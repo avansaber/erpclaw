@@ -1,0 +1,112 @@
+{
+  "version": "2.0",
+  "effective_from": "2025-09-22",
+  "slabs": [
+    {
+      "rate": "0",
+      "description": "Nil-rated / Exempt",
+      "examples": [
+        "Fresh produce",
+        "Dairy (unprocessed milk, curd)",
+        "Education services",
+        "Healthcare services",
+        "Fresh vegetables and fruits",
+        "Cereals and grains (unbranded/unpackaged)",
+        "Lifesaving medicines (33 specified drugs)",
+        "Books and periodicals",
+        "Handloom products",
+        "Agricultural services"
+      ]
+    },
+    {
+      "rate": "0.25",
+      "description": "Precious stones",
+      "examples": [
+        "Rough diamonds",
+        "Industrial diamonds",
+        "Cut and polished diamonds (partially processed)"
+      ]
+    },
+    {
+      "rate": "3",
+      "description": "Precious metals",
+      "examples": [
+        "Gold (bars, coins, ornaments)",
+        "Silver (bars, coins, ornaments)",
+        "Platinum",
+        "Jewelry (gold, silver, platinum)",
+        "Gold and silver findings"
+      ]
+    },
+    {
+      "rate": "5",
+      "description": "Essential goods",
+      "examples": [
+        "Processed foods (branded/packaged cereals, spices)",
+        "Textiles (cotton, silk, wool fabrics)",
+        "Readymade garments (up to specified value)",
+        "Agricultural equipment and machinery",
+        "Sugar, tea, coffee",
+        "Edible oils",
+        "Coal and lignite",
+        "Footwear (up to specified value)",
+        "Personal care items",
+        "Transport services (rail, air economy class)"
+      ]
+    },
+    {
+      "rate": "18",
+      "description": "Standard rate",
+      "examples": [
+        "Electronics (computers, phones, TVs)",
+        "Cement and construction materials",
+        "Most services (IT, consulting, professional)",
+        "Household appliances",
+        "Manufactured goods",
+        "Iron and steel products",
+        "Paints and varnishes",
+        "Furniture",
+        "Automobile parts",
+        "Financial and insurance services",
+        "Restaurant services (non-AC, non-starred)"
+      ]
+    },
+    {
+      "rate": "40",
+      "description": "Luxury / Sin goods",
+      "examples": [
+        "Carbonated beverages (aerated drinks)",
+        "Tobacco and tobacco products",
+        "Pan masala",
+        "High-displacement motorcycles (>350cc)",
+        "Gambling and betting",
+        "Large SUVs and luxury cars",
+        "Private aircraft and yachts"
+      ]
+    }
+  ],
+  "legacy_rates": {
+    "note": "GST 2.0 phased out 12% and 28% slabs. Some transitional items may still carry legacy rates during migration.",
+    "rates": [
+      {
+        "rate": "12",
+        "status": "transitional",
+        "description": "Being merged into 5% or 18% slab"
+      },
+      {
+        "rate": "28",
+        "status": "transitional",
+        "description": "Being merged into 18% or 40% slab"
+      }
+    ]
+  },
+  "compensation_cess": {
+    "note": "Additional cess on luxury/sin goods over and above the GST rate",
+    "examples": [
+      {"item": "Tobacco products", "cess_rate": "varies by product"},
+      {"item": "Aerated beverages", "cess_rate": "12"},
+      {"item": "Motor vehicles (large SUVs)", "cess_rate": "22"},
+      {"item": "Pan masala", "cess_rate": "varies"}
+    ]
+  }
+}

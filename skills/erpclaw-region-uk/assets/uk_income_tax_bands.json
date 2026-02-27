@@ -1,0 +1,25 @@
+{
+  "tax_year": "2025/26",
+  "personal_allowance": "12570",
+  "pa_taper_threshold": "100000",
+  "pa_taper_rate": "50",
+  "england_wales_ni": {
+    "bands": [
+      {"name": "Personal Allowance", "from": "0", "to": "12570", "rate": "0"},
+      {"name": "Basic Rate", "from": "12571", "to": "50270", "rate": "20"},
+      {"name": "Higher Rate", "from": "50271", "to": "125140", "rate": "40"},
+      {"name": "Additional Rate", "from": "125141", "to": "0", "rate": "45"}
+    ]
+  },
+  "scotland": {
+    "bands": [
+      {"name": "Personal Allowance", "from": "0", "to": "12570", "rate": "0"},
+      {"name": "Starter Rate", "from": "12571", "to": "14876", "rate": "19"},
+      {"name": "Basic Rate", "from": "14877", "to": "26561", "rate": "20"},
+      {"name": "Intermediate Rate", "from": "26562", "to": "43662", "rate": "21"},
+      {"name": "Higher Rate", "from": "43663", "to": "75000", "rate": "42"},
+      {"name": "Advanced Rate", "from": "75001", "to": "125140", "rate": "45"},
+      {"name": "Top Rate", "from": "125141", "to": "0", "rate": "48"}
+    ]
+  }
+}

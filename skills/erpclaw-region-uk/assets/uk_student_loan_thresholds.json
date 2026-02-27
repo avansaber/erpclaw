@@ -1,0 +1,10 @@
+{
+  "tax_year": "2025/26",
+  "plans": [
+    {"plan": "1", "annual_threshold": "24990", "rate": "9", "description": "Pre-2012 England/Wales, all NI/Scotland"},
+    {"plan": "2", "annual_threshold": "27295", "rate": "9", "description": "Post-2012 England/Wales"},
+    {"plan": "4", "annual_threshold": "31395", "rate": "9", "description": "Scotland post-2012"},
+    {"plan": "5", "annual_threshold": "25000", "rate": "9", "description": "Post-2023 England"},
+    {"plan": "PG", "annual_threshold": "21000", "rate": "6", "description": "Postgraduate loan"}
+  ]
+}

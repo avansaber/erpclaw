@@ -1,0 +1,2159 @@
+ocui_version: "1.0"
+skill: erpclaw-buying
+skill_version: "1.0.0"
+display_name: Buying / Procurement
+icon: shopping-cart
+color: "#f59e0b"
+
+# ===========================================================================
+# ENTITIES
+# ===========================================================================
+entities:
+
+  # -------------------------------------------------------------------------
+  # Supplier
+  # -------------------------------------------------------------------------
+  supplier:
+    label: Supplier
+    label_plural: Suppliers
+    icon: truck
+    primary_field: name
+    secondary_field: supplier_group
+    identifier_field: id
+    status_field: status
+    status_colors:
+      active: green
+      disabled: gray
+      blocked: red
+
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+
+      name:
+        type: text
+        label: Supplier Name
+        required: true
+        max_length: 140
+        searchable: true
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      supplier_group:
+        type: select
+        label: Supplier Group
+        options:
+          - { value: Raw-Material, label: Raw Material }
+          - { value: Services, label: Services }
+          - { value: Consumables, label: Consumables }
+          - { value: Sub-Contracting, label: Sub-Contracting }
+          - { value: Hardware, label: Hardware }
+          - { value: Software, label: Software }
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+      supplier_type:
+        type: select
+        label: Supplier Type
+        options:
+          - { value: company, label: Company }
+          - { value: individual, label: Individual }
+        default: company
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 3
+
+      payment_terms_id:
+        type: link
+        label: Payment Terms
+        link_entity: payment_terms
+        link_display_field: name
+        link_search_action: list-payment-terms
+        in_form_view: true
+        form_group: basic
+        form_order: 4
+
+      tax_id:
+        type: text
+        label: Tax ID / EIN
+        max_length: 20
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 5
+
+      is_1099_vendor:
+        type: boolean
+        label: 1099 Vendor
+        default: false
+        help_text: "Mark for US 1099 tax reporting"
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 6
+
+      primary_address:
+        type: json
+        label: Primary Address
+        help_text: "JSON object with address_line1, city, state, zip, country"
+        in_form_view: true
+        form_group: address
+        form_order: 1
+
+      status:
+        type: status
+        label: Status
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      company_id:
+        type: link
+        label: Company
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        required: true
+        in_form_view: true
+        form_group: basic
+        form_order: 7
+
+      total_outstanding:
+        type: currency
+        label: Total Outstanding
+        precision: 2
+        read_only: true
+        in_detail_view: true
+
+      outstanding_invoice_count:
+        type: integer
+        label: Outstanding Invoices
+        read_only: true
+        in_detail_view: true
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_detail_view: true
+
+      updated_at:
+        type: datetime
+        label: Last Updated
+        read_only: true
+        in_detail_view: true
+
+    form_groups:
+      basic:
+        label: Supplier Information
+        order: 1
+        columns: 2
+      address:
+        label: Address
+        order: 2
+        columns: 1
+        collapsible: true
+
+    views:
+      list:
+        columns:
+          - { field: name, width: 200, link: true }
+          - { field: supplier_group, width: 130 }
+          - { field: supplier_type, width: 100 }
+          - { field: tax_id, width: 120 }
+          - { field: is_1099_vendor, width: 80 }
+          - { field: status, width: 90 }
+        filters:
+          - { field: supplier_group, type: select }
+          - { field: supplier_type, type: select }
+          - { field: status, type: select }
+          - { field: company_id, type: link }
+        row_click: get-supplier
+
+      detail:
+        header:
+          title_field: name
+          subtitle_field: supplier_group
+          status_field: status
+        sections:
+          - label: Supplier Details
+            fields: [name, supplier_group, supplier_type, tax_id, is_1099_vendor, company_id]
+            columns: 3
+          - label: Payment & Terms
+            fields: [payment_terms_id, total_outstanding, outstanding_invoice_count]
+            columns: 3
+          - label: Address
+            fields: [primary_address]
+            columns: 1
+            collapsible: true
+        actions:
+          - { action: update-supplier, label: Edit }
+          - { action: add-purchase-order, label: New Purchase Order, prefill: { supplier_id: id } }
+
+  # -------------------------------------------------------------------------
+  # Material Request
+  # -------------------------------------------------------------------------
+  material_request:
+    label: Material Request
+    label_plural: Material Requests
+    icon: clipboard-list
+    primary_field: naming_series
+    secondary_field: request_type
+    identifier_field: id
+    status_field: status
+    lifecycle: draft-submit-cancel
+    status_colors:
+      draft: gray
+      submitted: blue
+      cancelled: red
+
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+
+      naming_series:
+        type: text
+        label: MR Number
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      request_type:
+        type: select
+        label: Request Type
+        required: true
+        options:
+          - { value: purchase, label: Purchase }
+          - { value: transfer, label: Transfer }
+          - { value: manufacture, label: Manufacture }
+          - { value: material_transfer, label: Material Transfer }
+          - { value: material_issue, label: Material Issue }
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      status:
+        type: status
+        label: Status
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      company_id:
+        type: link
+        label: Company
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        required: true
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+      items:
+        type: json
+        label: Items
+        required: true
+        help_text: "JSON array: [{item_id, qty, warehouse_id}]"
+        in_form_view: true
+        form_group: items
+        form_order: 1
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      updated_at:
+        type: datetime
+        label: Last Updated
+        read_only: true
+        in_detail_view: true
+
+    form_groups:
+      basic:
+        label: Request Details
+        order: 1
+        columns: 2
+      items:
+        label: Items
+        order: 2
+        columns: 1
+
+    views:
+      list:
+        columns:
+          - { field: naming_series, width: 140, link: true }
+          - { field: request_type, width: 140 }
+          - { field: status, width: 100 }
+          - { field: created_at, width: 160 }
+        filters:
+          - { field: request_type, type: select }
+          - { field: status, type: select }
+          - { field: company_id, type: link }
+
+  # -------------------------------------------------------------------------
+  # Request for Quotation
+  # -------------------------------------------------------------------------
+  request_for_quotation:
+    label: Request for Quotation
+    label_plural: RFQs
+    icon: file-question
+    primary_field: naming_series
+    secondary_field: rfq_date
+    identifier_field: id
+    status_field: status
+    lifecycle: draft-submit-cancel
+    status_colors:
+      draft: gray
+      submitted: blue
+      quotation_received: green
+      cancelled: red
+
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+
+      naming_series:
+        type: text
+        label: RFQ Number
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      rfq_date:
+        type: date
+        label: RFQ Date
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      status:
+        type: status
+        label: Status
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      company_id:
+        type: link
+        label: Company
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        required: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      items:
+        type: json
+        label: Items
+        required: true
+        help_text: "JSON array: [{item_id, qty, uom, required_date}]"
+        in_form_view: true
+        form_group: items
+        form_order: 1
+
+      suppliers:
+        type: json
+        label: Suppliers
+        required: true
+        help_text: "JSON array of supplier IDs"
+        in_form_view: true
+        form_group: suppliers
+        form_order: 1
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_detail_view: true
+
+      updated_at:
+        type: datetime
+        label: Last Updated
+        read_only: true
+        in_detail_view: true
+
+    form_groups:
+      basic:
+        label: RFQ Details
+        order: 1
+        columns: 2
+      items:
+        label: Items
+        order: 2
+        columns: 1
+      suppliers:
+        label: Suppliers
+        order: 3
+        columns: 1
+
+    views:
+      list:
+        columns:
+          - { field: naming_series, width: 140, link: true }
+          - { field: rfq_date, width: 120 }
+          - { field: status, width: 130 }
+          - { field: created_at, width: 160 }
+        filters:
+          - { field: status, type: select }
+          - { field: company_id, type: link }
+
+  # -------------------------------------------------------------------------
+  # Supplier Quotation
+  # -------------------------------------------------------------------------
+  supplier_quotation:
+    label: Supplier Quotation
+    label_plural: Supplier Quotations
+    icon: file-text
+    primary_field: supplier_name
+    secondary_field: total_amount
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: blue
+
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+
+      supplier_id:
+        type: link
+        label: Supplier
+        link_entity: supplier
+        link_display_field: name
+        link_search_action: list-suppliers
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      supplier_name:
+        type: text
+        label: Supplier Name
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      rfq_id:
+        type: link
+        label: RFQ
+        link_entity: request_for_quotation
+        link_display_field: naming_series
+        link_search_action: list-rfqs
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+      quotation_date:
+        type: date
+        label: Quotation Date
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      total_amount:
+        type: currency
+        label: Total Amount
+        precision: 2
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      grand_total:
+        type: currency
+        label: Grand Total
+        precision: 2
+        read_only: true
+        in_detail_view: true
+
+      status:
+        type: status
+        label: Status
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      company_id:
+        type: link
+        label: Company
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        read_only: true
+        in_detail_view: true
+
+      items:
+        type: json
+        label: Items
+        required: true
+        help_text: "JSON array: [{rfq_item_id, rate, lead_time_days}]"
+        in_form_view: true
+        form_group: items
+        form_order: 1
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_detail_view: true
+
+    form_groups:
+      basic:
+        label: Quotation Details
+        order: 1
+        columns: 2
+      items:
+        label: Quoted Items
+        order: 2
+        columns: 1
+
+    views:
+      list:
+        columns:
+          - { field: supplier_name, width: 180, link: true }
+          - { field: quotation_date, width: 120 }
+          - { field: total_amount, width: 130, align: right }
+          - { field: status, width: 100 }
+        filters:
+          - { field: rfq_id, type: link }
+          - { field: supplier_id, type: link }
+
+  # -------------------------------------------------------------------------
+  # Purchase Order
+  # -------------------------------------------------------------------------
+  purchase_order:
+    label: Purchase Order
+    label_plural: Purchase Orders
+    icon: file-plus
+    primary_field: naming_series
+    secondary_field: supplier_name
+    identifier_field: id
+    status_field: status
+    lifecycle: draft-submit-cancel
+    status_colors:
+      draft: gray
+      confirmed: blue
+      partially_received: yellow
+      fully_received: green
+      partially_invoiced: orange
+      fully_invoiced: teal
+      cancelled: red
+
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+
+      naming_series:
+        type: text
+        label: PO Number
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      supplier_id:
+        type: link
+        label: Supplier
+        link_entity: supplier
+        link_display_field: name
+        link_search_action: list-suppliers
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      supplier_name:
+        type: text
+        label: Supplier Name
+        read_only: true
+        in_list_view: true
+
+      order_date:
+        type: date
+        label: Order Date
+        default: today
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+      tax_template_id:
+        type: link
+        label: Tax Template
+        link_entity: tax_template
+        link_display_field: name
+        link_search_action: list-tax-templates
+        in_form_view: true
+        form_group: basic
+        form_order: 3
+
+      total_amount:
+        type: currency
+        label: Net Total
+        precision: 2
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      tax_amount:
+        type: currency
+        label: Tax Amount
+        precision: 2
+        read_only: true
+        in_detail_view: true
+
+      grand_total:
+        type: currency
+        label: Grand Total
+        precision: 2
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      per_received:
+        type: percent
+        label: "% Received"
+        precision: 2
+        read_only: true
+        in_detail_view: true
+
+      per_invoiced:
+        type: percent
+        label: "% Invoiced"
+        precision: 2
+        read_only: true
+        in_detail_view: true
+
+      status:
+        type: status
+        label: Status
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      company_id:
+        type: link
+        label: Company
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        required: true
+        in_form_view: true
+        form_group: basic
+        form_order: 4
+
+      items:
+        type: json
+        label: Items
+        required: true
+        help_text: "JSON array: [{item_id, qty, rate, uom, warehouse_id, discount_percentage, required_date}]"
+        in_form_view: true
+        form_group: items
+        form_order: 1
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_detail_view: true
+
+      updated_at:
+        type: datetime
+        label: Last Updated
+        read_only: true
+        in_detail_view: true
+
+    form_groups:
+      basic:
+        label: Order Details
+        order: 1
+        columns: 2
+      items:
+        label: Items
+        order: 2
+        columns: 1
+
+    views:
+      list:
+        columns:
+          - { field: naming_series, width: 140, link: true }
+          - { field: supplier_name, width: 180 }
+          - { field: order_date, width: 110 }
+          - { field: grand_total, width: 130, align: right }
+          - { field: status, width: 130 }
+        filters:
+          - { field: status, type: select }
+          - { field: supplier_id, type: link }
+          - { field: company_id, type: link }
+          - { field: order_date, type: date_range }
+        row_click: get-purchase-order
+
+      detail:
+        header:
+          title_field: naming_series
+          subtitle_field: supplier_name
+          status_field: status
+        sections:
+          - label: Order Details
+            fields: [supplier_id, order_date, tax_template_id, company_id]
+            columns: 2
+          - label: Amounts
+            fields: [total_amount, tax_amount, grand_total]
+            columns: 3
+          - label: Fulfillment
+            fields: [per_received, per_invoiced]
+            columns: 2
+          - label: Items
+            child_entity: purchase_order_item
+            columns: 1
+          - label: Linked Receipts
+            related_entity: purchase_receipt
+            related_filter: purchase_order_id
+            columns: 1
+            collapsible: true
+          - label: Linked Invoices
+            related_entity: purchase_invoice
+            related_filter: purchase_order_id
+            columns: 1
+            collapsible: true
+        actions:
+          - { action: update-purchase-order, label: Edit, condition: "status == 'draft'" }
+          - { action: submit-purchase-order, label: Submit, condition: "status == 'draft'", confirm: true }
+          - { action: cancel-purchase-order, label: Cancel, condition: "status != 'draft' && status != 'cancelled'", confirm: true, variant: danger }
+          - { action: create-purchase-receipt, label: Receive Goods, condition: "status == 'confirmed' || status == 'partially_received'" }
+          - { action: create-purchase-invoice, label: Create Invoice, condition: "status != 'draft' && status != 'cancelled'" }
+
+  # -------------------------------------------------------------------------
+  # Purchase Receipt
+  # -------------------------------------------------------------------------
+  purchase_receipt:
+    label: Purchase Receipt
+    label_plural: Purchase Receipts
+    icon: package-check
+    primary_field: naming_series
+    secondary_field: supplier_name
+    identifier_field: id
+    status_field: status
+    lifecycle: draft-submit-cancel
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+
+      naming_series:
+        type: text
+        label: GRN Number
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      supplier_id:
+        type: link
+        label: Supplier
+        link_entity: supplier
+        link_display_field: name
+        link_search_action: list-suppliers
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      supplier_name:
+        type: text
+        label: Supplier Name
+        read_only: true
+        in_list_view: true
+
+      posting_date:
+        type: date
+        label: Posting Date
+        default: today
+        in_list_view: true
+        in_detail_view: true
+
+      purchase_order_id:
+        type: link
+        label: Purchase Order
+        link_entity: purchase_order
+        link_display_field: naming_series
+        link_search_action: list-purchase-orders
+        required: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      total_qty:
+        type: quantity
+        label: Total Qty
+        precision: 2
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      status:
+        type: status
+        label: Status
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      company_id:
+        type: link
+        label: Company
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        read_only: true
+        in_detail_view: true
+
+      items:
+        type: json
+        label: Items (partial receipt)
+        help_text: "Optional JSON array for partial receipt: [{purchase_order_item_id, qty, warehouse_id, batch_id, serial_numbers}]"
+        in_form_view: true
+        form_group: items
+        form_order: 1
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_detail_view: true
+
+      updated_at:
+        type: datetime
+        label: Last Updated
+        read_only: true
+        in_detail_view: true
+
+    form_groups:
+      basic:
+        label: Receipt Details
+        order: 1
+        columns: 2
+      items:
+        label: Items (Partial Receipt Override)
+        order: 2
+        columns: 1
+        collapsible: true
+
+    views:
+      list:
+        columns:
+          - { field: naming_series, width: 140, link: true }
+          - { field: supplier_name, width: 180 }
+          - { field: posting_date, width: 110 }
+          - { field: total_qty, width: 100, align: right }
+          - { field: status, width: 100 }
+        filters:
+          - { field: status, type: select }
+          - { field: supplier_id, type: link }
+          - { field: company_id, type: link }
+        row_click: get-purchase-receipt
+
+      detail:
+        header:
+          title_field: naming_series
+          subtitle_field: supplier_name
+          status_field: status
+        sections:
+          - label: Receipt Details
+            fields: [supplier_id, posting_date, purchase_order_id, total_qty, company_id]
+            columns: 3
+          - label: Items
+            child_entity: purchase_receipt_item
+            columns: 1
+        actions:
+          - { action: submit-purchase-receipt, label: Submit, condition: "status == 'draft'", confirm: true }
+          - { action: cancel-purchase-receipt, label: Cancel, condition: "status == 'submitted'", confirm: true, variant: danger }
+          - { action: create-purchase-invoice, label: Create Invoice, condition: "status == 'submitted'" }
+
+  # -------------------------------------------------------------------------
+  # Purchase Invoice
+  # -------------------------------------------------------------------------
+  purchase_invoice:
+    label: Purchase Invoice
+    label_plural: Purchase Invoices
+    icon: file-invoice
+    primary_field: naming_series
+    secondary_field: supplier_name
+    identifier_field: id
+    status_field: status
+    lifecycle: draft-submit-cancel
+    status_colors:
+      draft: gray
+      submitted: blue
+      overdue: red
+      partially_paid: orange
+      paid: green
+      cancelled: red
+
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+
+      naming_series:
+        type: text
+        label: Invoice Number
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      supplier_id:
+        type: link
+        label: Supplier
+        link_entity: supplier
+        link_display_field: name
+        link_search_action: list-suppliers
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      supplier_name:
+        type: text
+        label: Supplier Name
+        read_only: true
+        in_list_view: true
+
+      posting_date:
+        type: date
+        label: Posting Date
+        default: today
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+      due_date:
+        type: date
+        label: Due Date
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 3
+
+      purchase_order_id:
+        type: link
+        label: Purchase Order
+        link_entity: purchase_order
+        link_display_field: naming_series
+        link_search_action: list-purchase-orders
+        in_form_view: true
+        form_group: source
+        form_order: 1
+
+      purchase_receipt_id:
+        type: link
+        label: Purchase Receipt
+        link_entity: purchase_receipt
+        link_display_field: naming_series
+        link_search_action: list-purchase-receipts
+        in_form_view: true
+        form_group: source
+        form_order: 2
+
+      tax_template_id:
+        type: link
+        label: Tax Template
+        link_entity: tax_template
+        link_display_field: name
+        link_search_action: list-tax-templates
+        in_form_view: true
+        form_group: basic
+        form_order: 4
+
+      total_amount:
+        type: currency
+        label: Net Total
+        precision: 2
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      tax_amount:
+        type: currency
+        label: Tax Amount
+        precision: 2
+        read_only: true
+        in_detail_view: true
+
+      grand_total:
+        type: currency
+        label: Grand Total
+        precision: 2
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      outstanding_amount:
+        type: currency
+        label: Outstanding
+        precision: 2
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      update_stock:
+        type: boolean
+        label: Update Stock
+        read_only: true
+        in_detail_view: true
+        help_text: "If true, SLE entries were posted on submit"
+
+      is_return:
+        type: boolean
+        label: Is Return (Debit Note)
+        read_only: true
+        in_detail_view: true
+
+      return_against:
+        type: link
+        label: Return Against Invoice
+        link_entity: purchase_invoice
+        link_display_field: naming_series
+        link_search_action: list-purchase-invoices
+        read_only: true
+        in_detail_view: true
+
+      status:
+        type: status
+        label: Status
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      company_id:
+        type: link
+        label: Company
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        required: true
+        in_form_view: true
+        form_group: basic
+        form_order: 5
+
+      items:
+        type: json
+        label: Items
+        help_text: "JSON array: [{item_id, qty, rate, uom, expense_account_id, cost_center_id}]"
+        in_form_view: true
+        form_group: items
+        form_order: 1
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_detail_view: true
+
+      updated_at:
+        type: datetime
+        label: Last Updated
+        read_only: true
+        in_detail_view: true
+
+    form_groups:
+      basic:
+        label: Invoice Details
+        order: 1
+        columns: 2
+      source:
+        label: Source Documents
+        order: 2
+        columns: 2
+        collapsible: true
+        help_text: "Link to PO or Purchase Receipt, or leave blank for standalone invoice"
+      items:
+        label: Items
+        order: 3
+        columns: 1
+
+    views:
+      list:
+        columns:
+          - { field: naming_series, width: 140, link: true }
+          - { field: supplier_name, width: 180 }
+          - { field: posting_date, width: 110 }
+          - { field: grand_total, width: 130, align: right }
+          - { field: outstanding_amount, width: 130, align: right }
+          - { field: status, width: 120 }
+        filters:
+          - { field: status, type: select }
+          - { field: supplier_id, type: link }
+          - { field: company_id, type: link }
+          - { field: posting_date, type: date_range }
+        row_click: get-purchase-invoice
+
+      detail:
+        header:
+          title_field: naming_series
+          subtitle_field: supplier_name
+          status_field: status
+        sections:
+          - label: Invoice Details
+            fields: [supplier_id, posting_date, due_date, tax_template_id, company_id]
+            columns: 3
+          - label: Source Documents
+            fields: [purchase_order_id, purchase_receipt_id]
+            columns: 2
+            collapsible: true
+          - label: Amounts
+            fields: [total_amount, tax_amount, grand_total, outstanding_amount]
+            columns: 4
+          - label: Flags
+            fields: [update_stock, is_return, return_against]
+            columns: 3
+            collapsible: true
+          - label: Items
+            child_entity: purchase_invoice_item
+            columns: 1
+          - label: Payments
+            related_entity: payment_ledger_entry
+            related_filter: against_voucher_id
+            columns: 1
+            collapsible: true
+        actions:
+          - { action: update-purchase-invoice, label: Edit, condition: "status == 'draft'" }
+          - { action: submit-purchase-invoice, label: Submit, condition: "status == 'draft'", confirm: true }
+          - { action: cancel-purchase-invoice, label: Cancel, condition: "status in ['submitted','overdue','partially_paid']", confirm: true, variant: danger }
+          - { action: create-debit-note, label: Create Debit Note, condition: "status in ['submitted','partially_paid','paid','overdue'] && !is_return" }
+
+  # -------------------------------------------------------------------------
+  # Landed Cost Voucher
+  # -------------------------------------------------------------------------
+  landed_cost_voucher:
+    label: Landed Cost Voucher
+    label_plural: Landed Cost Vouchers
+    icon: anchor
+    primary_field: id
+    secondary_field: total_landed_cost
+    identifier_field: id
+    status_field: status
+    status_colors:
+      submitted: green
+
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+
+      posting_date:
+        type: date
+        label: Posting Date
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      total_landed_cost:
+        type: currency
+        label: Total Landed Cost
+        precision: 2
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      status:
+        type: status
+        label: Status
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      company_id:
+        type: link
+        label: Company
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        required: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      purchase_receipt_ids:
+        type: json
+        label: Purchase Receipts
+        required: true
+        help_text: "JSON array of purchase receipt IDs"
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+      charges:
+        type: json
+        label: Charges
+        required: true
+        help_text: "JSON array: [{description, amount, expense_account_id, allocation_method}]"
+        in_form_view: true
+        form_group: charges
+        form_order: 1
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_detail_view: true
+
+    form_groups:
+      basic:
+        label: Voucher Details
+        order: 1
+        columns: 2
+      charges:
+        label: Charges
+        order: 2
+        columns: 1
+
+    views:
+      list:
+        columns:
+          - { field: posting_date, width: 120 }
+          - { field: total_landed_cost, width: 150, align: right }
+          - { field: status, width: 100 }
+          - { field: created_at, width: 160 }
+
+      detail:
+        header:
+          title_field: id
+          subtitle_field: posting_date
+          status_field: status
+        sections:
+          - label: Voucher Details
+            fields: [posting_date, total_landed_cost, company_id]
+            columns: 3
+          - label: Charges
+            child_entity: landed_cost_charge
+            columns: 1
+          - label: Allocated Items
+            child_entity: landed_cost_item
+            columns: 1
+
+# ===========================================================================
+# CHILD ENTITIES
+# ===========================================================================
+child_entities:
+
+  # -------------------------------------------------------------------------
+  # Purchase Order Item
+  # -------------------------------------------------------------------------
+  purchase_order_item:
+    label: PO Item
+    parent_entity: purchase_order
+    parent_field: purchase_order_id
+
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+
+      item_id:
+        type: link
+        label: Item
+        link_entity: item
+        link_display_field: item_name
+        link_search_action: list-items
+        required: true
+
+      item_code:
+        type: text
+        label: Item Code
+        read_only: true
+
+      item_name:
+        type: text
+        label: Item Name
+        read_only: true
+
+      quantity:
+        type: quantity
+        label: Qty
+        required: true
+        precision: 2
+        min: "0.01"
+
+      uom:
+        type: text
+        label: UoM
+
+      rate:
+        type: currency
+        label: Rate
+        required: true
+        precision: 2
+        min: "0.01"
+
+      amount:
+        type: currency
+        label: Amount
+        precision: 2
+        read_only: true
+
+      discount_percentage:
+        type: percent
+        label: Discount %
+        precision: 2
+        default: "0"
+
+      net_amount:
+        type: currency
+        label: Net Amount
+        precision: 2
+        read_only: true
+
+      warehouse_id:
+        type: link
+        label: Warehouse
+        link_entity: warehouse
+        link_display_field: name
+        link_search_action: list-warehouses
+
+      required_date:
+        type: date
+        label: Required By
+
+      received_qty:
+        type: quantity
+        label: Received Qty
+        precision: 2
+        read_only: true
+        default: "0"
+
+      invoiced_qty:
+        type: quantity
+        label: Invoiced Qty
+        precision: 2
+        read_only: true
+        default: "0"
+
+    table_columns:
+      - { field: item_name, width: 180 }
+      - { field: quantity, width: 80, align: right }
+      - { field: uom, width: 60 }
+      - { field: rate, width: 100, align: right }
+      - { field: discount_percentage, width: 80, align: right }
+      - { field: net_amount, width: 120, align: right }
+      - { field: received_qty, width: 90, align: right }
+      - { field: invoiced_qty, width: 90, align: right }
+      - { field: warehouse_id, width: 140 }
+
+  # -------------------------------------------------------------------------
+  # Purchase Receipt Item
+  # -------------------------------------------------------------------------
+  purchase_receipt_item:
+    label: Receipt Item
+    parent_entity: purchase_receipt
+    parent_field: purchase_receipt_id
+
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+
+      item_id:
+        type: link
+        label: Item
+        link_entity: item
+        link_display_field: item_name
+        link_search_action: list-items
+        required: true
+
+      item_code:
+        type: text
+        label: Item Code
+        read_only: true
+
+      item_name:
+        type: text
+        label: Item Name
+        read_only: true
+
+      quantity:
+        type: quantity
+        label: Qty Received
+        required: true
+        precision: 2
+        min: "0.01"
+
+      uom:
+        type: text
+        label: UoM
+
+      purchase_order_item_id:
+        type: link
+        label: PO Item
+        link_entity: purchase_order_item
+        link_display_field: id
+        read_only: true
+
+      warehouse_id:
+        type: link
+        label: Warehouse
+        link_entity: warehouse
+        link_display_field: name
+        link_search_action: list-warehouses
+        required: true
+
+      batch_id:
+        type: text
+        label: Batch ID
+
+      serial_numbers:
+        type: text
+        label: Serial Numbers
+
+      rate:
+        type: currency
+        label: Rate
+        precision: 2
+        read_only: true
+
+      amount:
+        type: currency
+        label: Amount
+        precision: 2
+        read_only: true
+
+    table_columns:
+      - { field: item_name, width: 180 }
+      - { field: quantity, width: 90, align: right }
+      - { field: uom, width: 60 }
+      - { field: rate, width: 100, align: right }
+      - { field: amount, width: 120, align: right }
+      - { field: warehouse_id, width: 140 }
+      - { field: batch_id, width: 100 }
+
+  # -------------------------------------------------------------------------
+  # Purchase Invoice Item
+  # -------------------------------------------------------------------------
+  purchase_invoice_item:
+    label: Invoice Item
+    parent_entity: purchase_invoice
+    parent_field: purchase_invoice_id
+
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+
+      item_id:
+        type: link
+        label: Item
+        link_entity: item
+        link_display_field: item_name
+        link_search_action: list-items
+        required: true
+
+      item_code:
+        type: text
+        label: Item Code
+        read_only: true
+
+      item_name:
+        type: text
+        label: Item Name
+        read_only: true
+
+      quantity:
+        type: quantity
+        label: Qty
+        required: true
+        precision: 2
+
+      uom:
+        type: text
+        label: UoM
+
+      rate:
+        type: currency
+        label: Rate
+        required: true
+        precision: 2
+
+      amount:
+        type: currency
+        label: Amount
+        precision: 2
+        read_only: true
+
+      expense_account_id:
+        type: link
+        label: Expense Account
+        link_entity: account
+        link_display_field: name
+        link_search_action: list-accounts
+
+      cost_center_id:
+        type: link
+        label: Cost Center
+        link_entity: cost_center
+        link_display_field: name
+        link_search_action: list-cost-centers
+
+      project_id:
+        type: link
+        label: Project
+        link_entity: project
+        link_display_field: name
+
+      purchase_order_item_id:
+        type: link
+        label: PO Item
+        link_entity: purchase_order_item
+        link_display_field: id
+        read_only: true
+
+      purchase_receipt_item_id:
+        type: link
+        label: Receipt Item
+        link_entity: purchase_receipt_item
+        link_display_field: id
+        read_only: true
+
+    table_columns:
+      - { field: item_name, width: 180 }
+      - { field: quantity, width: 80, align: right }
+      - { field: uom, width: 60 }
+      - { field: rate, width: 100, align: right }
+      - { field: amount, width: 120, align: right }
+      - { field: expense_account_id, width: 160 }
+      - { field: cost_center_id, width: 140 }
+
+  # -------------------------------------------------------------------------
+  # Material Request Item
+  # -------------------------------------------------------------------------
+  material_request_item:
+    label: MR Item
+    parent_entity: material_request
+    parent_field: material_request_id
+
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+
+      item_id:
+        type: link
+        label: Item
+        link_entity: item
+        link_display_field: item_name
+        link_search_action: list-items
+        required: true
+
+      quantity:
+        type: quantity
+        label: Qty
+        required: true
+        precision: 2
+        min: "0.01"
+
+      warehouse_id:
+        type: link
+        label: Warehouse
+        link_entity: warehouse
+        link_display_field: name
+        link_search_action: list-warehouses
+
+    table_columns:
+      - { field: item_id, width: 200 }
+      - { field: quantity, width: 100, align: right }
+      - { field: warehouse_id, width: 160 }
+
+  # -------------------------------------------------------------------------
+  # RFQ Item
+  # -------------------------------------------------------------------------
+  rfq_item:
+    label: RFQ Item
+    parent_entity: request_for_quotation
+    parent_field: rfq_id
+
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+
+      item_id:
+        type: link
+        label: Item
+        link_entity: item
+        link_display_field: item_name
+        link_search_action: list-items
+        required: true
+
+      quantity:
+        type: quantity
+        label: Qty
+        required: true
+        precision: 2
+        min: "0.01"
+
+      uom:
+        type: text
+        label: UoM
+
+      required_date:
+        type: date
+        label: Required Date
+
+    table_columns:
+      - { field: item_id, width: 200 }
+      - { field: quantity, width: 100, align: right }
+      - { field: uom, width: 80 }
+      - { field: required_date, width: 120 }
+
+  # -------------------------------------------------------------------------
+  # RFQ Supplier
+  # -------------------------------------------------------------------------
+  rfq_supplier:
+    label: RFQ Supplier
+    parent_entity: request_for_quotation
+    parent_field: rfq_id
+
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+
+      supplier_id:
+        type: link
+        label: Supplier
+        link_entity: supplier
+        link_display_field: name
+        link_search_action: list-suppliers
+        required: true
+
+      sent_date:
+        type: datetime
+        label: Sent Date
+        read_only: true
+
+      response_date:
+        type: datetime
+        label: Response Date
+        read_only: true
+
+      supplier_quotation_id:
+        type: link
+        label: Quotation
+        link_entity: supplier_quotation
+        link_display_field: id
+        read_only: true
+
+    table_columns:
+      - { field: supplier_id, width: 200 }
+      - { field: sent_date, width: 160 }
+      - { field: response_date, width: 160 }
+      - { field: supplier_quotation_id, width: 160 }
+
+  # -------------------------------------------------------------------------
+  # Supplier Quotation Item
+  # -------------------------------------------------------------------------
+  supplier_quotation_item:
+    label: Quotation Item
+    parent_entity: supplier_quotation
+    parent_field: supplier_quotation_id
+
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+
+      item_id:
+        type: link
+        label: Item
+        link_entity: item
+        link_display_field: item_name
+        link_search_action: list-items
+        required: true
+
+      quantity:
+        type: quantity
+        label: Qty
+        precision: 2
+        read_only: true
+
+      rate:
+        type: currency
+        label: Rate
+        precision: 2
+        required: true
+
+      amount:
+        type: currency
+        label: Amount
+        precision: 2
+        read_only: true
+
+      lead_time_days:
+        type: integer
+        label: Lead Time (Days)
+
+    table_columns:
+      - { field: item_id, width: 200 }
+      - { field: quantity, width: 90, align: right }
+      - { field: rate, width: 100, align: right }
+      - { field: amount, width: 120, align: right }
+      - { field: lead_time_days, width: 110, align: right }
+
+  # -------------------------------------------------------------------------
+  # Landed Cost Charge
+  # -------------------------------------------------------------------------
+  landed_cost_charge:
+    label: Landed Cost Charge
+    parent_entity: landed_cost_voucher
+    parent_field: landed_cost_voucher_id
+
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+
+      description:
+        type: text
+        label: Description
+        required: true
+        max_length: 200
+
+      amount:
+        type: currency
+        label: Amount
+        precision: 2
+        required: true
+        min: "0.01"
+
+      expense_account_id:
+        type: link
+        label: Expense Account
+        link_entity: account
+        link_display_field: name
+        link_search_action: list-accounts
+
+      allocation_method:
+        type: select
+        label: Allocation Method
+        options:
+          - { value: by_amount, label: By Amount (Value) }
+          - { value: by_qty, label: By Quantity }
+        default: by_amount
+
+    table_columns:
+      - { field: description, width: 200 }
+      - { field: amount, width: 120, align: right }
+      - { field: expense_account_id, width: 160 }
+      - { field: allocation_method, width: 130 }
+
+  # -------------------------------------------------------------------------
+  # Landed Cost Item
+  # -------------------------------------------------------------------------
+  landed_cost_item:
+    label: Landed Cost Item
+    parent_entity: landed_cost_voucher
+    parent_field: landed_cost_voucher_id
+
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+
+      purchase_receipt_id:
+        type: link
+        label: Purchase Receipt
+        link_entity: purchase_receipt
+        link_display_field: naming_series
+        read_only: true
+
+      purchase_receipt_item_id:
+        type: link
+        label: Receipt Item
+        link_entity: purchase_receipt_item
+        link_display_field: id
+        read_only: true
+
+      applicable_charges:
+        type: currency
+        label: Allocated Charges
+        precision: 2
+        read_only: true
+
+      original_rate:
+        type: currency
+        label: Original Rate
+        precision: 2
+        read_only: true
+
+      final_rate:
+        type: currency
+        label: Final Rate
+        precision: 2
+        read_only: true
+
+    table_columns:
+      - { field: purchase_receipt_id, width: 160 }
+      - { field: purchase_receipt_item_id, width: 160 }
+      - { field: applicable_charges, width: 130, align: right }
+      - { field: original_rate, width: 110, align: right }
+      - { field: final_rate, width: 110, align: right }
+
+# ===========================================================================
+# ACTION MAP
+# ===========================================================================
+action_map:
+
+  # ---- Suppliers (4 + 1 import) ------------------------------------------
+
+  add-supplier:
+    component: FormView
+    entity: supplier
+    mode: create
+    success_redirect: get-supplier
+    success_toast: "Supplier '{name}' created successfully"
+
+  update-supplier:
+    component: FormView
+    entity: supplier
+    mode: edit
+    success_redirect: get-supplier
+    success_toast: "Supplier updated"
+
+  get-supplier:
+    component: DetailView
+    entity: supplier
+
+  list-suppliers:
+    component: DataTable
+    entity: supplier
+    default_sort: name
+    searchable: true
+    add_action: add-supplier
+
+  import-suppliers:
+    component: WizardFlow
+    entity: supplier
+    steps:
+      - label: Upload CSV
+        fields: [csv_path, company_id]
+    success_toast: "Suppliers imported: {imported} new, {skipped} skipped"
+
+  # ---- Material Requests (3) ---------------------------------------------
+
+  add-material-request:
+    component: FormView
+    entity: material_request
+    mode: create
+    success_toast: "Material request created ({item_count} items)"
+
+  submit-material-request:
+    component: WizardFlow
+    entity: material_request
+    steps:
+      - label: Confirm Submission
+        confirmation_message: "Submit this material request? It will be assigned a naming series and can no longer be edited."
+        fields: [material_request_id]
+    success_toast: "Material request {naming_series} submitted"
+
+  list-material-requests:
+    component: DataTable
+    entity: material_request
+    default_sort: created_at
+    default_sort_dir: desc
+    add_action: add-material-request
+
+  # ---- RFQs (3) ----------------------------------------------------------
+
+  add-rfq:
+    component: FormView
+    entity: request_for_quotation
+    mode: create
+    success_toast: "RFQ created with {item_count} items for {supplier_count} suppliers"
+
+  submit-rfq:
+    component: WizardFlow
+    entity: request_for_quotation
+    steps:
+      - label: Confirm Submission
+        confirmation_message: "Submit this RFQ? It will be sent to the selected suppliers."
+        fields: [rfq_id]
+    success_toast: "RFQ {naming_series} submitted to suppliers"
+
+  list-rfqs:
+    component: DataTable
+    entity: request_for_quotation
+    default_sort: created_at
+    default_sort_dir: desc
+    add_action: add-rfq
+
+  # ---- Supplier Quotations (3) -------------------------------------------
+
+  add-supplier-quotation:
+    component: FormView
+    entity: supplier_quotation
+    mode: create
+    success_toast: "Supplier quotation recorded (total: ${total_amount})"
+
+  list-supplier-quotations:
+    component: DataTable
+    entity: supplier_quotation
+    default_sort: created_at
+    default_sort_dir: desc
+
+  compare-supplier-quotations:
+    component: ComparisonView
+    entity: supplier_quotation
+    params:
+      - { name: rfq_id, type: link, link_entity: request_for_quotation, required: true }
+    display:
+      group_by: item
+      columns_per_supplier: [rate, amount, lead_time_days]
+      highlight_lowest: true
+      lowest_field: rate
+
+  # ---- Purchase Orders (6) -----------------------------------------------
+
+  add-purchase-order:
+    component: FormView
+    entity: purchase_order
+    mode: create
+    success_redirect: get-purchase-order
+    success_toast: "Purchase order created (grand total: ${grand_total})"
+
+  update-purchase-order:
+    component: FormView
+    entity: purchase_order
+    mode: edit
+    success_redirect: get-purchase-order
+    success_toast: "Purchase order updated (grand total: ${grand_total})"
+
+  get-purchase-order:
+    component: DetailView
+    entity: purchase_order
+
+  list-purchase-orders:
+    component: DataTable
+    entity: purchase_order
+    default_sort: order_date
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-purchase-order
+
+  submit-purchase-order:
+    component: WizardFlow
+    entity: purchase_order
+    steps:
+      - label: Confirm Submission
+        confirmation_message: "Submit this purchase order? It will be confirmed and locked for editing. A naming series will be assigned."
+        fields: [purchase_order_id]
+    success_toast: "Purchase order {naming_series} confirmed"
+
+  cancel-purchase-order:
+    component: WizardFlow
+    entity: purchase_order
+    steps:
+      - label: Confirm Cancellation
+        confirmation_message: "Cancel this purchase order? This cannot be undone. Ensure there are no linked receipts or invoices."
+        fields: [purchase_order_id]
+        variant: danger
+    success_toast: "Purchase order cancelled"
+
+  # ---- Purchase Receipts (5) ---------------------------------------------
+
+  create-purchase-receipt:
+    component: FormView
+    entity: purchase_receipt
+    mode: create
+    success_redirect: get-purchase-receipt
+    success_toast: "Purchase receipt created ({item_count} items, total qty: {total_qty})"
+
+  get-purchase-receipt:
+    component: DetailView
+    entity: purchase_receipt
+
+  list-purchase-receipts:
+    component: DataTable
+    entity: purchase_receipt
+    default_sort: posting_date
+    default_sort_dir: desc
+    add_action: create-purchase-receipt
+
+  submit-purchase-receipt:
+    component: WizardFlow
+    entity: purchase_receipt
+    steps:
+      - label: Confirm Submission
+        confirmation_message: "Submit this purchase receipt? This will post Stock Ledger Entries (SLE) to add inventory and GL entries (DR Stock In Hand / CR Stock Received Not Billed) for perpetual inventory. These ledger entries are immutable."
+        fields: [purchase_receipt_id]
+    success_toast: "Purchase receipt {naming_series} submitted ({sle_entries_created} SLE, {gl_entries_created} GL entries posted)"
+
+  cancel-purchase-receipt:
+    component: WizardFlow
+    entity: purchase_receipt
+    steps:
+      - label: Confirm Cancellation
+        confirmation_message: "Cancel this purchase receipt? This will reverse all SLE and GL entries. Inventory quantities and valuations will be rolled back. This cannot be undone."
+        fields: [purchase_receipt_id]
+        variant: danger
+    success_toast: "Purchase receipt cancelled ({sle_reversals} SLE, {gl_reversals} GL reversals posted)"
+
+  # ---- Purchase Invoices (6) ---------------------------------------------
+
+  create-purchase-invoice:
+    component: FormView
+    entity: purchase_invoice
+    mode: create
+    success_redirect: get-purchase-invoice
+    success_toast: "Purchase invoice created (grand total: ${grand_total})"
+
+  update-purchase-invoice:
+    component: FormView
+    entity: purchase_invoice
+    mode: edit
+    success_redirect: get-purchase-invoice
+    success_toast: "Purchase invoice updated"
+
+  get-purchase-invoice:
+    component: DetailView
+    entity: purchase_invoice
+
+  list-purchase-invoices:
+    component: DataTable
+    entity: purchase_invoice
+    default_sort: posting_date
+    default_sort_dir: desc
+    searchable: true
+    add_action: create-purchase-invoice
+
+  submit-purchase-invoice:
+    component: WizardFlow
+    entity: purchase_invoice
+    steps:
+      - label: Confirm Submission
+        confirmation_message: "Submit this purchase invoice? This will post GL entries (DR Expense/SRNB / CR Accounts Payable), tax GL entries, and a Payment Ledger Entry (PLE). If update_stock is enabled, SLE entries will also be posted. These ledger entries are immutable."
+        fields: [purchase_invoice_id]
+    success_toast: "Purchase invoice {naming_series} submitted ({gl_entries_created} GL entries posted)"
+
+  cancel-purchase-invoice:
+    component: WizardFlow
+    entity: purchase_invoice
+    steps:
+      - label: Confirm Cancellation
+        confirmation_message: "Cancel this purchase invoice? This will reverse all GL entries, delink PLE entries, and (if update_stock was set) reverse SLE entries. This cannot be undone."
+        fields: [purchase_invoice_id]
+        variant: danger
+    success_toast: "Purchase invoice cancelled ({gl_reversals} GL reversals posted)"
+
+  # ---- Debit Notes (1) ---------------------------------------------------
+
+  create-debit-note:
+    component: WizardFlow
+    entity: purchase_invoice
+    steps:
+      - label: Select Invoice & Items
+        fields: [against_invoice_id, items, reason]
+        confirmation_message: "Create a debit note (return) against this purchase invoice? The debit note will be created in draft status and must be submitted separately to post GL reversals."
+    success_toast: "Debit note created (total: ${total_amount})"
+
+  # ---- Cross-Skill (1) ---------------------------------------------------
+
+  update-invoice-outstanding:
+    component: InternalAction
+    entity: purchase_invoice
+    description: "Called by erpclaw-payments to reduce outstanding amount after payment allocation"
+    params:
+      - { name: purchase_invoice_id, type: text, required: true }
+      - { name: amount, type: currency, required: true, precision: 2 }
+
+  # ---- Landed Costs (1) --------------------------------------------------
+
+  add-landed-cost-voucher:
+    component: WizardFlow
+    entity: landed_cost_voucher
+    steps:
+      - label: Select Receipts
+        fields: [purchase_receipt_ids, company_id]
+      - label: Define Charges
+        fields: [charges]
+        confirmation_message: "Submit this landed cost voucher? Charges will be allocated across receipt items proportionally, adjusting item valuation rates. GL entries (DR Stock In Hand / CR Expense) will be posted."
+    success_toast: "Landed cost voucher created (${total_landed_cost} allocated, {gl_entries_created} GL entries)"
+
+  # ---- Status / Dashboard (1) --------------------------------------------
+
+  status:
+    component: DashboardView
+    entity: null
+    layout:
+      - widget: StatCard
+        label: Suppliers
+        value_field: suppliers
+        icon: truck
+      - widget: StatCard
+        label: Total Outstanding
+        value_field: total_outstanding
+        format: currency
+        icon: dollar-sign
+      - widget: StatusBreakdown
+        label: Purchase Orders
+        value_field: purchase_orders
+        icon: file-plus
+      - widget: StatusBreakdown
+        label: Purchase Invoices
+        value_field: purchase_invoices
+        icon: file-invoice

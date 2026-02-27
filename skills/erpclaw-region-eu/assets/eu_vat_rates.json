@@ -1,0 +1,31 @@
+{
+  "rates": [
+    {"country": "AT", "standard": "20", "reduced": ["10", "13"], "super_reduced": null, "parking": "13"},
+    {"country": "BE", "standard": "21", "reduced": ["6", "12"], "super_reduced": null, "parking": "12"},
+    {"country": "BG", "standard": "20", "reduced": ["9"], "super_reduced": null, "parking": null},
+    {"country": "HR", "standard": "25", "reduced": ["5", "13"], "super_reduced": null, "parking": null},
+    {"country": "CY", "standard": "19", "reduced": ["5", "9"], "super_reduced": null, "parking": null},
+    {"country": "CZ", "standard": "21", "reduced": ["12"], "super_reduced": null, "parking": null},
+    {"country": "DK", "standard": "25", "reduced": [], "super_reduced": null, "parking": null},
+    {"country": "EE", "standard": "22", "reduced": ["9"], "super_reduced": null, "parking": null},
+    {"country": "FI", "standard": "25.5", "reduced": ["10", "14"], "super_reduced": null, "parking": null},
+    {"country": "FR", "standard": "20", "reduced": ["5.5", "10"], "super_reduced": "2.1", "parking": null},
+    {"country": "DE", "standard": "19", "reduced": ["7"], "super_reduced": null, "parking": null},
+    {"country": "GR", "standard": "24", "reduced": ["6", "13"], "super_reduced": null, "parking": null},
+    {"country": "HU", "standard": "27", "reduced": ["5", "18"], "super_reduced": null, "parking": null},
+    {"country": "IE", "standard": "23", "reduced": ["9", "13.5"], "super_reduced": "4.8", "parking": "13.5"},
+    {"country": "IT", "standard": "22", "reduced": ["5", "10"], "super_reduced": "4", "parking": null},
+    {"country": "LV", "standard": "21", "reduced": ["5", "12"], "super_reduced": null, "parking": null},
+    {"country": "LT", "standard": "21", "reduced": ["5", "9"], "super_reduced": null, "parking": null},
+    {"country": "LU", "standard": "17", "reduced": ["8"], "super_reduced": "3", "parking": "14"},
+    {"country": "MT", "standard": "18", "reduced": ["5", "7"], "super_reduced": null, "parking": null},
+    {"country": "NL", "standard": "21", "reduced": ["9"], "super_reduced": null, "parking": null},
+    {"country": "PL", "standard": "23", "reduced": ["5", "8"], "super_reduced": null, "parking": null},
+    {"country": "PT", "standard": "23", "reduced": ["6", "13"], "super_reduced": null, "parking": "13"},
+    {"country": "RO", "standard": "19", "reduced": ["5", "9"], "super_reduced": null, "parking": null},
+    {"country": "SK", "standard": "23", "reduced": ["5", "10"], "super_reduced": null, "parking": null},
+    {"country": "SI", "standard": "22", "reduced": ["5", "9.5"], "super_reduced": null, "parking": null},
+    {"country": "ES", "standard": "21", "reduced": ["10"], "super_reduced": "4", "parking": null},
+    {"country": "SE", "standard": "25", "reduced": ["6", "12"], "super_reduced": null, "parking": null}
+  ]
+}

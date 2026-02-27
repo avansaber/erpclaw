@@ -1,0 +1,574 @@
+ocui_version: "1.0"
+skill: erpclaw-payments
+skill_version: "1.0.0"
+display_name: Payments
+icon: credit-card
+color: "#06b6d4"
+
+entities:
+  payment_entry:
+    label: Payment Entry
+    label_plural: Payment Entries
+    table: payment_entry
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      naming_series:
+        type: text
+        label: Naming Series
+        read_only: true
+      payment_type:
+        type: select
+        label: Payment Type
+        required: true
+        options:
+          - value: "receive"
+            label: "Receive"
+          - value: "pay"
+            label: "Pay"
+          - value: "internal_transfer"
+            label: "Internal Transfer"
+        in_form_view: true
+        form_group: details
+        form_order: 1
+      posting_date:
+        type: date
+        label: Posting Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 2
+      party_type:
+        type: select
+        label: Party Type
+        options:
+          - value: "customer"
+            label: "Customer"
+          - value: "supplier"
+            label: "Supplier"
+          - value: "employee"
+            label: "Employee"
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      party_id:
+        type: link
+        label: Party ID
+        link_entity: party
+        link_display_field: name
+        link_search_action: list-parties
+        in_form_view: true
+        form_group: references
+        form_order: 4
+      paid_from_account:
+        type: currency
+        label: Paid From Account
+        precision: 2
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      paid_to_account:
+        type: currency
+        label: Paid To Account
+        precision: 2
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      paid_amount:
+        type: currency
+        label: Paid Amount
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 7
+      received_amount:
+        type: currency
+        label: Received Amount
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 8
+      payment_currency:
+        type: text
+        label: Payment Currency
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 9
+      exchange_rate:
+        type: currency
+        label: Exchange Rate
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 10
+      reference_number:
+        type: text
+        label: Reference Number
+        in_form_view: true
+        form_group: details
+        form_order: 11
+      reference_date:
+        type: date
+        label: Reference Date
+        in_form_view: true
+        form_group: header
+        form_order: 12
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "draft"
+            label: "Draft"
+          - value: "submitted"
+            label: "Submitted"
+          - value: "cancelled"
+            label: "Cancelled"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 13
+      unallocated_amount:
+        type: currency
+        label: Unallocated Amount
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 14
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 15
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 4
+        columns: 2
+
+  payment_allocation:
+    label: Payment Allocation
+    label_plural: Payment Allocations
+    table: payment_allocation
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      payment_entry_id:
+        type: link
+        label: Payment Entry ID
+        link_entity: payment_entry
+        link_display_field: name
+        link_search_action: list-payment-entries
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      voucher_type:
+        type: select
+        label: Voucher Type
+        required: true
+        options:
+          - value: "sales_invoice"
+            label: "Sales Invoice"
+          - value: "purchase_invoice"
+            label: "Purchase Invoice"
+          - value: "credit_note"
+            label: "Credit Note"
+          - value: "debit_note"
+            label: "Debit Note"
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      voucher_id:
+        type: link
+        label: Voucher ID
+        link_entity: voucher
+        link_display_field: name
+        link_search_action: list-vouchers
+        in_form_view: true
+        form_group: references
+        form_order: 3
+      allocated_amount:
+        type: currency
+        label: Allocated Amount
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 4
+      exchange_gain_loss:
+        type: text
+        label: Exchange Gain Loss
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 5
+    form_groups:
+      details:
+        label: Details
+        order: 1
+        columns: 2
+      references:
+        label: References
+        order: 2
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 3
+        columns: 2
+
+  payment_deduction:
+    label: Payment Deduction
+    label_plural: Payment Deductions
+    table: payment_deduction
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      payment_entry_id:
+        type: link
+        label: Payment Entry ID
+        link_entity: payment_entry
+        link_display_field: name
+        link_search_action: list-payment-entries
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      account_id:
+        type: link
+        label: Account ID
+        link_entity: account
+        link_display_field: name
+        link_search_action: list-accounts
+        in_form_view: true
+        form_group: references
+        form_order: 2
+      amount:
+        type: currency
+        label: Amount
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 3
+      type:
+        type: select
+        label: Type
+        required: true
+        options:
+          - value: "tds"
+            label: "Tds"
+          - value: "commission"
+            label: "Commission"
+          - value: "early_payment_discount"
+            label: "Early Payment Discount"
+          - value: "other"
+            label: "Other"
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      description:
+        type: textarea
+        label: Description
+        in_form_view: true
+        form_group: notes
+        form_order: 5
+    form_groups:
+      details:
+        label: Details
+        order: 1
+        columns: 2
+      references:
+        label: References
+        order: 2
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 3
+        columns: 2
+      notes:
+        label: Notes
+        order: 4
+        columns: 1
+
+  payment_terms:
+    label: Payment Terms
+    label_plural: Payment Termses
+    table: payment_terms
+    id_col: id
+    name_col: name
+    primary_field: name
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      name:
+        type: text
+        label: Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      due_days:
+        type: integer
+        label: Due Days
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      discount_percentage:
+        type: currency
+        label: Discount Percentage
+        precision: 2
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      discount_days:
+        type: integer
+        label: Discount Days
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      description:
+        type: textarea
+        label: Description
+        in_form_view: true
+        form_group: notes
+        form_order: 5
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      notes:
+        label: Notes
+        order: 3
+        columns: 1
+
+  payment_ledger_entry:
+    label: Payment Ledger Entry
+    label_plural: Payment Ledger Entries
+    table: payment_ledger_entry
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      posting_date:
+        type: date
+        label: Posting Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      account_id:
+        type: link
+        label: Account ID
+        link_entity: account
+        link_display_field: name
+        link_search_action: list-accounts
+        in_form_view: true
+        form_group: references
+        form_order: 2
+      party_type:
+        type: select
+        label: Party Type
+        required: true
+        options:
+          - value: "customer"
+            label: "Customer"
+          - value: "supplier"
+            label: "Supplier"
+          - value: "employee"
+            label: "Employee"
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      party_id:
+        type: link
+        label: Party ID
+        link_entity: party
+        link_display_field: name
+        link_search_action: list-parties
+        in_form_view: true
+        form_group: references
+        form_order: 4
+      voucher_type:
+        type: text
+        label: Voucher Type
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      voucher_id:
+        type: link
+        label: Voucher ID
+        link_entity: voucher
+        link_display_field: name
+        link_search_action: list-vouchers
+        in_form_view: true
+        form_group: references
+        form_order: 6
+      against_voucher_type:
+        type: text
+        label: Against Voucher Type
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      against_voucher_id:
+        type: link
+        label: Against Voucher ID
+        link_entity: against_voucher
+        link_display_field: name
+        link_search_action: list-against-vouchers
+        in_form_view: true
+        form_group: references
+        form_order: 8
+      amount:
+        type: currency
+        label: Amount
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 9
+      amount_in_account_currency:
+        type: currency
+        label: Amount In Account Currency
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 10
+      currency:
+        type: text
+        label: Currency
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 11
+      delinked:
+        type: integer
+        label: Delinked
+        in_form_view: true
+        form_group: details
+        form_order: 12
+      remarks:
+        type: textarea
+        label: Remarks
+        in_form_view: true
+        form_group: notes
+        form_order: 13
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 4
+        columns: 2
+      notes:
+        label: Notes
+        order: 5
+        columns: 1
+
+action_map:
+  add-payment:
+    component: FormView
+    mode: create
+  allocate-payment:
+    component: FormView
+    mode: create
+  bank-reconciliation:
+    component: FormView
+    mode: create
+  cancel-payment:
+    component: FormView
+    mode: create
+  create-payment-ledger-entry:
+    component: FormView
+    entity: payment_ledger_entry
+    mode: create
+  delete-payment:
+    component: FormView
+    mode: create
+  get-outstanding:
+    component: FormView
+    mode: create
+  get-payment:
+    component: FormView
+    mode: create
+  get-unallocated-payments:
+    component: FormView
+    mode: create
+  list-payments:
+    component: FormView
+    mode: create
+  reconcile-payments:
+    component: FormView
+    mode: create
+  status:
+    component: DashboardView
+  submit-payment:
+    component: FormView
+    mode: create
+  update-payment:
+    component: FormView
+    mode: create

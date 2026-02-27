@@ -1,0 +1,473 @@
+ocui_version: "1.0"
+skill: erpclaw-support
+skill_version: "1.0.0"
+display_name: Support & Helpdesk
+icon: headphones
+color: "#a855f7"
+
+entities:
+  issue:
+    label: Issue
+    label_plural: Issues
+    table: issue
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      open: blue
+      in_progress: blue
+      resolved: green
+      closed: gray
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      naming_series:
+        type: text
+        label: Naming Series
+        read_only: true
+      subject:
+        type: text
+        label: Subject
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 1
+      description:
+        type: textarea
+        label: Description
+        in_form_view: true
+        form_group: notes
+        form_order: 2
+      customer_id:
+        type: link
+        label: Customer ID
+        link_entity: customer
+        link_display_field: name
+        link_search_action: list-customers
+        in_form_view: true
+        form_group: references
+        form_order: 3
+      item_id:
+        type: link
+        label: Item ID
+        link_entity: item
+        link_display_field: name
+        link_search_action: list-items
+        in_form_view: true
+        form_group: references
+        form_order: 4
+      serial_number_id:
+        type: link
+        label: Serial Number ID
+        link_entity: serial_number
+        link_display_field: name
+        link_search_action: list-serial-numbers
+        in_form_view: true
+        form_group: references
+        form_order: 5
+      priority:
+        type: select
+        label: Priority
+        required: true
+        options:
+          - value: "low"
+            label: "Low"
+          - value: "medium"
+            label: "Medium"
+          - value: "high"
+            label: "High"
+          - value: "critical"
+            label: "Critical"
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      issue_type:
+        type: select
+        label: Issue Type
+        options:
+          - value: "bug"
+            label: "Bug"
+          - value: "feature_request"
+            label: "Feature Request"
+          - value: "question"
+            label: "Question"
+          - value: "complaint"
+            label: "Complaint"
+          - value: "return"
+            label: "Return"
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "open"
+            label: "Open"
+          - value: "in_progress"
+            label: "In Progress"
+          - value: "waiting_on_customer"
+            label: "Waiting On Customer"
+          - value: "resolved"
+            label: "Resolved"
+          - value: "closed"
+            label: "Closed"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 8
+      assigned_to:
+        type: text
+        label: Assigned To
+        in_form_view: true
+        form_group: details
+        form_order: 9
+      sla_id:
+        type: link
+        label: Sla ID
+        link_entity: service_level_agreement
+        link_display_field: name
+        link_search_action: list-service-level-agreements
+        in_form_view: true
+        form_group: references
+        form_order: 10
+      response_due:
+        type: text
+        label: Response Due
+        in_form_view: true
+        form_group: details
+        form_order: 11
+      resolution_due:
+        type: text
+        label: Resolution Due
+        in_form_view: true
+        form_group: details
+        form_order: 12
+      first_response_at:
+        type: text
+        label: First Response At
+        in_form_view: true
+        form_group: details
+        form_order: 13
+      resolved_at:
+        type: text
+        label: Resolved At
+        in_form_view: true
+        form_group: details
+        form_order: 14
+      sla_breached:
+        type: integer
+        label: Sla Breached
+        in_form_view: true
+        form_group: details
+        form_order: 15
+      resolution_notes:
+        type: text
+        label: Resolution Notes
+        in_form_view: true
+        form_group: details
+        form_order: 16
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      notes:
+        label: Notes
+        order: 4
+        columns: 1
+      items:
+        label: Line Items
+        order: 5
+        type: child_table
+
+  service_level_agreement:
+    label: Service Level Agreement
+    label_plural: Service Level Agreements
+    table: service_level_agreement
+    id_col: id
+    name_col: name
+    primary_field: name
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      name:
+        type: text
+        label: Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      priority_response_times:
+        type: text
+        label: Priority Response Times
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      priority_resolution_times:
+        type: text
+        label: Priority Resolution Times
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      working_hours:
+        type: text
+        label: Working Hours
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      is_default:
+        type: integer
+        label: Is Default
+        in_form_view: true
+        form_group: details
+        form_order: 5
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+
+  warranty_claim:
+    label: Warranty Claim
+    label_plural: Warranty Claims
+    table: warranty_claim
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      open: blue
+      in_progress: blue
+      resolved: green
+      closed: gray
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      naming_series:
+        type: text
+        label: Naming Series
+        read_only: true
+      customer_id:
+        type: link
+        label: Customer ID
+        link_entity: customer
+        link_display_field: name
+        link_search_action: list-customers
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      item_id:
+        type: link
+        label: Item ID
+        link_entity: item
+        link_display_field: name
+        link_search_action: list-items
+        in_form_view: true
+        form_group: references
+        form_order: 2
+      serial_number_id:
+        type: link
+        label: Serial Number ID
+        link_entity: serial_number
+        link_display_field: name
+        link_search_action: list-serial-numbers
+        in_form_view: true
+        form_group: references
+        form_order: 3
+      warranty_expiry_date:
+        type: date
+        label: Warranty Expiry Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 4
+      complaint_description:
+        type: text
+        label: Complaint Description
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      resolution:
+        type: select
+        label: Resolution
+        options:
+          - value: "repair"
+            label: "Repair"
+          - value: "replace"
+            label: "Replace"
+          - value: "refund"
+            label: "Refund"
+          - value: "rejected"
+            label: "Rejected"
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      resolution_date:
+        type: date
+        label: Resolution Date
+        in_form_view: true
+        form_group: header
+        form_order: 7
+      cost:
+        type: currency
+        label: Cost
+        precision: 2
+        in_form_view: true
+        form_group: details
+        form_order: 8
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "open"
+            label: "Open"
+          - value: "in_progress"
+            label: "In Progress"
+          - value: "resolved"
+            label: "Resolved"
+          - value: "closed"
+            label: "Closed"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 9
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+
+child_entities:
+  issue_comment:
+    parent_entity: issue
+    parent_field: issue_id
+    param_name: items
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      comment_by:
+        type: select
+        label: Comment By
+        required: true
+        options:
+          - value: "employee"
+            label: "Employee"
+          - value: "customer"
+            label: "Customer"
+      comment_text:
+        type: text
+        label: Comment Text
+        required: true
+      is_internal:
+        type: integer
+        label: Is Internal
+
+action_map:
+  add-issue:
+    component: FormView
+    entity: issue
+    mode: create
+    child_tables:
+      - entity: issue_comment
+        form_group: items
+        add_label: "Add Row"
+  add-issue-comment:
+    component: FormView
+    mode: create
+  add-maintenance-schedule:
+    component: FormView
+    mode: create
+  add-sla:
+    component: FormView
+    mode: create
+  add-warranty-claim:
+    component: FormView
+    entity: warranty_claim
+    mode: create
+  get-issue:
+    component: DetailView
+    entity: issue
+  list-issues:
+    component: DataTable
+    entity: issue
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-issue
+  list-maintenance-schedules:
+    component: FormView
+    mode: create
+  list-slas:
+    component: FormView
+    mode: create
+  list-warranty-claims:
+    component: DataTable
+    entity: warranty_claim
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-warranty-claim
+  overdue-issues-report:
+    component: FormView
+    mode: create
+  record-maintenance-visit:
+    component: FormView
+    mode: create
+  reopen-issue:
+    component: FormView
+    mode: create
+  resolve-issue:
+    component: FormView
+    mode: create
+  sla-compliance-report:
+    component: FormView
+    mode: create
+  status:
+    component: DashboardView
+  update-issue:
+    component: FormView
+    entity: issue
+    mode: edit
+  update-warranty-claim:
+    component: FormView
+    entity: warranty_claim
+    mode: edit

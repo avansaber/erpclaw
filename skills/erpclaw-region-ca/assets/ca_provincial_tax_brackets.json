@@ -1,0 +1,157 @@
+{
+  "year": 2026,
+  "provinces": {
+    "AB": {
+      "name": "Alberta",
+      "basic_personal_amount": "22769",
+      "brackets": [
+        {"from": "0", "to": "61200", "rate": "8"},
+        {"from": "61200", "to": "154259", "rate": "10"},
+        {"from": "154259", "to": "185111", "rate": "12"},
+        {"from": "185111", "to": "246813", "rate": "13"},
+        {"from": "246813", "to": "370220", "rate": "14"},
+        {"from": "370220", "to": "999999999", "rate": "15"}
+      ]
+    },
+    "BC": {
+      "name": "British Columbia",
+      "basic_personal_amount": "13216",
+      "brackets": [
+        {"from": "0", "to": "50363", "rate": "5.06"},
+        {"from": "50363", "to": "100728", "rate": "7.70"},
+        {"from": "100728", "to": "115648", "rate": "10.50"},
+        {"from": "115648", "to": "140430", "rate": "12.29"},
+        {"from": "140430", "to": "190405", "rate": "14.70"},
+        {"from": "190405", "to": "265545", "rate": "16.80"},
+        {"from": "265545", "to": "999999999", "rate": "20.50"}
+      ]
+    },
+    "MB": {
+      "name": "Manitoba",
+      "basic_personal_amount": "15780",
+      "brackets": [
+        {"from": "0", "to": "47000", "rate": "10.80"},
+        {"from": "47000", "to": "100000", "rate": "12.75"},
+        {"from": "100000", "to": "999999999", "rate": "17.40"}
+      ],
+      "note": "BPA phased out for net income between $200,000 and $400,000"
+    },
+    "NB": {
+      "name": "New Brunswick",
+      "basic_personal_amount": "13664",
+      "brackets": [
+        {"from": "0", "to": "52333", "rate": "9.40"},
+        {"from": "52333", "to": "104666", "rate": "14.00"},
+        {"from": "104666", "to": "193861", "rate": "16.00"},
+        {"from": "193861", "to": "999999999", "rate": "19.50"}
+      ]
+    },
+    "NL": {
+      "name": "Newfoundland and Labrador",
+      "basic_personal_amount": "11188",
+      "brackets": [
+        {"from": "0", "to": "44678", "rate": "8.70"},
+        {"from": "44678", "to": "89354", "rate": "14.50"},
+        {"from": "89354", "to": "159528", "rate": "15.80"},
+        {"from": "159528", "to": "223340", "rate": "17.80"},
+        {"from": "223340", "to": "285319", "rate": "19.80"},
+        {"from": "285319", "to": "570638", "rate": "20.80"},
+        {"from": "570638", "to": "1141275", "rate": "21.30"},
+        {"from": "1141275", "to": "999999999", "rate": "21.80"}
+      ]
+    },
+    "NS": {
+      "name": "Nova Scotia",
+      "basic_personal_amount": "11932",
+      "brackets": [
+        {"from": "0", "to": "30995", "rate": "8.79"},
+        {"from": "30995", "to": "61991", "rate": "14.95"},
+        {"from": "61991", "to": "97417", "rate": "16.67"},
+        {"from": "97417", "to": "157124", "rate": "17.50"},
+        {"from": "157124", "to": "999999999", "rate": "21.00"}
+      ]
+    },
+    "NT": {
+      "name": "Northwest Territories",
+      "basic_personal_amount": "18198",
+      "brackets": [
+        {"from": "0", "to": "53003", "rate": "5.90"},
+        {"from": "53003", "to": "106009", "rate": "8.60"},
+        {"from": "106009", "to": "172346", "rate": "12.20"},
+        {"from": "172346", "to": "999999999", "rate": "14.05"}
+      ]
+    },
+    "NU": {
+      "name": "Nunavut",
+      "basic_personal_amount": "19659",
+      "brackets": [
+        {"from": "0", "to": "55801", "rate": "4.00"},
+        {"from": "55801", "to": "111602", "rate": "7.00"},
+        {"from": "111602", "to": "181439", "rate": "9.00"},
+        {"from": "181439", "to": "999999999", "rate": "11.50"}
+      ]
+    },
+    "ON": {
+      "name": "Ontario",
+      "basic_personal_amount": "12989",
+      "brackets": [
+        {"from": "0", "to": "53891", "rate": "5.05"},
+        {"from": "53891", "to": "107785", "rate": "9.15"},
+        {"from": "107785", "to": "150000", "rate": "11.16"},
+        {"from": "150000", "to": "220000", "rate": "12.16"},
+        {"from": "220000", "to": "999999999", "rate": "13.16"}
+      ],
+      "surtax": {
+        "threshold_1": "5818",
+        "rate_1": "20",
+        "threshold_2": "7446",
+        "rate_2": "36",
+        "note": "20% on provincial tax over $5,818; additional 36% on provincial tax over $7,446 (total 56% surtax above second threshold)"
+      }
+    },
+    "PE": {
+      "name": "Prince Edward Island",
+      "basic_personal_amount": "15000",
+      "brackets": [
+        {"from": "0", "to": "33928", "rate": "9.50"},
+        {"from": "33928", "to": "65820", "rate": "13.47"},
+        {"from": "65820", "to": "106890", "rate": "16.60"},
+        {"from": "106890", "to": "142250", "rate": "17.62"},
+        {"from": "142250", "to": "999999999", "rate": "19.00"}
+      ]
+    },
+    "QC": {
+      "name": "Quebec",
+      "basic_personal_amount": "18952",
+      "brackets": [
+        {"from": "0", "to": "54345", "rate": "14.00"},
+        {"from": "54345", "to": "108680", "rate": "19.00"},
+        {"from": "108680", "to": "132245", "rate": "24.00"},
+        {"from": "132245", "to": "999999999", "rate": "25.75"}
+      ],
+      "note": "Quebec collects its own income tax via Revenu Quebec. Federal abatement of 16.5% applies."
+    },
+    "SK": {
+      "name": "Saskatchewan",
+      "basic_personal_amount": "20381",
+      "brackets": [
+        {"from": "0", "to": "54532", "rate": "10.50"},
+        {"from": "54532", "to": "155805", "rate": "12.50"},
+        {"from": "155805", "to": "999999999", "rate": "14.50"}
+      ]
+    },
+    "YT": {
+      "name": "Yukon",
+      "basic_personal_amount": "16452",
+      "brackets": [
+        {"from": "0", "to": "58523", "rate": "6.40"},
+        {"from": "58523", "to": "117045", "rate": "9.00"},
+        {"from": "117045", "to": "181440", "rate": "10.90"},
+        {"from": "181440", "to": "258482", "rate": "12.93"},
+        {"from": "258482", "to": "500000", "rate": "12.80"},
+        {"from": "500000", "to": "999999999", "rate": "15.00"}
+      ],
+      "note": "Yukon mirrors federal bracket thresholds for the first three brackets. BPA mirrors federal amount."
+    }
+  }
+}

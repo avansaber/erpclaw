@@ -1,0 +1,1117 @@
+ocui_version: "1.0"
+skill: erpclaw-payroll
+skill_version: "1.0.0"
+display_name: Payroll
+icon: wallet
+color: "#ec4899"
+
+entities:
+  salary_structure:
+    label: Salary Structure
+    label_plural: Salary Structures
+    table: salary_structure
+    id_col: id
+    name_col: name
+    primary_field: name
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      name:
+        type: text
+        label: Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      payroll_frequency:
+        type: select
+        label: Payroll Frequency
+        required: true
+        options:
+          - value: "monthly"
+            label: "Monthly"
+          - value: "biweekly"
+            label: "Biweekly"
+          - value: "weekly"
+            label: "Weekly"
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      currency:
+        type: text
+        label: Currency
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 4
+      is_active:
+        type: integer
+        label: Is Active
+        in_form_view: true
+        form_group: details
+        form_order: 5
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      items:
+        label: Line Items
+        order: 4
+        type: child_table
+
+  salary_slip:
+    label: Salary Slip
+    label_plural: Salary Slips
+    table: salary_slip
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      naming_series:
+        type: text
+        label: Naming Series
+        read_only: true
+      payroll_run_id:
+        type: link
+        label: Payroll Run ID
+        link_entity: payroll_run
+        link_display_field: name
+        link_search_action: list-payroll-runs
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      employee_id:
+        type: link
+        label: Employee ID
+        link_entity: employee
+        link_display_field: name
+        link_search_action: list-employees
+        in_form_view: true
+        form_group: references
+        form_order: 2
+      period_start:
+        type: text
+        label: Period Start
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      period_end:
+        type: text
+        label: Period End
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      total_working_days:
+        type: currency
+        label: Total Working Days
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 5
+      payment_days:
+        type: text
+        label: Payment Days
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      gross_pay:
+        type: currency
+        label: Gross Pay
+        precision: 2
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      total_deductions:
+        type: currency
+        label: Total Deductions
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 8
+      net_pay:
+        type: currency
+        label: Net Pay
+        precision: 2
+        in_form_view: true
+        form_group: details
+        form_order: 9
+      bank_account:
+        type: text
+        label: Bank Account
+        in_form_view: true
+        form_group: details
+        form_order: 10
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "draft"
+            label: "Draft"
+          - value: "submitted"
+            label: "Submitted"
+          - value: "paid"
+            label: "Paid"
+          - value: "cancelled"
+            label: "Cancelled"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 11
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 12
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 4
+        columns: 2
+      items:
+        label: Line Items
+        order: 5
+        type: child_table
+
+  salary_component:
+    label: Salary Component
+    label_plural: Salary Components
+    table: salary_component
+    id_col: id
+    name_col: name
+    primary_field: name
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      name:
+        type: text
+        label: Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      component_type:
+        type: select
+        label: Component Type
+        required: true
+        options:
+          - value: "earning"
+            label: "Earning"
+          - value: "deduction"
+            label: "Deduction"
+          - value: "employer_contribution"
+            label: "Employer Contribution"
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      is_tax_applicable:
+        type: integer
+        label: Is Tax Applicable
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      is_statutory:
+        type: integer
+        label: Is Statutory
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      is_pre_tax:
+        type: integer
+        label: Is Pre Tax
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      variable_based_on_taxable_salary:
+        type: integer
+        label: Variable Based On Taxable Salary
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      description:
+        type: textarea
+        label: Description
+        in_form_view: true
+        form_group: notes
+        form_order: 7
+      depends_on_payment_days:
+        type: integer
+        label: Depends On Payment Days
+        in_form_view: true
+        form_group: details
+        form_order: 8
+      gl_account_id:
+        type: link
+        label: Gl Account ID
+        link_entity: account
+        link_display_field: name
+        link_search_action: list-accounts
+        in_form_view: true
+        form_group: references
+        form_order: 9
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      notes:
+        label: Notes
+        order: 4
+        columns: 1
+
+  payroll_run:
+    label: Payroll Run
+    label_plural: Payroll Runs
+    table: payroll_run
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      naming_series:
+        type: text
+        label: Naming Series
+        read_only: true
+      period_start:
+        type: text
+        label: Period Start
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 1
+      period_end:
+        type: text
+        label: Period End
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      payroll_frequency:
+        type: select
+        label: Payroll Frequency
+        required: true
+        options:
+          - value: "monthly"
+            label: "Monthly"
+          - value: "biweekly"
+            label: "Biweekly"
+          - value: "weekly"
+            label: "Weekly"
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      department_id:
+        type: link
+        label: Department ID
+        link_entity: department
+        link_display_field: name
+        link_search_action: list-departments
+        in_form_view: true
+        form_group: references
+        form_order: 4
+      total_gross:
+        type: currency
+        label: Total Gross
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 5
+      total_deductions:
+        type: currency
+        label: Total Deductions
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 6
+      total_net:
+        type: currency
+        label: Total Net
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 7
+      employee_count:
+        type: integer
+        label: Employee Count
+        in_form_view: true
+        form_group: details
+        form_order: 8
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "draft"
+            label: "Draft"
+          - value: "submitted"
+            label: "Submitted"
+          - value: "paid"
+            label: "Paid"
+          - value: "cancelled"
+            label: "Cancelled"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 9
+      payment_entry_id:
+        type: link
+        label: Payment Entry ID
+        link_entity: payment_entry
+        link_display_field: name
+        link_search_action: list-payment-entries
+        in_form_view: true
+        form_group: references
+        form_order: 10
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 11
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 4
+        columns: 2
+
+  salary_assignment:
+    label: Salary Assignment
+    label_plural: Salary Assignments
+    table: salary_assignment
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      employee_id:
+        type: link
+        label: Employee ID
+        link_entity: employee
+        link_display_field: name
+        link_search_action: list-employees
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      salary_structure_id:
+        type: link
+        label: Salary Structure ID
+        link_entity: salary_structure
+        link_display_field: name
+        link_search_action: list-salary-structures
+        in_form_view: true
+        form_group: references
+        form_order: 2
+      base_amount:
+        type: currency
+        label: Base Amount
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 3
+      effective_from:
+        type: date
+        label: Effective From
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      effective_to:
+        type: date
+        label: Effective To
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      currency:
+        type: text
+        label: Currency
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 7
+    form_groups:
+      details:
+        label: Details
+        order: 1
+        columns: 2
+      references:
+        label: References
+        order: 2
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 3
+        columns: 2
+
+  income_tax_slab:
+    label: Income Tax Slab
+    label_plural: Income Tax Slabs
+    table: income_tax_slab
+    id_col: id
+    name_col: name
+    primary_field: name
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      name:
+        type: text
+        label: Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      tax_jurisdiction:
+        type: select
+        label: Tax Jurisdiction
+        required: true
+        options:
+          - value: "federal"
+            label: "Federal"
+          - value: "state"
+            label: "State"
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      state_code:
+        type: text
+        label: State Code
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      filing_status:
+        type: select
+        label: Filing Status
+        options:
+          - value: "single"
+            label: "Single"
+          - value: "married_jointly"
+            label: "Married Jointly"
+          - value: "married_separately"
+            label: "Married Separately"
+          - value: "head_of_household"
+            label: "Head Of Household"
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      effective_from:
+        type: date
+        label: Effective From
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      standard_deduction:
+        type: text
+        label: Standard Deduction
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      is_active:
+        type: integer
+        label: Is Active
+        in_form_view: true
+        form_group: details
+        form_order: 7
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      items:
+        label: Line Items
+        order: 3
+        type: child_table
+
+  fica_config:
+    label: Fica Config
+    label_plural: Fica Configs
+    table: fica_config
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      tax_year:
+        type: integer
+        label: Tax Year
+        in_form_view: true
+        form_group: details
+        form_order: 1
+      ss_wage_base:
+        type: currency
+        label: Ss Wage Base
+        precision: 2
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      ss_employee_rate:
+        type: currency
+        label: Ss Employee Rate
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 3
+      ss_employer_rate:
+        type: currency
+        label: Ss Employer Rate
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 4
+      medicare_employee_rate:
+        type: currency
+        label: Medicare Employee Rate
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 5
+      medicare_employer_rate:
+        type: currency
+        label: Medicare Employer Rate
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 6
+      additional_medicare_threshold:
+        type: text
+        label: Additional Medicare Threshold
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      additional_medicare_rate:
+        type: currency
+        label: Additional Medicare Rate
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 8
+    form_groups:
+      details:
+        label: Details
+        order: 1
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 2
+        columns: 2
+
+  futa_suta_config:
+    label: Futa Suta Config
+    label_plural: Futa Suta Configs
+    table: futa_suta_config
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      tax_year:
+        type: integer
+        label: Tax Year
+        in_form_view: true
+        form_group: details
+        form_order: 1
+      state_code:
+        type: text
+        label: State Code
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      wage_base:
+        type: currency
+        label: Wage Base
+        precision: 2
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      rate:
+        type: currency
+        label: Rate
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 4
+      employer_rate_override:
+        type: currency
+        label: Employer Rate Override
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 5
+    form_groups:
+      details:
+        label: Details
+        order: 1
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 2
+        columns: 2
+
+  wage_garnishment:
+    label: Wage Garnishment
+    label_plural: Wage Garnishments
+    table: wage_garnishment
+    id_col: id
+    name_col: creditor_name
+    primary_field: creditor_name
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      employee_id:
+        type: link
+        label: Employee ID
+        link_entity: employee
+        link_display_field: name
+        link_search_action: list-employees
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      order_number:
+        type: text
+        label: Order Number
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      creditor_name:
+        type: currency
+        label: Creditor Name
+        precision: 2
+        in_list_view: true
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      garnishment_type:
+        type: select
+        label: Garnishment Type
+        required: true
+        options:
+          - value: "child_support"
+            label: "Child Support"
+          - value: "tax_levy"
+            label: "Tax Levy"
+          - value: "student_loan"
+            label: "Student Loan"
+          - value: "creditor"
+            label: "Creditor"
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      amount_or_percentage:
+        type: currency
+        label: Amount Or Percentage
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 5
+      is_percentage:
+        type: percent
+        label: Is Percentage
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      max_percentage:
+        type: percent
+        label: Max Percentage
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      priority:
+        type: integer
+        label: Priority
+        in_form_view: true
+        form_group: details
+        form_order: 8
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "active"
+            label: "Active"
+          - value: "paused"
+            label: "Paused"
+          - value: "completed"
+            label: "Completed"
+          - value: "cancelled"
+            label: "Cancelled"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 9
+      cumulative_paid:
+        type: currency
+        label: Cumulative Paid
+        precision: 2
+        in_form_view: true
+        form_group: details
+        form_order: 10
+      total_owed:
+        type: currency
+        label: Total Owed
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 11
+      start_date:
+        type: date
+        label: Start Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 12
+      end_date:
+        type: date
+        label: End Date
+        in_form_view: true
+        form_group: header
+        form_order: 13
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 14
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 4
+        columns: 2
+
+child_entities:
+  salary_structure_detail:
+    parent_entity: salary_structure
+    parent_field: salary_structure_id
+    param_name: items
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      salary_component_id:
+        type: link
+        label: Salary Component ID
+        link_entity: salary_component
+        link_display_field: name
+        link_search_action: list-salary-components
+      amount:
+        type: currency
+        label: Amount
+        precision: 2
+      percentage:
+        type: percent
+        label: Percentage
+      formula:
+        type: text
+        label: Formula
+      base_component_id:
+        type: link
+        label: Base Component ID
+        link_entity: salary_component
+        link_display_field: name
+        link_search_action: list-salary-components
+      sort_order:
+        type: integer
+        label: Sort Order
+  salary_slip_detail:
+    parent_entity: salary_slip
+    parent_field: salary_slip_id
+    param_name: items
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      salary_component_id:
+        type: link
+        label: Salary Component ID
+        link_entity: salary_component
+        link_display_field: name
+        link_search_action: list-salary-components
+      component_type:
+        type: select
+        label: Component Type
+        required: true
+        options:
+          - value: "earning"
+            label: "Earning"
+          - value: "deduction"
+            label: "Deduction"
+      amount:
+        type: currency
+        label: Amount
+        precision: 2
+      year_to_date:
+        type: date
+        label: Year To Date
+  income_tax_slab_rate:
+    parent_entity: income_tax_slab
+    parent_field: slab_id
+    param_name: items
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      from_amount:
+        type: currency
+        label: From Amount
+        precision: 2
+      to_amount:
+        type: currency
+        label: To Amount
+        precision: 2
+      rate:
+        type: currency
+        label: Rate
+        precision: 2
+
+action_map:
+  add-income-tax-slab:
+    component: FormView
+    entity: income_tax_slab
+    mode: create
+    child_tables:
+      - entity: income_tax_slab_rate
+        form_group: items
+        add_label: "Add Row"
+  add-salary-assignment:
+    component: FormView
+    entity: salary_assignment
+    mode: create
+  add-salary-component:
+    component: FormView
+    entity: salary_component
+    mode: create
+    child_tables:
+      - entity: salary_structure_detail
+        form_group: items
+        add_label: "Add Row"
+  add-salary-structure:
+    component: FormView
+    entity: salary_structure
+    mode: create
+    child_tables:
+      - entity: salary_structure_detail
+        form_group: items
+        add_label: "Add Row"
+  cancel-payroll-run:
+    component: WizardFlow
+    entity: payroll_run
+    steps:
+      - label: Review
+        type: detail
+      - label: Confirm
+        type: confirmation
+        message: "Cancel this payroll run? This cannot be undone."
+        destructive: true
+  create-payroll-run:
+    component: FormView
+    entity: payroll_run
+    mode: create
+  generate-salary-slips:
+    component: FormView
+    entity: salary_slip
+    mode: create
+  generate-w2-data:
+    component: FormView
+    mode: create
+  get-salary-slip:
+    component: DetailView
+    entity: salary_slip
+  get-salary-structure:
+    component: DetailView
+    entity: salary_structure
+  list-salary-assignments:
+    component: DataTable
+    entity: salary_assignment
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-salary-assignment
+  list-salary-components:
+    component: DataTable
+    entity: salary_component
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-salary-component
+  list-salary-slips:
+    component: DataTable
+    entity: salary_slip
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+  list-salary-structures:
+    component: DataTable
+    entity: salary_structure
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-salary-structure
+  status:
+    component: DashboardView
+  submit-payroll-run:
+    component: WizardFlow
+    entity: payroll_run
+    steps:
+      - label: Review
+        type: detail
+      - label: Confirm
+        type: confirmation
+        message: "Submit this payroll run?"
+  update-fica-config:
+    component: FormView
+    entity: fica_config
+    mode: edit
+  update-futa-suta-config:
+    component: FormView
+    entity: futa_suta_config
+    mode: edit

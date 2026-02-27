@@ -1,0 +1,1166 @@
+ocui_version: "1.0"
+skill: erpclaw-billing
+skill_version: "1.0.0"
+display_name: Subscriptions & Billing
+icon: repeat
+color: "#0ea5e9"
+
+entities:
+  meter:
+    label: Meter
+    label_plural: Meters
+    table: meter
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      meter_number:
+        type: text
+        label: Meter Number
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 1
+      customer_id:
+        type: link
+        label: Customer ID
+        link_entity: customer
+        link_display_field: name
+        link_search_action: list-customers
+        in_form_view: true
+        form_group: references
+        form_order: 2
+      service_type:
+        type: select
+        label: Service Type
+        required: true
+        options:
+          - value: "electricity"
+            label: "Electricity"
+          - value: "water"
+            label: "Water"
+          - value: "gas"
+            label: "Gas"
+          - value: "telecom"
+            label: "Telecom"
+          - value: "saas"
+            label: "Saas"
+          - value: "parking"
+            label: "Parking"
+          - value: "rental"
+            label: "Rental"
+          - value: "waste"
+            label: "Waste"
+          - value: "custom"
+            label: "Custom"
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      service_point_id:
+        type: link
+        label: Service Point ID
+        link_entity: service_point
+        link_display_field: name
+        link_search_action: list-service-points
+        in_form_view: true
+        form_group: references
+        form_order: 4
+      service_point_address:
+        type: text
+        label: Service Point Address
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      rate_plan_id:
+        type: link
+        label: Rate Plan ID
+        link_entity: rate_plan
+        link_display_field: name
+        link_search_action: list-rate-plans
+        in_form_view: true
+        form_group: references
+        form_order: 6
+      install_date:
+        type: date
+        label: Install Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 7
+      last_reading_date:
+        type: date
+        label: Last Reading Date
+        in_form_view: true
+        form_group: header
+        form_order: 8
+      last_reading_value:
+        type: text
+        label: Last Reading Value
+        in_form_view: true
+        form_group: details
+        form_order: 9
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "active"
+            label: "Active"
+          - value: "disconnected"
+            label: "Disconnected"
+          - value: "removed"
+            label: "Removed"
+          - value: "suspended"
+            label: "Suspended"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 10
+      metadata:
+        type: text
+        label: Metadata
+        in_form_view: true
+        form_group: details
+        form_order: 11
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      items:
+        label: Line Items
+        order: 4
+        type: child_table
+
+  usage_event:
+    label: Usage Event
+    label_plural: Usage Events
+    table: usage_event
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      customer_id:
+        type: link
+        label: Customer ID
+        link_entity: customer
+        link_display_field: name
+        link_search_action: list-customers
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      meter_id:
+        type: link
+        label: Meter ID
+        link_entity: meter
+        link_display_field: name
+        link_search_action: list-meters
+        in_form_view: true
+        form_group: references
+        form_order: 2
+      event_type:
+        type: text
+        label: Event Type
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      quantity:
+        type: quantity
+        label: Quantity
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      timestamp:
+        type: text
+        label: Timestamp
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      metadata:
+        type: text
+        label: Metadata
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      idempotency_key:
+        type: text
+        label: IDempotency Key
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      billing_period_id:
+        type: link
+        label: Billing Period ID
+        link_entity: billing_period
+        link_display_field: name
+        link_search_action: list-billing-periods
+        in_form_view: true
+        form_group: references
+        form_order: 8
+      processed:
+        type: integer
+        label: Processed
+        in_form_view: true
+        form_group: details
+        form_order: 9
+    form_groups:
+      details:
+        label: Details
+        order: 1
+        columns: 2
+      references:
+        label: References
+        order: 2
+        columns: 2
+
+  rate_plan:
+    label: Rate Plan
+    label_plural: Rate Plans
+    table: rate_plan
+    id_col: id
+    name_col: name
+    primary_field: name
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      name:
+        type: text
+        label: Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      service_type:
+        type: text
+        label: Service Type
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      plan_type:
+        type: select
+        label: Plan Type
+        required: true
+        options:
+          - value: "flat"
+            label: "Flat"
+          - value: "tiered"
+            label: "Tiered"
+          - value: "time_of_use"
+            label: "Time Of Use"
+          - value: "demand"
+            label: "Demand"
+          - value: "volume_discount"
+            label: "Volume Discount"
+          - value: "prepaid_credit"
+            label: "Prepaid Credit"
+          - value: "hybrid"
+            label: "Hybrid"
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      base_charge:
+        type: text
+        label: Base Charge
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      base_charge_period:
+        type: select
+        label: Base Charge Period
+        options:
+          - value: "monthly"
+            label: "Monthly"
+          - value: "quarterly"
+            label: "Quarterly"
+          - value: "annually"
+            label: "Annually"
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      currency:
+        type: text
+        label: Currency
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      effective_from:
+        type: date
+        label: Effective From
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      effective_to:
+        type: date
+        label: Effective To
+        in_form_view: true
+        form_group: details
+        form_order: 8
+      minimum_charge:
+        type: text
+        label: Minimum Charge
+        in_form_view: true
+        form_group: details
+        form_order: 9
+      minimum_commitment:
+        type: text
+        label: Minimum Commitment
+        in_form_view: true
+        form_group: details
+        form_order: 10
+      overage_rate:
+        type: currency
+        label: Overage Rate
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 11
+      metadata:
+        type: text
+        label: Metadata
+        in_form_view: true
+        form_group: details
+        form_order: 12
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 3
+        columns: 2
+
+  rate_tier:
+    label: Rate Tier
+    label_plural: Rate Tiers
+    table: rate_tier
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      rate_plan_id:
+        type: link
+        label: Rate Plan ID
+        link_entity: rate_plan
+        link_display_field: name
+        link_search_action: list-rate-plans
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      tier_start:
+        type: text
+        label: Tier Start
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      tier_end:
+        type: text
+        label: Tier End
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      rate:
+        type: currency
+        label: Rate
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 4
+      fixed_charge:
+        type: text
+        label: Fixed Charge
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      time_of_use_period:
+        type: select
+        label: Time Of Use Period
+        options:
+          - value: "peak"
+            label: "Peak"
+          - value: "off_peak"
+            label: "Off Peak"
+          - value: "shoulder"
+            label: "Shoulder"
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      time_of_use_hours:
+        type: text
+        label: Time Of Use Hours
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      demand_type:
+        type: select
+        label: Demand Type
+        options:
+          - value: "energy"
+            label: "Energy"
+          - value: "demand"
+            label: "Demand"
+          - value: "reactive_power"
+            label: "Reactive Power"
+        in_form_view: true
+        form_group: details
+        form_order: 8
+      sort_order:
+        type: integer
+        label: Sort Order
+        in_form_view: true
+        form_group: details
+        form_order: 9
+    form_groups:
+      details:
+        label: Details
+        order: 1
+        columns: 2
+      references:
+        label: References
+        order: 2
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 3
+        columns: 2
+
+  billing_period:
+    label: Billing Period
+    label_plural: Billing Periods
+    table: billing_period
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      customer_id:
+        type: link
+        label: Customer ID
+        link_entity: customer
+        link_display_field: name
+        link_search_action: list-customers
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      meter_id:
+        type: link
+        label: Meter ID
+        link_entity: meter
+        link_display_field: name
+        link_search_action: list-meters
+        in_form_view: true
+        form_group: references
+        form_order: 2
+      rate_plan_id:
+        type: link
+        label: Rate Plan ID
+        link_entity: rate_plan
+        link_display_field: name
+        link_search_action: list-rate-plans
+        in_form_view: true
+        form_group: references
+        form_order: 3
+      period_start:
+        type: text
+        label: Period Start
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      period_end:
+        type: text
+        label: Period End
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      total_consumption:
+        type: currency
+        label: Total Consumption
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 6
+      consumption_uom:
+        type: text
+        label: Consumption UOM
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      peak_demand:
+        type: text
+        label: Peak Demand
+        in_form_view: true
+        form_group: details
+        form_order: 8
+      base_charge:
+        type: text
+        label: Base Charge
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 9
+      usage_charge:
+        type: text
+        label: Usage Charge
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 10
+      demand_charge:
+        type: text
+        label: Demand Charge
+        in_form_view: true
+        form_group: details
+        form_order: 11
+      adjustments_total:
+        type: currency
+        label: Adjustments Total
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 12
+      subtotal:
+        type: currency
+        label: Subtotal
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 13
+      tax_amount:
+        type: currency
+        label: Tax Amount
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 14
+      grand_total:
+        type: currency
+        label: Grand Total
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 15
+      invoice_id:
+        type: link
+        label: Invoice ID
+        link_entity: invoice
+        link_display_field: name
+        link_search_action: list-invoices
+        in_form_view: true
+        form_group: references
+        form_order: 16
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "open"
+            label: "Open"
+          - value: "rated"
+            label: "Rated"
+          - value: "invoiced"
+            label: "Invoiced"
+          - value: "paid"
+            label: "Paid"
+          - value: "disputed"
+            label: "Disputed"
+          - value: "void"
+            label: "Void"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 17
+      rated_at:
+        type: currency
+        label: Rated At
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 18
+      invoiced_at:
+        type: text
+        label: Invoiced At
+        in_form_view: true
+        form_group: details
+        form_order: 19
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 4
+        columns: 2
+
+  billing_adjustment:
+    label: Billing Adjustment
+    label_plural: Billing Adjustments
+    table: billing_adjustment
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      billing_period_id:
+        type: link
+        label: Billing Period ID
+        link_entity: billing_period
+        link_display_field: name
+        link_search_action: list-billing-periods
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      adjustment_type:
+        type: select
+        label: Adjustment Type
+        required: true
+        options:
+          - value: "credit"
+            label: "Credit"
+          - value: "late_fee"
+            label: "Late Fee"
+          - value: "deposit"
+            label: "Deposit"
+          - value: "refund"
+            label: "Refund"
+          - value: "proration"
+            label: "Proration"
+          - value: "discount"
+            label: "Discount"
+          - value: "penalty"
+            label: "Penalty"
+          - value: "write_off"
+            label: "Write Off"
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      amount:
+        type: currency
+        label: Amount
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 3
+      reason:
+        type: textarea
+        label: Reason
+        in_form_view: true
+        form_group: notes
+        form_order: 4
+      approved_by:
+        type: text
+        label: Approved By
+        in_form_view: true
+        form_group: details
+        form_order: 5
+    form_groups:
+      details:
+        label: Details
+        order: 1
+        columns: 2
+      references:
+        label: References
+        order: 2
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 3
+        columns: 2
+      notes:
+        label: Notes
+        order: 4
+        columns: 1
+
+  prepaid_credit_balance:
+    label: Prepaid Credit Balance
+    label_plural: Prepaid Credit Balances
+    table: prepaid_credit_balance
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      customer_id:
+        type: link
+        label: Customer ID
+        link_entity: customer
+        link_display_field: name
+        link_search_action: list-customers
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      rate_plan_id:
+        type: link
+        label: Rate Plan ID
+        link_entity: rate_plan
+        link_display_field: name
+        link_search_action: list-rate-plans
+        in_form_view: true
+        form_group: references
+        form_order: 2
+      original_amount:
+        type: currency
+        label: Original Amount
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 3
+      remaining_amount:
+        type: currency
+        label: Remaining Amount
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 4
+      period_start:
+        type: text
+        label: Period Start
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      period_end:
+        type: text
+        label: Period End
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      overage_amount:
+        type: currency
+        label: Overage Amount
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 7
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "active"
+            label: "Active"
+          - value: "exhausted"
+            label: "Exhausted"
+          - value: "expired"
+            label: "Expired"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 8
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 4
+        columns: 2
+
+  recurring_invoice_template:
+    label: Recurring Invoice Template
+    label_plural: Recurring Invoice Templates
+    table: recurring_invoice_template
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      naming_series:
+        type: text
+        label: Naming Series
+        read_only: true
+      customer_id:
+        type: link
+        label: Customer ID
+        link_entity: customer
+        link_display_field: name
+        link_search_action: list-customers
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      frequency:
+        type: select
+        label: Frequency
+        required: true
+        options:
+          - value: "weekly"
+            label: "Weekly"
+          - value: "monthly"
+            label: "Monthly"
+          - value: "quarterly"
+            label: "Quarterly"
+          - value: "semi_annually"
+            label: "Semi Annually"
+          - value: "annually"
+            label: "Annually"
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      start_date:
+        type: date
+        label: Start Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 3
+      end_date:
+        type: date
+        label: End Date
+        in_form_view: true
+        form_group: header
+        form_order: 4
+      next_invoice_date:
+        type: date
+        label: Next Invoice Date
+        in_form_view: true
+        form_group: header
+        form_order: 5
+      last_invoice_date:
+        type: date
+        label: Last Invoice Date
+        in_form_view: true
+        form_group: header
+        form_order: 6
+      tax_template_id:
+        type: link
+        label: Tax Template ID
+        link_entity: tax_template
+        link_display_field: name
+        link_search_action: list-tax-templates
+        in_form_view: true
+        form_group: references
+        form_order: 7
+      payment_terms_id:
+        type: link
+        label: Payment Terms ID
+        link_entity: payment_terms
+        link_display_field: name
+        link_search_action: list-payment-termses
+        in_form_view: true
+        form_group: references
+        form_order: 8
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "draft"
+            label: "Draft"
+          - value: "active"
+            label: "Active"
+          - value: "paused"
+            label: "Paused"
+          - value: "completed"
+            label: "Completed"
+          - value: "cancelled"
+            label: "Cancelled"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 9
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 10
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      items:
+        label: Line Items
+        order: 4
+        type: child_table
+
+child_entities:
+  meter_reading:
+    parent_entity: meter
+    parent_field: meter_id
+    param_name: items
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      reading_date:
+        type: date
+        label: Reading Date
+      reading_value:
+        type: text
+        label: Reading Value
+        required: true
+      previous_reading_value:
+        type: text
+        label: Previous Reading Value
+      consumption:
+        type: text
+        label: Consumption
+      reading_type:
+        type: select
+        label: Reading Type
+        required: true
+        options:
+          - value: "actual"
+            label: "Actual"
+          - value: "estimated"
+            label: "Estimated"
+          - value: "adjusted"
+            label: "Adjusted"
+          - value: "rollover"
+            label: "Rollover"
+      uom:
+        type: text
+        label: UOM
+      source:
+        type: select
+        label: Source
+        required: true
+        options:
+          - value: "manual"
+            label: "Manual"
+          - value: "smart_meter"
+            label: "Smart Meter"
+          - value: "api"
+            label: "Api"
+          - value: "import"
+            label: "Import"
+          - value: "estimated"
+            label: "Estimated"
+      validated:
+        type: integer
+        label: Validated
+      validation_notes:
+        type: text
+        label: Validation Notes
+      estimated_reason:
+        type: text
+        label: Estimated Reason
+  recurring_invoice_template_item:
+    parent_entity: recurring_invoice_template
+    parent_field: template_id
+    param_name: items
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      item_id:
+        type: link
+        label: Item ID
+        link_entity: item
+        link_display_field: name
+        link_search_action: list-items
+      quantity:
+        type: quantity
+        label: Quantity
+      uom:
+        type: text
+        label: UOM
+      rate:
+        type: currency
+        label: Rate
+        precision: 2
+      amount:
+        type: currency
+        label: Amount
+        precision: 2
+
+action_map:
+  add-billing-adjustment:
+    component: FormView
+    entity: billing_adjustment
+    mode: create
+  add-meter:
+    component: FormView
+    entity: meter
+    mode: create
+    child_tables:
+      - entity: meter_reading
+        form_group: items
+        add_label: "Add Row"
+  add-meter-reading:
+    component: FormView
+    mode: create
+  add-prepaid-credit:
+    component: FormView
+    mode: create
+  add-rate-plan:
+    component: FormView
+    entity: rate_plan
+    mode: create
+  add-usage-event:
+    component: FormView
+    entity: usage_event
+    mode: create
+  add-usage-events-batch:
+    component: FormView
+    mode: create
+  create-billing-period:
+    component: FormView
+    entity: billing_period
+    mode: create
+  generate-invoices:
+    component: FormView
+    mode: create
+  get-billing-period:
+    component: DetailView
+    entity: billing_period
+  get-meter:
+    component: DetailView
+    entity: meter
+  get-prepaid-balance:
+    component: FormView
+    mode: create
+  get-rate-plan:
+    component: DetailView
+    entity: rate_plan
+  list-billing-periods:
+    component: DataTable
+    entity: billing_period
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: create-billing-period
+  list-meter-readings:
+    component: FormView
+    mode: create
+  list-meters:
+    component: DataTable
+    entity: meter
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-meter
+  list-rate-plans:
+    component: DataTable
+    entity: rate_plan
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-rate-plan
+  rate-consumption:
+    component: FormView
+    mode: create
+  run-billing:
+    component: FormView
+    mode: create
+  status:
+    component: DashboardView
+  update-meter:
+    component: FormView
+    entity: meter
+    mode: edit
+  update-rate-plan:
+    component: FormView
+    entity: rate_plan
+    mode: edit

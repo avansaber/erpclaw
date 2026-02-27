@@ -1,0 +1,2 @@
+# No external dependencies. Uses only Python stdlib.
+# decimal, sqlite3, json, uuid, argparse, datetime -- all built-in.

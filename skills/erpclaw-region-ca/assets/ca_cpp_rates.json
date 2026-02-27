@@ -1,0 +1,32 @@
+{
+  "year": 2026,
+  "cpp": {
+    "rate": "5.95",
+    "max_pensionable_earnings": "74600",
+    "basic_exemption": "3500",
+    "max_employee_contribution": "4230.45",
+    "max_employer_contribution": "4230.45"
+  },
+  "cpp2": {
+    "rate": "4.00",
+    "first_additional_ceiling": "74600",
+    "second_additional_ceiling": "85000",
+    "max_employee_contribution": "416.00",
+    "max_employer_contribution": "416.00"
+  },
+  "qpp": {
+    "rate": "6.30",
+    "max_pensionable_earnings": "74600",
+    "basic_exemption": "3500",
+    "max_employee_contribution": "4479.30",
+    "max_employer_contribution": "4479.30",
+    "note": "QPP base rate 5.30% + additional plan 1.00% = 6.30% total employee rate"
+  },
+  "qpp2": {
+    "rate": "4.00",
+    "first_additional_ceiling": "74600",
+    "second_additional_ceiling": "85000",
+    "max_employee_contribution": "416.00",
+    "max_employer_contribution": "416.00"
+  }
+}

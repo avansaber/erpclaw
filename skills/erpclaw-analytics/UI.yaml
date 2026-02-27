@@ -1,0 +1,82 @@
+ocui_version: "1.0"
+skill: erpclaw-analytics
+skill_version: "1.0.0"
+display_name: Analytics & KPIs
+icon: line-chart
+color: "#84cc16"
+
+action_map:
+  abc-analysis:
+    component: FormView
+    mode: create
+  aging-inventory:
+    component: FormView
+    mode: create
+  available-metrics:
+    component: FormView
+    mode: create
+  company-scorecard:
+    component: FormView
+    mode: create
+  cost-trend:
+    component: FormView
+    mode: create
+  customer-concentration:
+    component: FormView
+    mode: create
+  efficiency-ratios:
+    component: FormView
+    mode: create
+  executive-dashboard:
+    component: FormView
+    mode: create
+  expense-breakdown:
+    component: FormView
+    mode: create
+  headcount-analytics:
+    component: FormView
+    mode: create
+  inventory-turnover:
+    component: FormView
+    mode: create
+  leave-utilization:
+    component: FormView
+    mode: create
+  liquidity-ratios:
+    component: FormView
+    mode: create
+  metric-trend:
+    component: FormView
+    mode: create
+  opex-vs-capex:
+    component: FormView
+    mode: create
+  payroll-analytics:
+    component: FormView
+    mode: create
+  period-comparison:
+    component: FormView
+    mode: create
+  profitability-ratios:
+    component: FormView
+    mode: create
+  project-profitability:
+    component: FormView
+    mode: create
+  quality-dashboard:
+    component: FormView
+    mode: create
+  revenue-by-customer:
+    component: FormView
+    mode: create
+  revenue-by-item:
+    component: FormView
+    mode: create
+  revenue-trend:
+    component: FormView
+    mode: create
+  status:
+    component: DashboardView
+  support-metrics:
+    component: FormView
+    mode: create

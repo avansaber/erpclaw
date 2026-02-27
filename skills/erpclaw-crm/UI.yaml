@@ -1,0 +1,797 @@
+ocui_version: "1.0"
+skill: erpclaw-crm
+skill_version: "1.0.0"
+display_name: CRM
+icon: contact
+color: "#3b82f6"
+
+entities:
+  lead:
+    label: Lead
+    label_plural: Leads
+    table: lead
+    id_col: id
+    name_col: lead_name
+    primary_field: lead_name
+    identifier_field: id
+    status_field: status
+    status_colors:
+      new: blue
+      contacted: cyan
+      qualified: teal
+      converted: green
+      lost: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      naming_series:
+        type: text
+        label: Naming Series
+        read_only: true
+      lead_name:
+        type: text
+        label: Lead Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: details
+        form_order: 1
+      company_name:
+        type: text
+        label: Company Name
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      email:
+        type: text
+        label: Email
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      phone:
+        type: text
+        label: Phone
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      source:
+        type: select
+        label: Source
+        options:
+          - value: "website"
+            label: "Website"
+          - value: "referral"
+            label: "Referral"
+          - value: "campaign"
+            label: "Campaign"
+          - value: "cold_call"
+            label: "Cold Call"
+          - value: "social_media"
+            label: "Social Media"
+          - value: "trade_show"
+            label: "Trade Show"
+          - value: "other"
+            label: "Other"
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      lead_source_id:
+        type: link
+        label: Lead Source ID
+        link_entity: lead_source
+        link_display_field: name
+        link_search_action: list-lead-sources
+        in_form_view: true
+        form_group: references
+        form_order: 6
+      territory:
+        type: text
+        label: Territory
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      industry:
+        type: text
+        label: Industry
+        in_form_view: true
+        form_group: details
+        form_order: 8
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "new"
+            label: "New"
+          - value: "contacted"
+            label: "Contacted"
+          - value: "qualified"
+            label: "Qualified"
+          - value: "converted"
+            label: "Converted"
+          - value: "unresponsive"
+            label: "Unresponsive"
+          - value: "lost"
+            label: "Lost"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 9
+      converted_to_customer:
+        type: text
+        label: Converted To Customer
+        in_form_view: true
+        form_group: details
+        form_order: 10
+      converted_to_opportunity:
+        type: text
+        label: Converted To Opportunity
+        in_form_view: true
+        form_group: details
+        form_order: 11
+      assigned_to:
+        type: text
+        label: Assigned To
+        in_form_view: true
+        form_group: details
+        form_order: 12
+      notes:
+        type: textarea
+        label: Notes
+        in_form_view: true
+        form_group: notes
+        form_order: 13
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 14
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      notes:
+        label: Notes
+        order: 4
+        columns: 1
+
+  opportunity:
+    label: Opportunity
+    label_plural: Opportunities
+    table: opportunity
+    id_col: id
+    name_col: opportunity_name
+    primary_field: opportunity_name
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      naming_series:
+        type: text
+        label: Naming Series
+        read_only: true
+      opportunity_name:
+        type: text
+        label: Opportunity Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: details
+        form_order: 1
+      lead_id:
+        type: link
+        label: Lead ID
+        link_entity: lead
+        link_display_field: name
+        link_search_action: list-leads
+        in_form_view: true
+        form_group: references
+        form_order: 2
+      customer_id:
+        type: link
+        label: Customer ID
+        link_entity: customer
+        link_display_field: name
+        link_search_action: list-customers
+        in_form_view: true
+        form_group: references
+        form_order: 3
+      opportunity_type:
+        type: select
+        label: Opportunity Type
+        required: true
+        options:
+          - value: "sales"
+            label: "Sales"
+          - value: "support"
+            label: "Support"
+          - value: "maintenance"
+            label: "Maintenance"
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      source:
+        type: text
+        label: Source
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      expected_closing_date:
+        type: date
+        label: Expected Closing Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 6
+      probability:
+        type: text
+        label: Probability
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      expected_revenue:
+        type: currency
+        label: Expected Revenue
+        precision: 2
+        in_form_view: true
+        form_group: details
+        form_order: 8
+      weighted_revenue:
+        type: currency
+        label: Weighted Revenue
+        precision: 2
+        in_form_view: true
+        form_group: details
+        form_order: 9
+      stage:
+        type: select
+        label: Stage
+        required: true
+        options:
+          - value: "new"
+            label: "New"
+          - value: "contacted"
+            label: "Contacted"
+          - value: "qualified"
+            label: "Qualified"
+          - value: "proposal_sent"
+            label: "Proposal Sent"
+          - value: "negotiation"
+            label: "Negotiation"
+          - value: "won"
+            label: "Won"
+          - value: "lost"
+            label: "Lost"
+        in_form_view: true
+        form_group: details
+        form_order: 10
+      lost_reason:
+        type: text
+        label: Lost Reason
+        in_form_view: true
+        form_group: details
+        form_order: 11
+      assigned_to:
+        type: text
+        label: Assigned To
+        in_form_view: true
+        form_group: details
+        form_order: 12
+      next_follow_up_date:
+        type: date
+        label: Next Follow Up Date
+        in_form_view: true
+        form_group: header
+        form_order: 13
+      quotation_id:
+        type: link
+        label: Quotation ID
+        link_entity: quotation
+        link_display_field: name
+        link_search_action: list-quotations
+        in_form_view: true
+        form_group: references
+        form_order: 14
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 15
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+
+  campaign:
+    label: Campaign
+    label_plural: Campaigns
+    table: campaign
+    id_col: id
+    name_col: name
+    primary_field: name
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      name:
+        type: text
+        label: Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      campaign_type:
+        type: select
+        label: Campaign Type
+        options:
+          - value: "email"
+            label: "Email"
+          - value: "social"
+            label: "Social"
+          - value: "event"
+            label: "Event"
+          - value: "referral"
+            label: "Referral"
+          - value: "content"
+            label: "Content"
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      start_date:
+        type: date
+        label: Start Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 3
+      end_date:
+        type: date
+        label: End Date
+        in_form_view: true
+        form_group: header
+        form_order: 4
+      budget:
+        type: text
+        label: Budget
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      actual_spend:
+        type: text
+        label: Actual Spend
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "planned"
+            label: "Planned"
+          - value: "active"
+            label: "Active"
+          - value: "completed"
+            label: "Completed"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 7
+      description:
+        type: textarea
+        label: Description
+        in_form_view: true
+        form_group: notes
+        form_order: 8
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      notes:
+        label: Notes
+        order: 3
+        columns: 1
+      items:
+        label: Line Items
+        order: 4
+        type: child_table
+
+  lead_source:
+    label: Lead Source
+    label_plural: Lead Sources
+    table: lead_source
+    id_col: id
+    name_col: name
+    primary_field: name
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      name:
+        type: text
+        label: Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      description:
+        type: textarea
+        label: Description
+        in_form_view: true
+        form_group: notes
+        form_order: 2
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      notes:
+        label: Notes
+        order: 2
+        columns: 1
+
+  crm_activity:
+    label: Crm Activity
+    label_plural: Crm Activities
+    table: crm_activity
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      activity_type:
+        type: select
+        label: Activity Type
+        required: true
+        options:
+          - value: "call"
+            label: "Call"
+          - value: "email"
+            label: "Email"
+          - value: "meeting"
+            label: "Meeting"
+          - value: "note"
+            label: "Note"
+          - value: "task"
+            label: "Task"
+        in_form_view: true
+        form_group: details
+        form_order: 1
+      subject:
+        type: text
+        label: Subject
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      description:
+        type: textarea
+        label: Description
+        in_form_view: true
+        form_group: notes
+        form_order: 3
+      activity_date:
+        type: date
+        label: Activity Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 4
+      lead_id:
+        type: link
+        label: Lead ID
+        link_entity: lead
+        link_display_field: name
+        link_search_action: list-leads
+        in_form_view: true
+        form_group: references
+        form_order: 5
+      opportunity_id:
+        type: link
+        label: Opportunity ID
+        link_entity: opportunity
+        link_display_field: name
+        link_search_action: list-opportunities
+        in_form_view: true
+        form_group: references
+        form_order: 6
+      customer_id:
+        type: link
+        label: Customer ID
+        link_entity: customer
+        link_display_field: name
+        link_search_action: list-customers
+        in_form_view: true
+        form_group: references
+        form_order: 7
+      created_by:
+        type: text
+        label: Created By
+        in_form_view: true
+        form_group: details
+        form_order: 8
+      next_action_date:
+        type: date
+        label: Next Action Date
+        in_form_view: true
+        form_group: header
+        form_order: 9
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      notes:
+        label: Notes
+        order: 4
+        columns: 1
+
+  communication:
+    label: Communication
+    label_plural: Communications
+    table: communication
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      communication_type:
+        type: select
+        label: Communication Type
+        required: true
+        options:
+          - value: "email"
+            label: "Email"
+          - value: "sms"
+            label: "Sms"
+          - value: "call"
+            label: "Call"
+          - value: "chat"
+            label: "Chat"
+        in_form_view: true
+        form_group: details
+        form_order: 1
+      subject:
+        type: text
+        label: Subject
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      content:
+        type: text
+        label: Content
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      sender:
+        type: text
+        label: Sender
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      recipients:
+        type: text
+        label: Recipients
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      reference_type:
+        type: text
+        label: Reference Type
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      reference_id:
+        type: link
+        label: Reference ID
+        link_entity: reference
+        link_display_field: name
+        link_search_action: list-references
+        in_form_view: true
+        form_group: references
+        form_order: 7
+      sent_or_received:
+        type: select
+        label: Sent Or Received
+        required: true
+        options:
+          - value: "sent"
+            label: "Sent"
+          - value: "received"
+            label: "Received"
+        in_form_view: true
+        form_group: details
+        form_order: 8
+      communication_date:
+        type: date
+        label: Communication Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 9
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+
+child_entities:
+  campaign_lead:
+    parent_entity: campaign
+    parent_field: campaign_id
+    param_name: items
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      lead_id:
+        type: link
+        label: Lead ID
+        link_entity: lead
+        link_display_field: name
+        link_search_action: list-leads
+      added_date:
+        type: date
+        label: Added Date
+      converted:
+        type: integer
+        label: Converted
+
+action_map:
+  add-activity:
+    component: FormView
+    mode: create
+  add-campaign:
+    component: FormView
+    entity: campaign
+    mode: create
+    child_tables:
+      - entity: campaign_lead
+        form_group: items
+        add_label: "Add Row"
+  add-lead:
+    component: FormView
+    entity: lead
+    mode: create
+    child_tables:
+      - entity: campaign_lead
+        form_group: items
+        add_label: "Add Row"
+  add-opportunity:
+    component: FormView
+    entity: opportunity
+    mode: create
+  convert-lead-to-opportunity:
+    component: FormView
+    mode: create
+  convert-opportunity-to-quotation:
+    component: FormView
+    mode: create
+  get-lead:
+    component: DetailView
+    entity: lead
+  get-opportunity:
+    component: DetailView
+    entity: opportunity
+  list-activities:
+    component: FormView
+    mode: create
+  list-campaigns:
+    component: DataTable
+    entity: campaign
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-campaign
+  list-leads:
+    component: DataTable
+    entity: lead
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-lead
+  list-opportunities:
+    component: DataTable
+    entity: opportunity
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-opportunity
+  mark-opportunity-lost:
+    component: FormView
+    mode: create
+  mark-opportunity-won:
+    component: FormView
+    mode: create
+  pipeline-report:
+    component: FormView
+    mode: create
+  status:
+    component: DashboardView
+  update-lead:
+    component: FormView
+    entity: lead
+    mode: edit
+  update-opportunity:
+    component: FormView
+    entity: opportunity
+    mode: edit

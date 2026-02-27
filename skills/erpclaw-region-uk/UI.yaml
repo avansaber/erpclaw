@@ -1,0 +1,138 @@
+ocui_version: "1.0"
+skill: erpclaw-region-uk
+skill_version: "1.0.0"
+display_name: UK Compliance
+icon: flag
+color: "#012169"
+
+entities:
+  regional_settings:
+    label: Regional Settings
+    label_plural: Regional Settingses
+    table: regional_settings
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      key:
+        type: text
+        label: Key
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      value:
+        type: text
+        label: Value
+        in_form_view: true
+        form_group: details
+        form_order: 3
+    form_groups:
+      details:
+        label: Details
+        order: 1
+        columns: 2
+      references:
+        label: References
+        order: 2
+        columns: 2
+
+action_map:
+  available-reports:
+    component: FormView
+    mode: create
+  compute-cis-deduction:
+    component: FormView
+    mode: create
+  compute-flat-rate-vat:
+    component: FormView
+    mode: create
+  compute-ni:
+    component: FormView
+    mode: create
+  compute-paye:
+    component: FormView
+    mode: create
+  compute-pension:
+    component: FormView
+    mode: create
+  compute-student-loan:
+    component: FormView
+    mode: create
+  compute-vat:
+    component: FormView
+    mode: create
+  compute-vat-inclusive:
+    component: FormView
+    mode: create
+  generate-ec-sales-list:
+    component: FormView
+    mode: create
+  generate-eps:
+    component: FormView
+    mode: create
+  generate-fps:
+    component: FormView
+    mode: create
+  generate-mtd-payload:
+    component: FormView
+    mode: create
+  generate-p45:
+    component: FormView
+    mode: create
+  generate-p60:
+    component: FormView
+    mode: create
+  generate-vat-return:
+    component: FormView
+    mode: create
+  list-vat-rates:
+    component: FormView
+    mode: create
+  seed-uk-coa:
+    component: FormView
+    mode: create
+  seed-uk-defaults:
+    component: FormView
+    mode: create
+  seed-uk-payroll:
+    component: FormView
+    mode: create
+  setup-vat:
+    component: FormView
+    mode: create
+  status:
+    component: DashboardView
+  uk-payroll-summary:
+    component: FormView
+    mode: create
+  uk-tax-summary:
+    component: FormView
+    mode: create
+  validate-crn:
+    component: FormView
+    mode: create
+  validate-nino:
+    component: FormView
+    mode: create
+  validate-utr:
+    component: FormView
+    mode: create
+  validate-vat-number:
+    component: FormView
+    mode: create

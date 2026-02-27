@@ -1,0 +1,29 @@
+{
+  "tax_year": "2025/26",
+  "class_1_employee": {
+    "primary_threshold_annual": "12570",
+    "upper_earnings_limit_annual": "50270",
+    "lower_earnings_limit_annual": "6396",
+    "rate_main": "8",
+    "rate_above_uel": "2"
+  },
+  "class_1_employer": {
+    "secondary_threshold_annual": "5000",
+    "rate": "15",
+    "employment_allowance": "10500"
+  },
+  "class_1a": {
+    "rate": "15",
+    "description": "Employer NI on benefits in kind"
+  },
+  "class_2_self_employed": {
+    "weekly_rate": "3.45",
+    "small_profits_threshold": "12570"
+  },
+  "class_4_self_employed": {
+    "lower_profits_limit": "12570",
+    "upper_profits_limit": "50270",
+    "rate_main": "6",
+    "rate_above_upl": "2"
+  }
+}

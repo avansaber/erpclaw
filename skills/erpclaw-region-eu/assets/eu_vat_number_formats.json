@@ -1,0 +1,31 @@
+{
+  "formats": [
+    {"country": "AT", "prefix": "ATU", "pattern": "^ATU\\d{8}$", "example": "ATU12345678"},
+    {"country": "BE", "prefix": "BE", "pattern": "^BE[01]\\d{9}$", "example": "BE0123456789"},
+    {"country": "BG", "prefix": "BG", "pattern": "^BG\\d{9,10}$", "example": "BG123456789"},
+    {"country": "HR", "prefix": "HR", "pattern": "^HR\\d{11}$", "example": "HR12345678901"},
+    {"country": "CY", "prefix": "CY", "pattern": "^CY\\d{8}[A-Z]$", "example": "CY12345678A"},
+    {"country": "CZ", "prefix": "CZ", "pattern": "^CZ\\d{8,10}$", "example": "CZ12345678"},
+    {"country": "DK", "prefix": "DK", "pattern": "^DK\\d{8}$", "example": "DK12345678"},
+    {"country": "EE", "prefix": "EE", "pattern": "^EE\\d{9}$", "example": "EE123456789"},
+    {"country": "FI", "prefix": "FI", "pattern": "^FI\\d{8}$", "example": "FI12345678"},
+    {"country": "FR", "prefix": "FR", "pattern": "^FR[A-Z0-9]{2}\\d{9}$", "example": "FR12345678901"},
+    {"country": "DE", "prefix": "DE", "pattern": "^DE\\d{9}$", "example": "DE123456789"},
+    {"country": "GR", "prefix": "EL", "pattern": "^EL\\d{9}$", "example": "EL123456789"},
+    {"country": "HU", "prefix": "HU", "pattern": "^HU\\d{8}$", "example": "HU12345678"},
+    {"country": "IE", "prefix": "IE", "pattern": "^IE\\d{7}[A-Z]{1,2}$", "example": "IE1234567A"},
+    {"country": "IT", "prefix": "IT", "pattern": "^IT\\d{11}$", "example": "IT12345678901"},
+    {"country": "LV", "prefix": "LV", "pattern": "^LV\\d{11}$", "example": "LV12345678901"},
+    {"country": "LT", "prefix": "LT", "pattern": "^LT(\\d{9}|\\d{12})$", "example": "LT123456789"},
+    {"country": "LU", "prefix": "LU", "pattern": "^LU\\d{8}$", "example": "LU12345678"},
+    {"country": "MT", "prefix": "MT", "pattern": "^MT\\d{8}$", "example": "MT12345678"},
+    {"country": "NL", "prefix": "NL", "pattern": "^NL\\d{9}B\\d{2}$", "example": "NL123456789B01"},
+    {"country": "PL", "prefix": "PL", "pattern": "^PL\\d{10}$", "example": "PL1234567890"},
+    {"country": "PT", "prefix": "PT", "pattern": "^PT\\d{9}$", "example": "PT123456789"},
+    {"country": "RO", "prefix": "RO", "pattern": "^RO\\d{2,10}$", "example": "RO1234567890"},
+    {"country": "SK", "prefix": "SK", "pattern": "^SK\\d{10}$", "example": "SK1234567890"},
+    {"country": "SI", "prefix": "SI", "pattern": "^SI\\d{8}$", "example": "SI12345678"},
+    {"country": "ES", "prefix": "ES", "pattern": "^ES[A-Z0-9]\\d{7}[A-Z0-9]$", "example": "ESA12345678"},
+    {"country": "SE", "prefix": "SE", "pattern": "^SE\\d{12}$", "example": "SE123456789012"}
+  ]
+}

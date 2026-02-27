@@ -1,0 +1,1470 @@
+ocui_version: "1.0"
+skill: erpclaw-hr
+skill_version: "1.0.0"
+display_name: Human Resources
+icon: users
+color: "#8b5cf6"
+
+entities:
+  employee:
+    label: Employee
+    label_plural: Employees
+    table: employee
+    id_col: id
+    name_col: first_name
+    primary_field: first_name
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      naming_series:
+        type: text
+        label: Naming Series
+        read_only: true
+      first_name:
+        type: text
+        label: First Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: details
+        form_order: 1
+      last_name:
+        type: text
+        label: Last Name
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      full_name:
+        type: text
+        label: Full Name
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      date_of_birth:
+        type: date
+        label: Date Of Birth
+        in_form_view: true
+        form_group: header
+        form_order: 4
+      gender:
+        type: select
+        label: Gender
+        options:
+          - value: "male"
+            label: "Male"
+          - value: "female"
+            label: "Female"
+          - value: "other"
+            label: "Other"
+          - value: "prefer_not_to_say"
+            label: "Prefer Not To Say"
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      date_of_joining:
+        type: date
+        label: Date Of Joining
+        in_form_view: true
+        form_group: header
+        form_order: 6
+      date_of_exit:
+        type: text
+        label: Date Of Exit
+        in_form_view: true
+        form_group: header
+        form_order: 7
+      employment_type:
+        type: select
+        label: Employment Type
+        required: true
+        options:
+          - value: "full_time"
+            label: "Full Time"
+          - value: "part_time"
+            label: "Part Time"
+          - value: "contract"
+            label: "Contract"
+          - value: "intern"
+            label: "Intern"
+        in_form_view: true
+        form_group: details
+        form_order: 8
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "active"
+            label: "Active"
+          - value: "inactive"
+            label: "Inactive"
+          - value: "suspended"
+            label: "Suspended"
+          - value: "left"
+            label: "Left"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 9
+      department_id:
+        type: link
+        label: Department ID
+        link_entity: department
+        link_display_field: name
+        link_search_action: list-departments
+        in_form_view: true
+        form_group: references
+        form_order: 10
+      designation_id:
+        type: link
+        label: Designation ID
+        link_entity: designation
+        link_display_field: name
+        link_search_action: list-designations
+        in_form_view: true
+        form_group: references
+        form_order: 11
+      employee_grade_id:
+        type: link
+        label: Employee Grade ID
+        link_entity: employee_grade
+        link_display_field: name
+        link_search_action: list-employee-grades
+        in_form_view: true
+        form_group: references
+        form_order: 12
+      branch:
+        type: text
+        label: Branch
+        in_form_view: true
+        form_group: details
+        form_order: 13
+      reporting_to:
+        type: text
+        label: Reporting To
+        in_form_view: true
+        form_group: details
+        form_order: 14
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 15
+      company_email:
+        type: text
+        label: Company Email
+        in_form_view: true
+        form_group: details
+        form_order: 16
+      personal_email:
+        type: text
+        label: Personal Email
+        in_form_view: true
+        form_group: details
+        form_order: 17
+      cell_phone:
+        type: text
+        label: Cell Phone
+        in_form_view: true
+        form_group: details
+        form_order: 18
+      emergency_contact:
+        type: text
+        label: Emergency Contact
+        in_form_view: true
+        form_group: details
+        form_order: 19
+      bank_details:
+        type: text
+        label: Bank Details
+        in_form_view: true
+        form_group: details
+        form_order: 20
+      ssn:
+        type: text
+        label: Ssn
+        in_form_view: true
+        form_group: details
+        form_order: 21
+      federal_filing_status:
+        type: select
+        label: Federal Filing Status
+        options:
+          - value: "single"
+            label: "Single"
+          - value: "married_jointly"
+            label: "Married Jointly"
+          - value: "married_separately"
+            label: "Married Separately"
+          - value: "head_of_household"
+            label: "Head Of Household"
+        in_form_view: true
+        form_group: details
+        form_order: 22
+      w4_allowances:
+        type: integer
+        label: W4 Allowances
+        in_form_view: true
+        form_group: details
+        form_order: 23
+      w4_additional_withholding:
+        type: text
+        label: W4 Additional Withholding
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 24
+      state_filing_status:
+        type: text
+        label: State Filing Status
+        in_form_view: true
+        form_group: details
+        form_order: 25
+      state_withholding_allowances:
+        type: integer
+        label: State Withholding Allowances
+        in_form_view: true
+        form_group: details
+        form_order: 26
+      employee_401k_rate:
+        type: currency
+        label: Employee 401K Rate
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 27
+      hsa_contribution:
+        type: text
+        label: Hsa Contribution
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 28
+      is_exempt_from_fica:
+        type: integer
+        label: Is Exempt From Fica
+        in_form_view: true
+        form_group: details
+        form_order: 29
+      salary_structure_id:
+        type: link
+        label: Salary Structure ID
+        link_entity: salary_structure
+        link_display_field: name
+        link_search_action: list-salary-structures
+        in_form_view: true
+        form_group: references
+        form_order: 30
+      leave_policy_id:
+        type: link
+        label: Leave Policy ID
+        link_entity: leave_policy
+        link_display_field: name
+        link_search_action: list-leave-policies
+        in_form_view: true
+        form_group: references
+        form_order: 31
+      shift_id:
+        type: link
+        label: Shift ID
+        link_entity: shift
+        link_display_field: name
+        link_search_action: list-shifts
+        in_form_view: true
+        form_group: references
+        form_order: 32
+      holiday_list_id:
+        type: link
+        label: Holiday List ID
+        link_entity: holiday_list
+        link_display_field: name
+        link_search_action: list-holiday-lists
+        in_form_view: true
+        form_group: references
+        form_order: 33
+      attendance_device_id:
+        type: link
+        label: Attendance Device ID
+        link_entity: attendance_device
+        link_display_field: name
+        link_search_action: list-attendance-devices
+        in_form_view: true
+        form_group: references
+        form_order: 34
+      payroll_cost_center_id:
+        type: link
+        label: Payroll Cost Center ID
+        link_entity: cost_center
+        link_display_field: name
+        link_search_action: list-cost-centers
+        in_form_view: true
+        form_group: references
+        form_order: 35
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 4
+        columns: 2
+
+  department:
+    label: Department
+    label_plural: Departments
+    table: department
+    id_col: id
+    name_col: name
+    primary_field: name
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      name:
+        type: text
+        label: Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      parent_id:
+        type: link
+        label: Parent ID
+        link_entity: department
+        link_display_field: name
+        link_search_action: list-departments
+        in_form_view: true
+        form_group: references
+        form_order: 2
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 3
+      cost_center_id:
+        type: link
+        label: Cost Center ID
+        link_entity: cost_center
+        link_display_field: name
+        link_search_action: list-cost-centers
+        in_form_view: true
+        form_group: references
+        form_order: 4
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      references:
+        label: References
+        order: 2
+        columns: 2
+
+  designation:
+    label: Designation
+    label_plural: Designations
+    table: designation
+    id_col: id
+    name_col: name
+    primary_field: name
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      name:
+        type: text
+        label: Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      description:
+        type: textarea
+        label: Description
+        in_form_view: true
+        form_group: notes
+        form_order: 2
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      notes:
+        label: Notes
+        order: 2
+        columns: 1
+
+  employee_grade:
+    label: Employee Grade
+    label_plural: Employee Grades
+    table: employee_grade
+    id_col: id
+    name_col: name
+    primary_field: name
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      name:
+        type: text
+        label: Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      description:
+        type: textarea
+        label: Description
+        in_form_view: true
+        form_group: notes
+        form_order: 2
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      notes:
+        label: Notes
+        order: 2
+        columns: 1
+
+  employee_lifecycle_event:
+    label: Employee Lifecycle Event
+    label_plural: Employee Lifecycle Events
+    table: employee_lifecycle_event
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      employee_id:
+        type: link
+        label: Employee ID
+        link_entity: employee
+        link_display_field: name
+        link_search_action: list-employees
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      event_type:
+        type: select
+        label: Event Type
+        required: true
+        options:
+          - value: "hiring"
+            label: "Hiring"
+          - value: "confirmation"
+            label: "Confirmation"
+          - value: "promotion"
+            label: "Promotion"
+          - value: "transfer"
+            label: "Transfer"
+          - value: "separation"
+            label: "Separation"
+          - value: "resignation"
+            label: "Resignation"
+          - value: "retirement"
+            label: "Retirement"
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      event_date:
+        type: date
+        label: Event Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 3
+      details:
+        type: text
+        label: Details
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      old_values:
+        type: text
+        label: Old Values
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      new_values:
+        type: text
+        label: New Values
+        in_form_view: true
+        form_group: details
+        form_order: 6
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+
+  leave_type:
+    label: Leave Type
+    label_plural: Leave Types
+    table: leave_type
+    id_col: id
+    name_col: name
+    primary_field: name
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      name:
+        type: text
+        label: Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      max_days_allowed:
+        type: text
+        label: Max Days Allowed
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      is_carry_forward:
+        type: integer
+        label: Is Carry Forward
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      max_carry_forward_days:
+        type: text
+        label: Max Carry Forward Days
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      is_paid_leave:
+        type: integer
+        label: Is Paid Leave
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      is_compensatory:
+        type: integer
+        label: Is Compensatory
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      applicable_after_days:
+        type: integer
+        label: Applicable After Days
+        in_form_view: true
+        form_group: details
+        form_order: 7
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+
+  leave_application:
+    label: Leave Application
+    label_plural: Leave Applications
+    table: leave_application
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      naming_series:
+        type: text
+        label: Naming Series
+        read_only: true
+      employee_id:
+        type: link
+        label: Employee ID
+        link_entity: employee
+        link_display_field: name
+        link_search_action: list-employees
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      leave_type_id:
+        type: link
+        label: Leave Type ID
+        link_entity: leave_type
+        link_display_field: name
+        link_search_action: list-leave-types
+        in_form_view: true
+        form_group: references
+        form_order: 2
+      from_date:
+        type: date
+        label: From Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 3
+      to_date:
+        type: date
+        label: To Date
+        in_form_view: true
+        form_group: header
+        form_order: 4
+      total_days:
+        type: currency
+        label: Total Days
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 5
+      half_day:
+        type: integer
+        label: Half Day
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      half_day_date:
+        type: date
+        label: Half Day Date
+        in_form_view: true
+        form_group: header
+        form_order: 7
+      reason:
+        type: textarea
+        label: Reason
+        in_form_view: true
+        form_group: notes
+        form_order: 8
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "draft"
+            label: "Draft"
+          - value: "approved"
+            label: "Approved"
+          - value: "rejected"
+            label: "Rejected"
+          - value: "cancelled"
+            label: "Cancelled"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 9
+      approved_by:
+        type: text
+        label: Approved By
+        in_form_view: true
+        form_group: details
+        form_order: 10
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 4
+        columns: 2
+      notes:
+        label: Notes
+        order: 5
+        columns: 1
+
+  leave_allocation:
+    label: Leave Allocation
+    label_plural: Leave Allocations
+    table: leave_allocation
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      employee_id:
+        type: link
+        label: Employee ID
+        link_entity: employee
+        link_display_field: name
+        link_search_action: list-employees
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      leave_type_id:
+        type: link
+        label: Leave Type ID
+        link_entity: leave_type
+        link_display_field: name
+        link_search_action: list-leave-types
+        in_form_view: true
+        form_group: references
+        form_order: 2
+      fiscal_year:
+        type: text
+        label: Fiscal Year
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      total_leaves:
+        type: currency
+        label: Total Leaves
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 4
+      used_leaves:
+        type: text
+        label: Used Leaves
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      remaining_leaves:
+        type: text
+        label: Remaining Leaves
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      carry_forwarded_from:
+        type: text
+        label: Carry Forwarded From
+        in_form_view: true
+        form_group: details
+        form_order: 7
+    form_groups:
+      details:
+        label: Details
+        order: 1
+        columns: 2
+      references:
+        label: References
+        order: 2
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 3
+        columns: 2
+
+  attendance:
+    label: Attendance
+    label_plural: Attendances
+    table: attendance
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      employee_id:
+        type: link
+        label: Employee ID
+        link_entity: employee
+        link_display_field: name
+        link_search_action: list-employees
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      attendance_date:
+        type: date
+        label: Attendance Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 2
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "present"
+            label: "Present"
+          - value: "absent"
+            label: "Absent"
+          - value: "half_day"
+            label: "Half Day"
+          - value: "on_leave"
+            label: "On Leave"
+          - value: "work_from_home"
+            label: "Work From Home"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 3
+      shift:
+        type: text
+        label: Shift
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      check_in_time:
+        type: text
+        label: Check In Time
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      check_out_time:
+        type: text
+        label: Check Out Time
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      working_hours:
+        type: text
+        label: Working Hours
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      late_entry:
+        type: integer
+        label: Late Entry
+        in_form_view: true
+        form_group: details
+        form_order: 8
+      early_exit:
+        type: integer
+        label: Early Exit
+        in_form_view: true
+        form_group: details
+        form_order: 9
+      source:
+        type: select
+        label: Source
+        required: true
+        options:
+          - value: "manual"
+            label: "Manual"
+          - value: "biometric"
+            label: "Biometric"
+          - value: "app"
+            label: "App"
+        in_form_view: true
+        form_group: details
+        form_order: 10
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+
+  holiday_list:
+    label: Holiday List
+    label_plural: Holiday Lists
+    table: holiday_list
+    id_col: id
+    name_col: name
+    primary_field: name
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      name:
+        type: text
+        label: Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      from_date:
+        type: date
+        label: From Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 2
+      to_date:
+        type: date
+        label: To Date
+        in_form_view: true
+        form_group: header
+        form_order: 3
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 4
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      references:
+        label: References
+        order: 2
+        columns: 2
+
+  holiday:
+    label: Holiday
+    label_plural: Holidaies
+    table: holiday
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      holiday_list_id:
+        type: link
+        label: Holiday List ID
+        link_entity: holiday_list
+        link_display_field: name
+        link_search_action: list-holiday-lists
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      holiday_date:
+        type: date
+        label: Holiday Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 2
+      description:
+        type: textarea
+        label: Description
+        in_form_view: true
+        form_group: notes
+        form_order: 3
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      references:
+        label: References
+        order: 2
+        columns: 2
+      notes:
+        label: Notes
+        order: 3
+        columns: 1
+
+  expense_claim:
+    label: Expense Claim
+    label_plural: Expense Claims
+    table: expense_claim
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      naming_series:
+        type: text
+        label: Naming Series
+        read_only: true
+      employee_id:
+        type: link
+        label: Employee ID
+        link_entity: employee
+        link_display_field: name
+        link_search_action: list-employees
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      expense_date:
+        type: date
+        label: Expense Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 2
+      total_amount:
+        type: currency
+        label: Total Amount
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 3
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "draft"
+            label: "Draft"
+          - value: "submitted"
+            label: "Submitted"
+          - value: "approved"
+            label: "Approved"
+          - value: "rejected"
+            label: "Rejected"
+          - value: "paid"
+            label: "Paid"
+          - value: "cancelled"
+            label: "Cancelled"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 4
+      approved_by:
+        type: text
+        label: Approved By
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      approval_date:
+        type: date
+        label: Approval Date
+        in_form_view: true
+        form_group: header
+        form_order: 6
+      payment_entry_id:
+        type: link
+        label: Payment Entry ID
+        link_entity: payment_entry
+        link_display_field: name
+        link_search_action: list-payment-entries
+        in_form_view: true
+        form_group: references
+        form_order: 7
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 8
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 4
+        columns: 2
+      items:
+        label: Line Items
+        order: 5
+        type: child_table
+
+  employee_tax_exemption_category:
+    label: Employee Tax Exemption Category
+    label_plural: Employee Tax Exemption Categories
+    table: employee_tax_exemption_category
+    id_col: id
+    name_col: name
+    primary_field: name
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      name:
+        type: text
+        label: Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      max_exemption_amount:
+        type: currency
+        label: Max Exemption Amount
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 2
+      parent_category_id:
+        type: link
+        label: Parent Category ID
+        link_entity: employee_tax_exemption_category
+        link_display_field: name
+        link_search_action: list-employee-tax-exemption-categories
+        in_form_view: true
+        form_group: references
+        form_order: 3
+      description:
+        type: textarea
+        label: Description
+        in_form_view: true
+        form_group: notes
+        form_order: 4
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      references:
+        label: References
+        order: 2
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 3
+        columns: 2
+      notes:
+        label: Notes
+        order: 4
+        columns: 1
+
+  employee_tax_exemption_declaration:
+    label: Employee Tax Exemption Declaration
+    label_plural: Employee Tax Exemption Declarations
+    table: employee_tax_exemption_declaration
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      employee_id:
+        type: link
+        label: Employee ID
+        link_entity: employee
+        link_display_field: name
+        link_search_action: list-employees
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      category_id:
+        type: link
+        label: Category ID
+        link_entity: employee_tax_exemption_category
+        link_display_field: name
+        link_search_action: list-employee-tax-exemption-categories
+        in_form_view: true
+        form_group: references
+        form_order: 2
+      fiscal_year:
+        type: text
+        label: Fiscal Year
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      declared_amount:
+        type: currency
+        label: Declared Amount
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 4
+      proof_submitted:
+        type: integer
+        label: Proof Submitted
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      approved:
+        type: integer
+        label: Approved
+        in_form_view: true
+        form_group: details
+        form_order: 6
+    form_groups:
+      details:
+        label: Details
+        order: 1
+        columns: 2
+      references:
+        label: References
+        order: 2
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 3
+        columns: 2
+
+child_entities:
+  expense_claim_item:
+    parent_entity: expense_claim
+    parent_field: expense_claim_id
+    param_name: items
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      expense_type:
+        type: select
+        label: Expense Type
+        required: true
+        options:
+          - value: "travel"
+            label: "Travel"
+          - value: "meals"
+            label: "Meals"
+          - value: "accommodation"
+            label: "Accommodation"
+          - value: "supplies"
+            label: "Supplies"
+          - value: "other"
+            label: "Other"
+      description:
+        type: textarea
+        label: Description
+      amount:
+        type: currency
+        label: Amount
+        precision: 2
+      receipt_attached:
+        type: integer
+        label: Receipt Attached
+      account_id:
+        type: link
+        label: Account ID
+        link_entity: account
+        link_display_field: name
+        link_search_action: list-accounts
+
+action_map:
+  add-department:
+    component: FormView
+    entity: department
+    mode: create
+  add-designation:
+    component: FormView
+    entity: designation
+    mode: create
+  add-employee:
+    component: FormView
+    entity: employee
+    mode: create
+  add-expense-claim:
+    component: FormView
+    entity: expense_claim
+    mode: create
+    child_tables:
+      - entity: expense_claim_item
+        form_group: items
+        add_label: "Add Row"
+  add-holiday-list:
+    component: FormView
+    entity: holiday_list
+    mode: create
+  add-leave-allocation:
+    component: FormView
+    entity: leave_allocation
+    mode: create
+  add-leave-application:
+    component: FormView
+    entity: leave_application
+    mode: create
+  add-leave-type:
+    component: FormView
+    entity: leave_type
+    mode: create
+  approve-expense-claim:
+    component: FormView
+    mode: create
+  approve-leave:
+    component: FormView
+    mode: create
+  bulk-mark-attendance:
+    component: FormView
+    mode: create
+  get-employee:
+    component: DetailView
+    entity: employee
+  get-leave-balance:
+    component: FormView
+    mode: create
+  list-attendance:
+    component: DataTable
+    entity: attendance
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: mark-attendance
+  list-departments:
+    component: DataTable
+    entity: department
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-department
+  list-designations:
+    component: DataTable
+    entity: designation
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-designation
+  list-employees:
+    component: DataTable
+    entity: employee
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-employee
+  list-expense-claims:
+    component: DataTable
+    entity: expense_claim
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-expense-claim
+  list-leave-applications:
+    component: DataTable
+    entity: leave_application
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-leave-application
+  list-leave-types:
+    component: DataTable
+    entity: leave_type
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-leave-type
+  mark-attendance:
+    component: FormView
+    mode: create
+  record-lifecycle-event:
+    component: FormView
+    mode: create
+  reject-expense-claim:
+    component: FormView
+    mode: create
+  reject-leave:
+    component: FormView
+    mode: create
+  status:
+    component: DashboardView
+  submit-expense-claim:
+    component: WizardFlow
+    entity: expense_claim
+    steps:
+      - label: Review
+        type: detail
+      - label: Confirm
+        type: confirmation
+        message: "Submit this expense claim?"
+  update-employee:
+    component: FormView
+    entity: employee
+    mode: edit
+  update-expense-claim-status:
+    component: FormView
+    mode: create

@@ -1,0 +1,14 @@
+{
+  "year": 2026,
+  "basic_personal_amount": "16452",
+  "basic_personal_amount_clawback_start": "181440",
+  "basic_personal_amount_minimum": "14829",
+  "brackets": [
+    {"from": "0", "to": "58523", "rate": "14"},
+    {"from": "58523", "to": "117045", "rate": "20.5"},
+    {"from": "117045", "to": "181440", "rate": "26"},
+    {"from": "181440", "to": "258482", "rate": "29"},
+    {"from": "258482", "to": "999999999", "rate": "33"}
+  ],
+  "note": "Lowest rate reduced from 15% to 14% effective 2026 (enacted mid-2025). BPA clawed back for income above $181,440, reaching minimum at $258,482."
+}

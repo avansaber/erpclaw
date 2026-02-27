@@ -1,0 +1,49 @@
+ocui_version: "1.0"
+skill: erpclaw-reports
+skill_version: "1.0.0"
+display_name: Financial Reports
+icon: bar-chart-3
+color: "#10b981"
+
+action_map:
+  ap-aging:
+    component: FormView
+    mode: create
+  ar-aging:
+    component: FormView
+    mode: create
+  balance-sheet:
+    component: FormView
+    mode: create
+  budget-vs-actual:
+    component: FormView
+    mode: create
+  cash-flow:
+    component: FormView
+    mode: create
+  comparative-pl:
+    component: FormView
+    mode: create
+  general-ledger:
+    component: FormView
+    mode: create
+  gl-summary:
+    component: FormView
+    mode: create
+  party-ledger:
+    component: FormView
+    mode: create
+  payment-summary:
+    component: FormView
+    mode: create
+  profit-and-loss:
+    component: FormView
+    mode: create
+  status:
+    component: DashboardView
+  tax-summary:
+    component: FormView
+    mode: create
+  trial-balance:
+    component: FormView
+    mode: create

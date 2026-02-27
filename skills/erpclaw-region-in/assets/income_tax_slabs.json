@@ -1,0 +1,108 @@
+{
+  "fiscal_year": "2025-26",
+  "assessment_year": "2026-27",
+  "regimes": {
+    "new": {
+      "name": "New Tax Regime (Default)",
+      "is_default": true,
+      "standard_deduction": 75000,
+      "rebate_limit": 1200000,
+      "rebate_amount": 60000,
+      "cess_rate": 4,
+      "cess_name": "Health and Education Cess",
+      "slabs": [
+        {"from": 0, "to": 400000, "rate": 0},
+        {"from": 400001, "to": 800000, "rate": 5},
+        {"from": 800001, "to": 1200000, "rate": 10},
+        {"from": 1200001, "to": 1600000, "rate": 15},
+        {"from": 1600001, "to": 2000000, "rate": 20},
+        {"from": 2000001, "to": 2400000, "rate": 25},
+        {"from": 2400001, "to": null, "rate": 30}
+      ],
+      "surcharge": [
+        {"from": 5000001, "to": 10000000, "rate": 10},
+        {"from": 10000001, "to": 20000000, "rate": 15},
+        {"from": 20000001, "to": 50000000, "rate": 25},
+        {"from": 50000001, "to": null, "rate": 37}
+      ],
+      "surcharge_marginal_relief": true,
+      "deductions_allowed": [
+        "80CCD(2) - Employer NPS contribution (up to 14% of salary)",
+        "Standard deduction of 75000"
+      ],
+      "notes": "New regime is default from FY 2024-25. Opt-out required for old regime."
+    },
+    "old": {
+      "name": "Old Tax Regime (Optional)",
+      "is_default": false,
+      "standard_deduction": 50000,
+      "rebate_limit": 500000,
+      "rebate_amount": 12500,
+      "cess_rate": 4,
+      "cess_name": "Health and Education Cess",
+      "slabs": [
+        {"from": 0, "to": 250000, "rate": 0},
+        {"from": 250001, "to": 500000, "rate": 5},
+        {"from": 500001, "to": 1000000, "rate": 20},
+        {"from": 1000001, "to": null, "rate": 30}
+      ],
+      "surcharge": [
+        {"from": 5000001, "to": 10000000, "rate": 10},
+        {"from": 10000001, "to": 20000000, "rate": 15},
+        {"from": 20000001, "to": 50000000, "rate": 25},
+        {"from": 50000001, "to": null, "rate": 37}
+      ],
+      "surcharge_marginal_relief": true,
+      "deductions_allowed": [
+        "80C - PPF, ELSS, LIC, NSC, tuition fees (up to 150000)",
+        "80CCC - Pension plan contribution (within 80C limit)",
+        "80CCD(1) - Employee NPS contribution (up to 10% of salary, within 80C limit)",
+        "80CCD(1B) - Additional NPS contribution (up to 50000)",
+        "80CCD(2) - Employer NPS contribution (up to 14% of salary)",
+        "80D - Medical insurance (25000 self, 25000/50000 parents)",
+        "80E - Education loan interest (full amount, 8 years)",
+        "80EEA - Home loan interest for first-time buyers (up to 150000)",
+        "80G - Donations to specified funds (50%/100% deduction)",
+        "80GG - Rent paid (no HRA, up to 60000/year)",
+        "80TTA - Savings account interest (up to 10000)",
+        "80TTB - Interest for senior citizens (up to 50000)",
+        "80U - Disability deduction (75000/125000)",
+        "HRA - House Rent Allowance exemption",
+        "LTA - Leave Travel Allowance exemption",
+        "Standard deduction of 50000"
+      ],
+      "notes": "Old regime allows more deductions. Beneficial for employees with high 80C/80D/HRA claims."
+    },
+    "senior_citizen": {
+      "name": "Senior Citizen (60-80 years) - Old Regime",
+      "is_default": false,
+      "standard_deduction": 50000,
+      "rebate_limit": 500000,
+      "rebate_amount": 12500,
+      "cess_rate": 4,
+      "cess_name": "Health and Education Cess",
+      "slabs": [
+        {"from": 0, "to": 300000, "rate": 0},
+        {"from": 300001, "to": 500000, "rate": 5},
+        {"from": 500001, "to": 1000000, "rate": 20},
+        {"from": 1000001, "to": null, "rate": 30}
+      ],
+      "notes": "Higher basic exemption limit for senior citizens under old regime. New regime has same slabs for all ages."
+    },
+    "super_senior_citizen": {
+      "name": "Super Senior Citizen (80+ years) - Old Regime",
+      "is_default": false,
+      "standard_deduction": 50000,
+      "rebate_limit": 500000,
+      "rebate_amount": 12500,
+      "cess_rate": 4,
+      "cess_name": "Health and Education Cess",
+      "slabs": [
+        {"from": 0, "to": 500000, "rate": 0},
+        {"from": 500001, "to": 1000000, "rate": 20},
+        {"from": 1000001, "to": null, "rate": 30}
+      ],
+      "notes": "Highest basic exemption for super senior citizens under old regime. No 5% slab."
+    }
+  }
+}

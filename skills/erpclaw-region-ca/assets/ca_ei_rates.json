@@ -1,0 +1,22 @@
+{
+  "year": 2026,
+  "employee_rate": "1.63",
+  "employer_multiple": "1.4",
+  "max_insurable_earnings": "68900",
+  "max_employee_premium": "1123.07",
+  "max_employer_premium": "1572.30",
+  "quebec": {
+    "employee_rate": "1.30",
+    "employer_multiple": "1.4",
+    "max_employee_premium": "895.70",
+    "max_employer_premium": "1253.98",
+    "note": "Quebec has QPIP, so lower EI rate"
+  },
+  "qpip": {
+    "employee_rate": "0.494",
+    "employer_rate": "0.692",
+    "max_insurable_earnings": "103000",
+    "max_employee_premium": "508.82",
+    "max_employer_premium": "712.76"
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "rules": [
+    {
+      "scenario": "intra_community_goods",
+      "description": "B2B goods between EU member states",
+      "seller_vat": "0",
+      "buyer_self_assesses": true,
+      "reporting": "EC Sales List required"
+    },
+    {
+      "scenario": "intra_community_services",
+      "description": "B2B services — general rule (place of supply = buyer)",
+      "seller_vat": "0",
+      "buyer_self_assesses": true,
+      "reporting": "EC Sales List required for some"
+    },
+    {
+      "scenario": "domestic_reverse_charge",
+      "description": "Specific domestic supplies (construction, scrap metal, etc.)",
+      "seller_vat": "0",
+      "buyer_self_assesses": true,
+      "reporting": "Domestic VAT return only"
+    },
+    {
+      "scenario": "triangulation",
+      "description": "Three-party cross-border transaction simplification",
+      "seller_vat": "0",
+      "buyer_self_assesses": true,
+      "reporting": "All three parties report; intermediary exempt from registration in destination"
+    },
+    {
+      "scenario": "oss_b2c_digital",
+      "description": "B2C digital services via One Stop Shop",
+      "seller_vat": "buyer_country_rate",
+      "buyer_self_assesses": false,
+      "reporting": "OSS quarterly return"
+    }
+  ],
+  "distance_selling_threshold": "10000",
+  "distance_selling_threshold_currency": "EUR",
+  "description": "EU-wide threshold for B2C distance selling (triggers registration or OSS)"
+}

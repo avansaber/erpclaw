@@ -1,0 +1,1010 @@
+[
+  {
+    "account_name": "Application of Funds (Assets)",
+    "account_number": "",
+    "parent_account": "",
+    "root_type": "asset",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Current Assets",
+    "account_number": "",
+    "parent_account": "Application of Funds (Assets)",
+    "root_type": "asset",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Accounts Receivable",
+    "account_number": "",
+    "parent_account": "Current Assets",
+    "root_type": "asset",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Debtors",
+    "account_number": "",
+    "parent_account": "Accounts Receivable",
+    "root_type": "asset",
+    "account_type": "receivable",
+    "is_group": false
+  },
+  {
+    "account_name": "Bank Accounts",
+    "account_number": "",
+    "parent_account": "Current Assets",
+    "root_type": "asset",
+    "account_type": "bank",
+    "is_group": true
+  },
+  {
+    "account_name": "Cash In Hand",
+    "account_number": "",
+    "parent_account": "Current Assets",
+    "root_type": "asset",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Cash",
+    "account_number": "",
+    "parent_account": "Cash In Hand",
+    "root_type": "asset",
+    "account_type": "cash",
+    "is_group": false
+  },
+  {
+    "account_name": "Loans and Advances (Assets)",
+    "account_number": "",
+    "parent_account": "Current Assets",
+    "root_type": "asset",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Employee Advances",
+    "account_number": "",
+    "parent_account": "Loans and Advances (Assets)",
+    "root_type": "asset",
+    "account_type": "receivable",
+    "is_group": false
+  },
+  {
+    "account_name": "Advance to Suppliers",
+    "account_number": "",
+    "parent_account": "Loans and Advances (Assets)",
+    "root_type": "asset",
+    "account_type": "receivable",
+    "is_group": false
+  },
+  {
+    "account_name": "Securities and Deposits",
+    "account_number": "",
+    "parent_account": "Current Assets",
+    "root_type": "asset",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Earnest Money",
+    "account_number": "",
+    "parent_account": "Securities and Deposits",
+    "root_type": "asset",
+    "account_type": "",
+    "is_group": false
+  },
+  {
+    "account_name": "Security Deposits",
+    "account_number": "",
+    "parent_account": "Securities and Deposits",
+    "root_type": "asset",
+    "account_type": "",
+    "is_group": false
+  },
+  {
+    "account_name": "Stock Assets",
+    "account_number": "",
+    "parent_account": "Current Assets",
+    "root_type": "asset",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Stock In Hand",
+    "account_number": "",
+    "parent_account": "Stock Assets",
+    "root_type": "asset",
+    "account_type": "stock",
+    "is_group": false
+  },
+  {
+    "account_name": "Raw Materials",
+    "account_number": "",
+    "parent_account": "Stock Assets",
+    "root_type": "asset",
+    "account_type": "stock",
+    "is_group": false
+  },
+  {
+    "account_name": "Work in Progress",
+    "account_number": "",
+    "parent_account": "Stock Assets",
+    "root_type": "asset",
+    "account_type": "stock",
+    "is_group": false
+  },
+  {
+    "account_name": "Finished Goods",
+    "account_number": "",
+    "parent_account": "Stock Assets",
+    "root_type": "asset",
+    "account_type": "stock",
+    "is_group": false
+  },
+  {
+    "account_name": "Tax Assets",
+    "account_number": "",
+    "parent_account": "Current Assets",
+    "root_type": "asset",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "TDS Receivable",
+    "account_number": "",
+    "parent_account": "Tax Assets",
+    "root_type": "asset",
+    "account_type": "tax",
+    "is_group": false
+  },
+  {
+    "account_name": "TCS Receivable",
+    "account_number": "",
+    "parent_account": "Tax Assets",
+    "root_type": "asset",
+    "account_type": "tax",
+    "is_group": false
+  },
+  {
+    "account_name": "CGST Input",
+    "account_number": "",
+    "parent_account": "Tax Assets",
+    "root_type": "asset",
+    "account_type": "tax",
+    "is_group": false
+  },
+  {
+    "account_name": "SGST Input",
+    "account_number": "",
+    "parent_account": "Tax Assets",
+    "root_type": "asset",
+    "account_type": "tax",
+    "is_group": false
+  },
+  {
+    "account_name": "IGST Input",
+    "account_number": "",
+    "parent_account": "Tax Assets",
+    "root_type": "asset",
+    "account_type": "tax",
+    "is_group": false
+  },
+  {
+    "account_name": "Prepaid Expenses",
+    "account_number": "",
+    "parent_account": "Current Assets",
+    "root_type": "asset",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Prepaid Insurance",
+    "account_number": "",
+    "parent_account": "Prepaid Expenses",
+    "root_type": "asset",
+    "account_type": "expense",
+    "is_group": false
+  },
+  {
+    "account_name": "Prepaid Rent",
+    "account_number": "",
+    "parent_account": "Prepaid Expenses",
+    "root_type": "asset",
+    "account_type": "expense",
+    "is_group": false
+  },
+  {
+    "account_name": "Fixed Assets",
+    "account_number": "",
+    "parent_account": "Application of Funds (Assets)",
+    "root_type": "asset",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Capital Equipment",
+    "account_number": "",
+    "parent_account": "Fixed Assets",
+    "root_type": "asset",
+    "account_type": "fixed_asset",
+    "is_group": false
+  },
+  {
+    "account_name": "Electronic Equipment",
+    "account_number": "",
+    "parent_account": "Fixed Assets",
+    "root_type": "asset",
+    "account_type": "fixed_asset",
+    "is_group": false
+  },
+  {
+    "account_name": "Furniture and Fixtures",
+    "account_number": "",
+    "parent_account": "Fixed Assets",
+    "root_type": "asset",
+    "account_type": "fixed_asset",
+    "is_group": false
+  },
+  {
+    "account_name": "Office Equipment",
+    "account_number": "",
+    "parent_account": "Fixed Assets",
+    "root_type": "asset",
+    "account_type": "fixed_asset",
+    "is_group": false
+  },
+  {
+    "account_name": "Plants and Machineries",
+    "account_number": "",
+    "parent_account": "Fixed Assets",
+    "root_type": "asset",
+    "account_type": "fixed_asset",
+    "is_group": false
+  },
+  {
+    "account_name": "Buildings",
+    "account_number": "",
+    "parent_account": "Fixed Assets",
+    "root_type": "asset",
+    "account_type": "fixed_asset",
+    "is_group": false
+  },
+  {
+    "account_name": "Land",
+    "account_number": "",
+    "parent_account": "Fixed Assets",
+    "root_type": "asset",
+    "account_type": "fixed_asset",
+    "is_group": false
+  },
+  {
+    "account_name": "Vehicles",
+    "account_number": "",
+    "parent_account": "Fixed Assets",
+    "root_type": "asset",
+    "account_type": "fixed_asset",
+    "is_group": false
+  },
+  {
+    "account_name": "Accumulated Depreciations",
+    "account_number": "",
+    "parent_account": "Fixed Assets",
+    "root_type": "asset",
+    "account_type": "accumulated_depreciation",
+    "is_group": false
+  },
+  {
+    "account_name": "Capital Work in Progress",
+    "account_number": "",
+    "parent_account": "Fixed Assets",
+    "root_type": "asset",
+    "account_type": "fixed_asset",
+    "is_group": false
+  },
+  {
+    "account_name": "Intangible Assets",
+    "account_number": "",
+    "parent_account": "Application of Funds (Assets)",
+    "root_type": "asset",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Software Licenses",
+    "account_number": "",
+    "parent_account": "Intangible Assets",
+    "root_type": "asset",
+    "account_type": "fixed_asset",
+    "is_group": false
+  },
+  {
+    "account_name": "Goodwill",
+    "account_number": "",
+    "parent_account": "Intangible Assets",
+    "root_type": "asset",
+    "account_type": "fixed_asset",
+    "is_group": false
+  },
+  {
+    "account_name": "Accumulated Amortization",
+    "account_number": "",
+    "parent_account": "Intangible Assets",
+    "root_type": "asset",
+    "account_type": "accumulated_depreciation",
+    "is_group": false
+  },
+  {
+    "account_name": "Investments",
+    "account_number": "",
+    "parent_account": "Application of Funds (Assets)",
+    "root_type": "asset",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Temporary Accounts",
+    "account_number": "",
+    "parent_account": "Application of Funds (Assets)",
+    "root_type": "asset",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Temporary Opening",
+    "account_number": "",
+    "parent_account": "Temporary Accounts",
+    "root_type": "asset",
+    "account_type": "temporary",
+    "is_group": false
+  },
+  {
+    "account_name": "Source of Funds (Liabilities)",
+    "account_number": "",
+    "parent_account": "",
+    "root_type": "liability",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Current Liabilities",
+    "account_number": "",
+    "parent_account": "Source of Funds (Liabilities)",
+    "root_type": "liability",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Accounts Payable",
+    "account_number": "",
+    "parent_account": "Current Liabilities",
+    "root_type": "liability",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Creditors",
+    "account_number": "",
+    "parent_account": "Accounts Payable",
+    "root_type": "liability",
+    "account_type": "payable",
+    "is_group": false
+  },
+  {
+    "account_name": "Payroll Payable",
+    "account_number": "",
+    "parent_account": "Accounts Payable",
+    "root_type": "liability",
+    "account_type": "payroll_payable",
+    "is_group": false
+  },
+  {
+    "account_name": "Duties and Taxes",
+    "account_number": "",
+    "parent_account": "Current Liabilities",
+    "root_type": "liability",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "TDS Payable",
+    "account_number": "",
+    "parent_account": "Duties and Taxes",
+    "root_type": "liability",
+    "account_type": "tax",
+    "is_group": false
+  },
+  {
+    "account_name": "TCS Payable",
+    "account_number": "",
+    "parent_account": "Duties and Taxes",
+    "root_type": "liability",
+    "account_type": "tax",
+    "is_group": false
+  },
+  {
+    "account_name": "CGST Output",
+    "account_number": "",
+    "parent_account": "Duties and Taxes",
+    "root_type": "liability",
+    "account_type": "tax",
+    "is_group": false
+  },
+  {
+    "account_name": "SGST Output",
+    "account_number": "",
+    "parent_account": "Duties and Taxes",
+    "root_type": "liability",
+    "account_type": "tax",
+    "is_group": false
+  },
+  {
+    "account_name": "IGST Output",
+    "account_number": "",
+    "parent_account": "Duties and Taxes",
+    "root_type": "liability",
+    "account_type": "tax",
+    "is_group": false
+  },
+  {
+    "account_name": "GST Reverse Charge",
+    "account_number": "",
+    "parent_account": "Duties and Taxes",
+    "root_type": "liability",
+    "account_type": "tax",
+    "is_group": false
+  },
+  {
+    "account_name": "Statutory Liabilities",
+    "account_number": "",
+    "parent_account": "Current Liabilities",
+    "root_type": "liability",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "PF Payable",
+    "account_number": "",
+    "parent_account": "Statutory Liabilities",
+    "root_type": "liability",
+    "account_type": "payable",
+    "is_group": false
+  },
+  {
+    "account_name": "ESI Payable",
+    "account_number": "",
+    "parent_account": "Statutory Liabilities",
+    "root_type": "liability",
+    "account_type": "payable",
+    "is_group": false
+  },
+  {
+    "account_name": "Professional Tax Payable",
+    "account_number": "",
+    "parent_account": "Statutory Liabilities",
+    "root_type": "liability",
+    "account_type": "tax",
+    "is_group": false
+  },
+  {
+    "account_name": "Stock Liabilities",
+    "account_number": "",
+    "parent_account": "Current Liabilities",
+    "root_type": "liability",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Stock Received But Not Billed",
+    "account_number": "",
+    "parent_account": "Stock Liabilities",
+    "root_type": "liability",
+    "account_type": "stock_received_not_billed",
+    "is_group": false
+  },
+  {
+    "account_name": "Other Current Liabilities",
+    "account_number": "",
+    "parent_account": "Current Liabilities",
+    "root_type": "liability",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Advance from Customers",
+    "account_number": "",
+    "parent_account": "Other Current Liabilities",
+    "root_type": "liability",
+    "account_type": "payable",
+    "is_group": false
+  },
+  {
+    "account_name": "Unearned Revenue",
+    "account_number": "",
+    "parent_account": "Other Current Liabilities",
+    "root_type": "liability",
+    "account_type": "payable",
+    "is_group": false
+  },
+  {
+    "account_name": "Loans (Liabilities)",
+    "account_number": "",
+    "parent_account": "Current Liabilities",
+    "root_type": "liability",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Secured Loans",
+    "account_number": "",
+    "parent_account": "Loans (Liabilities)",
+    "root_type": "liability",
+    "account_type": "payable",
+    "is_group": false
+  },
+  {
+    "account_name": "Unsecured Loans",
+    "account_number": "",
+    "parent_account": "Loans (Liabilities)",
+    "root_type": "liability",
+    "account_type": "payable",
+    "is_group": false
+  },
+  {
+    "account_name": "Bank Overdraft Account",
+    "account_number": "",
+    "parent_account": "Loans (Liabilities)",
+    "root_type": "liability",
+    "account_type": "payable",
+    "is_group": false
+  },
+  {
+    "account_name": "Long-Term Liabilities",
+    "account_number": "",
+    "parent_account": "Source of Funds (Liabilities)",
+    "root_type": "liability",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Long-Term Loans",
+    "account_number": "",
+    "parent_account": "Long-Term Liabilities",
+    "root_type": "liability",
+    "account_type": "payable",
+    "is_group": false
+  },
+  {
+    "account_name": "Debentures",
+    "account_number": "",
+    "parent_account": "Long-Term Liabilities",
+    "root_type": "liability",
+    "account_type": "payable",
+    "is_group": false
+  },
+  {
+    "account_name": "Capital Account",
+    "account_number": "",
+    "parent_account": "",
+    "root_type": "equity",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Shareholders Funds",
+    "account_number": "",
+    "parent_account": "Capital Account",
+    "root_type": "equity",
+    "account_type": "equity",
+    "is_group": false
+  },
+  {
+    "account_name": "Share Capital",
+    "account_number": "",
+    "parent_account": "Capital Account",
+    "root_type": "equity",
+    "account_type": "equity",
+    "is_group": false
+  },
+  {
+    "account_name": "Reserves and Surplus",
+    "account_number": "",
+    "parent_account": "Capital Account",
+    "root_type": "equity",
+    "account_type": "equity",
+    "is_group": true
+  },
+  {
+    "account_name": "General Reserve",
+    "account_number": "",
+    "parent_account": "Reserves and Surplus",
+    "root_type": "equity",
+    "account_type": "equity",
+    "is_group": false
+  },
+  {
+    "account_name": "Retained Earnings",
+    "account_number": "",
+    "parent_account": "Reserves and Surplus",
+    "root_type": "equity",
+    "account_type": "equity",
+    "is_group": false
+  },
+  {
+    "account_name": "Profit and Loss Account",
+    "account_number": "",
+    "parent_account": "Reserves and Surplus",
+    "root_type": "equity",
+    "account_type": "equity",
+    "is_group": false
+  },
+  {
+    "account_name": "Revaluation Surplus",
+    "account_number": "",
+    "parent_account": "Capital Account",
+    "root_type": "equity",
+    "account_type": "equity",
+    "is_group": false
+  },
+  {
+    "account_name": "Opening Balance Equity",
+    "account_number": "",
+    "parent_account": "Capital Account",
+    "root_type": "equity",
+    "account_type": "temporary",
+    "is_group": false
+  },
+  {
+    "account_name": "Dividends Paid",
+    "account_number": "",
+    "parent_account": "Capital Account",
+    "root_type": "equity",
+    "account_type": "equity",
+    "is_group": false
+  },
+  {
+    "account_name": "Income",
+    "account_number": "",
+    "parent_account": "",
+    "root_type": "income",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Direct Income",
+    "account_number": "",
+    "parent_account": "Income",
+    "root_type": "income",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Sales",
+    "account_number": "",
+    "parent_account": "Direct Income",
+    "root_type": "income",
+    "account_type": "revenue",
+    "is_group": false
+  },
+  {
+    "account_name": "Service Revenue",
+    "account_number": "",
+    "parent_account": "Direct Income",
+    "root_type": "income",
+    "account_type": "revenue",
+    "is_group": false
+  },
+  {
+    "account_name": "Export Revenue",
+    "account_number": "",
+    "parent_account": "Direct Income",
+    "root_type": "income",
+    "account_type": "revenue",
+    "is_group": false
+  },
+  {
+    "account_name": "Indirect Income",
+    "account_number": "",
+    "parent_account": "Income",
+    "root_type": "income",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Interest Income",
+    "account_number": "",
+    "parent_account": "Indirect Income",
+    "root_type": "income",
+    "account_type": "revenue",
+    "is_group": false
+  },
+  {
+    "account_name": "Dividend Income",
+    "account_number": "",
+    "parent_account": "Indirect Income",
+    "root_type": "income",
+    "account_type": "revenue",
+    "is_group": false
+  },
+  {
+    "account_name": "Gain on Asset Disposal",
+    "account_number": "",
+    "parent_account": "Indirect Income",
+    "root_type": "income",
+    "account_type": "revenue",
+    "is_group": false
+  },
+  {
+    "account_name": "Exchange Gain",
+    "account_number": "",
+    "parent_account": "Indirect Income",
+    "root_type": "income",
+    "account_type": "exchange_gain_loss",
+    "is_group": false
+  },
+  {
+    "account_name": "Rental Income",
+    "account_number": "",
+    "parent_account": "Indirect Income",
+    "root_type": "income",
+    "account_type": "revenue",
+    "is_group": false
+  },
+  {
+    "account_name": "Expenses",
+    "account_number": "",
+    "parent_account": "",
+    "root_type": "expense",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Direct Expenses",
+    "account_number": "",
+    "parent_account": "Expenses",
+    "root_type": "expense",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Stock Expenses",
+    "account_number": "",
+    "parent_account": "Direct Expenses",
+    "root_type": "expense",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Cost of Goods Sold",
+    "account_number": "",
+    "parent_account": "Stock Expenses",
+    "root_type": "expense",
+    "account_type": "cost_of_goods_sold",
+    "is_group": false
+  },
+  {
+    "account_name": "Expenses Included In Valuation",
+    "account_number": "",
+    "parent_account": "Stock Expenses",
+    "root_type": "expense",
+    "account_type": "expenses_included_in_valuation",
+    "is_group": false
+  },
+  {
+    "account_name": "Stock Adjustment",
+    "account_number": "",
+    "parent_account": "Stock Expenses",
+    "root_type": "expense",
+    "account_type": "stock_adjustment",
+    "is_group": false
+  },
+  {
+    "account_name": "Indirect Expenses",
+    "account_number": "",
+    "parent_account": "Expenses",
+    "root_type": "expense",
+    "account_type": "",
+    "is_group": true
+  },
+  {
+    "account_name": "Administrative Expenses",
+    "account_number": "",
+    "parent_account": "Indirect Expenses",
+    "root_type": "expense",
+    "account_type": "expense",
+    "is_group": false
+  },
+  {
+    "account_name": "Commission on Sales",
+    "account_number": "",
+    "parent_account": "Indirect Expenses",
+    "root_type": "expense",
+    "account_type": "expense",
+    "is_group": false
+  },
+  {
+    "account_name": "Depreciation",
+    "account_number": "",
+    "parent_account": "Indirect Expenses",
+    "root_type": "expense",
+    "account_type": "depreciation",
+    "is_group": false
+  },
+  {
+    "account_name": "Entertainment Expenses",
+    "account_number": "",
+    "parent_account": "Indirect Expenses",
+    "root_type": "expense",
+    "account_type": "expense",
+    "is_group": false
+  },
+  {
+    "account_name": "Freight and Forwarding Charges",
+    "account_number": "",
+    "parent_account": "Indirect Expenses",
+    "root_type": "expense",
+    "account_type": "chargeable",
+    "is_group": false
+  },
+  {
+    "account_name": "Legal Expenses",
+    "account_number": "",
+    "parent_account": "Indirect Expenses",
+    "root_type": "expense",
+    "account_type": "expense",
+    "is_group": false
+  },
+  {
+    "account_name": "Marketing Expenses",
+    "account_number": "",
+    "parent_account": "Indirect Expenses",
+    "root_type": "expense",
+    "account_type": "expense",
+    "is_group": false
+  },
+  {
+    "account_name": "Office Maintenance Expenses",
+    "account_number": "",
+    "parent_account": "Indirect Expenses",
+    "root_type": "expense",
+    "account_type": "expense",
+    "is_group": false
+  },
+  {
+    "account_name": "Office Rent",
+    "account_number": "",
+    "parent_account": "Indirect Expenses",
+    "root_type": "expense",
+    "account_type": "expense",
+    "is_group": false
+  },
+  {
+    "account_name": "Salary",
+    "account_number": "",
+    "parent_account": "Indirect Expenses",
+    "root_type": "expense",
+    "account_type": "expense",
+    "is_group": false
+  },
+  {
+    "account_name": "Sales Expenses",
+    "account_number": "",
+    "parent_account": "Indirect Expenses",
+    "root_type": "expense",
+    "account_type": "expense",
+    "is_group": false
+  },
+  {
+    "account_name": "Telephone Expenses",
+    "account_number": "",
+    "parent_account": "Indirect Expenses",
+    "root_type": "expense",
+    "account_type": "expense",
+    "is_group": false
+  },
+  {
+    "account_name": "Travel Expenses",
+    "account_number": "",
+    "parent_account": "Indirect Expenses",
+    "root_type": "expense",
+    "account_type": "expense",
+    "is_group": false
+  },
+  {
+    "account_name": "Utility Expenses",
+    "account_number": "",
+    "parent_account": "Indirect Expenses",
+    "root_type": "expense",
+    "account_type": "expense",
+    "is_group": false
+  },
+  {
+    "account_name": "Print and Stationery",
+    "account_number": "",
+    "parent_account": "Indirect Expenses",
+    "root_type": "expense",
+    "account_type": "expense",
+    "is_group": false
+  },
+  {
+    "account_name": "Postal Expenses",
+    "account_number": "",
+    "parent_account": "Indirect Expenses",
+    "root_type": "expense",
+    "account_type": "expense",
+    "is_group": false
+  },
+  {
+    "account_name": "Miscellaneous Expenses",
+    "account_number": "",
+    "parent_account": "Indirect Expenses",
+    "root_type": "expense",
+    "account_type": "expense",
+    "is_group": false
+  },
+  {
+    "account_name": "Rounded Off",
+    "account_number": "",
+    "parent_account": "Indirect Expenses",
+    "root_type": "expense",
+    "account_type": "rounding",
+    "is_group": false
+  },
+  {
+    "account_name": "Write Off",
+    "account_number": "",
+    "parent_account": "Indirect Expenses",
+    "root_type": "expense",
+    "account_type": "expense",
+    "is_group": false
+  },
+  {
+    "account_name": "Exchange Loss",
+    "account_number": "",
+    "parent_account": "Indirect Expenses",
+    "root_type": "expense",
+    "account_type": "exchange_gain_loss",
+    "is_group": false
+  },
+  {
+    "account_name": "Loss on Asset Disposal",
+    "account_number": "",
+    "parent_account": "Indirect Expenses",
+    "root_type": "expense",
+    "account_type": "expense",
+    "is_group": false
+  },
+  {
+    "account_name": "Impairment",
+    "account_number": "",
+    "parent_account": "Indirect Expenses",
+    "root_type": "expense",
+    "account_type": "expense",
+    "is_group": false
+  },
+  {
+    "account_name": "Bank Charges",
+    "account_number": "",
+    "parent_account": "Indirect Expenses",
+    "root_type": "expense",
+    "account_type": "expense",
+    "is_group": false
+  },
+  {
+    "account_name": "Interest Expense",
+    "account_number": "",
+    "parent_account": "Indirect Expenses",
+    "root_type": "expense",
+    "account_type": "expense",
+    "is_group": false
+  },
+  {
+    "account_name": "Insurance Expense",
+    "account_number": "",
+    "parent_account": "Indirect Expenses",
+    "root_type": "expense",
+    "account_type": "expense",
+    "is_group": false
+  }
+]

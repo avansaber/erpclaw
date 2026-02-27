@@ -1,0 +1,17 @@
+{
+  "tax_year": "2025/26",
+  "qualifying_earnings": {
+    "lower_limit_annual": "6240",
+    "upper_limit_annual": "50270"
+  },
+  "minimum_contributions": {
+    "employer_rate": "3",
+    "employee_rate": "5",
+    "total_rate": "8"
+  },
+  "age_eligibility": {
+    "min_age": 22,
+    "max_age": 66,
+    "earnings_trigger": "10000"
+  }
+}

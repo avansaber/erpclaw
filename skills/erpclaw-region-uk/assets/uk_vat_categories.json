@@ -1,0 +1,9 @@
+{
+  "categories": [
+    {"code": "standard", "rate": "20", "description": "Most goods and services"},
+    {"code": "reduced", "rate": "5", "description": "Home energy, children's car seats, sanitary products"},
+    {"code": "zero", "rate": "0", "description": "Food, books, children's clothing, public transport"},
+    {"code": "exempt", "rate": "0", "description": "Insurance, finance, education, health (no VAT, no input credit)"},
+    {"code": "outside_scope", "rate": "0", "description": "Wages, dividends, donations — not a supply"}
+  ]
+}

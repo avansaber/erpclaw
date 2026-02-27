@@ -1,0 +1,749 @@
+ocui_version: "1.0"
+skill: erpclaw-assets
+skill_version: "1.0.0"
+display_name: Asset Management
+icon: landmark
+color: "#14b8a6"
+
+entities:
+  asset:
+    label: Asset
+    label_plural: Assets
+    table: asset
+    id_col: id
+    name_col: asset_name
+    primary_field: asset_name
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      naming_series:
+        type: text
+        label: Naming Series
+        read_only: true
+      asset_name:
+        type: text
+        label: Asset Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: details
+        form_order: 1
+      asset_category_id:
+        type: link
+        label: Asset Category ID
+        link_entity: asset_category
+        link_display_field: name
+        link_search_action: list-asset-categories
+        in_form_view: true
+        form_group: references
+        form_order: 2
+      item_id:
+        type: link
+        label: Item ID
+        link_entity: item
+        link_display_field: name
+        link_search_action: list-items
+        in_form_view: true
+        form_group: references
+        form_order: 3
+      purchase_date:
+        type: date
+        label: Purchase Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 4
+      purchase_invoice_id:
+        type: link
+        label: Purchase Invoice ID
+        link_entity: purchase_invoice
+        link_display_field: name
+        link_search_action: list-purchase-invoices
+        in_form_view: true
+        form_group: references
+        form_order: 5
+      gross_value:
+        type: text
+        label: Gross Value
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      salvage_value:
+        type: text
+        label: Salvage Value
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      depreciation_method:
+        type: select
+        label: Depreciation Method
+        options:
+          - value: "straight_line"
+            label: "Straight Line"
+          - value: "written_down_value"
+            label: "Written Down Value"
+          - value: "double_declining"
+            label: "Double Declining"
+        in_form_view: true
+        form_group: details
+        form_order: 8
+      useful_life_years:
+        type: integer
+        label: Useful Life Years
+        in_form_view: true
+        form_group: details
+        form_order: 9
+      depreciation_start_date:
+        type: date
+        label: Depreciation Start Date
+        in_form_view: true
+        form_group: header
+        form_order: 10
+      current_book_value:
+        type: text
+        label: Current Book Value
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 11
+      accumulated_depreciation:
+        type: text
+        label: Accumulated Depreciation
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 12
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "draft"
+            label: "Draft"
+          - value: "submitted"
+            label: "Submitted"
+          - value: "in_use"
+            label: "In Use"
+          - value: "scrapped"
+            label: "Scrapped"
+          - value: "sold"
+            label: "Sold"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 13
+      location:
+        type: text
+        label: Location
+        in_form_view: true
+        form_group: details
+        form_order: 14
+      custodian_employee_id:
+        type: link
+        label: Custodian Employee ID
+        link_entity: custodian_employee
+        link_display_field: name
+        link_search_action: list-custodian-employees
+        in_form_view: true
+        form_group: references
+        form_order: 15
+      warranty_expiry_date:
+        type: date
+        label: Warranty Expiry Date
+        in_form_view: true
+        form_group: header
+        form_order: 16
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 17
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+
+  asset_category:
+    label: Asset Category
+    label_plural: Asset Categories
+    table: asset_category
+    id_col: id
+    name_col: name
+    primary_field: name
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      name:
+        type: text
+        label: Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      depreciation_method:
+        type: select
+        label: Depreciation Method
+        required: true
+        options:
+          - value: "straight_line"
+            label: "Straight Line"
+          - value: "written_down_value"
+            label: "Written Down Value"
+          - value: "double_declining"
+            label: "Double Declining"
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      useful_life_years:
+        type: integer
+        label: Useful Life Years
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      asset_account_id:
+        type: link
+        label: Asset Account ID
+        link_entity: account
+        link_display_field: name
+        link_search_action: list-accounts
+        in_form_view: true
+        form_group: references
+        form_order: 4
+      depreciation_account_id:
+        type: link
+        label: Depreciation Account ID
+        link_entity: account
+        link_display_field: name
+        link_search_action: list-accounts
+        in_form_view: true
+        form_group: references
+        form_order: 5
+      accumulated_depreciation_account_id:
+        type: link
+        label: Accumulated Depreciation Account ID
+        link_entity: account
+        link_display_field: name
+        link_search_action: list-accounts
+        in_form_view: true
+        form_group: references
+        form_order: 6
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 7
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+
+  asset_movement:
+    label: Asset Movement
+    label_plural: Asset Movements
+    table: asset_movement
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      asset_id:
+        type: link
+        label: Asset ID
+        link_entity: asset
+        link_display_field: name
+        link_search_action: list-assets
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      movement_type:
+        type: select
+        label: Movement Type
+        required: true
+        options:
+          - value: "transfer"
+            label: "Transfer"
+          - value: "issue"
+            label: "Issue"
+          - value: "receipt"
+            label: "Receipt"
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      from_location:
+        type: text
+        label: From Location
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      to_location:
+        type: text
+        label: To Location
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      from_employee_id:
+        type: link
+        label: From Employee ID
+        link_entity: from_employee
+        link_display_field: name
+        link_search_action: list-from-employees
+        in_form_view: true
+        form_group: references
+        form_order: 5
+      to_employee_id:
+        type: link
+        label: To Employee ID
+        link_entity: to_employee
+        link_display_field: name
+        link_search_action: list-to-employees
+        in_form_view: true
+        form_group: references
+        form_order: 6
+      movement_date:
+        type: date
+        label: Movement Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 7
+      reason:
+        type: textarea
+        label: Reason
+        in_form_view: true
+        form_group: notes
+        form_order: 8
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      notes:
+        label: Notes
+        order: 4
+        columns: 1
+
+  depreciation_schedule:
+    label: Depreciation Schedule
+    label_plural: Depreciation Schedules
+    table: depreciation_schedule
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      asset_id:
+        type: link
+        label: Asset ID
+        link_entity: asset
+        link_display_field: name
+        link_search_action: list-assets
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      schedule_date:
+        type: date
+        label: Schedule Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 2
+      depreciation_amount:
+        type: currency
+        label: Depreciation Amount
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 3
+      accumulated_amount:
+        type: currency
+        label: Accumulated Amount
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 4
+      book_value_after:
+        type: text
+        label: Book Value After
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      journal_entry_id:
+        type: link
+        label: Journal Entry ID
+        link_entity: journal_entry
+        link_display_field: name
+        link_search_action: list-journal-entries
+        in_form_view: true
+        form_group: references
+        form_order: 6
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "pending"
+            label: "Pending"
+          - value: "posted"
+            label: "Posted"
+          - value: "skipped"
+            label: "Skipped"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 7
+      fiscal_year:
+        type: text
+        label: Fiscal Year
+        in_form_view: true
+        form_group: details
+        form_order: 8
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 4
+        columns: 2
+
+  asset_disposal:
+    label: Asset Disposal
+    label_plural: Asset Disposals
+    table: asset_disposal
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      asset_id:
+        type: link
+        label: Asset ID
+        link_entity: asset
+        link_display_field: name
+        link_search_action: list-assets
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      disposal_date:
+        type: date
+        label: Disposal Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 2
+      disposal_method:
+        type: select
+        label: Disposal Method
+        required: true
+        options:
+          - value: "sale"
+            label: "Sale"
+          - value: "scrap"
+            label: "Scrap"
+          - value: "write_off"
+            label: "Write Off"
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      sale_amount:
+        type: currency
+        label: Sale Amount
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 4
+      book_value_at_disposal:
+        type: text
+        label: Book Value At Disposal
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      gain_or_loss:
+        type: text
+        label: Gain Or Loss
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      journal_entry_id:
+        type: link
+        label: Journal Entry ID
+        link_entity: journal_entry
+        link_display_field: name
+        link_search_action: list-journal-entries
+        in_form_view: true
+        form_group: references
+        form_order: 7
+      buyer_details:
+        type: text
+        label: Buyer Details
+        in_form_view: true
+        form_group: details
+        form_order: 8
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 4
+        columns: 2
+
+  asset_maintenance:
+    label: Asset Maintenance
+    label_plural: Asset Maintenances
+    table: asset_maintenance
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      asset_id:
+        type: link
+        label: Asset ID
+        link_entity: asset
+        link_display_field: name
+        link_search_action: list-assets
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      maintenance_type:
+        type: select
+        label: Maintenance Type
+        required: true
+        options:
+          - value: "preventive"
+            label: "Preventive"
+          - value: "corrective"
+            label: "Corrective"
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      scheduled_date:
+        type: date
+        label: Scheduled Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 3
+      actual_date:
+        type: date
+        label: Actual Date
+        in_form_view: true
+        form_group: header
+        form_order: 4
+      description:
+        type: textarea
+        label: Description
+        in_form_view: true
+        form_group: notes
+        form_order: 5
+      cost:
+        type: currency
+        label: Cost
+        precision: 2
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      performed_by:
+        type: text
+        label: Performed By
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "planned"
+            label: "Planned"
+          - value: "overdue"
+            label: "Overdue"
+          - value: "completed"
+            label: "Completed"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 8
+      next_due_date:
+        type: date
+        label: Next Due Date
+        in_form_view: true
+        form_group: header
+        form_order: 9
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      notes:
+        label: Notes
+        order: 4
+        columns: 1
+
+action_map:
+  add-asset:
+    component: FormView
+    entity: asset
+    mode: create
+  add-asset-category:
+    component: FormView
+    entity: asset_category
+    mode: create
+  asset-register-report:
+    component: FormView
+    mode: create
+  complete-maintenance:
+    component: FormView
+    mode: create
+  depreciation-summary:
+    component: FormView
+    mode: create
+  dispose-asset:
+    component: FormView
+    mode: create
+  generate-depreciation-schedule:
+    component: FormView
+    entity: depreciation_schedule
+    mode: create
+  get-asset:
+    component: DetailView
+    entity: asset
+  list-asset-categories:
+    component: DataTable
+    entity: asset_category
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-asset-category
+  list-assets:
+    component: DataTable
+    entity: asset
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-asset
+  post-depreciation:
+    component: FormView
+    mode: create
+  record-asset-movement:
+    component: FormView
+    mode: create
+  run-depreciation:
+    component: FormView
+    mode: create
+  schedule-maintenance:
+    component: FormView
+    mode: create
+  status:
+    component: DashboardView
+  update-asset:
+    component: FormView
+    entity: asset
+    mode: edit

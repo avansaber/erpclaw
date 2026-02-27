@@ -1,0 +1,1983 @@
+ocui_version: "1.0"
+skill: erpclaw-selling
+skill_version: "1.0.0"
+display_name: Sales & Invoicing
+icon: shopping-cart
+color: "#3b82f6"
+
+# =============================================================================
+# Entity Definitions
+# =============================================================================
+entities:
+
+  # ---------------------------------------------------------------------------
+  # Customer
+  # ---------------------------------------------------------------------------
+  customer:
+    label: Customer
+    label_plural: Customers
+    icon: users
+    table: customer
+    id_col: id
+    name_col: name
+    primary_field: name
+    secondary_field: customer_type
+    identifier_field: id
+    status_field: status
+    status_colors:
+      active: green
+      suspended: yellow
+      closed: red
+
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+
+      name:
+        type: text
+        label: Customer Name
+        required: true
+        max_length: 140
+        placeholder: "Enter company or individual name"
+        help_text: "The legal name of the customer"
+        searchable: true
+        in_list_view: true
+        in_detail_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      customer_type:
+        type: select
+        label: Type
+        required: true
+        options:
+          - { value: company, label: Company }
+          - { value: individual, label: Individual }
+        default: company
+        in_list_view: true
+        in_detail_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+      customer_group:
+        type: text
+        label: Customer Group
+        required: false
+        max_length: 140
+        in_form_view: true
+        in_detail_view: true
+        form_group: classification
+        form_order: 1
+
+      payment_terms_id:
+        type: link
+        label: Payment Terms
+        required: false
+        link_entity: payment_terms
+        link_display_field: name
+        in_form_view: true
+        form_group: accounting
+        form_order: 3
+
+      credit_limit:
+        type: currency
+        label: Credit Limit
+        required: false
+        default: "0.00"
+        min: "0.00"
+        precision: 2
+        in_form_view: true
+        in_detail_view: true
+        form_group: accounting
+        form_order: 1
+
+      tax_id:
+        type: text
+        label: Tax ID / EIN
+        required: false
+        max_length: 20
+        pattern: "^[0-9]{2}-[0-9]{7}$"
+        pattern_message: "Format: XX-XXXXXXX"
+        in_form_view: true
+        in_detail_view: true
+        form_group: accounting
+        form_order: 2
+
+      exempt_from_sales_tax:
+        type: boolean
+        label: Exempt from Sales Tax
+        default: false
+        in_form_view: true
+        form_group: accounting
+        form_order: 4
+
+      primary_address:
+        type: textarea
+        label: Primary Address
+        required: false
+        in_form_view: true
+        in_detail_view: true
+        form_group: contact
+        form_order: 1
+
+      primary_contact:
+        type: textarea
+        label: Primary Contact
+        required: false
+        in_form_view: true
+        in_detail_view: true
+        form_group: contact
+        form_order: 2
+
+      total_outstanding:
+        type: currency
+        label: Outstanding
+        read_only: true
+        precision: 2
+        in_list_view: true
+        in_detail_view: true
+
+      outstanding_invoice_count:
+        type: integer
+        label: Open Invoices
+        read_only: true
+        in_detail_view: true
+
+      status:
+        type: status
+        label: Status
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      company_id:
+        type: link
+        label: Company
+        required: true
+        link_entity: company
+        link_display_field: name
+        in_form_view: true
+        form_group: basic
+        form_order: 3
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_detail_view: true
+
+      updated_at:
+        type: datetime
+        label: Updated
+        read_only: true
+
+    form_groups:
+      basic: { label: Basic Information, order: 1, columns: 2 }
+      contact: { label: Contact Details, order: 2, columns: 2, collapsible: true }
+      accounting: { label: Accounting, order: 3, columns: 2 }
+      classification: { label: Classification, order: 4, columns: 2, collapsible: true }
+
+    views:
+      list:
+        columns:
+          - { field: name, width: 200, link: true }
+          - { field: customer_type, width: 120 }
+          - { field: customer_group, width: 140 }
+          - { field: credit_limit, width: 130, align: right }
+          - { field: total_outstanding, width: 130, align: right }
+          - { field: status, width: 100 }
+        filters:
+          - { field: customer_type, type: select }
+          - { field: customer_group, type: text }
+          - { field: status, type: select }
+          - { field: company_id, type: link, label: Company }
+        row_click: get-customer
+
+      detail:
+        header:
+          title_field: name
+          subtitle_field: customer_type
+          status_field: status
+        sections:
+          - label: Details
+            fields: [name, customer_type, customer_group, company_id]
+            columns: 2
+          - label: Contact
+            fields: [primary_address, primary_contact]
+            columns: 2
+          - label: Accounting
+            fields: [credit_limit, tax_id, exempt_from_sales_tax, payment_terms_id, total_outstanding, outstanding_invoice_count]
+            columns: 3
+        actions:
+          - { action: update-customer, label: Edit }
+          - { action: add-quotation, label: New Quotation, primary: true }
+          - { action: add-sales-order, label: New Sales Order }
+          - { action: create-sales-invoice, label: New Invoice }
+
+  # ---------------------------------------------------------------------------
+  # Quotation
+  # ---------------------------------------------------------------------------
+  quotation:
+    label: Quotation
+    label_plural: Quotations
+    icon: file-text
+    table: quotation
+    id_col: id
+    name_col: naming_series
+    primary_field: naming_series
+    secondary_field: customer_id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      open: blue
+      ordered: green
+      expired: orange
+      cancelled: red
+    lifecycle: draft-submit-cancel
+
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+
+      naming_series:
+        type: text
+        label: Quotation No.
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      customer_id:
+        type: link
+        label: Customer
+        required: true
+        link_entity: customer
+        link_display_field: name
+        link_search_action: list-customers
+        in_list_view: true
+        in_detail_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+
+      quotation_date:
+        type: date
+        label: Quotation Date
+        required: true
+        default: today
+        param_name: posting_date
+        in_list_view: true
+        in_detail_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 2
+
+      valid_until:
+        type: date
+        label: Valid Until
+        in_form_view: true
+        in_detail_view: true
+        form_group: header
+        form_order: 3
+
+      tax_template_id:
+        type: link
+        label: Tax Template
+        link_entity: tax_template
+        link_display_field: name
+        in_form_view: true
+        form_group: header
+        form_order: 4
+
+      total_amount:
+        type: currency
+        label: Net Total
+        read_only: true
+        precision: 2
+        in_detail_view: true
+
+      tax_amount:
+        type: currency
+        label: Tax
+        read_only: true
+        precision: 2
+        in_detail_view: true
+
+      grand_total:
+        type: currency
+        label: Grand Total
+        read_only: true
+        precision: 2
+        emphasis: true
+        in_list_view: true
+        in_detail_view: true
+
+      status:
+        type: status
+        label: Status
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      converted_to:
+        type: text
+        label: Converted To SO
+        read_only: true
+        in_detail_view: true
+
+      company_id:
+        type: link
+        label: Company
+        required: true
+        link_entity: company
+        link_display_field: name
+        in_form_view: true
+        form_group: header
+        form_order: 5
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_detail_view: true
+
+    form_groups:
+      header: { label: Quotation Details, order: 1, columns: 2 }
+      items: { label: Items, order: 2, type: child_table }
+      totals: { label: Totals, order: 3, columns: 3 }
+
+    views:
+      list:
+        columns:
+          - { field: naming_series, width: 160, link: true }
+          - { field: customer_id, width: 200 }
+          - { field: quotation_date, width: 120 }
+          - { field: grand_total, width: 130, align: right }
+          - { field: status, width: 100 }
+        filters:
+          - { field: status, type: select }
+          - { field: quotation_date, type: date_range }
+          - { field: customer_id, type: link, label: Customer }
+          - { field: company_id, type: link, label: Company }
+        row_click: get-quotation
+
+      detail:
+        header:
+          title_field: naming_series
+          subtitle_field: customer_id
+          status_field: status
+          amount_field: grand_total
+        sections:
+          - label: Quotation Details
+            fields: [customer_id, quotation_date, valid_until, company_id]
+            columns: 2
+          - label: Items
+            type: child_table
+            child_entity: quotation_item
+            child_fields: [item_id, item_name, quantity, uom, rate, discount_percentage, net_amount]
+            summary_fields: [{ field: net_amount, aggregate: sum }]
+          - label: Totals
+            fields: [total_amount, tax_amount, grand_total]
+            columns: 3
+        actions:
+          - { action: submit-quotation, label: Submit, requires_status: draft, primary: true }
+          - { action: convert-quotation-to-so, label: Convert to Sales Order, requires_status: open }
+          - { action: update-quotation, label: Edit, requires_status: draft }
+
+  # ---------------------------------------------------------------------------
+  # Sales Order
+  # ---------------------------------------------------------------------------
+  sales_order:
+    label: Sales Order
+    label_plural: Sales Orders
+    icon: clipboard
+    table: sales_order
+    id_col: id
+    name_col: naming_series
+    primary_field: naming_series
+    secondary_field: customer_id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      confirmed: blue
+      partially_delivered: cyan
+      fully_delivered: teal
+      partially_invoiced: indigo
+      fully_invoiced: green
+      cancelled: red
+    lifecycle: draft-submit-cancel
+
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+
+      naming_series:
+        type: text
+        label: SO No.
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      customer_id:
+        type: link
+        label: Customer
+        required: true
+        link_entity: customer
+        link_display_field: name
+        link_search_action: list-customers
+        in_list_view: true
+        in_detail_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+
+      order_date:
+        type: date
+        label: Order Date
+        required: true
+        default: today
+        param_name: posting_date
+        in_list_view: true
+        in_detail_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 2
+
+      delivery_date:
+        type: date
+        label: Delivery Date
+        required: true
+        in_list_view: true
+        in_detail_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 3
+
+      tax_template_id:
+        type: link
+        label: Tax Template
+        link_entity: tax_template
+        link_display_field: name
+        in_form_view: true
+        form_group: header
+        form_order: 4
+
+      total_amount:
+        type: currency
+        label: Net Total
+        read_only: true
+        precision: 2
+        in_detail_view: true
+
+      tax_amount:
+        type: currency
+        label: Tax
+        read_only: true
+        precision: 2
+        in_detail_view: true
+
+      grand_total:
+        type: currency
+        label: Grand Total
+        read_only: true
+        precision: 2
+        emphasis: true
+        in_list_view: true
+        in_detail_view: true
+
+      per_delivered:
+        type: percent
+        label: "% Delivered"
+        read_only: true
+        precision: 1
+        in_list_view: true
+        in_detail_view: true
+
+      per_invoiced:
+        type: percent
+        label: "% Invoiced"
+        read_only: true
+        precision: 1
+        in_list_view: true
+        in_detail_view: true
+
+      quotation_id:
+        type: link
+        label: Source Quotation
+        link_entity: quotation
+        link_display_field: naming_series
+        read_only: true
+        in_detail_view: true
+
+      status:
+        type: status
+        label: Status
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      company_id:
+        type: link
+        label: Company
+        required: true
+        link_entity: company
+        link_display_field: name
+        in_form_view: true
+        form_group: header
+        form_order: 5
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_detail_view: true
+
+    form_groups:
+      header: { label: Order Details, order: 1, columns: 2 }
+      items: { label: Items, order: 2, type: child_table }
+      totals: { label: Totals, order: 3, columns: 3 }
+
+    views:
+      list:
+        columns:
+          - { field: naming_series, width: 150, link: true }
+          - { field: customer_id, width: 200 }
+          - { field: order_date, width: 120 }
+          - { field: delivery_date, width: 120 }
+          - { field: grand_total, width: 130, align: right }
+          - { field: per_delivered, width: 100, align: right }
+          - { field: per_invoiced, width: 100, align: right }
+          - { field: status, width: 120 }
+        filters:
+          - { field: status, type: select }
+          - { field: order_date, type: date_range }
+          - { field: customer_id, type: link, label: Customer }
+          - { field: company_id, type: link, label: Company }
+        bulk_actions:
+          - { action: submit-sales-order, label: Submit, requires_status: draft }
+          - { action: cancel-sales-order, label: Cancel, requires_status: confirmed, destructive: true }
+        row_click: get-sales-order
+
+      detail:
+        header:
+          title_field: naming_series
+          subtitle_field: customer_id
+          status_field: status
+          amount_field: grand_total
+        sections:
+          - label: Order Details
+            fields: [customer_id, order_date, delivery_date, quotation_id, company_id]
+            columns: 3
+          - label: Items
+            type: child_table
+            child_entity: sales_order_item
+            child_fields: [item_id, item_name, item_code, quantity, uom, rate, discount_percentage, net_amount, delivered_qty, invoiced_qty]
+            summary_fields: [{ field: net_amount, aggregate: sum }]
+          - label: Totals
+            fields: [total_amount, tax_amount, grand_total]
+            columns: 3
+          - label: Fulfillment
+            fields: [per_delivered, per_invoiced]
+            columns: 2
+          - label: Linked Delivery Notes
+            type: related_list
+            related_entity: delivery_note
+            related_action: list-delivery-notes
+            filter_field: sales_order_id
+          - label: Linked Sales Invoices
+            type: related_list
+            related_entity: sales_invoice
+            related_action: list-sales-invoices
+            filter_field: sales_order_id
+        actions:
+          - { action: submit-sales-order, label: Submit, requires_status: draft, primary: true }
+          - { action: cancel-sales-order, label: Cancel, requires_status: confirmed, destructive: true }
+          - { action: create-delivery-note, label: Create Delivery Note, requires_status: [confirmed, partially_delivered] }
+          - { action: create-sales-invoice, label: Create Invoice, requires_status: [confirmed, partially_delivered, fully_delivered, partially_invoiced] }
+          - { action: update-sales-order, label: Edit, requires_status: draft }
+
+  # ---------------------------------------------------------------------------
+  # Delivery Note
+  # ---------------------------------------------------------------------------
+  delivery_note:
+    label: Delivery Note
+    label_plural: Delivery Notes
+    icon: truck
+    table: delivery_note
+    id_col: id
+    name_col: naming_series
+    primary_field: naming_series
+    secondary_field: customer_id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: blue
+      cancelled: red
+    lifecycle: draft-submit-cancel
+
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+
+      naming_series:
+        type: text
+        label: DN No.
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      customer_id:
+        type: link
+        label: Customer
+        required: true
+        link_entity: customer
+        link_display_field: name
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      posting_date:
+        type: date
+        label: Posting Date
+        required: true
+        default: today
+        in_list_view: true
+        in_detail_view: true
+
+      sales_order_id:
+        type: link
+        label: Sales Order
+        required: true
+        link_entity: sales_order
+        link_display_field: naming_series
+        link_search_action: list-sales-orders
+        in_list_view: true
+        in_detail_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+
+      total_qty:
+        type: quantity
+        label: Total Qty
+        read_only: true
+        precision: 2
+        in_list_view: true
+        in_detail_view: true
+
+      status:
+        type: status
+        label: Status
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      company_id:
+        type: link
+        label: Company
+        read_only: true
+        link_entity: company
+        link_display_field: name
+        in_detail_view: true
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_detail_view: true
+
+    form_groups:
+      header: { label: Delivery Details, order: 1, columns: 2 }
+      items: { label: Items, order: 2, type: child_table }
+
+    views:
+      list:
+        columns:
+          - { field: naming_series, width: 150, link: true }
+          - { field: customer_id, width: 200 }
+          - { field: posting_date, width: 120 }
+          - { field: sales_order_id, width: 150 }
+          - { field: total_qty, width: 100, align: right }
+          - { field: status, width: 100 }
+        filters:
+          - { field: status, type: select }
+          - { field: posting_date, type: date_range }
+          - { field: customer_id, type: link, label: Customer }
+          - { field: company_id, type: link, label: Company }
+        row_click: get-delivery-note
+
+      detail:
+        header:
+          title_field: naming_series
+          subtitle_field: customer_id
+          status_field: status
+        sections:
+          - label: Delivery Details
+            fields: [customer_id, posting_date, sales_order_id, company_id, total_qty]
+            columns: 3
+          - label: Items
+            type: child_table
+            child_entity: delivery_note_item
+            child_fields: [item_id, item_name, item_code, quantity, uom, warehouse_id, rate, amount]
+            summary_fields: [{ field: quantity, aggregate: sum }]
+        actions:
+          - { action: submit-delivery-note, label: Submit, requires_status: draft, primary: true }
+          - { action: cancel-delivery-note, label: Cancel, requires_status: submitted, destructive: true }
+          - { action: create-sales-invoice, label: Create Invoice, requires_status: submitted }
+
+  # ---------------------------------------------------------------------------
+  # Sales Invoice
+  # ---------------------------------------------------------------------------
+  sales_invoice:
+    label: Sales Invoice
+    label_plural: Sales Invoices
+    icon: file-text
+    table: sales_invoice
+    id_col: id
+    name_col: naming_series
+    primary_field: naming_series
+    secondary_field: customer_id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: blue
+      overdue: orange
+      partially_paid: yellow
+      paid: green
+      cancelled: red
+    lifecycle: draft-submit-cancel
+
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+
+      naming_series:
+        type: text
+        label: Invoice No.
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      customer_id:
+        type: link
+        label: Customer
+        required: true
+        link_entity: customer
+        link_display_field: name
+        link_search_action: list-customers
+        link_create_action: add-customer
+        in_list_view: true
+        in_detail_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+
+      posting_date:
+        type: date
+        label: Invoice Date
+        required: true
+        default: today
+        in_list_view: true
+        in_detail_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 2
+
+      due_date:
+        type: date
+        label: Due Date
+        required: false
+        help_text: "Auto-calculated from payment terms if blank (default: +30 days)"
+        in_list_view: true
+        in_detail_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 3
+
+      tax_template_id:
+        type: link
+        label: Tax Template
+        link_entity: tax_template
+        link_display_field: name
+        in_form_view: true
+        in_detail_view: true
+        form_group: header
+        form_order: 4
+
+      sales_order_id:
+        type: link
+        label: Sales Order
+        link_entity: sales_order
+        link_display_field: naming_series
+        link_search_action: list-sales-orders
+        help_text: "Create invoice from a sales order"
+        in_form_view: true
+        in_detail_view: true
+        form_group: source
+        form_order: 1
+
+      delivery_note_id:
+        type: link
+        label: Delivery Note
+        link_entity: delivery_note
+        link_display_field: naming_series
+        link_search_action: list-delivery-notes
+        help_text: "Create invoice from a delivery note"
+        in_form_view: true
+        in_detail_view: true
+        form_group: source
+        form_order: 2
+
+      payment_terms_id:
+        type: link
+        label: Payment Terms
+        link_entity: payment_terms
+        link_display_field: name
+        in_detail_view: true
+
+      total_amount:
+        type: currency
+        label: Net Total
+        read_only: true
+        precision: 2
+        in_detail_view: true
+
+      tax_amount:
+        type: currency
+        label: Total Tax
+        read_only: true
+        precision: 2
+        in_detail_view: true
+
+      grand_total:
+        type: currency
+        label: Grand Total
+        read_only: true
+        precision: 2
+        emphasis: true
+        in_list_view: true
+        in_detail_view: true
+
+      outstanding_amount:
+        type: currency
+        label: Outstanding
+        read_only: true
+        precision: 2
+        in_list_view: true
+        in_detail_view: true
+
+      is_return:
+        type: boolean
+        label: Is Return (Credit Note)
+        read_only: true
+        in_detail_view: true
+
+      return_against:
+        type: link
+        label: Return Against
+        link_entity: sales_invoice
+        link_display_field: naming_series
+        read_only: true
+        in_detail_view: true
+
+      update_stock:
+        type: boolean
+        label: Update Stock
+        read_only: true
+        in_detail_view: true
+
+      status:
+        type: status
+        label: Status
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      company_id:
+        type: link
+        label: Company
+        required: true
+        link_entity: company
+        link_display_field: name
+        in_form_view: true
+        form_group: header
+        form_order: 5
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_detail_view: true
+
+    form_groups:
+      header: { label: Invoice Details, order: 1, columns: 2 }
+      source: { label: Source Document, order: 2, columns: 2, collapsible: true, help_text: "Create from SO or DN, or leave blank for standalone invoice" }
+      items: { label: Items, order: 3, type: child_table }
+      totals: { label: Totals, order: 4, columns: 3 }
+
+    views:
+      list:
+        columns:
+          - { field: naming_series, width: 160, link: true }
+          - { field: customer_id, width: 200 }
+          - { field: posting_date, width: 120 }
+          - { field: due_date, width: 120 }
+          - { field: grand_total, width: 130, align: right }
+          - { field: outstanding_amount, width: 130, align: right }
+          - { field: status, width: 110 }
+        filters:
+          - { field: status, type: select }
+          - { field: posting_date, type: date_range }
+          - { field: customer_id, type: link, label: Customer }
+          - { field: company_id, type: link, label: Company }
+        bulk_actions:
+          - { action: submit-sales-invoice, label: Submit, requires_status: draft }
+          - { action: cancel-sales-invoice, label: Cancel, requires_status: submitted, destructive: true }
+        row_click: get-sales-invoice
+
+      detail:
+        header:
+          title_field: naming_series
+          subtitle_field: customer_id
+          status_field: status
+          amount_field: grand_total
+        sections:
+          - label: Invoice Details
+            fields: [customer_id, posting_date, due_date, company_id]
+            columns: 2
+          - label: Source
+            fields: [sales_order_id, delivery_note_id, payment_terms_id]
+            columns: 3
+            collapsible: true
+          - label: Items
+            type: child_table
+            child_entity: sales_invoice_item
+            child_fields: [item_id, item_name, item_code, quantity, uom, rate, discount_percentage, net_amount]
+            summary_fields: [{ field: net_amount, aggregate: sum }]
+          - label: Totals
+            fields: [total_amount, tax_amount, grand_total, outstanding_amount]
+            columns: 4
+          - label: Returns
+            fields: [is_return, return_against, update_stock]
+            columns: 3
+            collapsible: true
+          - label: Payments
+            type: related_list
+            related_entity: payment_ledger_entry
+            related_fields: [posting_date, voucher_type, amount, currency, remarks]
+        actions:
+          - { action: submit-sales-invoice, label: Submit, requires_status: draft, primary: true }
+          - { action: cancel-sales-invoice, label: Cancel, requires_status: [submitted, overdue, partially_paid], destructive: true }
+          - { action: create-credit-note, label: Create Credit Note, requires_status: [submitted, overdue, partially_paid, paid] }
+          - { action: update-sales-invoice, label: Edit, requires_status: draft }
+
+      form:
+        groups:
+          - label: Invoice Details
+            fields: [customer_id, posting_date, due_date, company_id]
+            columns: 2
+          - label: Source Document
+            fields: [sales_order_id, delivery_note_id]
+            columns: 2
+            collapsible: true
+          - label: Items
+            type: child_table
+            child_entity: sales_invoice_item
+            add_label: Add Item
+            fields: [item_id, quantity, rate, discount_percentage]
+            computed_fields: [net_amount]
+          - label: Tax
+            fields: [tax_template_id]
+
+  # ---------------------------------------------------------------------------
+  # Credit Note (stored as sales_invoice with is_return=1)
+  # ---------------------------------------------------------------------------
+  credit_note:
+    label: Credit Note
+    label_plural: Credit Notes
+    icon: file-minus
+    table: sales_invoice
+    id_col: id
+    name_col: naming_series
+    primary_field: naming_series
+    secondary_field: customer_id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: blue
+      cancelled: red
+    lifecycle: draft-submit-cancel
+    filter_condition: "is_return = 1"
+
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+
+      naming_series:
+        type: text
+        label: Credit Note No.
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      customer_id:
+        type: link
+        label: Customer
+        read_only: true
+        link_entity: customer
+        link_display_field: name
+        in_list_view: true
+        in_detail_view: true
+
+      posting_date:
+        type: date
+        label: Date
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      return_against:
+        type: link
+        label: Against Invoice
+        required: true
+        link_entity: sales_invoice
+        link_display_field: naming_series
+        in_list_view: true
+        in_detail_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+
+      grand_total:
+        type: currency
+        label: Credit Amount
+        read_only: true
+        precision: 2
+        in_list_view: true
+        in_detail_view: true
+
+      status:
+        type: status
+        label: Status
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+    form_groups:
+      header: { label: Credit Note Details, order: 1, columns: 2 }
+      items: { label: Return Items, order: 2, type: child_table }
+
+    views:
+      list:
+        columns:
+          - { field: naming_series, width: 160, link: true }
+          - { field: customer_id, width: 200 }
+          - { field: posting_date, width: 120 }
+          - { field: return_against, width: 160 }
+          - { field: grand_total, width: 130, align: right }
+          - { field: status, width: 100 }
+        filters:
+          - { field: status, type: select }
+          - { field: posting_date, type: date_range }
+          - { field: customer_id, type: link, label: Customer }
+        row_click: get-sales-invoice
+
+      detail:
+        header:
+          title_field: naming_series
+          subtitle_field: customer_id
+          status_field: status
+          amount_field: grand_total
+        sections:
+          - label: Details
+            fields: [customer_id, posting_date, return_against]
+            columns: 3
+          - label: Items
+            type: child_table
+            child_entity: sales_invoice_item
+            child_fields: [item_id, item_name, quantity, rate, net_amount]
+          - label: Totals
+            fields: [grand_total]
+            columns: 1
+        actions:
+          - { action: submit-sales-invoice, label: Submit, requires_status: draft, primary: true }
+          - { action: cancel-sales-invoice, label: Cancel, requires_status: submitted, destructive: true }
+
+  # ---------------------------------------------------------------------------
+  # Sales Partner
+  # ---------------------------------------------------------------------------
+  sales_partner:
+    label: Sales Partner
+    label_plural: Sales Partners
+    icon: handshake
+    table: sales_partner
+    id_col: id
+    name_col: name
+    primary_field: name
+    secondary_field: commission_rate
+    identifier_field: id
+
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+
+      name:
+        type: text
+        label: Partner Name
+        required: true
+        max_length: 140
+        searchable: true
+        in_list_view: true
+        in_detail_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      commission_rate:
+        type: percent
+        label: Commission Rate
+        required: true
+        min: "0"
+        max: "100"
+        precision: 2
+        in_list_view: true
+        in_detail_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_detail_view: true
+
+    form_groups:
+      basic: { label: Partner Details, order: 1, columns: 2 }
+
+    views:
+      list:
+        columns:
+          - { field: name, width: 250, link: true }
+          - { field: commission_rate, width: 150, align: right }
+        filters: []
+        row_click: null
+
+  # ---------------------------------------------------------------------------
+  # Recurring Invoice Template
+  # ---------------------------------------------------------------------------
+  recurring_invoice_template:
+    label: Recurring Template
+    label_plural: Recurring Templates
+    icon: repeat
+    table: recurring_invoice_template
+    id_col: id
+    name_col: id
+    primary_field: customer_id
+    secondary_field: frequency
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      active: green
+      paused: yellow
+      completed: blue
+      cancelled: red
+
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+
+      customer_id:
+        type: link
+        label: Customer
+        required: true
+        link_entity: customer
+        link_display_field: name
+        link_search_action: list-customers
+        in_list_view: true
+        in_detail_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+
+      frequency:
+        type: select
+        label: Frequency
+        required: true
+        options:
+          - { value: weekly, label: Weekly }
+          - { value: monthly, label: Monthly }
+          - { value: quarterly, label: Quarterly }
+          - { value: semi_annually, label: Semi-Annually }
+          - { value: annually, label: Annually }
+        in_list_view: true
+        in_detail_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 2
+
+      start_date:
+        type: date
+        label: Start Date
+        required: true
+        in_list_view: true
+        in_detail_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 3
+
+      end_date:
+        type: date
+        label: End Date
+        required: false
+        help_text: "Leave blank for indefinite recurrence"
+        in_detail_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 4
+
+      next_invoice_date:
+        type: date
+        label: Next Invoice Date
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      last_invoice_date:
+        type: date
+        label: Last Invoice Date
+        read_only: true
+        in_detail_view: true
+
+      tax_template_id:
+        type: link
+        label: Tax Template
+        link_entity: tax_template
+        link_display_field: name
+        in_form_view: true
+        form_group: header
+        form_order: 5
+
+      payment_terms_id:
+        type: link
+        label: Payment Terms
+        link_entity: payment_terms
+        link_display_field: name
+        in_form_view: true
+        form_group: header
+        form_order: 6
+
+      status:
+        type: status
+        label: Status
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      company_id:
+        type: link
+        label: Company
+        required: true
+        link_entity: company
+        link_display_field: name
+        in_form_view: true
+        form_group: header
+        form_order: 7
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_detail_view: true
+
+    form_groups:
+      header: { label: Template Details, order: 1, columns: 2 }
+      items: { label: Invoice Items, order: 2, type: child_table }
+
+    views:
+      list:
+        columns:
+          - { field: customer_id, width: 200, link: true }
+          - { field: frequency, width: 120 }
+          - { field: start_date, width: 120 }
+          - { field: next_invoice_date, width: 140 }
+          - { field: status, width: 100 }
+        filters:
+          - { field: status, type: select }
+          - { field: frequency, type: select }
+          - { field: customer_id, type: link, label: Customer }
+          - { field: company_id, type: link, label: Company }
+        row_click: null
+
+      detail:
+        header:
+          title_field: customer_id
+          subtitle_field: frequency
+          status_field: status
+        sections:
+          - label: Template Details
+            fields: [customer_id, frequency, start_date, end_date, next_invoice_date, last_invoice_date, company_id]
+            columns: 3
+          - label: Items
+            type: child_table
+            child_entity: recurring_invoice_template_item
+            child_fields: [item_id, quantity, uom, rate, amount]
+            summary_fields: [{ field: amount, aggregate: sum }]
+        actions:
+          - { action: update-recurring-template, label: Edit }
+          - { action: generate-recurring-invoices, label: Generate Invoices Now, primary: true }
+
+# =============================================================================
+# Child Entity Definitions
+# =============================================================================
+child_entities:
+
+  quotation_item:
+    parent_entity: quotation
+    parent_field: quotation_id
+    fields:
+      item_id:
+        type: link
+        label: Item
+        required: true
+        link_entity: item
+        link_display_field: item_name
+        link_search_action: list-items
+      item_name:
+        type: text
+        label: Item Name
+        read_only: true
+      quantity:
+        type: quantity
+        label: Qty
+        required: true
+        min: "0.001"
+        precision: 3
+        default: "1"
+        param_name: qty
+      uom:
+        type: text
+        label: UOM
+        read_only: true
+      rate:
+        type: currency
+        label: Rate
+        required: true
+        min: "0.00"
+        precision: 2
+      amount:
+        type: currency
+        label: Amount
+        read_only: true
+        precision: 2
+      discount_percentage:
+        type: percent
+        label: Discount %
+        default: "0"
+        min: "0"
+        max: "100"
+      net_amount:
+        type: currency
+        label: Net Amount
+        read_only: true
+        precision: 2
+        computed: "quantity * rate * (1 - discount_percentage / 100)"
+      description:
+        type: text
+        label: Description
+
+  sales_order_item:
+    parent_entity: sales_order
+    parent_field: sales_order_id
+    fields:
+      item_id:
+        type: link
+        label: Item
+        required: true
+        link_entity: item
+        link_display_field: item_name
+        link_search_action: list-items
+        on_change:
+          - { target: item_name, source: item_name }
+          - { target: item_code, source: item_code }
+          - { target: uom, source: stock_uom }
+      item_name:
+        type: text
+        label: Item Name
+        read_only: true
+      item_code:
+        type: text
+        label: Item Code
+        read_only: true
+      quantity:
+        type: quantity
+        label: Qty
+        required: true
+        min: "0.001"
+        precision: 3
+        default: "1"
+        param_name: qty
+      uom:
+        type: text
+        label: UOM
+        read_only: true
+      rate:
+        type: currency
+        label: Rate
+        required: true
+        min: "0.00"
+        precision: 2
+      amount:
+        type: currency
+        label: Amount
+        read_only: true
+        precision: 2
+      discount_percentage:
+        type: percent
+        label: Discount %
+        default: "0"
+        min: "0"
+        max: "100"
+      net_amount:
+        type: currency
+        label: Net Amount
+        read_only: true
+        precision: 2
+        computed: "quantity * rate * (1 - discount_percentage / 100)"
+      warehouse_id:
+        type: link
+        label: Warehouse
+        link_entity: warehouse
+        link_display_field: name
+      delivered_qty:
+        type: quantity
+        label: Delivered
+        read_only: true
+        precision: 3
+      invoiced_qty:
+        type: quantity
+        label: Invoiced
+        read_only: true
+        precision: 3
+
+  delivery_note_item:
+    parent_entity: delivery_note
+    parent_field: delivery_note_id
+    fields:
+      item_id:
+        type: link
+        label: Item
+        required: true
+        link_entity: item
+        link_display_field: item_name
+      item_name:
+        type: text
+        label: Item Name
+        read_only: true
+      item_code:
+        type: text
+        label: Item Code
+        read_only: true
+      quantity:
+        type: quantity
+        label: Qty
+        required: true
+        min: "0.001"
+        precision: 3
+        param_name: qty
+      uom:
+        type: text
+        label: UOM
+        read_only: true
+      warehouse_id:
+        type: link
+        label: Warehouse
+        link_entity: warehouse
+        link_display_field: name
+      rate:
+        type: currency
+        label: Rate
+        read_only: true
+        precision: 2
+      amount:
+        type: currency
+        label: Amount
+        read_only: true
+        precision: 2
+        computed: "quantity * rate"
+      sales_order_item_id:
+        type: text
+        label: SO Item Ref
+        read_only: true
+        hidden: true
+      batch_id:
+        type: text
+        label: Batch
+      serial_numbers:
+        type: text
+        label: Serial Numbers
+
+  sales_invoice_item:
+    parent_entity: sales_invoice
+    parent_field: sales_invoice_id
+    fields:
+      item_id:
+        type: link
+        label: Item
+        required: true
+        link_entity: item
+        link_display_field: item_name
+        link_search_action: list-items
+        on_change:
+          - { target: item_name, source: item_name }
+          - { target: item_code, source: item_code }
+          - { target: uom, source: stock_uom }
+          - { target: rate, source: standard_rate }
+      item_name:
+        type: text
+        label: Item Name
+        read_only: true
+      item_code:
+        type: text
+        label: Item Code
+        read_only: true
+      quantity:
+        type: quantity
+        label: Qty
+        required: true
+        min: "0.001"
+        precision: 3
+        default: "1"
+        param_name: qty
+      uom:
+        type: text
+        label: UOM
+        read_only: true
+      rate:
+        type: currency
+        label: Rate
+        required: true
+        min: "0.00"
+        precision: 2
+      amount:
+        type: currency
+        label: Amount
+        read_only: true
+        precision: 2
+      discount_percentage:
+        type: percent
+        label: Discount %
+        default: "0"
+        min: "0"
+        max: "100"
+      net_amount:
+        type: currency
+        label: Net Amount
+        read_only: true
+        precision: 2
+        computed: "quantity * rate * (1 - discount_percentage / 100)"
+      sales_order_item_id:
+        type: text
+        label: SO Item Ref
+        read_only: true
+        hidden: true
+      delivery_note_item_id:
+        type: text
+        label: DN Item Ref
+        read_only: true
+        hidden: true
+
+  recurring_invoice_template_item:
+    parent_entity: recurring_invoice_template
+    parent_field: template_id
+    fields:
+      item_id:
+        type: link
+        label: Item
+        required: true
+        link_entity: item
+        link_display_field: item_name
+        link_search_action: list-items
+      quantity:
+        type: quantity
+        label: Qty
+        required: true
+        min: "0.001"
+        precision: 3
+        default: "1"
+        param_name: qty
+      uom:
+        type: text
+        label: UOM
+      rate:
+        type: currency
+        label: Rate
+        required: true
+        min: "0.00"
+        precision: 2
+      amount:
+        type: currency
+        label: Amount
+        read_only: true
+        precision: 2
+        computed: "quantity * rate"
+
+# =============================================================================
+# Action Map — maps each action to a UI component
+# =============================================================================
+action_map:
+
+  # --- Customer actions ---
+  add-customer:
+    component: FormView
+    entity: customer
+    mode: create
+    success_redirect: get-customer
+
+  update-customer:
+    component: FormView
+    entity: customer
+    mode: edit
+    success_redirect: get-customer
+
+  get-customer:
+    component: DetailView
+    entity: customer
+    related:
+      - { entity: sales_invoice, action: list-sales-invoices, filter_field: customer_id, label: Invoices }
+      - { entity: sales_order, action: list-sales-orders, filter_field: customer_id, label: Orders }
+      - { entity: quotation, action: list-quotations, filter_field: customer_id, label: Quotations }
+
+  list-customers:
+    component: DataTable
+    entity: customer
+    default_sort: name
+    default_sort_dir: asc
+    searchable: true
+    add_action: add-customer
+
+  # --- Quotation actions ---
+  add-quotation:
+    component: FormView
+    entity: quotation
+    mode: create
+    child_tables:
+      - { entity: quotation_item, form_group: items, add_label: Add Item }
+    success_redirect: get-quotation
+
+  update-quotation:
+    component: FormView
+    entity: quotation
+    mode: edit
+    child_tables:
+      - { entity: quotation_item, form_group: items, add_label: Add Item }
+    success_redirect: get-quotation
+
+  get-quotation:
+    component: DetailView
+    entity: quotation
+
+  list-quotations:
+    component: DataTable
+    entity: quotation
+    default_sort: quotation_date
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-quotation
+
+  submit-quotation:
+    component: WizardFlow
+    entity: quotation
+    steps:
+      - { label: Review, type: detail }
+      - { label: Confirm, type: confirmation, message: "Submit this quotation? It will be locked and can be converted to a sales order." }
+    success_toast: "Quotation {naming_series} submitted."
+
+  convert-quotation-to-so:
+    component: WizardFlow
+    entity: quotation
+    steps:
+      - { label: Review, type: detail }
+      - { label: Confirm, type: confirmation, message: "Convert this quotation to a sales order?" }
+    success_toast: "Sales order created from quotation."
+    success_redirect: get-sales-order
+
+  # --- Sales Order actions ---
+  add-sales-order:
+    component: FormView
+    entity: sales_order
+    mode: create
+    child_tables:
+      - { entity: sales_order_item, form_group: items, add_label: Add Item }
+    success_redirect: get-sales-order
+
+  update-sales-order:
+    component: FormView
+    entity: sales_order
+    mode: edit
+    child_tables:
+      - { entity: sales_order_item, form_group: items, add_label: Add Item }
+    success_redirect: get-sales-order
+
+  get-sales-order:
+    component: DetailView
+    entity: sales_order
+    related:
+      - { entity: delivery_note, action: list-delivery-notes, filter_field: sales_order_id, label: Delivery Notes }
+      - { entity: sales_invoice, action: list-sales-invoices, filter_field: sales_order_id, label: Invoices }
+
+  list-sales-orders:
+    component: DataTable
+    entity: sales_order
+    default_sort: order_date
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-sales-order
+
+  submit-sales-order:
+    component: WizardFlow
+    entity: sales_order
+    steps:
+      - { label: Review, type: detail }
+      - { label: Confirm, type: confirmation, message: "Submit this sales order? A credit limit check will be performed." }
+    success_toast: "Sales order {naming_series} confirmed."
+
+  cancel-sales-order:
+    component: WizardFlow
+    entity: sales_order
+    steps:
+      - { label: Review, type: detail }
+      - { label: Confirm, type: confirmation, message: "Cancel this sales order? This cannot be undone.", destructive: true }
+    success_toast: "Sales order cancelled."
+
+  # --- Delivery Note actions ---
+  create-delivery-note:
+    component: FormView
+    entity: delivery_note
+    mode: create
+    child_tables:
+      - { entity: delivery_note_item, form_group: items, add_label: Add Item }
+    success_redirect: get-delivery-note
+
+  get-delivery-note:
+    component: DetailView
+    entity: delivery_note
+
+  list-delivery-notes:
+    component: DataTable
+    entity: delivery_note
+    default_sort: posting_date
+    default_sort_dir: desc
+    searchable: true
+
+  submit-delivery-note:
+    component: WizardFlow
+    entity: delivery_note
+    steps:
+      - { label: Review, type: detail }
+      - { label: Confirm, type: confirmation, message: "Submit this delivery note? Stock ledger entries and COGS GL entries will be posted." }
+    success_toast: "Delivery note {naming_series} submitted. {sle_entries_created} SLE + {gl_entries_created} GL entries posted."
+
+  cancel-delivery-note:
+    component: WizardFlow
+    entity: delivery_note
+    steps:
+      - { label: Review, type: detail }
+      - { label: Confirm, type: confirmation, message: "Cancel this delivery note? SLE and GL reversal entries will be posted.", destructive: true }
+    success_toast: "Delivery note cancelled. Reversal entries posted."
+
+  # --- Sales Invoice actions ---
+  create-sales-invoice:
+    component: FormView
+    entity: sales_invoice
+    mode: create
+    child_tables:
+      - { entity: sales_invoice_item, form_group: items, add_label: Add Item }
+    success_redirect: get-sales-invoice
+
+  update-sales-invoice:
+    component: FormView
+    entity: sales_invoice
+    mode: edit
+    child_tables:
+      - { entity: sales_invoice_item, form_group: items, add_label: Add Item }
+    success_redirect: get-sales-invoice
+
+  get-sales-invoice:
+    component: DetailView
+    entity: sales_invoice
+
+  list-sales-invoices:
+    component: DataTable
+    entity: sales_invoice
+    default_sort: posting_date
+    default_sort_dir: desc
+    searchable: true
+    add_action: create-sales-invoice
+
+  submit-sales-invoice:
+    component: WizardFlow
+    entity: sales_invoice
+    steps:
+      - { label: Review, type: detail }
+      - { label: Confirm, type: confirmation, message: "Submit this invoice? GL entries will be posted and the invoice cannot be edited." }
+    success_toast: "Invoice {naming_series} submitted. {gl_entries_created} GL entries posted."
+
+  cancel-sales-invoice:
+    component: WizardFlow
+    entity: sales_invoice
+    steps:
+      - { label: Review, type: detail }
+      - { label: Confirm, type: confirmation, message: "Cancel this invoice? Reversal GL entries will be posted.", destructive: true }
+    success_toast: "Invoice {naming_series} cancelled. Reversal entries posted."
+
+  # --- Credit Note actions ---
+  create-credit-note:
+    component: FormView
+    entity: credit_note
+    mode: create
+    child_tables:
+      - { entity: sales_invoice_item, form_group: items, add_label: Add Return Item }
+    success_redirect: get-sales-invoice
+
+  # --- Sales Partner actions ---
+  add-sales-partner:
+    component: FormView
+    entity: sales_partner
+    mode: create
+
+  list-sales-partners:
+    component: DataTable
+    entity: sales_partner
+    default_sort: name
+    default_sort_dir: asc
+    searchable: true
+    add_action: add-sales-partner
+
+  # --- Recurring Template actions ---
+  add-recurring-template:
+    component: FormView
+    entity: recurring_invoice_template
+    mode: create
+    child_tables:
+      - { entity: recurring_invoice_template_item, form_group: items, add_label: Add Item }
+
+  update-recurring-template:
+    component: FormView
+    entity: recurring_invoice_template
+    mode: edit
+    child_tables:
+      - { entity: recurring_invoice_template_item, form_group: items, add_label: Add Item }
+
+  list-recurring-templates:
+    component: DataTable
+    entity: recurring_invoice_template
+    default_sort: next_invoice_date
+    default_sort_dir: asc
+    searchable: true
+    add_action: add-recurring-template
+
+  generate-recurring-invoices:
+    component: WizardFlow
+    entity: recurring_invoice_template
+    steps:
+      - { label: Confirm, type: confirmation, message: "Generate all due recurring invoices? Draft invoices will be auto-submitted with GL entries." }
+    success_toast: "{invoices_generated} recurring invoices generated."
+
+  # --- Utility actions ---
+  update-invoice-outstanding:
+    component: null
+    hidden: true
+
+  import-customers:
+    component: null
+    hidden: true
+
+  add-intercompany-account-map:
+    component: FormView
+    entity: intercompany_account_map
+    mode: create
+    fields:
+      - { key: company_id, label: Source Company, type: entity_lookup, entity: company, required: true }
+      - { key: target_company_id, label: Target Company, type: entity_lookup, entity: company, required: true }
+      - { key: source_account_id, label: Source Account, type: entity_lookup, entity: account, required: true }
+      - { key: target_account_id, label: Target Account, type: entity_lookup, entity: account, required: true }
+
+  list-intercompany-account-maps:
+    component: DataTable
+    entity: intercompany_account_map
+    columns:
+      - { key: source_account_name, label: Source Account }
+      - { key: target_account_name, label: Target Account }
+    filters:
+      - { key: company_id, label: Source Company, type: entity_lookup, entity: company, required: true }
+      - { key: target_company_id, label: Target Company, type: entity_lookup, entity: company }
+
+  create-intercompany-invoice:
+    component: FormView
+    entity: intercompany_invoice
+    mode: create
+    fields:
+      - { key: sales_invoice_id, label: Sales Invoice, type: entity_lookup, entity: sales_invoice, required: true }
+      - { key: target_company_id, label: Target Company, type: entity_lookup, entity: company, required: true }
+      - { key: supplier_id, label: Supplier (in target), type: entity_lookup, entity: supplier, required: true }
+
+  list-intercompany-invoices:
+    component: DataTable
+    entity: intercompany_invoice
+    columns:
+      - { key: naming_series, label: Invoice # }
+      - { key: posting_date, label: Date, type: date }
+      - { key: grand_total, label: Amount, type: currency }
+      - { key: status, label: Status, type: status_badge }
+      - { key: direction, label: Direction }
+    filters:
+      - { key: company_id, label: Company, type: entity_lookup, entity: company, required: true }
+
+  cancel-intercompany-invoice:
+    component: WizardFlow
+    steps:
+      - type: confirmation
+        message: "Cancel this intercompany invoice? Both the sales invoice and mirror purchase invoice will be cancelled."
+    fields:
+      - { key: sales_invoice_id, label: Sales Invoice, type: entity_lookup, entity: sales_invoice, required: true }
+
+  status:
+    component: DashboardView
+    sections:
+      - { key: customers, label: Customers, metric_type: count }
+      - { key: quotations, label: Quotations, metric_type: status_breakdown }
+      - { key: sales_orders, label: Sales Orders, metric_type: status_breakdown }
+      - { key: sales_invoices, label: Sales Invoices, metric_type: status_breakdown }
+      - { key: total_outstanding, label: Total Outstanding, metric_type: currency }

@@ -1,0 +1,132 @@
+ocui_version: "1.0"
+skill: erpclaw-region-eu
+skill_version: "1.0.0"
+display_name: EU Compliance
+icon: flag
+color: "#003399"
+
+entities:
+  regional_settings:
+    label: Regional Settings
+    label_plural: Regional Settingses
+    table: regional_settings
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      key:
+        type: text
+        label: Key
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      value:
+        type: text
+        label: Value
+        in_form_view: true
+        form_group: details
+        form_order: 3
+    form_groups:
+      details:
+        label: Details
+        order: 1
+        columns: 2
+      references:
+        label: References
+        order: 2
+        columns: 2
+
+action_map:
+  available-reports:
+    component: FormView
+    mode: create
+  check-distance-selling-threshold:
+    component: FormView
+    mode: create
+  check-vies-format:
+    component: FormView
+    mode: create
+  compute-oss-vat:
+    component: FormView
+    mode: create
+  compute-reverse-charge:
+    component: FormView
+    mode: create
+  compute-vat:
+    component: FormView
+    mode: create
+  compute-withholding-tax:
+    component: FormView
+    mode: create
+  eu-tax-summary:
+    component: FormView
+    mode: create
+  generate-ec-sales-list:
+    component: FormView
+    mode: create
+  generate-einvoice-en16931:
+    component: FormView
+    mode: create
+  generate-intrastat-arrivals:
+    component: FormView
+    mode: create
+  generate-intrastat-dispatches:
+    component: FormView
+    mode: create
+  generate-oss-return:
+    component: FormView
+    mode: create
+  generate-saft-export:
+    component: FormView
+    mode: create
+  generate-vat-return:
+    component: FormView
+    mode: create
+  list-eu-countries:
+    component: FormView
+    mode: create
+  list-eu-vat-rates:
+    component: FormView
+    mode: create
+  list-intrastat-codes:
+    component: FormView
+    mode: create
+  seed-eu-coa:
+    component: FormView
+    mode: create
+  seed-eu-defaults:
+    component: FormView
+    mode: create
+  setup-eu-vat:
+    component: FormView
+    mode: create
+  status:
+    component: DashboardView
+  triangulation-check:
+    component: FormView
+    mode: create
+  validate-eori:
+    component: FormView
+    mode: create
+  validate-eu-vat-number:
+    component: FormView
+    mode: create
+  validate-iban:
+    component: FormView
+    mode: create

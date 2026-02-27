@@ -1,0 +1,52 @@
+{
+  "standard": "OECD SAF-T v2.0",
+  "header": {
+    "AuditFileVersion": "2.00",
+    "AuditFileCountry": "{company_country}",
+    "AuditFileDateCreated": "{current_date}",
+    "SoftwareCompanyName": "ERPClaw",
+    "SoftwareID": "erpclaw-region-eu",
+    "SoftwareVersion": "1.0.0",
+    "Company": {
+      "Name": "{company_name}",
+      "TaxRegistrationNumber": "{vat_number}",
+      "Address": "{company_address}"
+    },
+    "SelectionCriteria": {
+      "PeriodStart": "{period_start}",
+      "PeriodEnd": "{period_end}"
+    }
+  },
+  "master_files": {
+    "GeneralLedgerAccounts": {
+      "source_table": "account",
+      "fields": ["AccountID", "AccountDescription", "StandardAccountID", "AccountType", "OpeningDebitBalance", "ClosingDebitBalance"]
+    },
+    "Customers": {
+      "source_table": "customer",
+      "fields": ["CustomerID", "Name", "TaxRegistrationNumber", "Address"]
+    },
+    "Suppliers": {
+      "source_table": "supplier",
+      "fields": ["SupplierID", "Name", "TaxRegistrationNumber", "Address"]
+    },
+    "TaxTable": {
+      "source_table": "tax_template",
+      "fields": ["TaxType", "Description", "TaxPercentage"]
+    }
+  },
+  "source_documents": {
+    "SalesInvoices": {
+      "source_table": "sales_invoice",
+      "fields": ["InvoiceNo", "InvoiceDate", "CustomerID", "GrossTotal", "NetTotal", "TaxPayable"]
+    },
+    "PurchaseInvoices": {
+      "source_table": "purchase_invoice",
+      "fields": ["InvoiceNo", "InvoiceDate", "SupplierID", "GrossTotal", "NetTotal", "TaxPayable"]
+    }
+  },
+  "general_ledger_entries": {
+    "source_table": "gl_entry",
+    "fields": ["TransactionID", "Period", "TransactionDate", "Description", "DebitAmount", "CreditAmount", "AccountID"]
+  }
+}

@@ -1,0 +1,437 @@
+ocui_version: "1.0"
+skill: erpclaw-journals
+skill_version: "1.0.0"
+display_name: Journal Entries
+icon: book-open
+color: "#8b5cf6"
+
+entities:
+  journal_entry:
+    label: Journal Entry
+    label_plural: Journal Entries
+    table: journal_entry
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      naming_series:
+        type: text
+        label: Naming Series
+        read_only: true
+      posting_date:
+        type: date
+        label: Posting Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      entry_type:
+        type: select
+        label: Entry Type
+        required: true
+        options:
+          - value: "journal"
+            label: "Journal"
+          - value: "opening"
+            label: "Opening"
+          - value: "closing"
+            label: "Closing"
+          - value: "depreciation"
+            label: "Depreciation"
+          - value: "write_off"
+            label: "Write Off"
+          - value: "exchange_rate_revaluation"
+            label: "Exchange Rate Revaluation"
+          - value: "inter_company"
+            label: "Inter Company"
+          - value: "credit_note"
+            label: "Credit Note"
+          - value: "debit_note"
+            label: "Debit Note"
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      total_debit:
+        type: currency
+        label: Total Debit
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 3
+      total_credit:
+        type: currency
+        label: Total Credit
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 4
+      currency:
+        type: text
+        label: Currency
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      exchange_rate:
+        type: currency
+        label: Exchange Rate
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 6
+      remark:
+        type: text
+        label: Remark
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "draft"
+            label: "Draft"
+          - value: "submitted"
+            label: "Submitted"
+          - value: "cancelled"
+            label: "Cancelled"
+          - value: "amended"
+            label: "Amended"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 8
+      amended_from:
+        type: text
+        label: Amended From
+        in_form_view: true
+        form_group: details
+        form_order: 9
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 10
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 4
+        columns: 2
+      items:
+        label: Line Items
+        order: 5
+        type: child_table
+
+child_entities:
+  journal_entry_line:
+    parent_entity: journal_entry
+    parent_field: journal_entry_id
+    param_name: lines
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      account_id:
+        type: link
+        label: Account ID
+        link_entity: account
+        link_display_field: name
+        link_search_action: list-accounts
+      party_type:
+        type: select
+        label: Party Type
+        options:
+          - value: "customer"
+            label: "Customer"
+          - value: "supplier"
+            label: "Supplier"
+          - value: "employee"
+            label: "Employee"
+      party_id:
+        type: link
+        label: Party ID
+        link_entity: party
+        link_display_field: name
+        link_search_action: list-parties
+      debit:
+        type: currency
+        label: Debit
+        precision: 2
+      credit:
+        type: currency
+        label: Credit
+        precision: 2
+      cost_center_id:
+        type: link
+        label: Cost Center ID
+        link_entity: cost_center
+        link_display_field: name
+        link_search_action: list-cost-centers
+      project_id:
+        type: link
+        label: Project ID
+        link_entity: project
+        link_display_field: name
+        link_search_action: list-projects
+      remark:
+        type: text
+        label: Remark
+
+  recurring_journal_template:
+    label: Recurring Template
+    label_plural: Recurring Templates
+    table: recurring_journal_template
+    id_col: id
+    name_col: name
+    primary_field: name
+    identifier_field: naming_series
+    status_field: status
+    status_colors:
+      active: green
+      paused: yellow
+      completed: gray
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      naming_series:
+        type: text
+        label: Naming Series
+        read_only: true
+      name:
+        type: text
+        label: Template Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      frequency:
+        type: select
+        label: Frequency
+        required: true
+        options:
+          - value: "daily"
+            label: "Daily"
+          - value: "weekly"
+            label: "Weekly"
+          - value: "monthly"
+            label: "Monthly"
+          - value: "quarterly"
+            label: "Quarterly"
+          - value: "annual"
+            label: "Annual"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 2
+      start_date:
+        type: date
+        label: Start Date
+        required: true
+        in_form_view: true
+        form_group: schedule
+        form_order: 3
+      end_date:
+        type: date
+        label: End Date
+        in_form_view: true
+        form_group: schedule
+        form_order: 4
+      next_run_date:
+        type: date
+        label: Next Run Date
+        read_only: true
+        in_list_view: true
+      last_generated_date:
+        type: date
+        label: Last Generated
+        read_only: true
+      entry_type:
+        type: select
+        label: Entry Type
+        options:
+          - value: "journal"
+            label: "Journal"
+          - value: "opening"
+            label: "Opening"
+          - value: "closing"
+            label: "Closing"
+          - value: "depreciation"
+            label: "Depreciation"
+          - value: "write_off"
+            label: "Write Off"
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      auto_submit:
+        type: checkbox
+        label: Auto Submit
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      remark:
+        type: text
+        label: Remark
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "active"
+            label: "Active"
+          - value: "paused"
+            label: "Paused"
+          - value: "completed"
+            label: "Completed"
+        in_list_view: true
+      company_id:
+        type: link
+        label: Company
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 8
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      schedule:
+        label: Schedule
+        order: 2
+        columns: 2
+      details:
+        label: Details
+        order: 3
+        columns: 2
+      references:
+        label: References
+        order: 4
+        columns: 2
+      items:
+        label: Line Items
+        order: 5
+        type: child_table
+
+action_map:
+  add-journal-entry:
+    component: FormView
+    entity: journal_entry
+    mode: create
+    child_tables:
+      - entity: journal_entry_line
+        form_group: items
+        add_label: "Add Row"
+  amend-journal-entry:
+    component: FormView
+    mode: create
+  cancel-journal-entry:
+    component: WizardFlow
+    entity: journal_entry
+    steps:
+      - label: Review
+        type: detail
+      - label: Confirm
+        type: confirmation
+        message: "Cancel this journal entry? This cannot be undone."
+        destructive: true
+  delete-journal-entry:
+    component: null
+    entity: journal_entry
+    hidden: true
+  duplicate-journal-entry:
+    component: FormView
+    mode: create
+  get-journal-entry:
+    component: DetailView
+    entity: journal_entry
+  list-journal-entries:
+    component: DataTable
+    entity: journal_entry
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-journal-entry
+  status:
+    component: DashboardView
+  submit-journal-entry:
+    component: WizardFlow
+    entity: journal_entry
+    steps:
+      - label: Review
+        type: detail
+      - label: Confirm
+        type: confirmation
+        message: "Submit this journal entry?"
+  update-journal-entry:
+    component: FormView
+    entity: journal_entry
+    mode: edit
+  add-recurring-template:
+    component: FormView
+    entity: recurring_journal_template
+    mode: create
+    child_tables:
+      - entity: journal_entry_line
+        form_group: items
+        add_label: "Add Row"
+  update-recurring-template:
+    component: FormView
+    entity: recurring_journal_template
+    mode: edit
+  list-recurring-templates:
+    component: DataTable
+    entity: recurring_journal_template
+    default_sort: next_run_date
+    default_sort_dir: asc
+    searchable: true
+    add_action: add-recurring-template
+  get-recurring-template:
+    component: DetailView
+    entity: recurring_journal_template
+  process-recurring:
+    component: WizardFlow
+    steps:
+      - label: Confirm
+        type: confirmation
+        message: "Generate journal entries from all due recurring templates?"
+  delete-recurring-template:
+    component: null
+    entity: recurring_journal_template
+    hidden: true

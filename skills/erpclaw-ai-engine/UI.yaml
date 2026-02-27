@@ -1,0 +1,1016 @@
+ocui_version: "1.0"
+skill: erpclaw-ai-engine
+skill_version: "1.0.0"
+display_name: AI Engine
+icon: brain
+color: "#f43f5e"
+
+entities:
+  anomaly:
+    label: Anomaly
+    label_plural: Anomalies
+    table: anomaly
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      detected_at:
+        type: text
+        label: Detected At
+        in_form_view: true
+        form_group: details
+        form_order: 1
+      anomaly_type:
+        type: select
+        label: Anomaly Type
+        required: true
+        options:
+          - value: "price_spike"
+            label: "Price Spike"
+          - value: "volume_change"
+            label: "Volume Change"
+          - value: "duplicate_possible"
+            label: "Duplicate Possible"
+          - value: "margin_erosion"
+            label: "Margin Erosion"
+          - value: "unusual_vendor"
+            label: "Unusual Vendor"
+          - value: "pattern_break"
+            label: "Pattern Break"
+          - value: "consumption_spike"
+            label: "Consumption Spike"
+          - value: "late_pattern"
+            label: "Late Pattern"
+          - value: "round_number"
+            label: "Round Number"
+          - value: "ghost_employee"
+            label: "Ghost Employee"
+          - value: "vendor_concentration"
+            label: "Vendor Concentration"
+          - value: "sequence_violation"
+            label: "Sequence Violation"
+          - value: "benford_deviation"
+            label: "Benford Deviation"
+          - value: "budget_overrun"
+            label: "Budget Overrun"
+          - value: "inventory_shrinkage"
+            label: "Inventory Shrinkage"
+          - value: "payment_pattern_shift"
+            label: "Payment Pattern Shift"
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      severity:
+        type: select
+        label: Severity
+        required: true
+        options:
+          - value: "info"
+            label: "Info"
+          - value: "warning"
+            label: "Warning"
+          - value: "critical"
+            label: "Critical"
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      entity_type:
+        type: text
+        label: Entity Type
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      entity_id:
+        type: link
+        label: Entity ID
+        link_entity: entity
+        link_display_field: name
+        link_search_action: list-entities
+        in_form_view: true
+        form_group: references
+        form_order: 5
+      description:
+        type: textarea
+        label: Description
+        in_form_view: true
+        form_group: notes
+        form_order: 6
+      evidence:
+        type: text
+        label: Evidence
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      baseline:
+        type: text
+        label: Baseline
+        in_form_view: true
+        form_group: details
+        form_order: 8
+      actual:
+        type: text
+        label: Actual
+        in_form_view: true
+        form_group: details
+        form_order: 9
+      deviation_pct:
+        type: text
+        label: Deviation Pct
+        in_form_view: true
+        form_group: details
+        form_order: 10
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "new"
+            label: "New"
+          - value: "acknowledged"
+            label: "Acknowledged"
+          - value: "investigated"
+            label: "Investigated"
+          - value: "dismissed"
+            label: "Dismissed"
+          - value: "resolved"
+            label: "Resolved"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 11
+      resolution_notes:
+        type: text
+        label: Resolution Notes
+        in_form_view: true
+        form_group: details
+        form_order: 12
+      assigned_to:
+        type: text
+        label: Assigned To
+        in_form_view: true
+        form_group: details
+        form_order: 13
+      expires_at:
+        type: text
+        label: Expires At
+        in_form_view: true
+        form_group: details
+        form_order: 14
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      notes:
+        label: Notes
+        order: 4
+        columns: 1
+
+  scenario:
+    label: Scenario
+    label_plural: Scenarios
+    table: scenario
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      question:
+        type: text
+        label: Question
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 1
+      scenario_type:
+        type: select
+        label: Scenario Type
+        required: true
+        options:
+          - value: "price_change"
+            label: "Price Change"
+          - value: "supplier_loss"
+            label: "Supplier Loss"
+          - value: "demand_shift"
+            label: "Demand Shift"
+          - value: "cost_change"
+            label: "Cost Change"
+          - value: "hiring_impact"
+            label: "Hiring Impact"
+          - value: "expansion"
+            label: "Expansion"
+          - value: "contraction"
+            label: "Contraction"
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      assumptions:
+        type: text
+        label: Assumptions
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      baseline:
+        type: text
+        label: Baseline
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      projected:
+        type: text
+        label: Projected
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      impact_summary:
+        type: text
+        label: Impact Summary
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      confidence:
+        type: text
+        label: Confidence
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      expires_at:
+        type: text
+        label: Expires At
+        in_form_view: true
+        form_group: details
+        form_order: 8
+    form_groups:
+      details:
+        label: Details
+        order: 1
+        columns: 2
+
+  business_rule:
+    label: Business Rule
+    label_plural: Business Rules
+    table: business_rule
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      rule_text:
+        type: text
+        label: Rule Text
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 1
+      parsed_condition:
+        type: text
+        label: Parsed Condition
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      applies_to:
+        type: text
+        label: Applies To
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      action:
+        type: select
+        label: Action
+        required: true
+        options:
+          - value: "block"
+            label: "Block"
+          - value: "warn"
+            label: "Warn"
+          - value: "notify"
+            label: "Notify"
+          - value: "auto_execute"
+            label: "Auto Execute"
+          - value: "suggest"
+            label: "Suggest"
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      active:
+        type: integer
+        label: Active
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      times_triggered:
+        type: integer
+        label: Times Triggered
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      last_triggered_at:
+        type: text
+        label: Last Triggered At
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      created_by:
+        type: text
+        label: Created By
+        in_form_view: true
+        form_group: details
+        form_order: 8
+    form_groups:
+      details:
+        label: Details
+        order: 1
+        columns: 2
+
+  categorization_rule:
+    label: Categorization Rule
+    label_plural: Categorization Rules
+    table: categorization_rule
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      pattern:
+        type: text
+        label: Pattern
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 1
+      source:
+        type: select
+        label: Source
+        required: true
+        options:
+          - value: "bank_feed"
+            label: "Bank Feed"
+          - value: "ocr_vendor"
+            label: "Ocr Vendor"
+          - value: "email_subject"
+            label: "Email Subject"
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      target_account_id:
+        type: link
+        label: Target Account ID
+        link_entity: account
+        link_display_field: name
+        link_search_action: list-accounts
+        in_form_view: true
+        form_group: references
+        form_order: 3
+      target_cost_center_id:
+        type: link
+        label: Target Cost Center ID
+        link_entity: cost_center
+        link_display_field: name
+        link_search_action: list-cost-centers
+        in_form_view: true
+        form_group: references
+        form_order: 4
+      confidence:
+        type: text
+        label: Confidence
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      times_applied:
+        type: integer
+        label: Times Applied
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      times_overridden:
+        type: integer
+        label: Times Overridden
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      last_applied_at:
+        type: text
+        label: Last Applied At
+        in_form_view: true
+        form_group: details
+        form_order: 8
+      created_by:
+        type: select
+        label: Created By
+        required: true
+        options:
+          - value: "user"
+            label: "User"
+          - value: "ai"
+            label: "Ai"
+        in_form_view: true
+        form_group: details
+        form_order: 9
+    form_groups:
+      details:
+        label: Details
+        order: 1
+        columns: 2
+      references:
+        label: References
+        order: 2
+        columns: 2
+
+  correlation:
+    label: Correlation
+    label_plural: Correlations
+    table: correlation
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      discovered_at:
+        type: text
+        label: Discovered At
+        in_form_view: true
+        form_group: details
+        form_order: 1
+      module_a:
+        type: text
+        label: Module A
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      module_b:
+        type: text
+        label: Module B
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      description:
+        type: textarea
+        label: Description
+        in_form_view: true
+        form_group: notes
+        form_order: 4
+      evidence:
+        type: text
+        label: Evidence
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      strength:
+        type: select
+        label: Strength
+        required: true
+        options:
+          - value: "weak"
+            label: "Weak"
+          - value: "moderate"
+            label: "Moderate"
+          - value: "strong"
+            label: "Strong"
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      statistical_confidence:
+        type: text
+        label: Statistical Confidence
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      actionable:
+        type: integer
+        label: Actionable
+        in_form_view: true
+        form_group: details
+        form_order: 8
+      suggested_action:
+        type: text
+        label: Suggested Action
+        in_form_view: true
+        form_group: details
+        form_order: 9
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "new"
+            label: "New"
+          - value: "validated"
+            label: "Validated"
+          - value: "dismissed"
+            label: "Dismissed"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 10
+      expires_at:
+        type: text
+        label: Expires At
+        in_form_view: true
+        form_group: details
+        form_order: 11
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      notes:
+        label: Notes
+        order: 3
+        columns: 1
+
+  cash_flow_forecast:
+    label: Cash Flow Forecast
+    label_plural: Cash Flow Forecasts
+    table: cash_flow_forecast
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      forecast_date:
+        type: date
+        label: Forecast Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      generated_at:
+        type: currency
+        label: Generated At
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 2
+      horizon_days:
+        type: integer
+        label: Horizon Days
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      starting_balance:
+        type: currency
+        label: Starting Balance
+        precision: 2
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      projected_inflows:
+        type: text
+        label: Projected Inflows
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      projected_outflows:
+        type: text
+        label: Projected Outflows
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      projected_balance:
+        type: currency
+        label: Projected Balance
+        precision: 2
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      confidence_interval:
+        type: text
+        label: Confidence Interval
+        in_form_view: true
+        form_group: details
+        form_order: 8
+      assumptions:
+        type: text
+        label: Assumptions
+        in_form_view: true
+        form_group: details
+        form_order: 9
+      scenario:
+        type: select
+        label: Scenario
+        required: true
+        options:
+          - value: "pessimistic"
+            label: "Pessimistic"
+          - value: "expected"
+            label: "Expected"
+          - value: "optimistic"
+            label: "Optimistic"
+        in_form_view: true
+        form_group: details
+        form_order: 10
+      expires_at:
+        type: text
+        label: Expires At
+        in_form_view: true
+        form_group: details
+        form_order: 11
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 3
+        columns: 2
+
+  pending_decision:
+    label: Pending Decision
+    label_plural: Pending Decisions
+    table: pending_decision
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      context_id:
+        type: link
+        label: Context ID
+        link_entity: conversation_context
+        link_display_field: name
+        link_search_action: list-conversation-contexts
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      question:
+        type: text
+        label: Question
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      options:
+        type: text
+        label: Options
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      deadline:
+        type: text
+        label: Deadline
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      impact:
+        type: text
+        label: Impact
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "pending"
+            label: "Pending"
+          - value: "decided"
+            label: "Decided"
+          - value: "expired"
+            label: "Expired"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 6
+      decision_made:
+        type: text
+        label: Decision Made
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      decided_at:
+        type: text
+        label: Decided At
+        in_form_view: true
+        form_group: details
+        form_order: 8
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+
+  audit_conversation:
+    label: Audit Conversation
+    label_plural: Audit Conversations
+    table: audit_conversation
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      timestamp:
+        type: text
+        label: Timestamp
+        in_form_view: true
+        form_group: details
+        form_order: 1
+      voucher_type:
+        type: text
+        label: Voucher Type
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      voucher_id:
+        type: link
+        label: Voucher ID
+        link_entity: voucher
+        link_display_field: name
+        link_search_action: list-vouchers
+        in_form_view: true
+        form_group: references
+        form_order: 3
+      user_message:
+        type: text
+        label: User Message
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      ai_interpretation:
+        type: text
+        label: Ai Interpretation
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      actions_taken:
+        type: text
+        label: Actions Taken
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      confidence_score:
+        type: text
+        label: Confidence Score
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      user_confirmed:
+        type: integer
+        label: User Confirmed
+        in_form_view: true
+        form_group: details
+        form_order: 8
+      entity_changes:
+        type: text
+        label: Entity Changes
+        in_form_view: true
+        form_group: details
+        form_order: 9
+    form_groups:
+      details:
+        label: Details
+        order: 1
+        columns: 2
+      references:
+        label: References
+        order: 2
+        columns: 2
+
+  conversation_context:
+    label: Conversation Context
+    label_plural: Conversation Contexts
+    table: conversation_context
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      user_id:
+        type: link
+        label: User ID
+        link_entity: user
+        link_display_field: name
+        link_search_action: list-users
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      context_type:
+        type: select
+        label: Context Type
+        required: true
+        options:
+          - value: "active_workflow"
+            label: "Active Workflow"
+          - value: "pending_decision"
+            label: "Pending Decision"
+          - value: "in_progress_analysis"
+            label: "In Progress Analysis"
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      summary:
+        type: text
+        label: Summary
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      related_entities:
+        type: text
+        label: Related Entities
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      state:
+        type: text
+        label: State
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      last_active:
+        type: text
+        label: Last Active
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      priority:
+        type: integer
+        label: Priority
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      expires_at:
+        type: text
+        label: Expires At
+        in_form_view: true
+        form_group: details
+        form_order: 8
+    form_groups:
+      details:
+        label: Details
+        order: 1
+        columns: 2
+      references:
+        label: References
+        order: 2
+        columns: 2
+
+action_map:
+  acknowledge-anomaly:
+    component: FormView
+    mode: create
+  add-business-rule:
+    component: FormView
+    entity: business_rule
+    mode: create
+  add-categorization-rule:
+    component: FormView
+    entity: categorization_rule
+    mode: create
+  add-pending-decision:
+    component: FormView
+    entity: pending_decision
+    mode: create
+  categorize-transaction:
+    component: FormView
+    mode: create
+  create-scenario:
+    component: FormView
+    entity: scenario
+    mode: create
+  detect-anomalies:
+    component: FormView
+    mode: create
+  discover-correlations:
+    component: FormView
+    mode: create
+  dismiss-anomaly:
+    component: FormView
+    mode: create
+  evaluate-business-rules:
+    component: FormView
+    mode: create
+  forecast-cash-flow:
+    component: FormView
+    mode: create
+  get-conversation-context:
+    component: DetailView
+    entity: conversation_context
+  get-forecast:
+    component: FormView
+    mode: create
+  list-anomalies:
+    component: DataTable
+    entity: anomaly
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+  list-business-rules:
+    component: DataTable
+    entity: business_rule
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-business-rule
+  list-correlations:
+    component: DataTable
+    entity: correlation
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+  list-relationship-scores:
+    component: FormView
+    mode: create
+  list-scenarios:
+    component: DataTable
+    entity: scenario
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: create-scenario
+  log-audit-conversation:
+    component: FormView
+    mode: create
+  save-conversation-context:
+    component: FormView
+    mode: create
+  score-relationship:
+    component: FormView
+    mode: create
+  status:
+    component: DashboardView

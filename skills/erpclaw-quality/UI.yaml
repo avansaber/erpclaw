@@ -1,0 +1,588 @@
+ocui_version: "1.0"
+skill: erpclaw-quality
+skill_version: "1.0.0"
+display_name: Quality Control
+icon: shield-check
+color: "#22c55e"
+
+entities:
+  quality_inspection:
+    label: Quality Inspection
+    label_plural: Quality Inspections
+    table: quality_inspection
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      naming_series:
+        type: text
+        label: Naming Series
+        read_only: true
+      inspection_type:
+        type: select
+        label: Inspection Type
+        required: true
+        options:
+          - value: "incoming"
+            label: "Incoming"
+          - value: "outgoing"
+            label: "Outgoing"
+          - value: "in_process"
+            label: "In Process"
+        in_form_view: true
+        form_group: details
+        form_order: 1
+      item_id:
+        type: link
+        label: Item ID
+        link_entity: item
+        link_display_field: name
+        link_search_action: list-items
+        in_form_view: true
+        form_group: references
+        form_order: 2
+      batch_id:
+        type: link
+        label: Batch ID
+        link_entity: batch
+        link_display_field: name
+        link_search_action: list-batches
+        in_form_view: true
+        form_group: references
+        form_order: 3
+      reference_type:
+        type: select
+        label: Reference Type
+        options:
+          - value: "purchase_receipt"
+            label: "Purchase Receipt"
+          - value: "delivery_note"
+            label: "Delivery Note"
+          - value: "stock_entry"
+            label: "Stock Entry"
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      reference_id:
+        type: link
+        label: Reference ID
+        link_entity: reference
+        link_display_field: name
+        link_search_action: list-references
+        in_form_view: true
+        form_group: references
+        form_order: 5
+      template_id:
+        type: link
+        label: Template ID
+        link_entity: quality_inspection_template
+        link_display_field: name
+        link_search_action: list-quality-inspection-templates
+        in_form_view: true
+        form_group: references
+        form_order: 6
+      inspection_date:
+        type: date
+        label: Inspection Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 7
+      inspected_by:
+        type: text
+        label: Inspected By
+        in_form_view: true
+        form_group: details
+        form_order: 8
+      sample_size:
+        type: integer
+        label: Sample Size
+        in_form_view: true
+        form_group: details
+        form_order: 9
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "accepted"
+            label: "Accepted"
+          - value: "rejected"
+            label: "Rejected"
+          - value: "partially_accepted"
+            label: "Partially Accepted"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 10
+      remarks:
+        type: textarea
+        label: Remarks
+        in_form_view: true
+        form_group: notes
+        form_order: 11
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      notes:
+        label: Notes
+        order: 4
+        columns: 1
+      items:
+        label: Line Items
+        order: 5
+        type: child_table
+
+  quality_inspection_template:
+    label: Quality Inspection Template
+    label_plural: Quality Inspection Templates
+    table: quality_inspection_template
+    id_col: id
+    name_col: name
+    primary_field: name
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      name:
+        type: text
+        label: Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      item_id:
+        type: link
+        label: Item ID
+        link_entity: item
+        link_display_field: name
+        link_search_action: list-items
+        in_form_view: true
+        form_group: references
+        form_order: 2
+      inspection_type:
+        type: select
+        label: Inspection Type
+        required: true
+        options:
+          - value: "incoming"
+            label: "Incoming"
+          - value: "outgoing"
+            label: "Outgoing"
+          - value: "in_process"
+            label: "In Process"
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      description:
+        type: textarea
+        label: Description
+        in_form_view: true
+        form_group: notes
+        form_order: 4
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      notes:
+        label: Notes
+        order: 4
+        columns: 1
+
+  non_conformance:
+    label: Non Conformance
+    label_plural: Non Conformances
+    table: non_conformance
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      naming_series:
+        type: text
+        label: Naming Series
+        read_only: true
+      quality_inspection_id:
+        type: link
+        label: Quality Inspection ID
+        link_entity: quality_inspection
+        link_display_field: name
+        link_search_action: list-quality-inspections
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      item_id:
+        type: link
+        label: Item ID
+        link_entity: item
+        link_display_field: name
+        link_search_action: list-items
+        in_form_view: true
+        form_group: references
+        form_order: 2
+      batch_id:
+        type: link
+        label: Batch ID
+        link_entity: batch
+        link_display_field: name
+        link_search_action: list-batches
+        in_form_view: true
+        form_group: references
+        form_order: 3
+      description:
+        type: textarea
+        label: Description
+        in_form_view: true
+        form_group: notes
+        form_order: 4
+      severity:
+        type: select
+        label: Severity
+        required: true
+        options:
+          - value: "minor"
+            label: "Minor"
+          - value: "major"
+            label: "Major"
+          - value: "critical"
+            label: "Critical"
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      root_cause:
+        type: textarea
+        label: Root Cause
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      corrective_action:
+        type: text
+        label: Corrective Action
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      preventive_action:
+        type: text
+        label: Preventive Action
+        in_form_view: true
+        form_group: details
+        form_order: 8
+      responsible_employee_id:
+        type: link
+        label: Responsible Employee ID
+        link_entity: responsible_employee
+        link_display_field: name
+        link_search_action: list-responsible-employees
+        in_form_view: true
+        form_group: references
+        form_order: 9
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "open"
+            label: "Open"
+          - value: "investigating"
+            label: "Investigating"
+          - value: "resolved"
+            label: "Resolved"
+          - value: "closed"
+            label: "Closed"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 10
+      resolution_date:
+        type: date
+        label: Resolution Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 11
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      notes:
+        label: Notes
+        order: 4
+        columns: 1
+
+  quality_goal:
+    label: Quality Goal
+    label_plural: Quality Goals
+    table: quality_goal
+    id_col: id
+    name_col: name
+    primary_field: name
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      name:
+        type: text
+        label: Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      measurable:
+        type: text
+        label: Measurable
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      current_value:
+        type: text
+        label: Current Value
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      target_value:
+        type: text
+        label: Target Value
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      monitoring_frequency:
+        type: select
+        label: Monitoring Frequency
+        required: true
+        options:
+          - value: "daily"
+            label: "Daily"
+          - value: "weekly"
+            label: "Weekly"
+          - value: "monthly"
+            label: "Monthly"
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "on_track"
+            label: "On Track"
+          - value: "at_risk"
+            label: "At Risk"
+          - value: "behind"
+            label: "Behind"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 6
+      review_date:
+        type: date
+        label: Review Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 7
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+
+child_entities:
+  quality_inspection_reading:
+    parent_entity: quality_inspection
+    parent_field: quality_inspection_id
+    param_name: readings
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      parameter_id:
+        type: link
+        label: Parameter ID
+        link_entity: quality_inspection_parameter
+        link_display_field: name
+        link_search_action: list-quality-inspection-parameters
+      reading_value:
+        type: text
+        label: Reading Value
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "accepted"
+            label: "Accepted"
+          - value: "rejected"
+            label: "Rejected"
+      remarks:
+        type: textarea
+        label: Remarks
+  quality_inspection_parameter:
+    parent_entity: quality_inspection_template
+    parent_field: template_id
+    param_name: items
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      parameter_name:
+        type: text
+        label: Parameter Name
+        required: true
+      parameter_type:
+        type: select
+        label: Parameter Type
+        required: true
+        options:
+          - value: "numeric"
+            label: "Numeric"
+          - value: "non_numeric"
+            label: "Non Numeric"
+          - value: "formula"
+            label: "Formula"
+      min_value:
+        type: text
+        label: Min Value
+      max_value:
+        type: text
+        label: Max Value
+      acceptance_value:
+        type: text
+        label: Acceptance Value
+      formula:
+        type: text
+        label: Formula
+      uom:
+        type: text
+        label: UOM
+      sort_order:
+        type: integer
+        label: Sort Order
+
+action_map:
+  add-inspection-template:
+    component: FormView
+    mode: create
+  add-non-conformance:
+    component: FormView
+    entity: non_conformance
+    mode: create
+  add-quality-goal:
+    component: FormView
+    entity: quality_goal
+    mode: create
+  add-quality-inspection:
+    component: FormView
+    entity: quality_inspection
+    mode: create
+    child_tables:
+      - entity: quality_inspection_reading
+        form_group: items
+        add_label: "Add Row"
+  evaluate-inspection:
+    component: FormView
+    mode: create
+  get-inspection-template:
+    component: FormView
+    mode: create
+  list-inspection-templates:
+    component: FormView
+    mode: create
+  list-non-conformances:
+    component: DataTable
+    entity: non_conformance
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-non-conformance
+  list-quality-inspections:
+    component: DataTable
+    entity: quality_inspection
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-quality-inspection
+  quality-dashboard:
+    component: FormView
+    mode: create
+  record-inspection-readings:
+    component: FormView
+    mode: create
+  status:
+    component: DashboardView
+  update-non-conformance:
+    component: FormView
+    entity: non_conformance
+    mode: edit
+  update-quality-goal:
+    component: FormView
+    entity: quality_goal
+    mode: edit

@@ -1,0 +1,9 @@
+{
+  "effective_date": "2026-01-01",
+  "provinces": [
+    {"code": "BC", "name": "British Columbia", "tax_name": "PST", "rate": "7"},
+    {"code": "SK", "name": "Saskatchewan", "tax_name": "PST", "rate": "6"},
+    {"code": "MB", "name": "Manitoba", "tax_name": "RST", "rate": "7"},
+    {"code": "QC", "name": "Quebec", "tax_name": "QST", "rate": "9.975"}
+  ]
+}

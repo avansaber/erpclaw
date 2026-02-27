@@ -1,0 +1,692 @@
+ocui_version: "1.0"
+skill: erpclaw-tax
+skill_version: "1.0.0"
+display_name: Tax Management
+icon: receipt
+color: "#f59e0b"
+
+entities:
+  tax_template:
+    label: Tax Template
+    label_plural: Tax Templates
+    table: tax_template
+    id_col: id
+    name_col: name
+    primary_field: name
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      name:
+        type: text
+        label: Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      tax_type:
+        type: select
+        label: Tax Type
+        required: true
+        options:
+          - value: "sales"
+            label: "Sales"
+          - value: "purchase"
+            label: "Purchase"
+          - value: "both"
+            label: "Both"
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      is_default:
+        type: integer
+        label: Is Default
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      tax_category_id:
+        type: link
+        label: Tax Category ID
+        link_entity: tax_category
+        link_display_field: name
+        link_search_action: list-tax-categories
+        in_form_view: true
+        form_group: references
+        form_order: 4
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 5
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      items:
+        label: Line Items
+        order: 4
+        type: child_table
+
+  tax_rule:
+    label: Tax Rule
+    label_plural: Tax Rules
+    table: tax_rule
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      tax_template_id:
+        type: link
+        label: Tax Template ID
+        link_entity: tax_template
+        link_display_field: name
+        link_search_action: list-tax-templates
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      tax_type:
+        type: select
+        label: Tax Type
+        required: true
+        options:
+          - value: "sales"
+            label: "Sales"
+          - value: "purchase"
+            label: "Purchase"
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      customer_id:
+        type: link
+        label: Customer ID
+        link_entity: customer
+        link_display_field: name
+        link_search_action: list-customers
+        in_form_view: true
+        form_group: references
+        form_order: 3
+      supplier_id:
+        type: link
+        label: Supplier ID
+        link_entity: supplier
+        link_display_field: name
+        link_search_action: list-suppliers
+        in_form_view: true
+        form_group: references
+        form_order: 4
+      customer_group:
+        type: text
+        label: Customer Group
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      supplier_group:
+        type: text
+        label: Supplier Group
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      item_id:
+        type: link
+        label: Item ID
+        link_entity: item
+        link_display_field: name
+        link_search_action: list-items
+        in_form_view: true
+        form_group: references
+        form_order: 7
+      item_group:
+        type: text
+        label: Item Group
+        in_form_view: true
+        form_group: details
+        form_order: 8
+      billing_state:
+        type: text
+        label: Billing State
+        in_form_view: true
+        form_group: details
+        form_order: 9
+      shipping_state:
+        type: text
+        label: Shipping State
+        in_form_view: true
+        form_group: details
+        form_order: 10
+      tax_category_id:
+        type: link
+        label: Tax Category ID
+        link_entity: tax_category
+        link_display_field: name
+        link_search_action: list-tax-categories
+        in_form_view: true
+        form_group: references
+        form_order: 11
+      priority:
+        type: integer
+        label: Priority
+        in_form_view: true
+        form_group: details
+        form_order: 12
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 13
+    form_groups:
+      details:
+        label: Details
+        order: 1
+        columns: 2
+      references:
+        label: References
+        order: 2
+        columns: 2
+
+  tax_category:
+    label: Tax Category
+    label_plural: Tax Categories
+    table: tax_category
+    id_col: id
+    name_col: name
+    primary_field: name
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      name:
+        type: text
+        label: Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      description:
+        type: textarea
+        label: Description
+        in_form_view: true
+        form_group: notes
+        form_order: 2
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      notes:
+        label: Notes
+        order: 2
+        columns: 1
+
+  tax_withholding_category:
+    label: Tax Withholding Category
+    label_plural: Tax Withholding Categories
+    table: tax_withholding_category
+    id_col: id
+    name_col: name
+    primary_field: name
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      name:
+        type: text
+        label: Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      category_code:
+        type: text
+        label: Category Code
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      single_threshold:
+        type: text
+        label: Single Threshold
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      cumulative_threshold:
+        type: text
+        label: Cumulative Threshold
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      tax_on_excess_amount:
+        type: integer
+        label: Tax On Excess Amount
+        in_form_view: true
+        form_group: amounts
+        form_order: 5
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 6
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 4
+        columns: 2
+
+  tax_withholding_entry:
+    label: Tax Withholding Entry
+    label_plural: Tax Withholding Entries
+    table: tax_withholding_entry
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      party_type:
+        type: select
+        label: Party Type
+        required: true
+        options:
+          - value: "customer"
+            label: "Customer"
+          - value: "supplier"
+            label: "Supplier"
+        in_form_view: true
+        form_group: details
+        form_order: 1
+      party_id:
+        type: link
+        label: Party ID
+        link_entity: party
+        link_display_field: name
+        link_search_action: list-parties
+        in_form_view: true
+        form_group: references
+        form_order: 2
+      category_id:
+        type: link
+        label: Category ID
+        link_entity: tax_withholding_category
+        link_display_field: name
+        link_search_action: list-tax-withholding-categories
+        in_form_view: true
+        form_group: references
+        form_order: 3
+      fiscal_year:
+        type: text
+        label: Fiscal Year
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      taxable_amount:
+        type: currency
+        label: Taxable Amount
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 5
+      withheld_amount:
+        type: currency
+        label: Withheld Amount
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 6
+      taxable_voucher_type:
+        type: text
+        label: Taxable Voucher Type
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      taxable_voucher_id:
+        type: link
+        label: Taxable Voucher ID
+        link_entity: taxable_voucher
+        link_display_field: name
+        link_search_action: list-taxable-vouchers
+        in_form_view: true
+        form_group: references
+        form_order: 8
+      withholding_voucher_type:
+        type: text
+        label: Withholding Voucher Type
+        in_form_view: true
+        form_group: details
+        form_order: 9
+      withholding_voucher_id:
+        type: link
+        label: Withholding Voucher ID
+        link_entity: withholding_voucher
+        link_display_field: name
+        link_search_action: list-withholding-vouchers
+        in_form_view: true
+        form_group: references
+        form_order: 10
+    form_groups:
+      details:
+        label: Details
+        order: 1
+        columns: 2
+      references:
+        label: References
+        order: 2
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 3
+        columns: 2
+
+  tax_withholding_group:
+    label: Tax Withholding Group
+    label_plural: Tax Withholding Groups
+    table: tax_withholding_group
+    id_col: id
+    name_col: group_name
+    primary_field: group_name
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      category_id:
+        type: link
+        label: Category ID
+        link_entity: tax_withholding_category
+        link_display_field: name
+        link_search_action: list-tax-withholding-categories
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      group_name:
+        type: text
+        label: Group Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      rate:
+        type: currency
+        label: Rate
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 3
+      effective_from:
+        type: date
+        label: Effective From
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      effective_to:
+        type: date
+        label: Effective To
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      account_id:
+        type: link
+        label: Account ID
+        link_entity: account
+        link_display_field: name
+        link_search_action: list-accounts
+        in_form_view: true
+        form_group: references
+        form_order: 6
+    form_groups:
+      details:
+        label: Details
+        order: 1
+        columns: 2
+      references:
+        label: References
+        order: 2
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 3
+        columns: 2
+
+  item_tax_template:
+    label: Item Tax Template
+    label_plural: Item Tax Templates
+    table: item_tax_template
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      item_id:
+        type: link
+        label: Item ID
+        link_entity: item
+        link_display_field: name
+        link_search_action: list-items
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      tax_template_id:
+        type: link
+        label: Tax Template ID
+        link_entity: tax_template
+        link_display_field: name
+        link_search_action: list-tax-templates
+        in_form_view: true
+        form_group: references
+        form_order: 2
+      tax_rate:
+        type: currency
+        label: Tax Rate
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 3
+    form_groups:
+      references:
+        label: References
+        order: 1
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 2
+        columns: 2
+
+child_entities:
+  tax_template_line:
+    parent_entity: tax_template
+    parent_field: tax_template_id
+    param_name: lines
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      tax_account_id:
+        type: link
+        label: Tax Account ID
+        link_entity: account
+        link_display_field: name
+        link_search_action: list-accounts
+      rate:
+        type: currency
+        label: Rate
+        precision: 2
+      charge_type:
+        type: select
+        label: Charge Type
+        required: true
+        options:
+          - value: "actual"
+            label: "Actual"
+          - value: "on_net_total"
+            label: "On Net Total"
+          - value: "on_previous_row_amount"
+            label: "On Previous Row Amount"
+          - value: "on_previous_row_total"
+            label: "On Previous Row Total"
+          - value: "on_item_quantity"
+            label: "On Item Quantity"
+      row_order:
+        type: integer
+        label: Row Order
+      add_deduct:
+        type: select
+        label: Add Deduct
+        required: true
+        options:
+          - value: "add"
+            label: "Add"
+          - value: "deduct"
+            label: "Deduct"
+      included_in_print_rate:
+        type: integer
+        label: Included In Print Rate
+      description:
+        type: textarea
+        label: Description
+      dont_recompute_tax:
+        type: integer
+        label: Dont Recompute Tax
+      is_tax_withholding_account:
+        type: integer
+        label: Is Tax Withholding Account
+
+action_map:
+  add-item-tax-template:
+    component: FormView
+    entity: item_tax_template
+    mode: create
+  add-tax-category:
+    component: FormView
+    entity: tax_category
+    mode: create
+  add-tax-rule:
+    component: FormView
+    entity: tax_rule
+    mode: create
+  add-tax-template:
+    component: FormView
+    entity: tax_template
+    mode: create
+    child_tables:
+      - entity: tax_template_line
+        form_group: items
+        add_label: "Add Row"
+  add-tax-withholding-category:
+    component: FormView
+    entity: tax_withholding_category
+    mode: create
+  calculate-tax:
+    component: FormView
+    mode: create
+  delete-tax-template:
+    component: null
+    entity: tax_template
+    hidden: true
+  generate-1099-data:
+    component: FormView
+    mode: create
+  get-tax-template:
+    component: DetailView
+    entity: tax_template
+  get-withholding-details:
+    component: FormView
+    mode: create
+  list-tax-categories:
+    component: DataTable
+    entity: tax_category
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-tax-category
+  list-tax-rules:
+    component: DataTable
+    entity: tax_rule
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-tax-rule
+  list-tax-templates:
+    component: DataTable
+    entity: tax_template
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-tax-template
+  record-1099-payment:
+    component: FormView
+    mode: create
+  record-withholding-entry:
+    component: FormView
+    mode: create
+  resolve-tax-template:
+    component: FormView
+    mode: create
+  status:
+    component: DashboardView
+  update-tax-template:
+    component: FormView
+    entity: tax_template
+    mode: edit

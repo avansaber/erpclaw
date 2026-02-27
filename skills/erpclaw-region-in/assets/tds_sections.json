@@ -1,0 +1,254 @@
+[
+  {
+    "section": "192",
+    "description": "TDS on Salary",
+    "rate": "slab_based",
+    "threshold": 0,
+    "type": "salary",
+    "notes": "Employer deducts TDS based on income tax slab (new or old regime). Monthly TDS = estimated annual tax / 12."
+  },
+  {
+    "section": "192A",
+    "description": "Premature withdrawal from EPF",
+    "rate": "10",
+    "threshold": 50000,
+    "type": "non_salary",
+    "notes": "Applicable if PF withdrawal before 5 years of service and amount > threshold"
+  },
+  {
+    "section": "193",
+    "description": "Interest on securities",
+    "rate": "10",
+    "threshold": 10000,
+    "type": "non_salary",
+    "notes": "Interest on debentures, government securities (not tax-free bonds)"
+  },
+  {
+    "section": "194",
+    "description": "Dividend",
+    "rate": "10",
+    "threshold": 5000,
+    "type": "non_salary",
+    "notes": "Dividend from domestic companies"
+  },
+  {
+    "section": "194A",
+    "description": "Interest other than on securities",
+    "rate": "10",
+    "threshold": 40000,
+    "type": "non_salary",
+    "notes": "Bank/FD interest. Threshold 50000 for senior citizens. Banking/co-op threshold is 40000."
+  },
+  {
+    "section": "194B",
+    "description": "Winnings from lottery, crossword puzzle",
+    "rate": "30",
+    "threshold": 10000,
+    "type": "non_salary",
+    "notes": "Flat 30% without any deduction"
+  },
+  {
+    "section": "194BB",
+    "description": "Winnings from horse race",
+    "rate": "30",
+    "threshold": 10000,
+    "type": "non_salary",
+    "notes": "Flat 30% without any deduction"
+  },
+  {
+    "section": "194C",
+    "description": "Payment to contractors",
+    "rate_individual": "1",
+    "rate_others": "2",
+    "threshold": 30000,
+    "aggregate_threshold": 100000,
+    "type": "non_salary",
+    "notes": "1% for individual/HUF contractors, 2% for others. Single payment >30K or aggregate >1L in FY."
+  },
+  {
+    "section": "194D",
+    "description": "Insurance commission",
+    "rate": "5",
+    "threshold": 15000,
+    "type": "non_salary",
+    "notes": "Commission/remuneration to insurance agents"
+  },
+  {
+    "section": "194DA",
+    "description": "Payment for life insurance policy",
+    "rate": "5",
+    "threshold": 100000,
+    "type": "non_salary",
+    "notes": "On income component of maturity proceeds exceeding threshold"
+  },
+  {
+    "section": "194E",
+    "description": "Payment to non-resident sportsmen/entertainer",
+    "rate": "20",
+    "threshold": 0,
+    "type": "non_salary",
+    "notes": "No threshold. Payment to NR sportsperson or entertainer"
+  },
+  {
+    "section": "194G",
+    "description": "Commission on lottery tickets",
+    "rate": "5",
+    "threshold": 15000,
+    "type": "non_salary",
+    "notes": "Commission/remuneration on sale of lottery tickets"
+  },
+  {
+    "section": "194H",
+    "description": "Commission / Brokerage",
+    "rate": "5",
+    "threshold": 15000,
+    "type": "non_salary",
+    "notes": "Any commission or brokerage (not insurance). Threshold per FY."
+  },
+  {
+    "section": "194I",
+    "description": "Rent",
+    "rate_land_building": "10",
+    "rate_machinery": "2",
+    "threshold": 240000,
+    "type": "non_salary",
+    "notes": "2% for plant/machinery/equipment, 10% for land/building/furniture. Annual threshold 2.4L."
+  },
+  {
+    "section": "194IA",
+    "description": "Transfer of immovable property",
+    "rate": "1",
+    "threshold": 5000000,
+    "type": "non_salary",
+    "notes": "1% on consideration for transfer. Threshold is property value > 50 lakhs."
+  },
+  {
+    "section": "194IB",
+    "description": "Rent by individual/HUF (not liable to audit)",
+    "rate": "5",
+    "threshold": 50000,
+    "type": "non_salary",
+    "notes": "Monthly rent exceeding 50000. Deducted by individual/HUF tenant."
+  },
+  {
+    "section": "194J",
+    "description": "Professional / Technical fees",
+    "rate_professional": "10",
+    "rate_technical": "2",
+    "threshold": 30000,
+    "type": "non_salary",
+    "notes": "10% for professional services, 2% for technical services / royalty / call center. Threshold per FY."
+  },
+  {
+    "section": "194K",
+    "description": "Income from mutual fund units",
+    "rate": "10",
+    "threshold": 5000,
+    "type": "non_salary",
+    "notes": "On income distributed by mutual funds to unit holders"
+  },
+  {
+    "section": "194LA",
+    "description": "Compensation on acquisition of immovable property",
+    "rate": "10",
+    "threshold": 250000,
+    "type": "non_salary",
+    "notes": "Compulsory acquisition by government. Enhanced compensation."
+  },
+  {
+    "section": "194M",
+    "description": "Commission/contract by individual/HUF",
+    "rate": "5",
+    "threshold": 5000000,
+    "type": "non_salary",
+    "notes": "Individuals/HUF not liable to audit. Commission, brokerage, contract payment. Aggregate threshold 50L."
+  },
+  {
+    "section": "194N",
+    "description": "Cash withdrawal",
+    "rate": "2",
+    "threshold": 10000000,
+    "type": "non_salary",
+    "notes": "2% on cash withdrawal exceeding 1 crore. 5% if no ITR filed for 3 years (threshold 20L)."
+  },
+  {
+    "section": "194O",
+    "description": "E-commerce operator payments",
+    "rate": "1",
+    "threshold": 500000,
+    "type": "non_salary",
+    "notes": "E-commerce operator to deduct 1% on gross amount paid to e-commerce participant"
+  },
+  {
+    "section": "194P",
+    "description": "TDS on senior citizens (75+)",
+    "rate": "slab_based",
+    "threshold": 0,
+    "type": "salary",
+    "notes": "Bank deducts TDS for senior citizens (75+) having only pension + interest income from same bank"
+  },
+  {
+    "section": "194Q",
+    "description": "Purchase of goods",
+    "rate": "0.1",
+    "threshold": 5000000,
+    "type": "non_salary",
+    "notes": "0.1% on purchase value exceeding 50 lakhs from a resident seller. Buyer's turnover must exceed 10 Cr."
+  },
+  {
+    "section": "194R",
+    "description": "Benefits / Perquisites (business)",
+    "rate": "10",
+    "threshold": 20000,
+    "type": "non_salary",
+    "notes": "10% on benefits/perquisites arising from business or profession. Threshold 20000 per FY."
+  },
+  {
+    "section": "194S",
+    "description": "Transfer of virtual digital assets (crypto)",
+    "rate": "1",
+    "threshold": 10000,
+    "type": "non_salary",
+    "notes": "1% on transfer of VDA. Threshold 10000 (50000 for specified persons)."
+  },
+  {
+    "section": "195",
+    "description": "Payment to non-resident (other than salary)",
+    "rate": "varies",
+    "threshold": 0,
+    "type": "non_salary",
+    "notes": "Rate depends on nature of payment and DTAA provisions. No threshold."
+  },
+  {
+    "section": "206C",
+    "description": "TCS on sale of goods",
+    "rate": "0.1",
+    "threshold": 5000000,
+    "type": "tcs",
+    "notes": "TCS (not TDS). Seller collects 0.1% on sale exceeding 50 lakhs. Seller's turnover must exceed 10 Cr."
+  },
+  {
+    "section": "206C_1H",
+    "description": "TCS on sale of goods (general)",
+    "rate": "0.1",
+    "threshold": 5000000,
+    "type": "tcs",
+    "notes": "Section 206C(1H). 0.1% TCS on sale consideration exceeding 50 lakhs."
+  },
+  {
+    "section": "206C_LRS",
+    "description": "TCS on foreign remittance (LRS)",
+    "rate": "5",
+    "threshold": 700000,
+    "type": "tcs",
+    "notes": "5% on remittance under LRS exceeding 7 lakhs. 20% for non-education/medical purposes above threshold."
+  },
+  {
+    "section": "206C_TCS_TOUR",
+    "description": "TCS on overseas tour package",
+    "rate": "5",
+    "threshold": 0,
+    "type": "tcs",
+    "notes": "5% on overseas tour package (any amount). 20% if amount exceeds 7 lakhs."
+  }
+]

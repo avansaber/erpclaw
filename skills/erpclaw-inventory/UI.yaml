@@ -1,0 +1,1831 @@
+ocui_version: "1.0"
+skill: erpclaw-inventory
+skill_version: "1.0.0"
+display_name: Inventory Management
+icon: package
+color: "#059669"
+
+entities:
+  item:
+    label: Item
+    label_plural: Items
+    icon: box
+    primary_field: item_name
+    secondary_field: item_code
+    identifier_field: id
+    status_field: status
+    status_colors:
+      active: green
+      disabled: gray
+
+    fields:
+      item_code:
+        type: text
+        label: Item Code
+        required: true
+        max_length: 140
+        placeholder: "e.g., SKU-001"
+        searchable: true
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      item_name:
+        type: text
+        label: Item Name
+        required: true
+        max_length: 140
+        searchable: true
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+      item_type:
+        type: select
+        label: Item Type
+        required: true
+        options:
+          - { value: stock, label: Stock }
+          - { value: non_stock, label: Non-Stock }
+          - { value: service, label: Service }
+        default: stock
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 3
+
+      item_group_id:
+        type: link
+        label: Item Group
+        link_entity: item_group
+        link_display_field: name
+        link_search_action: list-item-groups
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 4
+
+      stock_uom:
+        type: text
+        label: Stock UoM
+        required: true
+        default: "Nos"
+        max_length: 80
+        help_text: "Default unit of measure (e.g., Nos, Kg, Ltr)"
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 5
+
+      valuation_method:
+        type: select
+        label: Valuation Method
+        options:
+          - { value: moving_average, label: Moving Average }
+          - { value: fifo, label: FIFO }
+        default: moving_average
+        in_form_view: true
+        form_group: basic
+        form_order: 6
+
+      standard_rate:
+        type: currency
+        label: Standard Rate
+        precision: 2
+        default: "0.00"
+        help_text: "Default rate used when no price list rate is available"
+        in_list_view: true
+        in_form_view: true
+        form_group: pricing
+        form_order: 1
+
+      is_stock_item:
+        type: boolean
+        label: Is Stock Item
+        read_only: true
+        help_text: "Automatically set based on item type"
+        in_detail_view: true
+
+      has_batch:
+        type: boolean
+        label: Has Batch No
+        default: false
+        help_text: "Track this item by batch number"
+        in_form_view: true
+        form_group: tracking
+        form_order: 1
+
+      has_serial:
+        type: boolean
+        label: Has Serial No
+        default: false
+        help_text: "Track each unit by serial number"
+        in_form_view: true
+        form_group: tracking
+        form_order: 2
+
+      reorder_level:
+        type: quantity
+        label: Reorder Level
+        precision: 2
+        help_text: "Alert when stock falls to or below this quantity"
+        in_form_view: true
+        form_group: reorder
+        form_order: 1
+
+      reorder_qty:
+        type: quantity
+        label: Reorder Qty
+        precision: 2
+        help_text: "Suggested quantity to reorder"
+        in_form_view: true
+        form_group: reorder
+        form_order: 2
+
+      status:
+        type: status
+        label: Status
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      description:
+        type: textarea
+        label: Description
+        max_length: 1000
+        in_form_view: true
+        form_group: basic
+        form_order: 7
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_detail_view: true
+
+      updated_at:
+        type: datetime
+        label: Last Updated
+        read_only: true
+        in_detail_view: true
+
+    form_groups:
+      basic:
+        label: Item Details
+        order: 1
+        columns: 2
+      pricing:
+        label: Pricing
+        order: 2
+        columns: 2
+      tracking:
+        label: Batch & Serial Tracking
+        order: 3
+        columns: 2
+        collapsible: true
+      reorder:
+        label: Reorder Settings
+        order: 4
+        columns: 2
+        collapsible: true
+
+    views:
+      list:
+        columns:
+          - { field: item_code, width: 120, link: true }
+          - { field: item_name, width: 200 }
+          - { field: item_type, width: 100 }
+          - { field: stock_uom, width: 80 }
+          - { field: standard_rate, width: 120, align: right }
+          - { field: status, width: 90 }
+        filters:
+          - { field: item_type, type: select }
+          - { field: item_group_id, type: link }
+          - { field: status, type: select }
+        row_click: get-item
+
+      detail:
+        header:
+          title_field: item_name
+          subtitle_field: item_code
+          status_field: status
+        sections:
+          - label: Item Details
+            fields: [item_code, item_name, item_type, item_group_id, stock_uom, valuation_method, description]
+            columns: 2
+          - label: Pricing
+            fields: [standard_rate]
+            columns: 2
+          - label: Tracking
+            fields: [has_batch, has_serial]
+            columns: 2
+            collapsible: true
+          - label: Reorder Settings
+            fields: [reorder_level, reorder_qty]
+            columns: 2
+            collapsible: true
+          - label: Stock Balances
+            child_entity: item_stock_balance
+            child_action: get-item
+            child_key: stock_balances
+            columns: 1
+        actions:
+          - { action: update-item, label: Edit }
+          - { action: add-item-price, label: Set Price }
+          - { action: add-batch, label: Add Batch, condition: "has_batch == true" }
+          - { action: add-serial-number, label: Add Serial No, condition: "has_serial == true" }
+
+  item_group:
+    label: Item Group
+    label_plural: Item Groups
+    icon: folder
+    primary_field: name
+    identifier_field: id
+
+    fields:
+      name:
+        type: text
+        label: Group Name
+        required: true
+        max_length: 140
+        searchable: true
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      parent_id:
+        type: link
+        label: Parent Group
+        link_entity: item_group
+        link_display_field: name
+        link_search_action: list-item-groups
+        help_text: "Leave blank for a top-level group"
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_detail_view: true
+
+    form_groups:
+      basic:
+        label: Item Group Details
+        order: 1
+        columns: 2
+
+    views:
+      list:
+        columns:
+          - { field: name, width: 240, link: true }
+          - { field: parent_id, width: 200 }
+        filters:
+          - { field: parent_id, type: link }
+
+  warehouse:
+    label: Warehouse
+    label_plural: Warehouses
+    icon: home
+    primary_field: name
+    secondary_field: warehouse_type
+    identifier_field: id
+
+    fields:
+      name:
+        type: text
+        label: Warehouse Name
+        required: true
+        max_length: 140
+        searchable: true
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      company_id:
+        type: link
+        label: Company
+        required: true
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+      warehouse_type:
+        type: select
+        label: Warehouse Type
+        options:
+          - { value: stores, label: Stores }
+          - { value: production, label: Production }
+          - { value: transit, label: Transit }
+          - { value: rejected, label: Rejected }
+        default: stores
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 3
+
+      parent_id:
+        type: link
+        label: Parent Warehouse
+        link_entity: warehouse
+        link_display_field: name
+        link_search_action: list-warehouses
+        help_text: "Leave blank for a top-level warehouse"
+        in_form_view: true
+        form_group: basic
+        form_order: 4
+
+      account_id:
+        type: link
+        label: Stock Account
+        link_entity: account
+        link_display_field: name
+        link_search_action: list-accounts
+        help_text: "GL account for perpetual inventory posting"
+        in_form_view: true
+        form_group: accounting
+        form_order: 1
+
+      is_group:
+        type: boolean
+        label: Is Group
+        default: false
+        help_text: "Group warehouses cannot hold stock directly"
+        in_form_view: true
+        form_group: basic
+        form_order: 5
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_detail_view: true
+
+      updated_at:
+        type: datetime
+        label: Last Updated
+        read_only: true
+        in_detail_view: true
+
+    form_groups:
+      basic:
+        label: Warehouse Details
+        order: 1
+        columns: 2
+      accounting:
+        label: Accounting
+        order: 2
+        columns: 2
+        collapsible: true
+
+    views:
+      list:
+        columns:
+          - { field: name, width: 220, link: true }
+          - { field: warehouse_type, width: 120 }
+          - { field: company_id, width: 180 }
+          - { field: is_group, width: 80 }
+        filters:
+          - { field: company_id, type: link }
+          - { field: warehouse_type, type: select }
+
+  stock_entry:
+    label: Stock Entry
+    label_plural: Stock Entries
+    icon: truck
+    primary_field: naming_series
+    secondary_field: stock_entry_type
+    identifier_field: id
+    status_field: status
+    lifecycle: draft-submit-cancel
+    status_colors:
+      draft: blue
+      submitted: green
+      cancelled: red
+
+    fields:
+      naming_series:
+        type: text
+        label: Entry No
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      stock_entry_type:
+        type: select
+        label: Entry Type
+        required: true
+        options:
+          - { value: material_receipt, label: Material Receipt }
+          - { value: material_issue, label: Material Issue }
+          - { value: material_transfer, label: Material Transfer }
+          - { value: manufacture, label: Manufacture }
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      company_id:
+        type: link
+        label: Company
+        required: true
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+      posting_date:
+        type: date
+        label: Posting Date
+        required: true
+        default: today
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 3
+
+      total_incoming_value:
+        type: currency
+        label: Total Incoming Value
+        precision: 2
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      total_outgoing_value:
+        type: currency
+        label: Total Outgoing Value
+        precision: 2
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      value_difference:
+        type: currency
+        label: Value Difference
+        precision: 2
+        read_only: true
+        in_detail_view: true
+
+      status:
+        type: status
+        label: Status
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_detail_view: true
+
+      updated_at:
+        type: datetime
+        label: Last Updated
+        read_only: true
+        in_detail_view: true
+
+    form_groups:
+      basic:
+        label: Stock Entry Details
+        order: 1
+        columns: 3
+      items:
+        label: Items
+        order: 2
+        columns: 1
+        child_entity: stock_entry_item
+      totals:
+        label: Totals
+        order: 3
+        columns: 3
+        read_only: true
+
+    views:
+      list:
+        columns:
+          - { field: naming_series, width: 140, link: true }
+          - { field: stock_entry_type, width: 140 }
+          - { field: posting_date, width: 110 }
+          - { field: total_incoming_value, width: 140, align: right }
+          - { field: total_outgoing_value, width: 140, align: right }
+          - { field: status, width: 100 }
+        filters:
+          - { field: company_id, type: link }
+          - { field: stock_entry_type, type: select }
+          - { field: status, type: select }
+          - { field: posting_date, type: date_range }
+        row_click: get-stock-entry
+
+      detail:
+        header:
+          title_field: naming_series
+          subtitle_field: stock_entry_type
+          status_field: status
+        sections:
+          - label: Entry Details
+            fields: [naming_series, stock_entry_type, company_id, posting_date]
+            columns: 2
+          - label: Items
+            child_entity: stock_entry_item
+            child_action: get-stock-entry
+            child_key: items
+            columns: 1
+          - label: Totals
+            fields: [total_incoming_value, total_outgoing_value, value_difference]
+            columns: 3
+        actions:
+          - { action: submit-stock-entry, label: Submit, condition: "status == 'draft'", style: primary, confirm: true }
+          - { action: cancel-stock-entry, label: Cancel, condition: "status == 'submitted'", style: danger, confirm: true }
+
+  batch:
+    label: Batch
+    label_plural: Batches
+    icon: layers
+    primary_field: batch_name
+    identifier_field: id
+
+    fields:
+      batch_name:
+        type: text
+        label: Batch Name
+        required: true
+        max_length: 140
+        searchable: true
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      item_id:
+        type: link
+        label: Item
+        required: true
+        link_entity: item
+        link_display_field: item_name
+        link_search_action: list-items
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+      manufacturing_date:
+        type: date
+        label: Manufacturing Date
+        in_form_view: true
+        form_group: dates
+        form_order: 1
+
+      expiry_date:
+        type: date
+        label: Expiry Date
+        in_list_view: true
+        in_form_view: true
+        form_group: dates
+        form_order: 2
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_detail_view: true
+
+    form_groups:
+      basic:
+        label: Batch Details
+        order: 1
+        columns: 2
+      dates:
+        label: Dates
+        order: 2
+        columns: 2
+
+    views:
+      list:
+        columns:
+          - { field: batch_name, width: 180, link: true }
+          - { field: item_id, width: 200 }
+          - { field: expiry_date, width: 120 }
+        filters:
+          - { field: item_id, type: link }
+
+  serial_number:
+    label: Serial Number
+    label_plural: Serial Numbers
+    icon: hash
+    primary_field: serial_no
+    secondary_field: status
+    identifier_field: id
+    status_field: status
+    status_colors:
+      active: green
+      delivered: blue
+      returned: orange
+      scrapped: red
+
+    fields:
+      serial_no:
+        type: text
+        label: Serial No
+        required: true
+        max_length: 140
+        searchable: true
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      item_id:
+        type: link
+        label: Item
+        required: true
+        link_entity: item
+        link_display_field: item_name
+        link_search_action: list-items
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+      warehouse_id:
+        type: link
+        label: Warehouse
+        link_entity: warehouse
+        link_display_field: name
+        link_search_action: list-warehouses
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 3
+
+      batch_id:
+        type: link
+        label: Batch
+        link_entity: batch
+        link_display_field: batch_name
+        link_search_action: list-batches
+        in_form_view: true
+        form_group: basic
+        form_order: 4
+
+      status:
+        type: status
+        label: Status
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_detail_view: true
+
+    form_groups:
+      basic:
+        label: Serial Number Details
+        order: 1
+        columns: 2
+
+    views:
+      list:
+        columns:
+          - { field: serial_no, width: 160, link: true }
+          - { field: item_id, width: 200 }
+          - { field: warehouse_id, width: 180 }
+          - { field: status, width: 100 }
+        filters:
+          - { field: item_id, type: link }
+          - { field: warehouse_id, type: link }
+          - { field: status, type: select }
+
+  price_list:
+    label: Price List
+    label_plural: Price Lists
+    icon: tag
+    primary_field: name
+    secondary_field: currency
+    identifier_field: id
+
+    fields:
+      name:
+        type: text
+        label: Price List Name
+        required: true
+        max_length: 140
+        searchable: true
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      currency:
+        type: currency_code
+        label: Currency
+        default: USD
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+      buying:
+        type: boolean
+        label: Buying
+        default: false
+        help_text: "Use this price list for purchase transactions"
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 3
+
+      selling:
+        type: boolean
+        label: Selling
+        default: false
+        help_text: "Use this price list for sales transactions"
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 4
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_detail_view: true
+
+    form_groups:
+      basic:
+        label: Price List Details
+        order: 1
+        columns: 2
+
+    views:
+      list:
+        columns:
+          - { field: name, width: 220, link: true }
+          - { field: currency, width: 100 }
+          - { field: buying, width: 80 }
+          - { field: selling, width: 80 }
+
+  item_price:
+    label: Item Price
+    label_plural: Item Prices
+    icon: dollar-sign
+    primary_field: item_id
+    secondary_field: price_list_id
+    identifier_field: id
+
+    fields:
+      item_id:
+        type: link
+        label: Item
+        required: true
+        link_entity: item
+        link_display_field: item_name
+        link_search_action: list-items
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      price_list_id:
+        type: link
+        label: Price List
+        required: true
+        link_entity: price_list
+        link_display_field: name
+        link_search_action: list-price-lists
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+      rate:
+        type: currency
+        label: Rate
+        required: true
+        precision: 2
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 3
+
+      min_qty:
+        type: quantity
+        label: Minimum Qty
+        precision: 2
+        default: "0"
+        help_text: "Price applies when ordered qty >= this value"
+        in_list_view: true
+        in_form_view: true
+        form_group: validity
+        form_order: 1
+
+      valid_from:
+        type: date
+        label: Valid From
+        in_form_view: true
+        form_group: validity
+        form_order: 2
+
+      valid_to:
+        type: date
+        label: Valid To
+        in_form_view: true
+        form_group: validity
+        form_order: 3
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_detail_view: true
+
+    form_groups:
+      basic:
+        label: Price Details
+        order: 1
+        columns: 3
+      validity:
+        label: Validity & Tiers
+        order: 2
+        columns: 3
+        collapsible: true
+
+    views:
+      list:
+        columns:
+          - { field: item_id, width: 200 }
+          - { field: price_list_id, width: 180 }
+          - { field: rate, width: 120, align: right }
+          - { field: min_qty, width: 100, align: right }
+          - { field: valid_from, width: 110 }
+          - { field: valid_to, width: 110 }
+
+  pricing_rule:
+    label: Pricing Rule
+    label_plural: Pricing Rules
+    icon: percent
+    primary_field: name
+    secondary_field: applies_to
+    identifier_field: id
+
+    fields:
+      name:
+        type: text
+        label: Rule Name
+        required: true
+        max_length: 140
+        searchable: true
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      applies_to:
+        type: select
+        label: Applies To
+        required: true
+        options:
+          - { value: item, label: Item }
+          - { value: item_group, label: Item Group }
+          - { value: customer, label: Customer }
+          - { value: customer_group, label: Customer Group }
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+      entity_id:
+        type: text
+        label: Entity ID
+        help_text: "ID of the item, item group, customer, or customer group"
+        in_form_view: true
+        form_group: basic
+        form_order: 3
+
+      discount_percentage:
+        type: percent
+        label: Discount %
+        precision: 2
+        min: "0"
+        max: "100"
+        in_list_view: true
+        in_form_view: true
+        form_group: pricing
+        form_order: 1
+
+      rate:
+        type: currency
+        label: Fixed Rate
+        precision: 2
+        help_text: "Override rate (alternative to discount %)"
+        in_form_view: true
+        form_group: pricing
+        form_order: 2
+
+      min_qty:
+        type: quantity
+        label: Minimum Qty
+        precision: 2
+        in_form_view: true
+        form_group: conditions
+        form_order: 1
+
+      max_qty:
+        type: quantity
+        label: Maximum Qty
+        precision: 2
+        in_form_view: true
+        form_group: conditions
+        form_order: 2
+
+      valid_from:
+        type: date
+        label: Valid From
+        in_list_view: true
+        in_form_view: true
+        form_group: conditions
+        form_order: 3
+
+      valid_to:
+        type: date
+        label: Valid To
+        in_list_view: true
+        in_form_view: true
+        form_group: conditions
+        form_order: 4
+
+      priority:
+        type: integer
+        label: Priority
+        default: 0
+        help_text: "Higher priority rules are applied first"
+        in_form_view: true
+        form_group: conditions
+        form_order: 5
+
+      company_id:
+        type: link
+        label: Company
+        required: true
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: basic
+        form_order: 4
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_detail_view: true
+
+    form_groups:
+      basic:
+        label: Rule Details
+        order: 1
+        columns: 2
+      pricing:
+        label: Pricing
+        order: 2
+        columns: 2
+      conditions:
+        label: Conditions & Validity
+        order: 3
+        columns: 2
+        collapsible: true
+
+    views:
+      list:
+        columns:
+          - { field: name, width: 200, link: true }
+          - { field: applies_to, width: 120 }
+          - { field: discount_percentage, width: 100, align: right }
+          - { field: valid_from, width: 110 }
+          - { field: valid_to, width: 110 }
+        filters:
+          - { field: applies_to, type: select }
+          - { field: company_id, type: link }
+
+  stock_reconciliation:
+    label: Stock Reconciliation
+    label_plural: Stock Reconciliations
+    icon: clipboard-check
+    primary_field: naming_series
+    secondary_field: posting_date
+    identifier_field: id
+    status_field: status
+    lifecycle: draft-submit-cancel
+    status_colors:
+      draft: blue
+      submitted: green
+      cancelled: red
+
+    fields:
+      naming_series:
+        type: text
+        label: Reconciliation No
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      posting_date:
+        type: date
+        label: Posting Date
+        required: true
+        default: today
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      company_id:
+        type: link
+        label: Company
+        required: true
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+      difference_amount:
+        type: currency
+        label: Difference Amount
+        precision: 2
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      status:
+        type: status
+        label: Status
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_detail_view: true
+
+      updated_at:
+        type: datetime
+        label: Last Updated
+        read_only: true
+        in_detail_view: true
+
+    form_groups:
+      basic:
+        label: Reconciliation Details
+        order: 1
+        columns: 2
+      items:
+        label: Items
+        order: 2
+        columns: 1
+        child_entity: stock_reconciliation_item
+
+    views:
+      list:
+        columns:
+          - { field: naming_series, width: 160, link: true }
+          - { field: posting_date, width: 120 }
+          - { field: company_id, width: 180 }
+          - { field: difference_amount, width: 140, align: right }
+          - { field: status, width: 100 }
+        filters:
+          - { field: company_id, type: link }
+          - { field: status, type: select }
+          - { field: posting_date, type: date_range }
+
+      detail:
+        header:
+          title_field: naming_series
+          subtitle_field: posting_date
+          status_field: status
+        sections:
+          - label: Reconciliation Details
+            fields: [naming_series, posting_date, company_id, difference_amount]
+            columns: 2
+          - label: Items
+            child_entity: stock_reconciliation_item
+            child_action: get-stock-reconciliation
+            child_key: items
+            columns: 1
+        actions:
+          - { action: submit-stock-reconciliation, label: Submit, condition: "status == 'draft'", style: primary, confirm: true }
+
+  stock_revaluation:
+    label: Stock Revaluation
+    label_plural: Stock Revaluations
+    icon: trending-up
+    primary_field: naming_series
+    secondary_field: posting_date
+    identifier_field: id
+    status_field: status
+    lifecycle: submit-cancel
+    status_colors:
+      submitted: green
+      cancelled: red
+
+    fields:
+      naming_series:
+        type: text
+        label: Revaluation No
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      item_id:
+        type: link
+        label: Item
+        required: true
+        link_entity: item
+        link_display_field: item_name
+        link_search_action: list-items
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      warehouse_id:
+        type: link
+        label: Warehouse
+        required: true
+        link_entity: warehouse
+        link_display_field: name
+        link_search_action: list-warehouses
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+      posting_date:
+        type: date
+        label: Posting Date
+        required: true
+        default: today
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 3
+
+      new_rate:
+        type: currency
+        label: New Rate
+        precision: 2
+        required: true
+        in_form_view: true
+        form_group: basic
+        form_order: 4
+
+      reason:
+        type: text
+        label: Reason
+        in_form_view: true
+        form_group: basic
+        form_order: 5
+
+      current_qty:
+        type: quantity
+        label: Current Qty
+        precision: 2
+        read_only: true
+        in_detail_view: true
+
+      old_rate:
+        type: currency
+        label: Old Rate
+        precision: 2
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      adjustment_amount:
+        type: currency
+        label: Adjustment Amount
+        precision: 2
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      status:
+        type: status
+        label: Status
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+    form_groups:
+      basic:
+        label: Revaluation Details
+        order: 1
+        columns: 2
+
+    views:
+      list:
+        columns:
+          - { field: naming_series, width: 160, link: true }
+          - { field: posting_date, width: 120 }
+          - { field: item_id, width: 180 }
+          - { field: old_rate, width: 120, align: right }
+          - { field: new_rate, width: 120, align: right }
+          - { field: adjustment_amount, width: 140, align: right }
+          - { field: status, width: 100 }
+        filters:
+          - { field: status, type: select }
+          - { field: posting_date, type: date_range }
+
+      detail:
+        header:
+          title_field: naming_series
+          subtitle_field: posting_date
+          status_field: status
+        sections:
+          - label: Revaluation Details
+            fields: [naming_series, item_id, warehouse_id, posting_date, current_qty, old_rate, new_rate, adjustment_amount, reason]
+            columns: 2
+        actions:
+          - { action: cancel-stock-revaluation, label: Cancel, condition: "status == 'submitted'", style: destructive, confirm: true }
+
+child_entities:
+  stock_entry_item:
+    label: Stock Entry Item
+    label_plural: Stock Entry Items
+    parent_entity: stock_entry
+    parent_key: stock_entry_id
+
+    fields:
+      item_id:
+        type: link
+        label: Item
+        required: true
+        link_entity: item
+        link_display_field: item_name
+        link_search_action: list-items
+
+      item_code:
+        type: text
+        label: Item Code
+        read_only: true
+
+      item_name:
+        type: text
+        label: Item Name
+        read_only: true
+
+      quantity:
+        type: quantity
+        label: Qty
+        required: true
+        precision: 2
+        min: "0.01"
+
+      from_warehouse_id:
+        type: link
+        label: From Warehouse
+        link_entity: warehouse
+        link_display_field: name
+        link_search_action: list-warehouses
+
+      to_warehouse_id:
+        type: link
+        label: To Warehouse
+        link_entity: warehouse
+        link_display_field: name
+        link_search_action: list-warehouses
+
+      valuation_rate:
+        type: currency
+        label: Rate
+        precision: 2
+        required: true
+
+      amount:
+        type: currency
+        label: Amount
+        precision: 2
+        read_only: true
+        computed: "quantity * valuation_rate"
+
+      batch_id:
+        type: link
+        label: Batch
+        link_entity: batch
+        link_display_field: batch_name
+        link_search_action: list-batches
+
+      serial_numbers:
+        type: text
+        label: Serial Numbers
+        help_text: "Comma-separated serial numbers"
+
+    table_columns:
+      - { field: item_code, width: 100 }
+      - { field: item_name, width: 160 }
+      - { field: quantity, width: 80, align: right }
+      - { field: from_warehouse_id, width: 140 }
+      - { field: to_warehouse_id, width: 140 }
+      - { field: valuation_rate, width: 100, align: right }
+      - { field: amount, width: 120, align: right }
+
+  stock_reconciliation_item:
+    label: Reconciliation Item
+    label_plural: Reconciliation Items
+    parent_entity: stock_reconciliation
+    parent_key: stock_reconciliation_id
+
+    fields:
+      item_id:
+        type: link
+        label: Item
+        required: true
+        link_entity: item
+        link_display_field: item_name
+        link_search_action: list-items
+
+      warehouse_id:
+        type: link
+        label: Warehouse
+        required: true
+        link_entity: warehouse
+        link_display_field: name
+        link_search_action: list-warehouses
+
+      current_qty:
+        type: quantity
+        label: Current Qty
+        precision: 2
+        read_only: true
+
+      current_valuation_rate:
+        type: currency
+        label: Current Rate
+        precision: 2
+        read_only: true
+
+      qty:
+        type: quantity
+        label: Counted Qty
+        required: true
+        precision: 2
+
+      valuation_rate:
+        type: currency
+        label: Counted Rate
+        precision: 2
+
+      quantity_difference:
+        type: quantity
+        label: Qty Difference
+        precision: 2
+        read_only: true
+        computed: "qty - current_qty"
+
+      amount_difference:
+        type: currency
+        label: Amount Difference
+        precision: 2
+        read_only: true
+
+    table_columns:
+      - { field: item_id, width: 180 }
+      - { field: warehouse_id, width: 160 }
+      - { field: current_qty, width: 90, align: right }
+      - { field: current_valuation_rate, width: 100, align: right }
+      - { field: qty, width: 90, align: right }
+      - { field: valuation_rate, width: 100, align: right }
+      - { field: quantity_difference, width: 100, align: right }
+      - { field: amount_difference, width: 120, align: right }
+
+  item_stock_balance:
+    label: Stock Balance
+    label_plural: Stock Balances
+    virtual: true
+    parent_entity: item
+    parent_key: item_id
+    description: "Stock balance per warehouse, returned as part of get-item response"
+
+    fields:
+      warehouse_id:
+        type: link
+        label: Warehouse
+        link_entity: warehouse
+        link_display_field: name
+        read_only: true
+
+      warehouse_name:
+        type: text
+        label: Warehouse Name
+        read_only: true
+
+      qty:
+        type: quantity
+        label: Qty
+        precision: 2
+        read_only: true
+
+      valuation_rate:
+        type: currency
+        label: Valuation Rate
+        precision: 2
+        read_only: true
+
+      stock_value:
+        type: currency
+        label: Stock Value
+        precision: 2
+        read_only: true
+
+    table_columns:
+      - { field: warehouse_name, width: 200 }
+      - { field: qty, width: 100, align: right }
+      - { field: valuation_rate, width: 120, align: right }
+      - { field: stock_value, width: 140, align: right }
+
+action_map:
+  # -----------------------------------------------------------------------
+  # Item Master (4 actions + import)
+  # -----------------------------------------------------------------------
+  add-item:
+    component: FormView
+    entity: item
+    mode: create
+    success_redirect: get-item
+    success_toast: "Item '{item_name}' ({item_code}) created successfully"
+
+  update-item:
+    component: FormView
+    entity: item
+    mode: edit
+    success_redirect: get-item
+    success_toast: "Item updated"
+
+  get-item:
+    component: DetailView
+    entity: item
+
+  list-items:
+    component: DataTable
+    entity: item
+    default_sort: item_name
+    searchable: true
+    search_fields: [item_name, item_code]
+    add_action: add-item
+
+  import-items:
+    component: FileUpload
+    entity: item
+    mode: bulk_import
+    accept: ".csv"
+    success_toast: "Imported {imported} items ({skipped} skipped)"
+
+  # -----------------------------------------------------------------------
+  # Item Groups (2 actions)
+  # -----------------------------------------------------------------------
+  add-item-group:
+    component: FormView
+    entity: item_group
+    mode: create
+    success_toast: "Item group '{name}' created"
+
+  list-item-groups:
+    component: DataTable
+    entity: item_group
+    default_sort: name
+    searchable: true
+    add_action: add-item-group
+
+  # -----------------------------------------------------------------------
+  # Warehouses (3 actions)
+  # -----------------------------------------------------------------------
+  add-warehouse:
+    component: FormView
+    entity: warehouse
+    mode: create
+    success_toast: "Warehouse '{name}' created"
+
+  update-warehouse:
+    component: FormView
+    entity: warehouse
+    mode: edit
+    success_toast: "Warehouse updated"
+
+  list-warehouses:
+    component: DataTable
+    entity: warehouse
+    default_sort: name
+    searchable: true
+    add_action: add-warehouse
+
+  # -----------------------------------------------------------------------
+  # Stock Entries & Lifecycle (5 actions)
+  # -----------------------------------------------------------------------
+  add-stock-entry:
+    component: FormView
+    entity: stock_entry
+    mode: create
+    child_tables:
+      - entity: stock_entry_item
+        min_rows: 1
+    success_redirect: get-stock-entry
+    success_toast: "Stock entry {naming_series} created as draft"
+
+  get-stock-entry:
+    component: DetailView
+    entity: stock_entry
+
+  list-stock-entries:
+    component: DataTable
+    entity: stock_entry
+    default_sort: posting_date
+    default_sort_dir: desc
+    searchable: false
+    add_action: add-stock-entry
+
+  submit-stock-entry:
+    component: WizardFlow
+    entity: stock_entry
+    steps:
+      - type: confirmation
+        title: Submit Stock Entry
+        message: "This will post Stock Ledger Entries (SLE) and perpetual inventory GL entries. Stock balances and valuations will be updated. This action cannot be undone (only cancelled with reversal entries)."
+        confirm_label: Submit
+        cancel_label: Cancel
+      - type: action
+        action: submit-stock-entry
+    success_redirect: get-stock-entry
+    success_toast: "Stock entry submitted: {sle_entries_created} SLE and {gl_entries_created} GL entries posted"
+
+  cancel-stock-entry:
+    component: WizardFlow
+    entity: stock_entry
+    steps:
+      - type: confirmation
+        title: Cancel Stock Entry
+        message: "This will mark existing SLE entries as cancelled and post reversal SLE + GL entries. Stock balances and valuations will be adjusted. The stock entry will become immutable."
+        confirm_label: Cancel Entry
+        cancel_label: Go Back
+        style: danger
+      - type: action
+        action: cancel-stock-entry
+    success_redirect: get-stock-entry
+    success_toast: "Stock entry cancelled: {sle_reversals} SLE and {gl_reversals} GL reversal entries posted"
+
+  # -----------------------------------------------------------------------
+  # Cross-Skill Stock Ledger (2 actions)
+  # -----------------------------------------------------------------------
+  create-stock-ledger-entries:
+    component: ApiAction
+    hidden: true
+    description: "Cross-skill: create SLE entries (called by selling/buying skills)"
+
+  reverse-stock-ledger-entries:
+    component: ApiAction
+    hidden: true
+    description: "Cross-skill: reverse SLE entries (called by selling/buying skills)"
+
+  # -----------------------------------------------------------------------
+  # Stock Reports (3 actions)
+  # -----------------------------------------------------------------------
+  get-stock-balance:
+    component: DetailView
+    entity: item
+    custom_layout:
+      title: Stock Balance
+      description: "Current stock for a specific item in a specific warehouse"
+      fields:
+        - { key: item_id, label: Item, type: link, link_entity: item }
+        - { key: warehouse_id, label: Warehouse, type: link, link_entity: warehouse }
+        - { key: qty, label: Balance Qty, type: quantity, precision: 2 }
+        - { key: valuation_rate, label: Valuation Rate, type: currency, precision: 2 }
+        - { key: stock_value, label: Stock Value, type: currency, precision: 2 }
+
+  stock-balance-report:
+    component: ReportView
+    custom_layout:
+      title: Stock Balance Report
+      description: "Stock balance summary across all items and warehouses for a company"
+      filters:
+        - { key: company_id, label: Company, type: link, link_entity: company, link_search_action: list-companies, required: true }
+        - { key: warehouse_id, label: Warehouse, type: link, link_entity: warehouse, link_search_action: list-warehouses }
+      columns:
+        - { key: item_code, label: Item Code, width: 120 }
+        - { key: item_name, label: Item Name, width: 200 }
+        - { key: warehouse_name, label: Warehouse, width: 180 }
+        - { key: qty, label: Balance Qty, width: 100, align: right, type: quantity, precision: 2 }
+        - { key: valuation_rate, label: Valuation Rate, width: 120, align: right, type: currency, precision: 2 }
+        - { key: stock_value, label: Stock Value, width: 140, align: right, type: currency, precision: 2 }
+      summary:
+        - { key: total_stock_value, label: Total Stock Value, type: currency, precision: 2 }
+        - { key: row_count, label: Total Rows, type: integer }
+      data_key: report
+
+  stock-ledger-report:
+    component: ReportView
+    custom_layout:
+      title: Stock Ledger Report
+      description: "Detailed stock ledger entry log with all movements"
+      filters:
+        - { key: item_id, label: Item, type: link, link_entity: item, link_search_action: list-items }
+        - { key: warehouse_id, label: Warehouse, type: link, link_entity: warehouse, link_search_action: list-warehouses }
+        - { key: from_date, label: From Date, type: date }
+        - { key: to_date, label: To Date, type: date }
+      columns:
+        - { key: posting_date, label: Date, width: 100, type: date }
+        - { key: item_code, label: Item Code, width: 110 }
+        - { key: item_name, label: Item Name, width: 160 }
+        - { key: warehouse_name, label: Warehouse, width: 160 }
+        - { key: voucher_type, label: Voucher Type, width: 130 }
+        - { key: actual_qty, label: Qty Change, width: 100, align: right, type: quantity, precision: 2 }
+        - { key: incoming_rate, label: Incoming Rate, width: 110, align: right, type: currency, precision: 2 }
+        - { key: valuation_rate, label: Valuation Rate, width: 120, align: right, type: currency, precision: 2 }
+        - { key: stock_value, label: Stock Value, width: 130, align: right, type: currency, precision: 2 }
+        - { key: stock_value_difference, label: Value Diff, width: 120, align: right, type: currency, precision: 2 }
+      data_key: entries
+
+  check-reorder:
+    component: ReportView
+    custom_layout:
+      title: Reorder Check
+      description: "Items whose current stock is at or below their reorder level"
+      filters:
+        - { key: company_id, label: Company, type: link, link_entity: company, link_search_action: list-companies }
+      columns:
+        - { key: item_code, label: Item Code, width: 120 }
+        - { key: item_name, label: Item Name, width: 200 }
+        - { key: current_stock, label: Current Stock, width: 120, align: right, type: quantity, precision: 2 }
+        - { key: reorder_level, label: Reorder Level, width: 120, align: right, type: quantity, precision: 2 }
+        - { key: reorder_qty, label: Reorder Qty, width: 120, align: right, type: quantity, precision: 2 }
+        - { key: shortfall, label: Shortfall, width: 120, align: right, type: quantity, precision: 2 }
+      summary:
+        - { key: items_below_reorder, label: Items Below Reorder, type: integer }
+      data_key: items
+      empty_state:
+        icon: check-circle
+        message: "All items are above reorder level"
+
+  # -----------------------------------------------------------------------
+  # Batches & Serial Numbers (4 actions)
+  # -----------------------------------------------------------------------
+  add-batch:
+    component: FormView
+    entity: batch
+    mode: create
+    success_toast: "Batch '{batch_name}' created"
+
+  list-batches:
+    component: DataTable
+    entity: batch
+    default_sort: batch_name
+    searchable: true
+    add_action: add-batch
+
+  add-serial-number:
+    component: FormView
+    entity: serial_number
+    mode: create
+    success_toast: "Serial number '{serial_no}' registered"
+
+  list-serial-numbers:
+    component: DataTable
+    entity: serial_number
+    default_sort: serial_no
+    searchable: true
+    add_action: add-serial-number
+
+  # -----------------------------------------------------------------------
+  # Pricing (4 actions)
+  # -----------------------------------------------------------------------
+  add-price-list:
+    component: FormView
+    entity: price_list
+    mode: create
+    success_toast: "Price list '{name}' created"
+
+  add-item-price:
+    component: FormView
+    entity: item_price
+    mode: create
+    success_toast: "Item price set at {rate}"
+
+  get-item-price:
+    component: DetailView
+    entity: item_price
+    custom_layout:
+      title: Item Price Lookup
+      description: "Finds the applicable price from a price list for the given item and quantity"
+      fields:
+        - { key: item_id, label: Item, type: link, link_entity: item }
+        - { key: price_list_id, label: Price List, type: link, link_entity: price_list }
+        - { key: rate, label: Rate, type: currency, precision: 2 }
+        - { key: min_qty, label: Min Qty, type: quantity, precision: 2 }
+        - { key: valid_from, label: Valid From, type: date }
+        - { key: valid_to, label: Valid To, type: date }
+
+  add-pricing-rule:
+    component: FormView
+    entity: pricing_rule
+    mode: create
+    success_toast: "Pricing rule '{name}' created"
+
+  # -----------------------------------------------------------------------
+  # Stock Reconciliation (2 actions)
+  # -----------------------------------------------------------------------
+  add-stock-reconciliation:
+    component: FormView
+    entity: stock_reconciliation
+    mode: create
+    child_tables:
+      - entity: stock_reconciliation_item
+        min_rows: 1
+    success_redirect: get-stock-reconciliation
+    success_toast: "Stock reconciliation {naming_series} created as draft (difference: {difference_amount})"
+
+  submit-stock-reconciliation:
+    component: WizardFlow
+    entity: stock_reconciliation
+    steps:
+      - type: confirmation
+        title: Submit Stock Reconciliation
+        message: "This will post Stock Ledger Entries (SLE) for quantity differences and perpetual inventory GL entries for value adjustments. Stock balances and valuations will be updated to match the physical count."
+        confirm_label: Submit Reconciliation
+        cancel_label: Cancel
+      - type: action
+        action: submit-stock-reconciliation
+    success_redirect: get-stock-reconciliation
+    success_toast: "Reconciliation submitted: {sle_entries_created} SLE and {gl_entries_created} GL entries posted"
+
+  # -----------------------------------------------------------------------
+  # Stock Revaluation (4 actions)
+  # -----------------------------------------------------------------------
+  revalue-stock:
+    component: FormView
+    entity: stock_revaluation
+    mode: create
+    success_redirect: get-stock-revaluation
+    success_toast: "Stock revalued: {item_name} rate {old_rate} → {new_rate} (adjustment: {adjustment_amount})"
+
+  list-stock-revaluations:
+    component: DataTable
+    entity: stock_revaluation
+    default_sort: created_at
+    sort_direction: desc
+    add_action: revalue-stock
+
+  get-stock-revaluation:
+    component: DetailView
+    entity: stock_revaluation
+
+  cancel-stock-revaluation:
+    component: WizardFlow
+    entity: stock_revaluation
+    steps:
+      - type: confirmation
+        title: Cancel Stock Revaluation
+        message: "This will reverse the SLE and GL entries created by this revaluation, restoring the previous valuation rate."
+        confirm_label: Cancel Revaluation
+        cancel_label: Keep
+      - type: action
+        action: cancel-stock-revaluation
+    success_redirect: get-stock-revaluation
+    success_toast: "Revaluation cancelled and reversed"
+
+  # -----------------------------------------------------------------------
+  # Utility (1 action)
+  # -----------------------------------------------------------------------
+  status:
+    component: DashboardView
+    custom_layout:
+      title: Inventory Status
+      description: "Summary of inventory data for the company"
+      cards:
+        - { key: items, label: Total Items, icon: box, type: integer }
+        - { key: warehouses, label: Warehouses, icon: home, type: integer }
+        - { key: stock_entries.total, label: Stock Entries, icon: truck, type: integer }
+        - { key: total_stock_value, label: Total Stock Value, icon: dollar-sign, type: currency, precision: 2 }
+      detail_rows:
+        - { key: stock_entries.draft, label: Draft Entries, type: integer }
+        - { key: stock_entries.submitted, label: Submitted Entries, type: integer }
+        - { key: stock_entries.cancelled, label: Cancelled Entries, type: integer }

@@ -1,0 +1,19 @@
+{
+  "effective_date": "2026-01-01",
+  "gst_rate": "5",
+  "provinces": [
+    {"code": "ON", "tax_type": "HST", "combined_rate": "13", "federal": "5", "provincial": "8"},
+    {"code": "NS", "tax_type": "HST", "combined_rate": "14", "federal": "5", "provincial": "9", "note": "Reduced from 15% to 14% effective April 1, 2025"},
+    {"code": "NB", "tax_type": "HST", "combined_rate": "15", "federal": "5", "provincial": "10"},
+    {"code": "NL", "tax_type": "HST", "combined_rate": "15", "federal": "5", "provincial": "10"},
+    {"code": "PE", "tax_type": "HST", "combined_rate": "15", "federal": "5", "provincial": "10"},
+    {"code": "AB", "tax_type": "GST", "combined_rate": "5", "federal": "5", "provincial": "0"},
+    {"code": "BC", "tax_type": "GST+PST", "combined_rate": "12", "federal": "5", "provincial": "0", "note": "PST 7% charged separately"},
+    {"code": "SK", "tax_type": "GST+PST", "combined_rate": "11", "federal": "5", "provincial": "0", "note": "PST 6% charged separately"},
+    {"code": "MB", "tax_type": "GST+RST", "combined_rate": "12", "federal": "5", "provincial": "0", "note": "RST 7% charged separately"},
+    {"code": "QC", "tax_type": "GST+QST", "combined_rate": "14.975", "federal": "5", "provincial": "0", "note": "QST 9.975% charged separately"},
+    {"code": "NT", "tax_type": "GST", "combined_rate": "5", "federal": "5", "provincial": "0"},
+    {"code": "NU", "tax_type": "GST", "combined_rate": "5", "federal": "5", "provincial": "0"},
+    {"code": "YT", "tax_type": "GST", "combined_rate": "5", "federal": "5", "provincial": "0"}
+  ]
+}

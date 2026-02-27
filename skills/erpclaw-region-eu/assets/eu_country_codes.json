@@ -1,0 +1,31 @@
+{
+  "countries": [
+    {"code": "AT", "name": "Austria", "currency": "EUR", "standard_vat": "20"},
+    {"code": "BE", "name": "Belgium", "currency": "EUR", "standard_vat": "21"},
+    {"code": "BG", "name": "Bulgaria", "currency": "BGN", "standard_vat": "20"},
+    {"code": "HR", "name": "Croatia", "currency": "EUR", "standard_vat": "25"},
+    {"code": "CY", "name": "Cyprus", "currency": "EUR", "standard_vat": "19"},
+    {"code": "CZ", "name": "Czech Republic", "currency": "CZK", "standard_vat": "21"},
+    {"code": "DK", "name": "Denmark", "currency": "DKK", "standard_vat": "25"},
+    {"code": "EE", "name": "Estonia", "currency": "EUR", "standard_vat": "22"},
+    {"code": "FI", "name": "Finland", "currency": "EUR", "standard_vat": "25.5"},
+    {"code": "FR", "name": "France", "currency": "EUR", "standard_vat": "20"},
+    {"code": "DE", "name": "Germany", "currency": "EUR", "standard_vat": "19"},
+    {"code": "GR", "name": "Greece", "currency": "EUR", "standard_vat": "24"},
+    {"code": "HU", "name": "Hungary", "currency": "HUF", "standard_vat": "27"},
+    {"code": "IE", "name": "Ireland", "currency": "EUR", "standard_vat": "23"},
+    {"code": "IT", "name": "Italy", "currency": "EUR", "standard_vat": "22"},
+    {"code": "LV", "name": "Latvia", "currency": "EUR", "standard_vat": "21"},
+    {"code": "LT", "name": "Lithuania", "currency": "EUR", "standard_vat": "21"},
+    {"code": "LU", "name": "Luxembourg", "currency": "EUR", "standard_vat": "17"},
+    {"code": "MT", "name": "Malta", "currency": "EUR", "standard_vat": "18"},
+    {"code": "NL", "name": "Netherlands", "currency": "EUR", "standard_vat": "21"},
+    {"code": "PL", "name": "Poland", "currency": "PLN", "standard_vat": "23"},
+    {"code": "PT", "name": "Portugal", "currency": "EUR", "standard_vat": "23"},
+    {"code": "RO", "name": "Romania", "currency": "RON", "standard_vat": "19"},
+    {"code": "SK", "name": "Slovakia", "currency": "EUR", "standard_vat": "23"},
+    {"code": "SI", "name": "Slovenia", "currency": "EUR", "standard_vat": "22"},
+    {"code": "ES", "name": "Spain", "currency": "EUR", "standard_vat": "21"},
+    {"code": "SE", "name": "Sweden", "currency": "SEK", "standard_vat": "25"}
+  ]
+}

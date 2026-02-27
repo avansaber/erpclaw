@@ -1,0 +1,274 @@
+{
+  "states": {
+    "MH": {
+      "name": "Maharashtra",
+      "frequency": "monthly",
+      "slabs": {
+        "male": [
+          {"min": 0, "max": 7500, "tax": 0},
+          {"min": 7501, "max": 10000, "tax": 175},
+          {"min": 10001, "max": null, "tax": 200}
+        ],
+        "female": [
+          {"min": 0, "max": 25000, "tax": 0},
+          {"min": 25001, "max": null, "tax": 200}
+        ]
+      },
+      "february_adjustment": 300,
+      "annual_max": 2500,
+      "notes": "February month tax is 300 for males earning >10000 to cap annual total at 2500"
+    },
+    "KA": {
+      "name": "Karnataka",
+      "frequency": "monthly",
+      "slabs": {
+        "all": [
+          {"min": 0, "max": 24999, "tax": 0},
+          {"min": 25000, "max": null, "tax": 200}
+        ]
+      },
+      "february_adjustment": 300,
+      "annual_max": 2500,
+      "notes": "No gender distinction. February tax is 300 to cap annual total at 2500"
+    },
+    "TN": {
+      "name": "Tamil Nadu",
+      "frequency": "half_yearly",
+      "slabs": {
+        "all": [
+          {"min": 0, "max": 21000, "tax": 0},
+          {"min": 21001, "max": 30000, "tax": 180},
+          {"min": 30001, "max": 45000, "tax": 425},
+          {"min": 45001, "max": 60000, "tax": 930},
+          {"min": 60001, "max": 75000, "tax": 1025},
+          {"min": 75001, "max": null, "tax": 1250}
+        ]
+      },
+      "february_adjustment": null,
+      "annual_max": 2500,
+      "notes": "Half-yearly payment. Slabs are per month income, tax is per half-year"
+    },
+    "AP": {
+      "name": "Andhra Pradesh",
+      "frequency": "monthly",
+      "slabs": {
+        "all": [
+          {"min": 0, "max": 15000, "tax": 0},
+          {"min": 15001, "max": 20000, "tax": 150},
+          {"min": 20001, "max": null, "tax": 200}
+        ]
+      },
+      "february_adjustment": null,
+      "annual_max": 2500,
+      "notes": "No gender distinction. No February adjustment"
+    },
+    "TS": {
+      "name": "Telangana",
+      "frequency": "monthly",
+      "slabs": {
+        "all": [
+          {"min": 0, "max": 15000, "tax": 0},
+          {"min": 15001, "max": 20000, "tax": 150},
+          {"min": 20001, "max": null, "tax": 200}
+        ]
+      },
+      "february_adjustment": null,
+      "annual_max": 2500,
+      "notes": "Same slabs as Andhra Pradesh. No February adjustment"
+    },
+    "WB": {
+      "name": "West Bengal",
+      "frequency": "monthly",
+      "slabs": {
+        "all": [
+          {"min": 0, "max": 10000, "tax": 0},
+          {"min": 10001, "max": 15000, "tax": 110},
+          {"min": 15001, "max": 25000, "tax": 130},
+          {"min": 25001, "max": 40000, "tax": 150},
+          {"min": 40001, "max": null, "tax": 200}
+        ]
+      },
+      "february_adjustment": null,
+      "annual_max": 2500,
+      "notes": "No gender distinction. Progressive slabs"
+    },
+    "GJ": {
+      "name": "Gujarat",
+      "frequency": "monthly",
+      "slabs": {
+        "all": [
+          {"min": 0, "max": 12000, "tax": 0},
+          {"min": 12001, "max": null, "tax": 200}
+        ]
+      },
+      "february_adjustment": null,
+      "annual_max": 2500,
+      "notes": "Flat 200 per month above threshold"
+    },
+    "KL": {
+      "name": "Kerala",
+      "frequency": "half_yearly",
+      "slabs": {
+        "all": [
+          {"min": 0, "max": 11999, "tax": 0},
+          {"min": 12000, "max": 17999, "tax": 320},
+          {"min": 18000, "max": 29999, "tax": 450},
+          {"min": 30000, "max": 44999, "tax": 600},
+          {"min": 45000, "max": 99999, "tax": 750},
+          {"min": 100000, "max": 166666, "tax": 1000},
+          {"min": 166667, "max": null, "tax": 1250}
+        ]
+      },
+      "february_adjustment": null,
+      "annual_max": 2500,
+      "notes": "Half-yearly payment. Slabs are per month income, tax is per half-year"
+    },
+    "MP": {
+      "name": "Madhya Pradesh",
+      "frequency": "monthly",
+      "slabs": {
+        "all": [
+          {"min": 0, "max": 18750, "tax": 0},
+          {"min": 18751, "max": 25000, "tax": 125},
+          {"min": 25001, "max": 33333, "tax": 167},
+          {"min": 33334, "max": null, "tax": 208}
+        ]
+      },
+      "february_adjustment": null,
+      "annual_max": 2500,
+      "notes": "Annual tax = monthly * 12, capped at 2500"
+    },
+    "AS": {
+      "name": "Assam",
+      "frequency": "monthly",
+      "slabs": {
+        "all": [
+          {"min": 0, "max": 10000, "tax": 0},
+          {"min": 10001, "max": 15000, "tax": 150},
+          {"min": 15001, "max": 25000, "tax": 180},
+          {"min": 25001, "max": null, "tax": 208}
+        ]
+      },
+      "february_adjustment": null,
+      "annual_max": 2500,
+      "notes": "Progressive slabs"
+    },
+    "ML": {
+      "name": "Meghalaya",
+      "frequency": "monthly",
+      "slabs": {
+        "all": [
+          {"min": 0, "max": 16667, "tax": 0},
+          {"min": 16668, "max": 25000, "tax": 100},
+          {"min": 25001, "max": 41666, "tax": 150},
+          {"min": 41667, "max": null, "tax": 208}
+        ]
+      },
+      "february_adjustment": null,
+      "annual_max": 2500,
+      "notes": "Specified annual amounts divided by 12 for monthly equivalent"
+    },
+    "TR": {
+      "name": "Tripura",
+      "frequency": "monthly",
+      "slabs": {
+        "all": [
+          {"min": 0, "max": 7500, "tax": 0},
+          {"min": 7501, "max": 15000, "tax": 100},
+          {"min": 15001, "max": 25000, "tax": 150},
+          {"min": 25001, "max": null, "tax": 208}
+        ]
+      },
+      "february_adjustment": null,
+      "annual_max": 2500,
+      "notes": "Progressive slabs. Low threshold compared to other states"
+    },
+    "OD": {
+      "name": "Odisha",
+      "frequency": "monthly",
+      "slabs": {
+        "all": [
+          {"min": 0, "max": 16667, "tax": 0},
+          {"min": 16668, "max": 25000, "tax": 125},
+          {"min": 25001, "max": null, "tax": 208}
+        ]
+      },
+      "february_adjustment": null,
+      "annual_max": 2500,
+      "notes": "Annual amounts divided by 12 for monthly equivalent"
+    },
+    "JH": {
+      "name": "Jharkhand",
+      "frequency": "monthly",
+      "slabs": {
+        "all": [
+          {"min": 0, "max": 25000, "tax": 0},
+          {"min": 25001, "max": 41666, "tax": 100},
+          {"min": 41667, "max": 66666, "tax": 150},
+          {"min": 66667, "max": 83333, "tax": 175},
+          {"min": 83334, "max": null, "tax": 208}
+        ]
+      },
+      "february_adjustment": null,
+      "annual_max": 2500,
+      "notes": "Higher threshold and progressive slabs"
+    },
+    "BR": {
+      "name": "Bihar",
+      "frequency": "monthly",
+      "slabs": {
+        "all": [
+          {"min": 0, "max": 25000, "tax": 0},
+          {"min": 25001, "max": 50000, "tax": 100},
+          {"min": 50001, "max": 75000, "tax": 150},
+          {"min": 75001, "max": 100000, "tax": 175},
+          {"min": 100001, "max": null, "tax": 208}
+        ]
+      },
+      "february_adjustment": null,
+      "annual_max": 2500,
+      "notes": "Higher threshold. Monthly equivalent of annual slabs"
+    },
+    "SK": {
+      "name": "Sikkim",
+      "frequency": "monthly",
+      "slabs": {
+        "all": [
+          {"min": 0, "max": 20000, "tax": 0},
+          {"min": 20001, "max": 30000, "tax": 125},
+          {"min": 30001, "max": null, "tax": 208}
+        ]
+      },
+      "february_adjustment": null,
+      "annual_max": 2500,
+      "notes": "Simple slab structure"
+    },
+    "MN": {
+      "name": "Manipur",
+      "frequency": "monthly",
+      "slabs": {
+        "all": [
+          {"min": 0, "max": 16667, "tax": 0},
+          {"min": 16668, "max": 25000, "tax": 125},
+          {"min": 25001, "max": null, "tax": 208}
+        ]
+      },
+      "february_adjustment": null,
+      "annual_max": 2500,
+      "notes": "Annual amounts divided by 12 for monthly equivalent"
+    },
+    "PB": {
+      "name": "Punjab",
+      "frequency": "monthly",
+      "slabs": {
+        "all": [
+          {"min": 0, "max": 25000, "tax": 0},
+          {"min": 25001, "max": null, "tax": 200}
+        ]
+      },
+      "february_adjustment": null,
+      "annual_max": 2500,
+      "notes": "Flat 200 per month above threshold. Recently reintroduced PT"
+    }
+  }
+}

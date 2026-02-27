@@ -1,0 +1,144 @@
+ocui_version: "1.0"
+skill: erpclaw-region-ca
+skill_version: "1.0.0"
+display_name: Canada Compliance
+icon: flag
+color: "#ff0000"
+
+entities:
+  regional_settings:
+    label: Regional Settings
+    label_plural: Regional Settingses
+    table: regional_settings
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      key:
+        type: text
+        label: Key
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      value:
+        type: text
+        label: Value
+        in_form_view: true
+        form_group: details
+        form_order: 3
+    form_groups:
+      details:
+        label: Details
+        order: 1
+        columns: 2
+      references:
+        label: References
+        order: 2
+        columns: 2
+
+action_map:
+  available-reports:
+    component: FormView
+    mode: create
+  ca-payroll-summary:
+    component: FormView
+    mode: create
+  ca-tax-summary:
+    component: FormView
+    mode: create
+  compute-cpp:
+    component: FormView
+    mode: create
+  compute-cpp2:
+    component: FormView
+    mode: create
+  compute-ei:
+    component: FormView
+    mode: create
+  compute-federal-tax:
+    component: FormView
+    mode: create
+  compute-gst:
+    component: FormView
+    mode: create
+  compute-hst:
+    component: FormView
+    mode: create
+  compute-itc:
+    component: FormView
+    mode: create
+  compute-provincial-tax:
+    component: FormView
+    mode: create
+  compute-pst:
+    component: FormView
+    mode: create
+  compute-qpp:
+    component: FormView
+    mode: create
+  compute-qst:
+    component: FormView
+    mode: create
+  compute-sales-tax:
+    component: FormView
+    mode: create
+  compute-total-payroll-deductions:
+    component: FormView
+    mode: create
+  generate-gst-hst-return:
+    component: FormView
+    mode: create
+  generate-pd7a:
+    component: FormView
+    mode: create
+  generate-qst-return:
+    component: FormView
+    mode: create
+  generate-roe:
+    component: FormView
+    mode: create
+  generate-t4:
+    component: FormView
+    mode: create
+  generate-t4a:
+    component: FormView
+    mode: create
+  list-tax-rates:
+    component: FormView
+    mode: create
+  seed-ca-coa:
+    component: FormView
+    mode: create
+  seed-ca-defaults:
+    component: FormView
+    mode: create
+  seed-ca-payroll:
+    component: FormView
+    mode: create
+  setup-gst-hst:
+    component: FormView
+    mode: create
+  status:
+    component: DashboardView
+  validate-business-number:
+    component: FormView
+    mode: create
+  validate-sin:
+    component: FormView
+    mode: create

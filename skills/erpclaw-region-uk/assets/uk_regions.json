@@ -1,0 +1,32 @@
+{
+  "regions": [
+    {
+      "code": "ENG",
+      "name": "England",
+      "scottish_income_tax": false,
+      "welsh_rates": false,
+      "notes": "Standard HMRC income tax bands apply"
+    },
+    {
+      "code": "SCO",
+      "name": "Scotland",
+      "scottish_income_tax": true,
+      "welsh_rates": false,
+      "notes": "Scottish Parliament sets own income tax rates and bands since 2017/18"
+    },
+    {
+      "code": "WAL",
+      "name": "Wales",
+      "scottish_income_tax": false,
+      "welsh_rates": true,
+      "notes": "Welsh rates of income tax apply since 2019/20; currently match England/NI rates"
+    },
+    {
+      "code": "NIR",
+      "name": "Northern Ireland",
+      "scottish_income_tax": false,
+      "welsh_rates": false,
+      "notes": "Standard HMRC income tax bands apply; corporation tax devolution under discussion"
+    }
+  ]
+}

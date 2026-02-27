@@ -1,0 +1,144 @@
+ocui_version: "1.0"
+skill: erpclaw-region-in
+skill_version: "1.0.0"
+display_name: India Compliance
+icon: flag
+color: "#ff9933"
+
+entities:
+  regional_settings:
+    label: Regional Settings
+    label_plural: Regional Settingses
+    table: regional_settings
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      key:
+        type: text
+        label: Key
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      value:
+        type: text
+        label: Value
+        in_form_view: true
+        form_group: details
+        form_order: 3
+    form_groups:
+      details:
+        label: Details
+        order: 1
+        columns: 2
+      references:
+        label: References
+        order: 2
+        columns: 2
+
+action_map:
+  add-hsn-code:
+    component: FormView
+    mode: create
+  add-reverse-charge-rule:
+    component: FormView
+    mode: create
+  available-reports:
+    component: FormView
+    mode: create
+  compute-esi:
+    component: FormView
+    mode: create
+  compute-gst:
+    component: FormView
+    mode: create
+  compute-itc:
+    component: FormView
+    mode: create
+  compute-pf:
+    component: FormView
+    mode: create
+  compute-professional-tax:
+    component: FormView
+    mode: create
+  compute-tds-on-salary:
+    component: FormView
+    mode: create
+  generate-einvoice-payload:
+    component: FormView
+    mode: create
+  generate-eway-bill-payload:
+    component: FormView
+    mode: create
+  generate-form16:
+    component: FormView
+    mode: create
+  generate-form24q:
+    component: FormView
+    mode: create
+  generate-gstr1:
+    component: FormView
+    mode: create
+  generate-gstr3b:
+    component: FormView
+    mode: create
+  generate-hsn-summary:
+    component: FormView
+    mode: create
+  generate-tds-return:
+    component: FormView
+    mode: create
+  india-payroll-summary:
+    component: FormView
+    mode: create
+  india-tax-summary:
+    component: FormView
+    mode: create
+  list-hsn-codes:
+    component: FormView
+    mode: create
+  seed-india-defaults:
+    component: FormView
+    mode: create
+  seed-india-payroll:
+    component: FormView
+    mode: create
+  seed-indian-coa:
+    component: FormView
+    mode: create
+  setup-gst:
+    component: FormView
+    mode: create
+  status:
+    component: DashboardView
+  tds-withhold:
+    component: FormView
+    mode: create
+  validate-aadhaar:
+    component: FormView
+    mode: create
+  validate-gstin:
+    component: FormView
+    mode: create
+  validate-pan:
+    component: FormView
+    mode: create
+  validate-tan:
+    component: FormView
+    mode: create

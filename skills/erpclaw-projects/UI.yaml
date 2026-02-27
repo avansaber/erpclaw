@@ -1,0 +1,709 @@
+ocui_version: "1.0"
+skill: erpclaw-projects
+skill_version: "1.0.0"
+display_name: Projects & Tasks
+icon: kanban
+color: "#6366f1"
+
+entities:
+  project:
+    label: Project
+    label_plural: Projects
+    table: project
+    id_col: id
+    name_col: project_name
+    primary_field: project_name
+    identifier_field: id
+    status_field: status
+    status_colors:
+      open: blue
+      in_progress: blue
+      completed: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      naming_series:
+        type: text
+        label: Naming Series
+        read_only: true
+      project_name:
+        type: text
+        label: Project Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: details
+        form_order: 1
+      customer_id:
+        type: link
+        label: Customer ID
+        link_entity: customer
+        link_display_field: name
+        link_search_action: list-customers
+        in_form_view: true
+        form_group: references
+        form_order: 2
+      project_type:
+        type: select
+        label: Project Type
+        required: true
+        options:
+          - value: "internal"
+            label: "Internal"
+          - value: "external"
+            label: "External"
+          - value: "service"
+            label: "Service"
+          - value: "product"
+            label: "Product"
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "open"
+            label: "Open"
+          - value: "in_progress"
+            label: "In Progress"
+          - value: "completed"
+            label: "Completed"
+          - value: "cancelled"
+            label: "Cancelled"
+          - value: "on_hold"
+            label: "On Hold"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 4
+      priority:
+        type: select
+        label: Priority
+        required: true
+        options:
+          - value: "low"
+            label: "Low"
+          - value: "medium"
+            label: "Medium"
+          - value: "high"
+            label: "High"
+          - value: "critical"
+            label: "Critical"
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      start_date:
+        type: date
+        label: Start Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 6
+      end_date:
+        type: date
+        label: End Date
+        in_form_view: true
+        form_group: header
+        form_order: 7
+      estimated_cost:
+        type: currency
+        label: Estimated Cost
+        precision: 2
+        in_form_view: true
+        form_group: details
+        form_order: 8
+      actual_cost:
+        type: currency
+        label: Actual Cost
+        precision: 2
+        in_form_view: true
+        form_group: details
+        form_order: 9
+      billing_type:
+        type: select
+        label: Billing Type
+        required: true
+        options:
+          - value: "fixed_price"
+            label: "Fixed Price"
+          - value: "time_and_material"
+            label: "Time And Material"
+          - value: "non_billable"
+            label: "Non Billable"
+        in_form_view: true
+        form_group: details
+        form_order: 10
+      total_billed:
+        type: currency
+        label: Total Billed
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 11
+      profit_margin:
+        type: text
+        label: Profit Margin
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 12
+      percent_complete:
+        type: percent
+        label: Percent Complete
+        in_form_view: true
+        form_group: details
+        form_order: 13
+      cost_center_id:
+        type: link
+        label: Cost Center ID
+        link_entity: cost_center
+        link_display_field: name
+        link_search_action: list-cost-centers
+        in_form_view: true
+        form_group: references
+        form_order: 14
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 15
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 4
+        columns: 2
+
+  task:
+    label: Task
+    label_plural: Tasks
+    table: task
+    id_col: id
+    name_col: task_name
+    primary_field: task_name
+    identifier_field: id
+    status_field: status
+    status_colors:
+      open: blue
+      working: blue
+      completed: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      naming_series:
+        type: text
+        label: Naming Series
+        read_only: true
+      project_id:
+        type: link
+        label: Project ID
+        link_entity: project
+        link_display_field: name
+        link_search_action: list-projects
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      task_name:
+        type: text
+        label: Task Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      parent_task_id:
+        type: link
+        label: Parent Task ID
+        link_entity: task
+        link_display_field: name
+        link_search_action: list-tasks
+        in_form_view: true
+        form_group: references
+        form_order: 3
+      assigned_to:
+        type: text
+        label: Assigned To
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "open"
+            label: "Open"
+          - value: "in_progress"
+            label: "In Progress"
+          - value: "completed"
+            label: "Completed"
+          - value: "cancelled"
+            label: "Cancelled"
+          - value: "blocked"
+            label: "Blocked"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 5
+      priority:
+        type: select
+        label: Priority
+        required: true
+        options:
+          - value: "low"
+            label: "Low"
+          - value: "medium"
+            label: "Medium"
+          - value: "high"
+            label: "High"
+          - value: "critical"
+            label: "Critical"
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      start_date:
+        type: date
+        label: Start Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 7
+      end_date:
+        type: date
+        label: End Date
+        in_form_view: true
+        form_group: header
+        form_order: 8
+      estimated_hours:
+        type: text
+        label: Estimated Hours
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 9
+      actual_hours:
+        type: text
+        label: Actual Hours
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 10
+      depends_on:
+        type: text
+        label: Depends On
+        in_form_view: true
+        form_group: details
+        form_order: 11
+      description:
+        type: textarea
+        label: Description
+        in_form_view: true
+        form_group: notes
+        form_order: 12
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      notes:
+        label: Notes
+        order: 4
+        columns: 1
+
+  timesheet:
+    label: Timesheet
+    label_plural: Timesheets
+    table: timesheet
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      naming_series:
+        type: text
+        label: Naming Series
+        read_only: true
+      employee_id:
+        type: link
+        label: Employee ID
+        link_entity: employee
+        link_display_field: name
+        link_search_action: list-employees
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      start_date:
+        type: date
+        label: Start Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 2
+      end_date:
+        type: date
+        label: End Date
+        in_form_view: true
+        form_group: header
+        form_order: 3
+      total_hours:
+        type: currency
+        label: Total Hours
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 4
+      total_billable_hours:
+        type: currency
+        label: Total Billable Hours
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 5
+      total_billed_hours:
+        type: currency
+        label: Total Billed Hours
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 6
+      total_cost:
+        type: currency
+        label: Total Cost
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 7
+      total_billable_amount:
+        type: currency
+        label: Total Billable Amount
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 8
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "draft"
+            label: "Draft"
+          - value: "submitted"
+            label: "Submitted"
+          - value: "billed"
+            label: "Billed"
+          - value: "cancelled"
+            label: "Cancelled"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 9
+      sales_invoice_id:
+        type: link
+        label: Sales Invoice ID
+        link_entity: sales_invoice
+        link_display_field: name
+        link_search_action: list-sales-invoices
+        in_form_view: true
+        form_group: references
+        form_order: 10
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 11
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      references:
+        label: References
+        order: 2
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 3
+        columns: 2
+      items:
+        label: Line Items
+        order: 4
+        type: child_table
+
+  milestone:
+    label: Milestone
+    label_plural: Milestones
+    table: milestone
+    id_col: id
+    name_col: milestone_name
+    primary_field: milestone_name
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      project_id:
+        type: link
+        label: Project ID
+        link_entity: project
+        link_display_field: name
+        link_search_action: list-projects
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      milestone_name:
+        type: text
+        label: Milestone Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      target_date:
+        type: date
+        label: Target Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 3
+      completion_date:
+        type: date
+        label: Completion Date
+        in_form_view: true
+        form_group: header
+        form_order: 4
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "pending"
+            label: "Pending"
+          - value: "completed"
+            label: "Completed"
+          - value: "missed"
+            label: "Missed"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 5
+      description:
+        type: textarea
+        label: Description
+        in_form_view: true
+        form_group: notes
+        form_order: 6
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      notes:
+        label: Notes
+        order: 4
+        columns: 1
+
+child_entities:
+  timesheet_detail:
+    parent_entity: timesheet
+    parent_field: timesheet_id
+    param_name: items
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      project_id:
+        type: link
+        label: Project ID
+        link_entity: project
+        link_display_field: name
+        link_search_action: list-projects
+      task_id:
+        type: link
+        label: Task ID
+        link_entity: task
+        link_display_field: name
+        link_search_action: list-tasks
+      activity_type:
+        type: select
+        label: Activity Type
+        options:
+          - value: "development"
+            label: "Development"
+          - value: "design"
+            label: "Design"
+          - value: "consulting"
+            label: "Consulting"
+          - value: "support"
+            label: "Support"
+          - value: "admin"
+            label: "Admin"
+      hours:
+        type: text
+        label: Hours
+        required: true
+      billing_rate:
+        type: currency
+        label: Billing Rate
+        precision: 2
+      billable:
+        type: integer
+        label: Billable
+      description:
+        type: textarea
+        label: Description
+      date:
+        type: text
+        label: Date
+        required: true
+
+action_map:
+  add-milestone:
+    component: FormView
+    entity: milestone
+    mode: create
+  add-project:
+    component: FormView
+    entity: project
+    mode: create
+    child_tables:
+      - entity: timesheet_detail
+        form_group: items
+        add_label: "Add Row"
+  add-task:
+    component: FormView
+    entity: task
+    mode: create
+    child_tables:
+      - entity: timesheet_detail
+        form_group: items
+        add_label: "Add Row"
+  add-timesheet:
+    component: FormView
+    entity: timesheet
+    mode: create
+    child_tables:
+      - entity: timesheet_detail
+        form_group: items
+        add_label: "Add Row"
+  bill-timesheet:
+    component: FormView
+    mode: create
+  gantt-data:
+    component: FormView
+    mode: create
+  get-project:
+    component: DetailView
+    entity: project
+  get-timesheet:
+    component: DetailView
+    entity: timesheet
+  list-projects:
+    component: DataTable
+    entity: project
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-project
+  list-tasks:
+    component: DataTable
+    entity: task
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-task
+  list-timesheets:
+    component: DataTable
+    entity: timesheet
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-timesheet
+  project-profitability:
+    component: FormView
+    mode: create
+  resource-utilization:
+    component: FormView
+    mode: create
+  status:
+    component: DashboardView
+  submit-timesheet:
+    component: WizardFlow
+    entity: timesheet
+    steps:
+      - label: Review
+        type: detail
+      - label: Confirm
+        type: confirmation
+        message: "Submit this timesheet?"
+  update-milestone:
+    component: FormView
+    entity: milestone
+    mode: edit
+  update-project:
+    component: FormView
+    entity: project
+    mode: edit
+  update-task:
+    component: FormView
+    entity: task
+    mode: edit

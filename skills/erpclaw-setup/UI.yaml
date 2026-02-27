@@ -1,0 +1,969 @@
+ocui_version: "1.0"
+skill: erpclaw-setup
+skill_version: "1.0.0"
+display_name: Company Setup
+icon: settings
+color: "#6366f1"
+
+entities:
+  company:
+    label: Company
+    label_plural: Companies
+    icon: building
+    primary_field: name
+    secondary_field: abbr
+    identifier_field: id
+
+    fields:
+      name:
+        type: text
+        label: Company Name
+        required: true
+        max_length: 140
+        searchable: true
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      abbr:
+        type: text
+        label: Abbreviation
+        max_length: 10
+        help_text: "Auto-generated from initials if left blank"
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+      default_currency:
+        type: currency_code
+        label: Base Currency
+        required: true
+        default: USD
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 3
+
+      country:
+        type: text
+        label: Country
+        default: "United States"
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 4
+
+      fiscal_year_start_month:
+        type: integer
+        label: Fiscal Year Start Month
+        default: 1
+        min: 1
+        max: 12
+        help_text: "1 = January, 4 = April, 7 = July, etc."
+        in_form_view: true
+        form_group: basic
+        form_order: 5
+
+      tax_id:
+        type: text
+        label: Tax ID / EIN
+        max_length: 20
+        in_form_view: true
+        form_group: basic
+        form_order: 6
+
+      default_receivable_account_id:
+        type: link
+        label: Default Receivable Account
+        link_entity: account
+        link_display_field: name
+        link_search_action: list-accounts
+        in_form_view: true
+        form_group: default_accounts
+        form_order: 1
+
+      default_payable_account_id:
+        type: link
+        label: Default Payable Account
+        link_entity: account
+        link_display_field: name
+        link_search_action: list-accounts
+        in_form_view: true
+        form_group: default_accounts
+        form_order: 2
+
+      default_income_account_id:
+        type: link
+        label: Default Income Account
+        link_entity: account
+        link_display_field: name
+        link_search_action: list-accounts
+        in_form_view: true
+        form_group: default_accounts
+        form_order: 3
+
+      default_expense_account_id:
+        type: link
+        label: Default Expense Account
+        link_entity: account
+        link_display_field: name
+        link_search_action: list-accounts
+        in_form_view: true
+        form_group: default_accounts
+        form_order: 4
+
+      default_bank_account_id:
+        type: link
+        label: Default Bank Account
+        link_entity: account
+        link_display_field: name
+        link_search_action: list-accounts
+        in_form_view: true
+        form_group: default_accounts
+        form_order: 5
+
+      default_cash_account_id:
+        type: link
+        label: Default Cash Account
+        link_entity: account
+        link_display_field: name
+        link_search_action: list-accounts
+        in_form_view: true
+        form_group: default_accounts
+        form_order: 6
+
+      default_cost_center_id:
+        type: link
+        label: Default Cost Center
+        link_entity: cost_center
+        link_display_field: name
+        link_search_action: list-cost-centers
+        in_form_view: true
+        form_group: default_accounts
+        form_order: 7
+
+      default_warehouse_id:
+        type: link
+        label: Default Warehouse
+        link_entity: warehouse
+        link_display_field: name
+        link_search_action: list-warehouses
+        in_form_view: true
+        form_group: default_accounts
+        form_order: 8
+
+      round_off_account_id:
+        type: link
+        label: Round-Off Account
+        link_entity: account
+        link_display_field: name
+        link_search_action: list-accounts
+        in_form_view: true
+        form_group: advanced
+        form_order: 1
+
+      exchange_gain_loss_account_id:
+        type: link
+        label: Exchange Gain/Loss Account
+        link_entity: account
+        link_display_field: name
+        link_search_action: list-accounts
+        in_form_view: true
+        form_group: advanced
+        form_order: 2
+
+      perpetual_inventory:
+        type: boolean
+        label: Perpetual Inventory
+        default: false
+        help_text: "Auto-post stock value changes to GL"
+        in_form_view: true
+        form_group: advanced
+        form_order: 3
+
+      enable_negative_stock:
+        type: boolean
+        label: Allow Negative Stock
+        default: false
+        in_form_view: true
+        form_group: advanced
+        form_order: 4
+
+      accounts_frozen_till_date:
+        type: date
+        label: Accounts Frozen Till
+        help_text: "No GL entries allowed before this date"
+        in_form_view: true
+        form_group: advanced
+        form_order: 5
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_detail_view: true
+
+      updated_at:
+        type: datetime
+        label: Last Updated
+        read_only: true
+        in_detail_view: true
+
+    form_groups:
+      basic:
+        label: Company Information
+        order: 1
+        columns: 2
+      default_accounts:
+        label: Default Accounts
+        order: 2
+        columns: 2
+        collapsible: true
+      advanced:
+        label: Advanced Settings
+        order: 3
+        columns: 2
+        collapsible: true
+
+    views:
+      list:
+        columns:
+          - { field: name, width: 220, link: true }
+          - { field: abbr, width: 80 }
+          - { field: default_currency, width: 100 }
+          - { field: country, width: 160 }
+        row_click: get-company
+
+      detail:
+        header:
+          title_field: name
+          subtitle_field: country
+        sections:
+          - label: Company Information
+            fields: [name, abbr, default_currency, country, fiscal_year_start_month, tax_id]
+            columns: 3
+          - label: Default Accounts
+            fields: [default_receivable_account_id, default_payable_account_id, default_income_account_id, default_expense_account_id, default_bank_account_id, default_cash_account_id, default_cost_center_id, default_warehouse_id]
+            columns: 2
+            collapsible: true
+          - label: Advanced
+            fields: [round_off_account_id, exchange_gain_loss_account_id, perpetual_inventory, enable_negative_stock, accounts_frozen_till_date]
+            columns: 2
+            collapsible: true
+        actions:
+          - { action: update-company, label: Edit }
+          - { action: seed-defaults, label: Seed Defaults }
+
+  currency:
+    label: Currency
+    label_plural: Currencies
+    icon: dollar-sign
+    primary_field: name
+    secondary_field: code
+    identifier_field: code
+
+    fields:
+      code:
+        type: currency_code
+        label: Currency Code
+        required: true
+        max_length: 3
+        help_text: "ISO 4217 code (e.g., USD, EUR, GBP)"
+        searchable: true
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      name:
+        type: text
+        label: Currency Name
+        required: true
+        max_length: 80
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+      symbol:
+        type: text
+        label: Symbol
+        max_length: 5
+        placeholder: "$"
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 3
+
+      decimal_places:
+        type: integer
+        label: Decimal Places
+        default: 2
+        min: 0
+        max: 6
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 4
+
+      enabled:
+        type: boolean
+        label: Enabled
+        default: false
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 5
+
+    form_groups:
+      basic:
+        label: Currency Details
+        order: 1
+        columns: 2
+
+    views:
+      list:
+        columns:
+          - { field: code, width: 80, link: true }
+          - { field: name, width: 200 }
+          - { field: symbol, width: 60 }
+          - { field: decimal_places, width: 80, align: right }
+          - { field: enabled, width: 80 }
+        filters:
+          - { field: enabled, type: select }
+
+  exchange_rate:
+    label: Exchange Rate
+    label_plural: Exchange Rates
+    icon: trending-up
+    primary_field: from_currency
+    secondary_field: to_currency
+    identifier_field: id
+
+    fields:
+      from_currency:
+        type: currency_code
+        label: From Currency
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      to_currency:
+        type: currency_code
+        label: To Currency
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+      rate:
+        type: decimal
+        label: Exchange Rate
+        required: true
+        precision: 6
+        min: "0.000001"
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 3
+
+      effective_date:
+        type: date
+        label: Effective Date
+        required: true
+        default: today
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 4
+
+      source:
+        type: select
+        label: Source
+        options:
+          - { value: manual, label: Manual }
+          - { value: api, label: API }
+          - { value: bank_feed, label: Bank Feed }
+        default: manual
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 5
+
+    form_groups:
+      basic:
+        label: Rate Details
+        order: 1
+        columns: 2
+
+    views:
+      list:
+        columns:
+          - { field: from_currency, width: 100 }
+          - { field: to_currency, width: 100 }
+          - { field: rate, width: 130, align: right }
+          - { field: effective_date, width: 120 }
+          - { field: source, width: 100 }
+        filters:
+          - { field: from_currency, type: text }
+          - { field: to_currency, type: text }
+          - { field: effective_date, type: date_range }
+
+  payment_terms:
+    label: Payment Terms
+    label_plural: Payment Terms
+    icon: clock
+    primary_field: name
+    secondary_field: due_days
+    identifier_field: id
+
+    fields:
+      name:
+        type: text
+        label: Name
+        required: true
+        max_length: 140
+        placeholder: "e.g., Net 30, 2/10 Net 30"
+        searchable: true
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      due_days:
+        type: integer
+        label: Due Days
+        required: true
+        default: 30
+        min: 0
+        help_text: "Number of days until payment is due"
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+      discount_percentage:
+        type: percent
+        label: Early Payment Discount
+        precision: 2
+        min: "0"
+        max: "100"
+        help_text: "Discount percentage for early payment"
+        in_list_view: true
+        in_form_view: true
+        form_group: discount
+        form_order: 1
+
+      discount_days:
+        type: integer
+        label: Discount Days
+        min: 0
+        help_text: "Pay within this many days to get the discount"
+        in_list_view: true
+        in_form_view: true
+        form_group: discount
+        form_order: 2
+
+      description:
+        type: textarea
+        label: Description
+        max_length: 500
+        in_form_view: true
+        form_group: basic
+        form_order: 3
+
+    form_groups:
+      basic:
+        label: Payment Terms
+        order: 1
+        columns: 2
+      discount:
+        label: Early Payment Discount
+        order: 2
+        columns: 2
+        collapsible: true
+
+    views:
+      list:
+        columns:
+          - { field: name, width: 200, link: true }
+          - { field: due_days, width: 100, align: right }
+          - { field: discount_percentage, width: 120, align: right }
+          - { field: discount_days, width: 120, align: right }
+        row_click: get-payment-terms
+
+  uom:
+    label: Unit of Measure
+    label_plural: Units of Measure
+    icon: ruler
+    primary_field: name
+    identifier_field: id
+
+    fields:
+      name:
+        type: text
+        label: UoM Name
+        required: true
+        max_length: 80
+        placeholder: "e.g., Kilogram, Piece, Dozen"
+        searchable: true
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      must_be_whole_number:
+        type: boolean
+        label: Must Be Whole Number
+        default: false
+        help_text: "Check for discrete units like Pieces, Boxes"
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+    form_groups:
+      basic:
+        label: Unit of Measure
+        order: 1
+        columns: 2
+
+    views:
+      list:
+        columns:
+          - { field: name, width: 200, link: true }
+          - { field: must_be_whole_number, width: 160 }
+
+  uom_conversion:
+    label: UoM Conversion
+    label_plural: UoM Conversions
+    icon: repeat
+    primary_field: from_uom
+    secondary_field: to_uom
+    identifier_field: id
+
+    fields:
+      from_uom:
+        type: text
+        label: From UoM
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      to_uom:
+        type: text
+        label: To UoM
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+      conversion_factor:
+        type: decimal
+        label: Conversion Factor
+        required: true
+        precision: 6
+        min: "0.000001"
+        help_text: "1 From UoM = X To UoM"
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 3
+
+      item_id:
+        type: link
+        label: Item (optional)
+        link_entity: item
+        link_display_field: item_name
+        link_search_action: list-items
+        help_text: "Leave blank for universal conversion, or select an item for item-specific conversion"
+        in_form_view: true
+        form_group: basic
+        form_order: 4
+
+    form_groups:
+      basic:
+        label: Conversion Details
+        order: 1
+        columns: 2
+
+    views:
+      list:
+        columns:
+          - { field: from_uom, width: 140 }
+          - { field: to_uom, width: 140 }
+          - { field: conversion_factor, width: 140, align: right }
+
+  erp_user:
+    label: User
+    label_plural: Users
+    icon: user
+    primary_field: username
+    secondary_field: email
+    identifier_field: id
+    status_field: status
+    status_colors:
+      active: green
+      disabled: gray
+      locked: red
+
+    fields:
+      username:
+        type: text
+        label: Username
+        required: true
+        max_length: 80
+        searchable: true
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      email:
+        type: email
+        label: Email
+        max_length: 254
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+      full_name:
+        type: text
+        label: Full Name
+        max_length: 140
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 3
+
+      status:
+        type: status
+        label: Status
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      company_ids:
+        type: json
+        label: Company Access
+        help_text: "JSON array of company IDs this user can access"
+        in_form_view: true
+        form_group: access
+        form_order: 1
+
+      created_at:
+        type: datetime
+        label: Created
+        read_only: true
+        in_detail_view: true
+
+    form_groups:
+      basic:
+        label: User Information
+        order: 1
+        columns: 2
+      access:
+        label: Access Control
+        order: 2
+        columns: 1
+        collapsible: true
+
+    views:
+      list:
+        columns:
+          - { field: username, width: 160, link: true }
+          - { field: full_name, width: 180 }
+          - { field: email, width: 200 }
+          - { field: status, width: 100 }
+        filters:
+          - { field: status, type: select }
+        row_click: get-user
+
+      detail:
+        header:
+          title_field: username
+          subtitle_field: full_name
+          status_field: status
+        sections:
+          - label: User Details
+            fields: [username, email, full_name, status]
+            columns: 2
+          - label: Access
+            fields: [company_ids]
+            columns: 1
+        actions:
+          - { action: update-user, label: Edit }
+          - { action: assign-role, label: Assign Role }
+          - { action: set-password, label: Set Password }
+
+  role:
+    label: Role
+    label_plural: Roles
+    icon: shield
+    primary_field: name
+    identifier_field: id
+
+    fields:
+      name:
+        type: text
+        label: Role Name
+        required: true
+        max_length: 80
+        searchable: true
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 1
+
+      description:
+        type: textarea
+        label: Description
+        max_length: 500
+        in_list_view: true
+        in_form_view: true
+        form_group: basic
+        form_order: 2
+
+      is_system:
+        type: boolean
+        label: System Role
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+      user_count:
+        type: integer
+        label: Users
+        read_only: true
+        in_list_view: true
+        in_detail_view: true
+
+    form_groups:
+      basic:
+        label: Role Details
+        order: 1
+        columns: 1
+
+    views:
+      list:
+        columns:
+          - { field: name, width: 180, link: true }
+          - { field: description, width: 260 }
+          - { field: is_system, width: 100 }
+          - { field: user_count, width: 80, align: right }
+
+  audit_log:
+    label: Audit Log
+    label_plural: Audit Log
+    icon: file-text
+    primary_field: action
+    secondary_field: entity_type
+    identifier_field: id
+
+    fields:
+      timestamp:
+        type: datetime
+        label: Timestamp
+        read_only: true
+        in_list_view: true
+
+      action:
+        type: text
+        label: Action
+        read_only: true
+        in_list_view: true
+
+      entity_type:
+        type: text
+        label: Entity Type
+        read_only: true
+        in_list_view: true
+
+      entity_id:
+        type: text
+        label: Entity ID
+        read_only: true
+
+      user_id:
+        type: text
+        label: User
+        read_only: true
+        in_list_view: true
+
+      description:
+        type: text
+        label: Description
+        read_only: true
+        in_list_view: true
+
+      old_values:
+        type: json
+        label: Previous Values
+        read_only: true
+        in_detail_view: true
+
+      new_values:
+        type: json
+        label: New Values
+        read_only: true
+        in_detail_view: true
+
+    views:
+      list:
+        columns:
+          - { field: timestamp, width: 160 }
+          - { field: action, width: 120 }
+          - { field: entity_type, width: 120 }
+          - { field: description, width: 260 }
+          - { field: user_id, width: 140 }
+        filters:
+          - { field: entity_type, type: text }
+          - { field: action, type: text }
+          - { field: timestamp, type: date_range }
+
+action_map:
+  # Company actions
+  setup-company:
+    component: FormView
+    entity: company
+    mode: create
+    success_redirect: get-company
+    success_toast: "Company '{name}' created successfully"
+
+  update-company:
+    component: FormView
+    entity: company
+    mode: edit
+    success_redirect: get-company
+
+  get-company:
+    component: DetailView
+    entity: company
+
+  list-companies:
+    component: DataTable
+    entity: company
+    default_sort: name
+    searchable: true
+    add_action: setup-company
+
+  # Currency actions
+  add-currency:
+    component: FormView
+    entity: currency
+    mode: create
+    success_toast: "Currency {code} added"
+
+  list-currencies:
+    component: DataTable
+    entity: currency
+    default_sort: code
+    searchable: true
+    add_action: add-currency
+
+  # Exchange rate actions
+  add-exchange-rate:
+    component: FormView
+    entity: exchange_rate
+    mode: create
+    success_toast: "Exchange rate added for {effective_date}"
+
+  get-exchange-rate:
+    component: DetailView
+    entity: exchange_rate
+
+  list-exchange-rates:
+    component: DataTable
+    entity: exchange_rate
+    default_sort: effective_date
+    default_sort_dir: desc
+    add_action: add-exchange-rate
+
+  # Payment terms actions
+  add-payment-terms:
+    component: FormView
+    entity: payment_terms
+    mode: create
+    success_toast: "Payment terms '{name}' created"
+
+  list-payment-terms:
+    component: DataTable
+    entity: payment_terms
+    default_sort: due_days
+    searchable: true
+    add_action: add-payment-terms
+
+  # UoM actions
+  add-uom:
+    component: FormView
+    entity: uom
+    mode: create
+    success_toast: "Unit of measure '{name}' added"
+
+  list-uoms:
+    component: DataTable
+    entity: uom
+    default_sort: name
+    searchable: true
+    add_action: add-uom
+
+  add-uom-conversion:
+    component: FormView
+    entity: uom_conversion
+    mode: create
+    success_toast: "UoM conversion added"
+
+  # User actions
+  add-user:
+    component: FormView
+    entity: erp_user
+    mode: create
+    success_redirect: get-user
+    success_toast: "User '{username}' created"
+
+  update-user:
+    component: FormView
+    entity: erp_user
+    mode: edit
+    success_redirect: get-user
+
+  get-user:
+    component: DetailView
+    entity: erp_user
+
+  list-users:
+    component: DataTable
+    entity: erp_user
+    default_sort: username
+    searchable: true
+    add_action: add-user
+
+  # Role actions
+  add-role:
+    component: FormView
+    entity: role
+    mode: create
+    success_toast: "Role '{name}' created"
+
+  list-roles:
+    component: DataTable
+    entity: role
+    default_sort: name
+    add_action: add-role
+
+  # Audit log
+  get-audit-log:
+    component: DataTable
+    entity: audit_log
+    default_sort: timestamp
+    default_sort_dir: desc
+    searchable: false

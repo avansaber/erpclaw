@@ -1,0 +1,1215 @@
+ocui_version: "1.0"
+skill: erpclaw-manufacturing
+skill_version: "1.0.0"
+display_name: Manufacturing
+icon: factory
+color: "#f97316"
+
+entities:
+  bom:
+    label: Bom
+    label_plural: Boms
+    table: bom
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      naming_series:
+        type: text
+        label: Naming Series
+        read_only: true
+      item_id:
+        type: link
+        label: Item ID
+        link_entity: item
+        link_display_field: name
+        link_search_action: list-items
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      quantity:
+        type: quantity
+        label: Quantity
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      uom:
+        type: text
+        label: UOM
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      is_active:
+        type: integer
+        label: Is Active
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      is_default:
+        type: integer
+        label: Is Default
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      operating_cost:
+        type: currency
+        label: Operating Cost
+        precision: 2
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      raw_material_cost:
+        type: currency
+        label: Raw Material Cost
+        precision: 2
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      total_cost:
+        type: currency
+        label: Total Cost
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 8
+      with_operations:
+        type: integer
+        label: With Operations
+        in_form_view: true
+        form_group: details
+        form_order: 9
+      routing_id:
+        type: link
+        label: Routing ID
+        link_entity: routing
+        link_display_field: name
+        link_search_action: list-routings
+        in_form_view: true
+        form_group: references
+        form_order: 10
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 11
+    form_groups:
+      details:
+        label: Details
+        order: 1
+        columns: 2
+      references:
+        label: References
+        order: 2
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 3
+        columns: 2
+      items:
+        label: Line Items
+        order: 4
+        type: child_table
+
+  work_order:
+    label: Work Order
+    label_plural: Work Orders
+    table: work_order
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      naming_series:
+        type: text
+        label: Naming Series
+        read_only: true
+      item_id:
+        type: link
+        label: Item ID
+        link_entity: item
+        link_display_field: name
+        link_search_action: list-items
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      bom_id:
+        type: link
+        label: Bom ID
+        link_entity: bom
+        link_display_field: name
+        link_search_action: list-boms
+        in_form_view: true
+        form_group: references
+        form_order: 2
+      qty:
+        type: quantity
+        label: Qty
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      produced_qty:
+        type: text
+        label: Produced Qty
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      production_plan_id:
+        type: link
+        label: Production Plan ID
+        link_entity: production_plan
+        link_display_field: name
+        link_search_action: list-production-plans
+        in_form_view: true
+        form_group: references
+        form_order: 5
+      sales_order_id:
+        type: link
+        label: Sales Order ID
+        link_entity: sales_order
+        link_display_field: name
+        link_search_action: list-sales-orders
+        in_form_view: true
+        form_group: references
+        form_order: 6
+      planned_start_date:
+        type: date
+        label: Planned Start Date
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 7
+      planned_end_date:
+        type: date
+        label: Planned End Date
+        in_form_view: true
+        form_group: header
+        form_order: 8
+      actual_start_date:
+        type: date
+        label: Actual Start Date
+        in_form_view: true
+        form_group: header
+        form_order: 9
+      actual_end_date:
+        type: date
+        label: Actual End Date
+        in_form_view: true
+        form_group: header
+        form_order: 10
+      source_warehouse_id:
+        type: link
+        label: Source Warehouse ID
+        link_entity: warehouse
+        link_display_field: name
+        link_search_action: list-warehouses
+        in_form_view: true
+        form_group: references
+        form_order: 11
+      target_warehouse_id:
+        type: link
+        label: Target Warehouse ID
+        link_entity: warehouse
+        link_display_field: name
+        link_search_action: list-warehouses
+        in_form_view: true
+        form_group: references
+        form_order: 12
+      wip_warehouse_id:
+        type: link
+        label: Wip Warehouse ID
+        link_entity: warehouse
+        link_display_field: name
+        link_search_action: list-warehouses
+        in_form_view: true
+        form_group: references
+        form_order: 13
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "draft"
+            label: "Draft"
+          - value: "not_started"
+            label: "Not Started"
+          - value: "in_process"
+            label: "In Process"
+          - value: "completed"
+            label: "Completed"
+          - value: "stopped"
+            label: "Stopped"
+          - value: "cancelled"
+            label: "Cancelled"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 14
+      material_transferred_for_manufacturing:
+        type: text
+        label: Material Transferred For Manufacturing
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 15
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 16
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      items:
+        label: Line Items
+        order: 4
+        type: child_table
+
+  workstation:
+    label: Workstation
+    label_plural: Workstations
+    table: workstation
+    id_col: id
+    name_col: name
+    primary_field: name
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      name:
+        type: text
+        label: Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      workstation_type:
+        type: text
+        label: Workstation Type
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      production_capacity:
+        type: text
+        label: Production Capacity
+        in_form_view: true
+        form_group: details
+        form_order: 3
+      operating_cost_per_hour:
+        type: currency
+        label: Operating Cost Per Hour
+        precision: 2
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      working_hours_per_day:
+        type: text
+        label: Working Hours Per Day
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      holiday_list_id:
+        type: link
+        label: Holiday List ID
+        link_entity: holiday_list
+        link_display_field: name
+        link_search_action: list-holiday-lists
+        in_form_view: true
+        form_group: references
+        form_order: 6
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "active"
+            label: "Active"
+          - value: "maintenance"
+            label: "Maintenance"
+          - value: "offline"
+            label: "Offline"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 7
+      description:
+        type: textarea
+        label: Description
+        in_form_view: true
+        form_group: notes
+        form_order: 8
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      notes:
+        label: Notes
+        order: 4
+        columns: 1
+
+  operation:
+    label: Operation
+    label_plural: Operations
+    table: operation
+    id_col: id
+    name_col: name
+    primary_field: name
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      name:
+        type: text
+        label: Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      description:
+        type: textarea
+        label: Description
+        in_form_view: true
+        form_group: notes
+        form_order: 2
+      default_workstation_id:
+        type: link
+        label: Default Workstation ID
+        link_entity: default_workstation
+        link_display_field: name
+        link_search_action: list-default-workstations
+        in_form_view: true
+        form_group: references
+        form_order: 3
+      is_active:
+        type: integer
+        label: Is Active
+        in_form_view: true
+        form_group: details
+        form_order: 4
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      notes:
+        label: Notes
+        order: 4
+        columns: 1
+
+  routing:
+    label: Routing
+    label_plural: Routings
+    table: routing
+    id_col: id
+    name_col: name
+    primary_field: name
+    identifier_field: id
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      name:
+        type: text
+        label: Name
+        required: true
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 1
+      description:
+        type: textarea
+        label: Description
+        in_form_view: true
+        form_group: notes
+        form_order: 2
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      notes:
+        label: Notes
+        order: 2
+        columns: 1
+      items:
+        label: Line Items
+        order: 3
+        type: child_table
+
+  production_plan:
+    label: Production Plan
+    label_plural: Production Plans
+    table: production_plan
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      naming_series:
+        type: text
+        label: Naming Series
+        read_only: true
+      planning_period_start:
+        type: text
+        label: Planning Period Start
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 1
+      planning_period_end:
+        type: text
+        label: Planning Period End
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 2
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "draft"
+            label: "Draft"
+          - value: "submitted"
+            label: "Submitted"
+          - value: "material_requested"
+            label: "Material Requested"
+          - value: "cancelled"
+            label: "Cancelled"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 3
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 4
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      items:
+        label: Line Items
+        order: 4
+        type: child_table
+
+  job_card:
+    label: Job Card
+    label_plural: Job Cards
+    table: job_card
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      naming_series:
+        type: text
+        label: Naming Series
+        read_only: true
+      work_order_id:
+        type: link
+        label: Work Order ID
+        link_entity: work_order
+        link_display_field: name
+        link_search_action: list-work-orders
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      operation_id:
+        type: link
+        label: Operation ID
+        link_entity: operation
+        link_display_field: name
+        link_search_action: list-operations
+        in_form_view: true
+        form_group: references
+        form_order: 2
+      workstation_id:
+        type: link
+        label: Workstation ID
+        link_entity: workstation
+        link_display_field: name
+        link_search_action: list-workstations
+        in_form_view: true
+        form_group: references
+        form_order: 3
+      for_quantity:
+        type: text
+        label: For Quantity
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 4
+      completed_qty:
+        type: text
+        label: Completed Qty
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      time_started:
+        type: text
+        label: Time Started
+        in_form_view: true
+        form_group: details
+        form_order: 6
+      time_completed:
+        type: text
+        label: Time Completed
+        in_form_view: true
+        form_group: details
+        form_order: 7
+      total_time_in_minutes:
+        type: currency
+        label: Total Time In Minutes
+        precision: 2
+        in_form_view: true
+        form_group: amounts
+        form_order: 8
+      employee_id:
+        type: link
+        label: Employee ID
+        link_entity: employee
+        link_display_field: name
+        link_search_action: list-employees
+        in_form_view: true
+        form_group: references
+        form_order: 9
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "open"
+            label: "Open"
+          - value: "in_process"
+            label: "In Process"
+          - value: "completed"
+            label: "Completed"
+          - value: "cancelled"
+            label: "Cancelled"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 10
+      remarks:
+        type: textarea
+        label: Remarks
+        in_form_view: true
+        form_group: notes
+        form_order: 11
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+      amounts:
+        label: Amounts
+        order: 4
+        columns: 2
+      notes:
+        label: Notes
+        order: 5
+        columns: 1
+
+  subcontracting_order:
+    label: Subcontracting Order
+    label_plural: Subcontracting Orders
+    table: subcontracting_order
+    id_col: id
+    name_col: id
+    primary_field: id
+    identifier_field: id
+    status_field: status
+    status_colors:
+      draft: gray
+      submitted: green
+      cancelled: red
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      naming_series:
+        type: text
+        label: Naming Series
+        read_only: true
+      supplier_id:
+        type: link
+        label: Supplier ID
+        link_entity: supplier
+        link_display_field: name
+        link_search_action: list-suppliers
+        in_form_view: true
+        form_group: references
+        form_order: 1
+      service_item_id:
+        type: link
+        label: Service Item ID
+        link_entity: item
+        link_display_field: name
+        link_search_action: list-items
+        in_form_view: true
+        form_group: references
+        form_order: 2
+      finished_item_id:
+        type: link
+        label: Finished Item ID
+        link_entity: item
+        link_display_field: name
+        link_search_action: list-items
+        in_form_view: true
+        form_group: references
+        form_order: 3
+      bom_id:
+        type: link
+        label: Bom ID
+        link_entity: bom
+        link_display_field: name
+        link_search_action: list-boms
+        in_form_view: true
+        form_group: references
+        form_order: 4
+      qty:
+        type: quantity
+        label: Qty
+        in_form_view: true
+        form_group: details
+        form_order: 5
+      supplier_warehouse_id:
+        type: link
+        label: Supplier Warehouse ID
+        link_entity: warehouse
+        link_display_field: name
+        link_search_action: list-warehouses
+        in_form_view: true
+        form_group: references
+        form_order: 6
+      status:
+        type: select
+        label: Status
+        options:
+          - value: "draft"
+            label: "Draft"
+          - value: "submitted"
+            label: "Submitted"
+          - value: "partially_received"
+            label: "Partially Received"
+          - value: "completed"
+            label: "Completed"
+          - value: "cancelled"
+            label: "Cancelled"
+        in_list_view: true
+        in_form_view: true
+        form_group: header
+        form_order: 7
+      materials_transferred:
+        type: text
+        label: Materials Transferred
+        required: true
+        in_form_view: true
+        form_group: details
+        form_order: 8
+      received_qty:
+        type: quantity
+        label: Received Qty
+        in_form_view: true
+        form_group: details
+        form_order: 9
+      company_id:
+        type: link
+        label: Company ID
+        link_entity: company
+        link_display_field: name
+        link_search_action: list-companies
+        in_form_view: true
+        form_group: references
+        form_order: 10
+    form_groups:
+      header:
+        label: Basic Information
+        order: 1
+        columns: 2
+      details:
+        label: Details
+        order: 2
+        columns: 2
+      references:
+        label: References
+        order: 3
+        columns: 2
+
+child_entities:
+  bom_item:
+    parent_entity: bom
+    parent_field: bom_id
+    param_name: items
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      item_id:
+        type: link
+        label: Item ID
+        link_entity: item
+        link_display_field: name
+        link_search_action: list-items
+      quantity:
+        type: quantity
+        label: Quantity
+      uom:
+        type: text
+        label: UOM
+      rate:
+        type: currency
+        label: Rate
+        precision: 2
+      amount:
+        type: currency
+        label: Amount
+        precision: 2
+      source_warehouse_id:
+        type: link
+        label: Source Warehouse ID
+        link_entity: warehouse
+        link_display_field: name
+        link_search_action: list-warehouses
+      is_sub_assembly:
+        type: integer
+        label: Is Sub Assembly
+      sub_bom_id:
+        type: link
+        label: Sub Bom ID
+        link_entity: bom
+        link_display_field: name
+        link_search_action: list-boms
+      scrap_percentage:
+        type: percent
+        label: Scrap Percentage
+  bom_operation:
+    parent_entity: bom
+    parent_field: bom_id
+    param_name: operations
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      operation_id:
+        type: link
+        label: Operation ID
+        link_entity: operation
+        link_display_field: name
+        link_search_action: list-operations
+      workstation_id:
+        type: link
+        label: Workstation ID
+        link_entity: workstation
+        link_display_field: name
+        link_search_action: list-workstations
+      time_in_minutes:
+        type: text
+        label: Time In Minutes
+        required: true
+      operating_cost:
+        type: currency
+        label: Operating Cost
+        precision: 2
+      sequence:
+        type: integer
+        label: Sequence
+      description:
+        type: textarea
+        label: Description
+  work_order_item:
+    parent_entity: work_order
+    parent_field: work_order_id
+    param_name: items
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      item_id:
+        type: link
+        label: Item ID
+        link_entity: item
+        link_display_field: name
+        link_search_action: list-items
+      required_qty:
+        type: text
+        label: Required Qty
+        required: true
+      transferred_qty:
+        type: text
+        label: Transferred Qty
+        required: true
+      consumed_qty:
+        type: text
+        label: Consumed Qty
+        required: true
+      source_warehouse_id:
+        type: link
+        label: Source Warehouse ID
+        link_entity: warehouse
+        link_display_field: name
+        link_search_action: list-warehouses
+  routing_operation:
+    parent_entity: routing
+    parent_field: routing_id
+    param_name: items
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      operation_id:
+        type: link
+        label: Operation ID
+        link_entity: operation
+        link_display_field: name
+        link_search_action: list-operations
+      workstation_id:
+        type: link
+        label: Workstation ID
+        link_entity: workstation
+        link_display_field: name
+        link_search_action: list-workstations
+      sequence:
+        type: integer
+        label: Sequence
+      time_in_minutes:
+        type: text
+        label: Time In Minutes
+        required: true
+      operating_cost:
+        type: currency
+        label: Operating Cost
+        precision: 2
+  production_plan_item:
+    parent_entity: production_plan
+    parent_field: production_plan_id
+    param_name: items
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      item_id:
+        type: link
+        label: Item ID
+        link_entity: item
+        link_display_field: name
+        link_search_action: list-items
+      bom_id:
+        type: link
+        label: Bom ID
+        link_entity: bom
+        link_display_field: name
+        link_search_action: list-boms
+      planned_qty:
+        type: text
+        label: Planned Qty
+        required: true
+      produced_qty:
+        type: text
+        label: Produced Qty
+        required: true
+      ordered_qty:
+        type: quantity
+        label: Ordered Qty
+      sales_order_id:
+        type: link
+        label: Sales Order ID
+        link_entity: sales_order
+        link_display_field: name
+        link_search_action: list-sales-orders
+      work_order_id:
+        type: link
+        label: Work Order ID
+        link_entity: work_order
+        link_display_field: name
+        link_search_action: list-work-orders
+      warehouse_id:
+        type: link
+        label: Warehouse ID
+        link_entity: warehouse
+        link_display_field: name
+        link_search_action: list-warehouses
+  production_plan_material:
+    parent_entity: production_plan
+    parent_field: production_plan_id
+    param_name: items
+    fields:
+      id:
+        type: text
+        label: ID
+        read_only: true
+        hidden: true
+      item_id:
+        type: link
+        label: Item ID
+        link_entity: item
+        link_display_field: name
+        link_search_action: list-items
+      required_qty:
+        type: text
+        label: Required Qty
+        required: true
+      available_qty:
+        type: text
+        label: Available Qty
+        required: true
+      on_order_qty:
+        type: text
+        label: On Order Qty
+        required: true
+      shortfall_qty:
+        type: text
+        label: Shortfall Qty
+        required: true
+      purchase_order_id:
+        type: link
+        label: Purchase Order ID
+        link_entity: purchase_order
+        link_display_field: name
+        link_search_action: list-purchase-orders
+      warehouse_id:
+        type: link
+        label: Warehouse ID
+        link_entity: warehouse
+        link_display_field: name
+        link_search_action: list-warehouses
+
+action_map:
+  add-bom:
+    component: FormView
+    entity: bom
+    mode: create
+    child_tables:
+      - entity: bom_item
+        form_group: items
+        add_label: "Add Row"
+  add-operation:
+    component: FormView
+    entity: operation
+    mode: create
+    child_tables:
+      - entity: bom_operation
+        form_group: items
+        add_label: "Add Row"
+  add-routing:
+    component: FormView
+    entity: routing
+    mode: create
+    child_tables:
+      - entity: routing_operation
+        form_group: items
+        add_label: "Add Row"
+  add-subcontracting-order:
+    component: FormView
+    entity: subcontracting_order
+    mode: create
+  add-work-order:
+    component: FormView
+    entity: work_order
+    mode: create
+    child_tables:
+      - entity: work_order_item
+        form_group: items
+        add_label: "Add Row"
+  add-workstation:
+    component: FormView
+    entity: workstation
+    mode: create
+    child_tables:
+      - entity: bom_operation
+        form_group: items
+        add_label: "Add Row"
+  cancel-work-order:
+    component: WizardFlow
+    entity: work_order
+    steps:
+      - label: Review
+        type: detail
+      - label: Confirm
+        type: confirmation
+        message: "Cancel this work order? This cannot be undone."
+        destructive: true
+  complete-job-card:
+    component: FormView
+    mode: create
+  complete-work-order:
+    component: FormView
+    mode: create
+  create-job-card:
+    component: FormView
+    entity: job_card
+    mode: create
+  create-production-plan:
+    component: FormView
+    entity: production_plan
+    mode: create
+    child_tables:
+      - entity: production_plan_item
+        form_group: items
+        add_label: "Add Row"
+  explode-bom:
+    component: FormView
+    mode: create
+  generate-purchase-requests:
+    component: FormView
+    mode: create
+  generate-work-orders:
+    component: FormView
+    entity: work_order
+    mode: create
+  get-bom:
+    component: DetailView
+    entity: bom
+  get-production-plan:
+    component: DetailView
+    entity: production_plan
+  get-work-order:
+    component: DetailView
+    entity: work_order
+  list-boms:
+    component: DataTable
+    entity: bom
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-bom
+  list-work-orders:
+    component: DataTable
+    entity: work_order
+    default_sort: created_at
+    default_sort_dir: desc
+    searchable: true
+    add_action: add-work-order
+  run-mrp:
+    component: FormView
+    mode: create
+  start-work-order:
+    component: FormView
+    mode: create
+  status:
+    component: DashboardView
+  transfer-materials:
+    component: FormView
+    mode: create
+  update-bom:
+    component: FormView
+    entity: bom
+    mode: edit

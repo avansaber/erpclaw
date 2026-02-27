@@ -1,0 +1,2 @@
+# Python standard library only — no external dependencies required.
+# sqlite3, json, decimal, uuid, datetime, argparse are all stdlib.
