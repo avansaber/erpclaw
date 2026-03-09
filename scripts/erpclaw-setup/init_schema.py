@@ -253,6 +253,7 @@ CREATE INDEX IF NOT EXISTS idx_user_permission_entity ON user_permission(entity_
 # SKILL: erpclaw-gl
 # Tables: account, gl_entry, fiscal_year, period_closing_voucher,
 #         cost_center, budget, naming_series
+# NOTE: elimination_rule, elimination_entry moved to erpclaw-growth
 # ---------------------------------------------------------------------------
 
 GL_TABLES = """
@@ -399,39 +400,6 @@ CREATE TABLE IF NOT EXISTS budget (
 CREATE INDEX IF NOT EXISTS idx_budget_fiscal_year ON budget(fiscal_year_id);
 CREATE INDEX IF NOT EXISTS idx_budget_account ON budget(account_id);
 CREATE INDEX IF NOT EXISTS idx_budget_cost_center ON budget(cost_center_id);
-
--- Intercompany elimination rules and entries (for consolidated reporting)
-CREATE TABLE IF NOT EXISTS elimination_rule (
-    id                  TEXT PRIMARY KEY,
-    name                TEXT NOT NULL,
-    source_company_id   TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    target_company_id   TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    source_account_id   TEXT NOT NULL REFERENCES account(id) ON DELETE RESTRICT,
-    target_account_id   TEXT NOT NULL REFERENCES account(id) ON DELETE RESTRICT,
-    status              TEXT NOT NULL DEFAULT 'active'
-                        CHECK(status IN ('active','disabled')),
-    created_at          TEXT DEFAULT (datetime('now')),
-    updated_at          TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_elim_rule_source ON elimination_rule(source_company_id);
-CREATE INDEX IF NOT EXISTS idx_elim_rule_target ON elimination_rule(target_company_id);
-
-CREATE TABLE IF NOT EXISTS elimination_entry (
-    id                      TEXT PRIMARY KEY,
-    elimination_rule_id     TEXT NOT NULL REFERENCES elimination_rule(id) ON DELETE RESTRICT,
-    fiscal_year_id          TEXT NOT NULL REFERENCES fiscal_year(id) ON DELETE RESTRICT,
-    posting_date            TEXT NOT NULL,
-    amount                  TEXT NOT NULL DEFAULT '0',
-    source_gl_entry_id      TEXT,
-    target_gl_entry_id      TEXT,
-    status                  TEXT NOT NULL DEFAULT 'posted'
-                            CHECK(status IN ('posted','reversed')),
-    created_at              TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_elim_entry_rule ON elimination_entry(elimination_rule_id);
-CREATE INDEX IF NOT EXISTS idx_elim_entry_fy ON elimination_entry(fiscal_year_id);
 
 CREATE TABLE IF NOT EXISTS naming_series (
     id              TEXT PRIMARY KEY,
@@ -1674,7 +1642,7 @@ CREATE INDEX IF NOT EXISTS idx_pbi_bundle ON product_bundle_item(product_bundle_
 
 # ---------------------------------------------------------------------------
 # SKILL: erpclaw-billing
-# Tables: meter, meter_reading, usage_event, rate_plan, rate_tier,
+# Tables: meter, meter_reading, rate_plan, rate_tier,
 #         billing_period, billing_adjustment, prepaid_credit_balance
 # ---------------------------------------------------------------------------
 
@@ -1729,25 +1697,6 @@ CREATE TABLE IF NOT EXISTS meter_reading (
 
 CREATE INDEX IF NOT EXISTS idx_reading_meter ON meter_reading(meter_id);
 CREATE INDEX IF NOT EXISTS idx_reading_date ON meter_reading(reading_date);
-
-CREATE TABLE IF NOT EXISTS usage_event (
-    id              TEXT PRIMARY KEY,
-    customer_id     TEXT NOT NULL REFERENCES customer(id) ON DELETE RESTRICT,
-    meter_id        TEXT REFERENCES meter(id) ON DELETE RESTRICT,
-    event_type      TEXT NOT NULL,
-    quantity        TEXT NOT NULL DEFAULT '0',
-    timestamp       TEXT NOT NULL,
-    metadata        TEXT,  -- JSON
-    idempotency_key TEXT UNIQUE,
-    billing_period_id TEXT,
-    processed       INTEGER NOT NULL DEFAULT 0 CHECK(processed IN (0,1)),
-    created_at      TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_usage_event_customer ON usage_event(customer_id);
-CREATE INDEX IF NOT EXISTS idx_usage_event_meter ON usage_event(meter_id);
-CREATE INDEX IF NOT EXISTS idx_usage_event_processed ON usage_event(processed);
-CREATE INDEX IF NOT EXISTS idx_usage_event_idempotency ON usage_event(idempotency_key);
 
 CREATE TABLE IF NOT EXISTS rate_plan (
     id              TEXT PRIMARY KEY,
@@ -3056,7 +3005,7 @@ CREATE TABLE IF NOT EXISTS quality_goal (
 # ---------------------------------------------------------------------------
 # SKILL: erpclaw-support
 # Tables: issue, issue_comment, service_level_agreement,
-#         warranty_claim, maintenance_schedule, maintenance_visit
+#         warranty_claim
 # ---------------------------------------------------------------------------
 
 SUPPORT_TABLES = """
@@ -3139,417 +3088,273 @@ CREATE TABLE IF NOT EXISTS warranty_claim (
 CREATE INDEX IF NOT EXISTS idx_warranty_customer ON warranty_claim(customer_id);
 CREATE INDEX IF NOT EXISTS idx_warranty_status ON warranty_claim(status);
 
-CREATE TABLE IF NOT EXISTS maintenance_schedule (
-    id              TEXT PRIMARY KEY,
-    naming_series   TEXT,
-    customer_id     TEXT NOT NULL REFERENCES customer(id) ON DELETE RESTRICT,
-    item_id         TEXT REFERENCES item(id) ON DELETE RESTRICT,
-    serial_number_id TEXT REFERENCES serial_number(id) ON DELETE RESTRICT,
-    schedule_frequency TEXT NOT NULL DEFAULT 'quarterly'
-                    CHECK(schedule_frequency IN ('monthly','quarterly','semi_annual','annual')),
-    start_date      TEXT NOT NULL,
-    end_date        TEXT NOT NULL,
-    last_completed_date TEXT,
-    next_due_date   TEXT,
-    status          TEXT NOT NULL DEFAULT 'active'
-                    CHECK(status IN ('active','expired','cancelled')),
-    assigned_to     TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_maint_sched_customer ON maintenance_schedule(customer_id);
-CREATE INDEX IF NOT EXISTS idx_maint_sched_status ON maintenance_schedule(status);
-
-CREATE TABLE IF NOT EXISTS maintenance_visit (
-    id              TEXT PRIMARY KEY,
-    naming_series   TEXT,
-    maintenance_schedule_id TEXT NOT NULL REFERENCES maintenance_schedule(id) ON DELETE RESTRICT,
-    customer_id     TEXT NOT NULL REFERENCES customer(id) ON DELETE RESTRICT,
-    visit_date      TEXT NOT NULL,
-    completed_by    TEXT,
-    observations    TEXT,
-    work_done       TEXT,
-    status          TEXT NOT NULL DEFAULT 'scheduled'
-                    CHECK(status IN ('scheduled','completed','cancelled')),
-    created_at      TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_maint_visit_schedule ON maintenance_visit(maintenance_schedule_id);
 """
 
 
+
+
+
 # ---------------------------------------------------------------------------
-# SKILL: erpclaw-ai-engine
-# Tables: anomaly, cash_flow_forecast, correlation, scenario,
-#         business_rule, categorization_rule, relationship_score,
-#         conversation_context, pending_decision, audit_conversation
+# SKILL: erpclaw-accounting-adv
+# Tables: advacct_revenue_contract, advacct_performance_obligation,
+#         advacct_variable_consideration, advacct_revenue_schedule,
+#         advacct_lease, advacct_lease_payment, advacct_amortization_entry,
+#         advacct_ic_transaction, advacct_transfer_price_rule,
+#         advacct_consolidation_group, advacct_group_entity,
+#         advacct_elimination_entry
 # ---------------------------------------------------------------------------
 
-AI_ENGINE_TABLES = """
+ADVACCT_TABLES = """
 -- =========================================================================
--- SKILL: erpclaw-ai-engine (Business Analyst)
+-- SKILL: erpclaw-accounting-adv (Advanced Accounting)
+-- ASC 606, ASC 842, Intercompany, Consolidation
 -- =========================================================================
 
-CREATE TABLE IF NOT EXISTS anomaly (
-    id              TEXT PRIMARY KEY,
-    detected_at     TEXT DEFAULT (datetime('now')),
-    anomaly_type    TEXT NOT NULL CHECK(anomaly_type IN (
-                        'price_spike','volume_change','duplicate_possible',
-                        'margin_erosion','unusual_vendor','pattern_break',
-                        'consumption_spike','late_pattern','round_number',
-                        'ghost_employee','vendor_concentration',
-                        'sequence_violation','benford_deviation','budget_overrun',
-                        'inventory_shrinkage','payment_pattern_shift'
-                    )),
-    severity        TEXT NOT NULL DEFAULT 'info'
-                    CHECK(severity IN ('info','warning','critical')),
-    entity_type     TEXT,
-    entity_id       TEXT,
-    description     TEXT NOT NULL,
-    evidence        TEXT,    -- JSON
-    baseline        TEXT,    -- JSON
-    actual          TEXT,    -- JSON
-    deviation_pct   TEXT,
-    status          TEXT NOT NULL DEFAULT 'new'
-                    CHECK(status IN ('new','acknowledged','investigated','dismissed','resolved')),
-    resolution_notes TEXT,
-    assigned_to     TEXT,
-    expires_at      TEXT
+-- Revenue Recognition (ASC 606) -- 4 tables
+
+CREATE TABLE IF NOT EXISTS advacct_revenue_contract (
+    id                  TEXT PRIMARY KEY,
+    naming_series       TEXT,
+    customer_name       TEXT NOT NULL,
+    contract_number     TEXT,
+    start_date          TEXT,
+    end_date            TEXT,
+    total_value         TEXT NOT NULL DEFAULT '0',
+    allocated_value     TEXT NOT NULL DEFAULT '0',
+    contract_status     TEXT NOT NULL DEFAULT 'active'
+                        CHECK(contract_status IN ('draft','active','modified','completed','terminated')),
+    modification_count  INTEGER NOT NULL DEFAULT 0,
+    company_id          TEXT NOT NULL REFERENCES company(id),
+    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_anomaly_status ON anomaly(status);
-CREATE INDEX IF NOT EXISTS idx_anomaly_type ON anomaly(anomaly_type);
-CREATE INDEX IF NOT EXISTS idx_anomaly_severity ON anomaly(severity);
-CREATE INDEX IF NOT EXISTS idx_anomaly_entity ON anomaly(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_advacct_rcon_company ON advacct_revenue_contract(company_id);
+CREATE INDEX IF NOT EXISTS idx_advacct_rcon_status ON advacct_revenue_contract(contract_status);
+CREATE INDEX IF NOT EXISTS idx_advacct_rcon_customer ON advacct_revenue_contract(customer_name);
 
-CREATE TABLE IF NOT EXISTS cash_flow_forecast (
-    id              TEXT PRIMARY KEY,
-    forecast_date   TEXT NOT NULL,
-    generated_at    TEXT DEFAULT (datetime('now')),
-    horizon_days    INTEGER NOT NULL DEFAULT 30,
-    starting_balance TEXT NOT NULL DEFAULT '0',
-    projected_inflows TEXT,   -- JSON
-    projected_outflows TEXT,  -- JSON
-    projected_balance TEXT NOT NULL DEFAULT '0',
-    confidence_interval TEXT, -- JSON: {low, mid, high}
-    assumptions     TEXT,     -- JSON
-    scenario        TEXT NOT NULL DEFAULT 'expected'
-                    CHECK(scenario IN ('pessimistic','expected','optimistic')),
-    expires_at      TEXT
+CREATE TABLE IF NOT EXISTS advacct_performance_obligation (
+    id                  TEXT PRIMARY KEY,
+    contract_id         TEXT NOT NULL REFERENCES advacct_revenue_contract(id) ON DELETE CASCADE,
+    name                TEXT NOT NULL,
+    standalone_price    TEXT NOT NULL DEFAULT '0',
+    allocated_price     TEXT NOT NULL DEFAULT '0',
+    recognition_method  TEXT NOT NULL DEFAULT 'over_time'
+                        CHECK(recognition_method IN ('point_in_time','over_time')),
+    recognition_basis   TEXT NOT NULL DEFAULT 'time'
+                        CHECK(recognition_basis IN ('output','input','time')),
+    pct_complete        TEXT NOT NULL DEFAULT '0',
+    obligation_status   TEXT NOT NULL DEFAULT 'unsatisfied'
+                        CHECK(obligation_status IN ('unsatisfied','partially_satisfied','satisfied')),
+    satisfied_date      TEXT,
+    company_id          TEXT NOT NULL REFERENCES company(id),
+    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_forecast_date ON cash_flow_forecast(forecast_date);
-CREATE INDEX IF NOT EXISTS idx_forecast_scenario ON cash_flow_forecast(scenario);
+CREATE INDEX IF NOT EXISTS idx_advacct_po_contract ON advacct_performance_obligation(contract_id);
+CREATE INDEX IF NOT EXISTS idx_advacct_po_status ON advacct_performance_obligation(obligation_status);
+CREATE INDEX IF NOT EXISTS idx_advacct_po_company ON advacct_performance_obligation(company_id);
 
-CREATE TABLE IF NOT EXISTS correlation (
-    id              TEXT PRIMARY KEY,
-    discovered_at   TEXT DEFAULT (datetime('now')),
-    module_a        TEXT NOT NULL,
-    module_b        TEXT NOT NULL,
-    description     TEXT NOT NULL,
-    evidence        TEXT,    -- JSON
-    strength        TEXT NOT NULL DEFAULT 'moderate'
-                    CHECK(strength IN ('weak','moderate','strong')),
-    statistical_confidence TEXT,
-    actionable      INTEGER NOT NULL DEFAULT 0 CHECK(actionable IN (0,1)),
-    suggested_action TEXT,
-    status          TEXT NOT NULL DEFAULT 'new'
-                    CHECK(status IN ('new','validated','dismissed')),
-    expires_at      TEXT
+CREATE TABLE IF NOT EXISTS advacct_variable_consideration (
+    id                  TEXT PRIMARY KEY,
+    contract_id         TEXT NOT NULL REFERENCES advacct_revenue_contract(id) ON DELETE CASCADE,
+    description         TEXT NOT NULL,
+    estimated_amount    TEXT NOT NULL DEFAULT '0',
+    constraint_amount   TEXT NOT NULL DEFAULT '0',
+    method              TEXT NOT NULL DEFAULT 'expected_value'
+                        CHECK(method IN ('expected_value','most_likely')),
+    probability         TEXT NOT NULL DEFAULT '0',
+    company_id          TEXT NOT NULL REFERENCES company(id),
+    created_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_correlation_status ON correlation(status);
+CREATE INDEX IF NOT EXISTS idx_advacct_vc_contract ON advacct_variable_consideration(contract_id);
+CREATE INDEX IF NOT EXISTS idx_advacct_vc_company ON advacct_variable_consideration(company_id);
 
-CREATE TABLE IF NOT EXISTS scenario (
-    id              TEXT PRIMARY KEY,
-    question        TEXT NOT NULL,
-    scenario_type   TEXT NOT NULL CHECK(scenario_type IN (
-                        'price_change','supplier_loss','demand_shift','cost_change',
-                        'hiring_impact','expansion','contraction'
-                    )),
-    assumptions     TEXT,    -- JSON
-    baseline        TEXT,    -- JSON
-    projected       TEXT,    -- JSON
-    impact_summary  TEXT,
-    confidence      TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    expires_at      TEXT
+CREATE TABLE IF NOT EXISTS advacct_revenue_schedule (
+    id                  TEXT PRIMARY KEY,
+    obligation_id       TEXT NOT NULL REFERENCES advacct_performance_obligation(id) ON DELETE CASCADE,
+    period_date         TEXT NOT NULL,
+    amount              TEXT NOT NULL DEFAULT '0',
+    recognized          INTEGER NOT NULL DEFAULT 0,
+    company_id          TEXT NOT NULL REFERENCES company(id),
+    created_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_scenario_type ON scenario(scenario_type);
+CREATE INDEX IF NOT EXISTS idx_advacct_rs_obligation ON advacct_revenue_schedule(obligation_id);
+CREATE INDEX IF NOT EXISTS idx_advacct_rs_period ON advacct_revenue_schedule(period_date);
+CREATE INDEX IF NOT EXISTS idx_advacct_rs_company ON advacct_revenue_schedule(company_id);
 
-CREATE TABLE IF NOT EXISTS business_rule (
-    id              TEXT PRIMARY KEY,
-    rule_text       TEXT NOT NULL,
-    parsed_condition TEXT,   -- JSON
-    applies_to      TEXT,
-    action          TEXT NOT NULL DEFAULT 'warn'
-                    CHECK(action IN ('block','warn','notify','auto_execute','suggest')),
-    active          INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
-    times_triggered INTEGER NOT NULL DEFAULT 0,
-    last_triggered_at TEXT,
-    created_by      TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+-- Lease Accounting (ASC 842) -- 3 tables
+
+CREATE TABLE IF NOT EXISTS advacct_lease (
+    id                      TEXT PRIMARY KEY,
+    naming_series           TEXT,
+    lessee_name             TEXT NOT NULL,
+    lessor_name             TEXT NOT NULL,
+    asset_description       TEXT,
+    lease_type              TEXT NOT NULL DEFAULT 'operating'
+                            CHECK(lease_type IN ('operating','finance')),
+    start_date              TEXT,
+    end_date                TEXT,
+    term_months             INTEGER NOT NULL DEFAULT 0,
+    monthly_payment         TEXT NOT NULL DEFAULT '0',
+    annual_escalation       TEXT NOT NULL DEFAULT '0',
+    discount_rate           TEXT NOT NULL DEFAULT '0',
+    purchase_option_price   TEXT,
+    rou_asset_value         TEXT,
+    lease_liability         TEXT,
+    lease_status            TEXT NOT NULL DEFAULT 'draft'
+                            CHECK(lease_status IN ('draft','active','modified','expired','terminated')),
+    company_id              TEXT NOT NULL REFERENCES company(id),
+    created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_business_rule_active ON business_rule(active);
+CREATE INDEX IF NOT EXISTS idx_advacct_lease_company ON advacct_lease(company_id);
+CREATE INDEX IF NOT EXISTS idx_advacct_lease_status ON advacct_lease(lease_status);
+CREATE INDEX IF NOT EXISTS idx_advacct_lease_type ON advacct_lease(lease_type);
 
-CREATE TABLE IF NOT EXISTS categorization_rule (
-    id              TEXT PRIMARY KEY,
-    pattern         TEXT NOT NULL,
-    source          TEXT NOT NULL CHECK(source IN ('bank_feed','ocr_vendor','email_subject')),
-    target_account_id TEXT REFERENCES account(id) ON DELETE RESTRICT,
-    target_cost_center_id TEXT REFERENCES cost_center(id) ON DELETE RESTRICT,
-    confidence      TEXT NOT NULL DEFAULT '0',
-    times_applied   INTEGER NOT NULL DEFAULT 0,
-    times_overridden INTEGER NOT NULL DEFAULT 0,
-    last_applied_at TEXT,
-    created_by      TEXT NOT NULL DEFAULT 'ai'
-                    CHECK(created_by IN ('user','ai')),
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+CREATE TABLE IF NOT EXISTS advacct_lease_payment (
+    id                  TEXT PRIMARY KEY,
+    lease_id            TEXT NOT NULL REFERENCES advacct_lease(id) ON DELETE CASCADE,
+    payment_date        TEXT NOT NULL,
+    payment_amount      TEXT NOT NULL DEFAULT '0',
+    principal           TEXT NOT NULL DEFAULT '0',
+    interest            TEXT NOT NULL DEFAULT '0',
+    balance_after       TEXT NOT NULL DEFAULT '0',
+    payment_status      TEXT NOT NULL DEFAULT 'scheduled'
+                        CHECK(payment_status IN ('scheduled','paid','overdue')),
+    company_id          TEXT NOT NULL REFERENCES company(id),
+    created_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_categorization_source ON categorization_rule(source);
+CREATE INDEX IF NOT EXISTS idx_advacct_lpay_lease ON advacct_lease_payment(lease_id);
+CREATE INDEX IF NOT EXISTS idx_advacct_lpay_date ON advacct_lease_payment(payment_date);
+CREATE INDEX IF NOT EXISTS idx_advacct_lpay_status ON advacct_lease_payment(payment_status);
+CREATE INDEX IF NOT EXISTS idx_advacct_lpay_company ON advacct_lease_payment(company_id);
 
-CREATE TABLE IF NOT EXISTS relationship_score (
-    id              TEXT PRIMARY KEY,
-    party_type      TEXT NOT NULL CHECK(party_type IN ('customer','supplier')),
-    party_id        TEXT NOT NULL,
-    score_date      TEXT NOT NULL,
-    overall_score   TEXT NOT NULL DEFAULT '0',
-    payment_score   TEXT NOT NULL DEFAULT '0',
-    volume_trend    TEXT CHECK(volume_trend IN ('growing','stable','declining')),
-    profitability_score TEXT NOT NULL DEFAULT '0',
-    risk_score      TEXT NOT NULL DEFAULT '0',
-    lifetime_value  TEXT NOT NULL DEFAULT '0',
-    factors         TEXT,    -- JSON
-    ai_summary      TEXT,
-    expires_at      TEXT,
-    created_at      TEXT DEFAULT (datetime('now'))
+CREATE TABLE IF NOT EXISTS advacct_amortization_entry (
+    id                  TEXT PRIMARY KEY,
+    lease_id            TEXT NOT NULL REFERENCES advacct_lease(id) ON DELETE CASCADE,
+    period_date         TEXT NOT NULL,
+    opening_balance     TEXT NOT NULL DEFAULT '0',
+    payment             TEXT NOT NULL DEFAULT '0',
+    interest            TEXT NOT NULL DEFAULT '0',
+    principal           TEXT NOT NULL DEFAULT '0',
+    closing_balance     TEXT NOT NULL DEFAULT '0',
+    company_id          TEXT NOT NULL REFERENCES company(id),
+    created_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_rel_score_party ON relationship_score(party_type, party_id);
+CREATE INDEX IF NOT EXISTS idx_advacct_amort_lease ON advacct_amortization_entry(lease_id);
+CREATE INDEX IF NOT EXISTS idx_advacct_amort_period ON advacct_amortization_entry(period_date);
+CREATE INDEX IF NOT EXISTS idx_advacct_amort_company ON advacct_amortization_entry(company_id);
 
-CREATE TABLE IF NOT EXISTS conversation_context (
-    id              TEXT PRIMARY KEY,
-    user_id         TEXT,
-    context_type    TEXT NOT NULL CHECK(context_type IN (
-                        'active_workflow','pending_decision','in_progress_analysis'
-                    )),
-    summary         TEXT,
-    related_entities TEXT,   -- JSON: [{type, id}]
-    state           TEXT,    -- JSON
-    last_active     TEXT DEFAULT (datetime('now')),
-    priority        INTEGER NOT NULL DEFAULT 0,
-    expires_at      TEXT
+-- Intercompany Transactions -- 2 tables
+
+CREATE TABLE IF NOT EXISTS advacct_ic_transaction (
+    id                      TEXT PRIMARY KEY,
+    naming_series           TEXT,
+    from_company_id         TEXT NOT NULL,
+    to_company_id           TEXT NOT NULL,
+    transaction_type        TEXT NOT NULL
+                            CHECK(transaction_type IN ('sale','purchase','service','loan','dividend','allocation')),
+    description             TEXT,
+    amount                  TEXT NOT NULL DEFAULT '0',
+    currency                TEXT NOT NULL DEFAULT 'USD',
+    transfer_price_method   TEXT
+                            CHECK(transfer_price_method IN ('cost_plus','resale_minus','comparable','other')),
+    ic_status               TEXT NOT NULL DEFAULT 'draft'
+                            CHECK(ic_status IN ('draft','pending_approval','approved','posted','eliminated')),
+    posted_date             TEXT,
+    company_id              TEXT NOT NULL REFERENCES company(id),
+    created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_conv_ctx_user ON conversation_context(user_id);
-CREATE INDEX IF NOT EXISTS idx_conv_ctx_type ON conversation_context(context_type);
+CREATE INDEX IF NOT EXISTS idx_advacct_ict_from ON advacct_ic_transaction(from_company_id);
+CREATE INDEX IF NOT EXISTS idx_advacct_ict_to ON advacct_ic_transaction(to_company_id);
+CREATE INDEX IF NOT EXISTS idx_advacct_ict_status ON advacct_ic_transaction(ic_status);
+CREATE INDEX IF NOT EXISTS idx_advacct_ict_type ON advacct_ic_transaction(transaction_type);
+CREATE INDEX IF NOT EXISTS idx_advacct_ict_company ON advacct_ic_transaction(company_id);
 
-CREATE TABLE IF NOT EXISTS pending_decision (
-    id              TEXT PRIMARY KEY,
-    context_id      TEXT REFERENCES conversation_context(id) ON DELETE RESTRICT,
-    question        TEXT NOT NULL,
-    options         TEXT,    -- JSON
-    deadline        TEXT,
-    impact          TEXT,
-    status          TEXT NOT NULL DEFAULT 'pending'
-                    CHECK(status IN ('pending','decided','expired')),
-    decision_made   TEXT,
-    decided_at      TEXT,
-    created_at      TEXT DEFAULT (datetime('now'))
+CREATE TABLE IF NOT EXISTS advacct_transfer_price_rule (
+    id                  TEXT PRIMARY KEY,
+    from_company_id     TEXT,
+    to_company_id       TEXT,
+    transaction_type    TEXT
+                        CHECK(transaction_type IN ('sale','purchase','service','loan','dividend','allocation')),
+    method              TEXT NOT NULL DEFAULT 'cost_plus'
+                        CHECK(method IN ('cost_plus','resale_minus','comparable','other')),
+    markup_pct          TEXT NOT NULL DEFAULT '0',
+    effective_date      TEXT,
+    expiry_date         TEXT,
+    company_id          TEXT NOT NULL REFERENCES company(id),
+    created_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_pending_decision_status ON pending_decision(status);
-CREATE INDEX IF NOT EXISTS idx_pending_decision_context ON pending_decision(context_id);
+CREATE INDEX IF NOT EXISTS idx_advacct_tpr_companies ON advacct_transfer_price_rule(from_company_id, to_company_id);
+CREATE INDEX IF NOT EXISTS idx_advacct_tpr_type ON advacct_transfer_price_rule(transaction_type);
+CREATE INDEX IF NOT EXISTS idx_advacct_tpr_company ON advacct_transfer_price_rule(company_id);
 
-CREATE TABLE IF NOT EXISTS audit_conversation (
-    id              TEXT PRIMARY KEY,
-    timestamp       TEXT DEFAULT (datetime('now')),
-    voucher_type    TEXT,
-    voucher_id      TEXT,
-    user_message    TEXT,
-    ai_interpretation TEXT,
-    actions_taken   TEXT,    -- JSON
-    confidence_score TEXT,
-    user_confirmed  INTEGER CHECK(user_confirmed IN (0,1)),
-    entity_changes  TEXT     -- JSON: before/after snapshots
+-- Multi-Entity Consolidation -- 3 tables
+
+CREATE TABLE IF NOT EXISTS advacct_consolidation_group (
+    id                      TEXT PRIMARY KEY,
+    naming_series           TEXT,
+    name                    TEXT NOT NULL,
+    parent_company_id       TEXT,
+    consolidation_currency  TEXT NOT NULL DEFAULT 'USD',
+    group_status            TEXT NOT NULL DEFAULT 'active'
+                            CHECK(group_status IN ('active','inactive')),
+    company_id              TEXT NOT NULL REFERENCES company(id),
+    created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_audit_conv_voucher ON audit_conversation(voucher_type, voucher_id);
-CREATE INDEX IF NOT EXISTS idx_audit_conv_timestamp ON audit_conversation(timestamp);
+CREATE INDEX IF NOT EXISTS idx_advacct_cgrp_company ON advacct_consolidation_group(company_id);
+CREATE INDEX IF NOT EXISTS idx_advacct_cgrp_status ON advacct_consolidation_group(group_status);
+
+CREATE TABLE IF NOT EXISTS advacct_group_entity (
+    id                      TEXT PRIMARY KEY,
+    group_id                TEXT NOT NULL REFERENCES advacct_consolidation_group(id) ON DELETE CASCADE,
+    entity_company_id       TEXT NOT NULL,
+    entity_name             TEXT NOT NULL,
+    ownership_pct           TEXT NOT NULL DEFAULT '100',
+    functional_currency     TEXT NOT NULL DEFAULT 'USD',
+    consolidation_method    TEXT NOT NULL DEFAULT 'full'
+                            CHECK(consolidation_method IN ('full','proportional','equity')),
+    is_active               INTEGER NOT NULL DEFAULT 1,
+    company_id              TEXT NOT NULL REFERENCES company(id),
+    created_at              TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_advacct_ge_group ON advacct_group_entity(group_id);
+CREATE INDEX IF NOT EXISTS idx_advacct_ge_entity ON advacct_group_entity(entity_company_id);
+CREATE INDEX IF NOT EXISTS idx_advacct_ge_company ON advacct_group_entity(company_id);
+
+CREATE TABLE IF NOT EXISTS advacct_elimination_entry (
+    id                  TEXT PRIMARY KEY,
+    group_id            TEXT NOT NULL REFERENCES advacct_consolidation_group(id) ON DELETE CASCADE,
+    period_date         TEXT NOT NULL,
+    debit_account       TEXT NOT NULL,
+    credit_account      TEXT NOT NULL,
+    amount              TEXT NOT NULL DEFAULT '0',
+    description         TEXT,
+    entry_type          TEXT NOT NULL DEFAULT 'ic_elimination'
+                        CHECK(entry_type IN ('ic_elimination','minority_interest','currency_translation','goodwill')),
+    company_id          TEXT NOT NULL REFERENCES company(id),
+    created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_advacct_ee_group ON advacct_elimination_entry(group_id);
+CREATE INDEX IF NOT EXISTS idx_advacct_ee_period ON advacct_elimination_entry(period_date);
+CREATE INDEX IF NOT EXISTS idx_advacct_ee_type ON advacct_elimination_entry(entry_type);
+CREATE INDEX IF NOT EXISTS idx_advacct_ee_company ON advacct_elimination_entry(company_id);
 """
 
-
-# ---------------------------------------------------------------------------
-# SKILL: erpclaw-integrations (plaid)
-# Tables: plaid_config, plaid_linked_account, plaid_transaction
-# ---------------------------------------------------------------------------
-
-PLAID_TABLES = """
--- =========================================================================
--- SKILL: erpclaw-integrations (Bank Integration)
--- =========================================================================
-
-CREATE TABLE IF NOT EXISTS plaid_config (
-    id              TEXT PRIMARY KEY,
-    company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    client_id       TEXT NOT NULL,
-    secret          TEXT NOT NULL,
-    environment     TEXT NOT NULL DEFAULT 'sandbox'
-                    CHECK(environment IN ('sandbox','development','production')),
-    status          TEXT NOT NULL DEFAULT 'active'
-                    CHECK(status IN ('active','disabled')),
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now')),
-    UNIQUE(company_id)
-);
-
-CREATE TABLE IF NOT EXISTS plaid_linked_account (
-    id              TEXT PRIMARY KEY,
-    company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    access_token    TEXT NOT NULL,
-    institution_name TEXT,
-    account_name    TEXT,
-    account_type    TEXT,
-    account_mask    TEXT,
-    erp_account_id  TEXT REFERENCES account(id) ON DELETE SET NULL,
-    last_synced_at  TEXT,
-    status          TEXT NOT NULL DEFAULT 'active'
-                    CHECK(status IN ('active','disconnected','error')),
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_plaid_account_company ON plaid_linked_account(company_id);
-
-CREATE TABLE IF NOT EXISTS plaid_transaction (
-    id              TEXT PRIMARY KEY,
-    plaid_linked_account_id TEXT NOT NULL REFERENCES plaid_linked_account(id) ON DELETE CASCADE,
-    plaid_transaction_id TEXT NOT NULL,
-    date            TEXT NOT NULL,
-    amount          TEXT NOT NULL DEFAULT '0',
-    name            TEXT,
-    category        TEXT,
-    merchant_name   TEXT,
-    matched_gl_entry_id TEXT,
-    match_status    TEXT NOT NULL DEFAULT 'unmatched'
-                    CHECK(match_status IN ('unmatched','auto_matched','manual_matched','ignored')),
-    created_at      TEXT DEFAULT (datetime('now')),
-    UNIQUE(plaid_linked_account_id, plaid_transaction_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_plaid_txn_account ON plaid_transaction(plaid_linked_account_id);
-CREATE INDEX IF NOT EXISTS idx_plaid_txn_status ON plaid_transaction(match_status);
-"""
-
-
-# ---------------------------------------------------------------------------
-# SKILL: erpclaw-integrations (stripe)
-# Tables: stripe_config, stripe_payment_intent, stripe_webhook_event
-# ---------------------------------------------------------------------------
-
-STRIPE_TABLES = """
--- =========================================================================
--- SKILL: erpclaw-integrations (Payment Gateway)
--- =========================================================================
-
-CREATE TABLE IF NOT EXISTS stripe_config (
-    id              TEXT PRIMARY KEY,
-    company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    publishable_key TEXT NOT NULL,
-    secret_key      TEXT NOT NULL,
-    webhook_secret  TEXT,
-    mode            TEXT NOT NULL DEFAULT 'test'
-                    CHECK(mode IN ('test','live')),
-    status          TEXT NOT NULL DEFAULT 'active'
-                    CHECK(status IN ('active','disabled')),
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now')),
-    UNIQUE(company_id)
-);
-
-CREATE TABLE IF NOT EXISTS stripe_payment_intent (
-    id              TEXT PRIMARY KEY,
-    company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    stripe_id       TEXT NOT NULL,
-    amount          TEXT NOT NULL DEFAULT '0',
-    currency        TEXT NOT NULL DEFAULT 'USD',
-    customer_id     TEXT REFERENCES customer(id) ON DELETE SET NULL,
-    sales_invoice_id TEXT REFERENCES sales_invoice(id) ON DELETE SET NULL,
-    status          TEXT NOT NULL DEFAULT 'created'
-                    CHECK(status IN ('created','processing','succeeded','failed','cancelled')),
-    payment_entry_id TEXT,
-    metadata        TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_stripe_pi_company ON stripe_payment_intent(company_id);
-CREATE INDEX IF NOT EXISTS idx_stripe_pi_status ON stripe_payment_intent(status);
-CREATE INDEX IF NOT EXISTS idx_stripe_pi_stripe_id ON stripe_payment_intent(stripe_id);
-
-CREATE TABLE IF NOT EXISTS stripe_webhook_event (
-    id              TEXT PRIMARY KEY,
-    stripe_event_id TEXT NOT NULL UNIQUE,
-    event_type      TEXT NOT NULL,
-    payload         TEXT NOT NULL,
-    processed       INTEGER NOT NULL DEFAULT 0,
-    processed_at    TEXT,
-    error_message   TEXT,
-    created_at      TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_stripe_webhook_type ON stripe_webhook_event(event_type);
-"""
-
-
-# ---------------------------------------------------------------------------
-# SKILL: erpclaw-integrations (s3)
-# Tables: s3_config, s3_backup_record
-# ---------------------------------------------------------------------------
-
-S3_TABLES = """
--- =========================================================================
--- SKILL: erpclaw-integrations (Cloud Backup)
--- =========================================================================
-
-CREATE TABLE IF NOT EXISTS s3_config (
-    id              TEXT PRIMARY KEY,
-    company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    bucket_name     TEXT NOT NULL,
-    region          TEXT NOT NULL DEFAULT 'us-east-1',
-    access_key_id   TEXT NOT NULL,
-    secret_access_key TEXT NOT NULL,
-    prefix          TEXT DEFAULT 'erpclaw-backups/',
-    status          TEXT NOT NULL DEFAULT 'active'
-                    CHECK(status IN ('active','disabled')),
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now')),
-    UNIQUE(company_id)
-);
-
-CREATE TABLE IF NOT EXISTS s3_backup_record (
-    id              TEXT PRIMARY KEY,
-    company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    s3_key          TEXT NOT NULL,
-    file_size_bytes INTEGER,
-    backup_type     TEXT NOT NULL DEFAULT 'full'
-                    CHECK(backup_type IN ('full','incremental')),
-    encrypted       INTEGER NOT NULL DEFAULT 0,
-    checksum        TEXT,
-    status          TEXT NOT NULL DEFAULT 'completed'
-                    CHECK(status IN ('uploading','completed','failed','deleted')),
-    created_at      TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_s3_backup_company ON s3_backup_record(company_id);
-CREATE INDEX IF NOT EXISTS idx_s3_backup_status ON s3_backup_record(status);
-"""
 
 # ---------------------------------------------------------------------------
 # TYPE REGISTRY TABLES (required by tax, GL validation, and cross-skill refs)
@@ -3647,10 +3452,7 @@ ALL_DDL_BLOCKS = [
     ("erpclaw-assets",         ASSETS_TABLES),
     ("erpclaw-quality",        QUALITY_TABLES),
     ("erpclaw-support",        SUPPORT_TABLES),
-    ("erpclaw-ai-engine",      AI_ENGINE_TABLES),
-    ("erpclaw-integrations",   PLAID_TABLES),
-    ("erpclaw-integrations",   STRIPE_TABLES),
-    ("erpclaw-integrations",   S3_TABLES),
+    ("erpclaw-accounting-adv", ADVACCT_TABLES),
     ("erpclaw-registries",     REGISTRY_TABLES),
     ("erpclaw-modules",        MODULE_TABLES),
 ]

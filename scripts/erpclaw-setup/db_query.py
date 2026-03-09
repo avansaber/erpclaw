@@ -104,7 +104,7 @@ def setup_company(conn, args):
         fy_end = date(fy_start_year, 12, 31)
     else:
         fy_end = date(fy_start_year + 1, fiscal_month, 1) - timedelta(days=1)
-    fy_name = f"FY {fy_start.strftime('%Y-%m-%d')} to {fy_end.strftime('%Y-%m-%d')}"
+    fy_name = f"{abbr} FY {fy_start.strftime('%Y-%m-%d')} to {fy_end.strftime('%Y-%m-%d')}"
     try:
         t_fy = Table("fiscal_year")
         q_fy = (Q.into(t_fy)
@@ -113,7 +113,8 @@ def setup_company(conn, args):
         conn.execute(q_fy.get_sql(),
                      (fy_id, fy_name, fy_start.isoformat(), fy_end.isoformat(), company_id))
         conn.commit()
-    except Exception:
+    except Exception as e:
+        sys.stderr.write(f"[erpclaw-setup] Fiscal year creation failed: {e}\n")
         pass  # Non-fatal — user can create manually
 
     # Auto-create default cost center
@@ -122,15 +123,16 @@ def setup_company(conn, args):
     try:
         t_cc = Table("cost_center")
         q_cc = (Q.into(t_cc)
-                .columns("id", "name", "company_id", "is_group", "disabled")
-                .insert(P(), P(), P(), P(), P()))
-        conn.execute(q_cc.get_sql(), (cc_id, cc_name, company_id, 0, 0))
+                .columns("id", "name", "company_id", "is_group")
+                .insert(P(), P(), P(), P()))
+        conn.execute(q_cc.get_sql(), (cc_id, cc_name, company_id, 0))
         # Set as company default
         t_co = Table("company")
         q_co = (Q.update(t_co).set(Field("default_cost_center_id"), P()).where(t_co.id == P()))
         conn.execute(q_co.get_sql(), (cc_id, company_id))
         conn.commit()
-    except Exception:
+    except Exception as e:
+        sys.stderr.write(f"[erpclaw-setup] Cost center creation failed: {e}\n")
         pass  # Non-fatal — user can create manually
 
     # Auto-create default warehouse
@@ -147,7 +149,8 @@ def setup_company(conn, args):
         q_co2 = (Q.update(t_co2).set(Field("default_warehouse_id"), P()).where(t_co2.id == P()))
         conn.execute(q_co2.get_sql(), (wh_id, company_id))
         conn.commit()
-    except Exception:
+    except Exception as e:
+        sys.stderr.write(f"[erpclaw-setup] Warehouse creation failed: {e}\n")
         pass  # Non-fatal — user can create manually
 
     ok({"company_id": company_id, "name": name, "abbr": abbr,

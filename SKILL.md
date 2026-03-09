@@ -4,13 +4,13 @@ version: 3.1.2
 description: >
   AI-native ERP system. Full accounting, invoicing, inventory, purchasing,
   tax, billing, HR, payroll, advanced accounting (ASC 606/842, intercompany, consolidation),
-  and financial reporting in a single install. 365+ actions across 14 domains.
+  and financial reporting in a single install. 371 actions across 14 domains.
   Modular expansion via GitHub-hosted modules. Double-entry GL, immutable audit trail, US GAAP.
-author: AvanSaber / Nikhil Jathar
-homepage: https://www.erpclaw.ai
+author: AvanSaber
+homepage: https://github.com/avansaber/erpclaw
 source: https://github.com/avansaber/erpclaw
 tier: 0
-category: erp
+category: core
 requires: []
 database: ~/.openclaw/erpclaw/data.sqlite
 user-invocable: true

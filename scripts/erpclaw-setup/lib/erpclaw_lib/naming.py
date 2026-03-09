@@ -114,7 +114,7 @@ ENTITY_PREFIXES = {
     "educlaw_course": "CRS-",
     "educlaw_fee_invoice": "FEE-",
     # NonprofitClaw (nonprofit)
-    "nonprofitclaw_donor": "DON-",
+    "nonprofitclaw_donor_ext": "NDNR-",
     "nonprofitclaw_donation": "DND-",
     "nonprofitclaw_fund": "FND-",
     "nonprofitclaw_fund_transfer": "FT-",
@@ -162,7 +162,7 @@ ENTITY_PREFIXES = {
     "foodclaw_inspection": "FINS-",
     "foodclaw_franchise_unit": "FFU-",
     # AutomotiveClaw
-    "automotiveclaw_customer": "ACST-",
+    "automotiveclaw_customer_ext": "ACST-",
     "automotiveclaw_vehicle": "AVEH-",
     "automotiveclaw_deal": "ADEL-",
     "automotiveclaw_repair_order": "ARO-",
@@ -190,7 +190,7 @@ ENTITY_PREFIXES = {
     "retailclaw_wholesale_order": "RWSO-",
     "retailclaw_return_authorization": "RRA-",
     # LegalClaw
-    "legalclaw_client": "LCL-",
+    "legalclaw_client_ext": "LCLI-",
     "legalclaw_matter": "LMAT-",
     "legalclaw_time_entry": "LTE-",
     "legalclaw_expense": "LEXP-",

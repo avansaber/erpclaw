@@ -120,7 +120,7 @@ domains:
   label: Fulfillment
   entities:
   - delivery_note
-- key: billing
+- key: sales_billing
   label: Billing
   entities:
   - sales_invoice
@@ -142,7 +142,7 @@ domains:
   entities:
   - purchase_receipt
   - landed_cost_voucher
-- key: billing
+- key: purchase_billing
   label: Billing
   entities:
   - purchase_invoice

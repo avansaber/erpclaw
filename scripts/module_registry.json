@@ -1,16 +1,16 @@
 {
   "version": "3.0.0",
-  "generated": "2026-03-08",
+  "generated": "2026-03-09",
   "modules": {
     "erpclaw": {
       "display_name": "ERPClaw Core",
-      "description": "Complete ERP foundation: accounting, inventory, selling, buying, billing, payments, tax, journals, GL, reports, and setup. 315 actions across 12 domains.",
+      "description": "Complete ERP foundation: accounting, inventory, selling, buying, billing, payments, tax, journals, GL, reports, and setup. 371 actions across 12 domains.",
       "category": "core",
       "github": "avansaber/erpclaw",
       "version": "2.0.0",
       "requires": [],
       "has_init_db": false,
-      "action_count": 315,
+      "action_count": 371,
       "tags": [
         "erp",
         "accounting",
@@ -54,7 +54,7 @@
     },
     "erpclaw-growth": {
       "display_name": "ERPClaw Growth",
-      "description": "CRM, analytics, AI engine, and advanced CRM capabilities. Leads, opportunities, campaigns, KPIs, anomaly detection, forecasting, and scoring. 113 actions across 4 domains.",
+      "description": "CRM, analytics, AI engine, and advanced CRM capabilities. Leads, opportunities, campaigns, KPIs, anomaly detection, forecasting, and scoring. 110 actions across 4 domains.",
       "category": "expansion",
       "github": "avansaber/erpclaw-addons",
       "version": "2.0.0",
@@ -62,7 +62,7 @@
         "erpclaw"
       ],
       "has_init_db": true,
-      "action_count": 113,
+      "action_count": 110,
       "tags": [
         "crm",
         "leads",
@@ -86,7 +86,7 @@
     },
     "erpclaw-ops": {
       "display_name": "ERPClaw Operations",
-      "description": "Manufacturing, advanced manufacturing, projects, assets, quality, and support. BOMs, work orders, MRP, routing, tasks, timesheets, depreciation, inspections, SLAs. 126 actions across 6 domains.",
+      "description": "Manufacturing, advanced manufacturing, projects, assets, quality, and support. BOMs, work orders, MRP, routing, tasks, timesheets, depreciation, inspections, SLAs. 121 actions across 6 domains.",
       "category": "expansion",
       "github": "avansaber/erpclaw-addons",
       "version": "2.0.0",
@@ -94,7 +94,7 @@
         "erpclaw"
       ],
       "has_init_db": true,
-      "action_count": 126,
+      "action_count": 121,
       "tags": [
         "manufacturing",
         "bom",
@@ -123,7 +123,9 @@
       "category": "expansion",
       "github": "avansaber/erpclaw-addons",
       "version": "2.0.0",
-      "requires": [],
+      "requires": [
+        "erpclaw"
+      ],
       "has_init_db": true,
       "action_count": 80,
       "tags": [
@@ -160,7 +162,9 @@
       "category": "infrastructure",
       "github": "avansaber/erpclaw-addons",
       "version": "1.0.0",
-      "requires": [],
+      "requires": [
+        "erpclaw"
+      ],
       "has_init_db": true,
       "action_count": 14,
       "tags": [
@@ -180,7 +184,9 @@
       "category": "infrastructure",
       "github": "avansaber/erpclaw-addons",
       "version": "1.0.0",
-      "requires": [],
+      "requires": [
+        "erpclaw"
+      ],
       "has_init_db": true,
       "action_count": 13,
       "tags": [
@@ -199,7 +205,9 @@
       "category": "infrastructure",
       "github": "avansaber/erpclaw-addons",
       "version": "1.0.0",
-      "requires": [],
+      "requires": [
+        "erpclaw"
+      ],
       "has_init_db": true,
       "action_count": 38,
       "tags": [
@@ -224,7 +232,9 @@
       "category": "infrastructure",
       "github": "avansaber/erpclaw-addons",
       "version": "1.0.0",
-      "requires": [],
+      "requires": [
+        "erpclaw"
+      ],
       "has_init_db": true,
       "action_count": 25,
       "tags": [
@@ -246,7 +256,9 @@
       "category": "infrastructure",
       "github": "avansaber/erpclaw-addons",
       "version": "1.0.0",
-      "requires": [],
+      "requires": [
+        "erpclaw"
+      ],
       "has_init_db": true,
       "action_count": 13,
       "tags": [
@@ -265,7 +277,9 @@
       "category": "infrastructure",
       "github": "avansaber/erpclaw-addons",
       "version": "1.0.0",
-      "requires": [],
+      "requires": [
+        "erpclaw"
+      ],
       "has_init_db": true,
       "action_count": 15,
       "tags": [
@@ -307,7 +321,9 @@
       "category": "infrastructure",
       "github": "avansaber/erpclaw-addons",
       "version": "1.0.0",
-      "requires": [],
+      "requires": [
+        "erpclaw"
+      ],
       "has_init_db": true,
       "action_count": 33,
       "tags": [
@@ -328,7 +344,9 @@
       "category": "infrastructure",
       "github": "avansaber/erpclaw-addons",
       "version": "1.0.0",
-      "requires": [],
+      "requires": [
+        "erpclaw"
+      ],
       "has_init_db": true,
       "action_count": 39,
       "tags": [
@@ -366,13 +384,15 @@
     },
     "erpclaw-pos": {
       "display_name": "ERPClaw POS",
-      "description": "Point of sale: registers, shifts, transactions, cash management, returns, and end-of-day reconciliation. 28 actions.",
+      "description": "Point of sale: registers, shifts, transactions, cash management, returns, and end-of-day reconciliation. 29 actions.",
       "category": "infrastructure",
       "github": "avansaber/erpclaw-addons",
       "version": "1.0.0",
-      "requires": [],
+      "requires": [
+        "erpclaw"
+      ],
       "has_init_db": true,
-      "action_count": 28,
+      "action_count": 29,
       "tags": [
         "pos",
         "point-of-sale",
@@ -391,7 +411,9 @@
       "category": "infrastructure",
       "github": "avansaber/erpclaw-addons",
       "version": "1.0.0",
-      "requires": [],
+      "requires": [
+        "erpclaw"
+      ],
       "has_init_db": true,
       "action_count": 25,
       "tags": [
@@ -410,7 +432,9 @@
       "category": "infrastructure",
       "github": "avansaber/erpclaw-addons",
       "version": "1.0.0",
-      "requires": [],
+      "requires": [
+        "erpclaw"
+      ],
       "has_init_db": true,
       "action_count": 35,
       "tags": [
@@ -550,7 +574,7 @@
     },
     "educlaw": {
       "display_name": "EduClaw",
-      "description": "Education management: students, academics, grading, attendance, staff, fees, enrollment, and communications. K-12 and higher education. 112 actions across 8 domains.",
+      "description": "Education management: students, academics, grading, attendance, staff, fees, enrollment, and communications. K-12 and higher education. 113 actions across 8 domains.",
       "category": "vertical",
       "github": "avansaber/educlaw",
       "version": "1.0.0",
@@ -558,7 +582,7 @@
         "erpclaw"
       ],
       "has_init_db": true,
-      "action_count": 112,
+      "action_count": 113,
       "tags": [
         "education",
         "students",
@@ -577,7 +601,7 @@
     },
     "propertyclaw": {
       "display_name": "PropertyClaw",
-      "description": "Property management: properties, units, leases, tenants, maintenance requests, and property accounting. 66 actions across 5 domains.",
+      "description": "Property management: properties, units, leases, tenants, maintenance requests, and property accounting. 67 actions across 5 domains.",
       "category": "vertical",
       "github": "avansaber/propertyclaw",
       "version": "1.0.0",
@@ -585,7 +609,7 @@
         "erpclaw"
       ],
       "has_init_db": true,
-      "action_count": 66,
+      "action_count": 67,
       "tags": [
         "property",
         "real-estate",
@@ -600,13 +624,15 @@
     },
     "agricultureclaw": {
       "display_name": "AgricultureClaw",
-      "description": "Agricultural operations management: farms, fields, crops, livestock, equipment, harvest tracking, and agricultural accounting. 65 actions.",
-      "category": "vertical",
+      "description": "Agricultural operations management: farms, fields, crops, livestock, equipment, harvest tracking, and agricultural accounting. 63 actions.",
+      "category": "agriculture",
       "github": "avansaber/agricultureclaw",
       "version": "1.0.0",
-      "requires": [],
+      "requires": [
+        "erpclaw"
+      ],
       "has_init_db": true,
-      "action_count": 62,
+      "action_count": 63,
       "tags": [
         "agriculture",
         "farming",
@@ -624,7 +650,9 @@
       "category": "vertical",
       "github": "avansaber/automotiveclaw",
       "version": "1.0.0",
-      "requires": [],
+      "requires": [
+        "erpclaw"
+      ],
       "has_init_db": true,
       "action_count": 70,
       "tags": [
@@ -640,13 +668,15 @@
     },
     "constructclaw": {
       "display_name": "ConstructClaw",
-      "description": "Construction project management: projects, contracts, budgets, cost tracking, subcontractors, RFIs, submittals, change orders, and safety compliance. 113 actions.",
+      "description": "Construction project management: projects, contracts, budgets, cost tracking, subcontractors, RFIs, submittals, change orders, and safety compliance. 114 actions.",
       "category": "vertical",
       "github": "avansaber/constructclaw",
       "version": "1.0.0",
-      "requires": [],
+      "requires": [
+        "erpclaw"
+      ],
       "has_init_db": true,
-      "action_count": 113,
+      "action_count": 114,
       "tags": [
         "construction",
         "projects",
@@ -666,7 +696,9 @@
       "category": "vertical",
       "github": "avansaber/foodclaw",
       "version": "1.0.0",
-      "requires": [],
+      "requires": [
+        "erpclaw"
+      ],
       "has_init_db": true,
       "action_count": 71,
       "tags": [
@@ -683,7 +715,7 @@
     },
     "hospitalityclaw": {
       "display_name": "HospitalityClaw",
-      "description": "Hospitality management: properties, rooms, reservations, guests, housekeeping, front desk operations, F&B, and revenue management. 80 actions.",
+      "description": "Hospitality management: properties, rooms, reservations, guests, housekeeping, front desk operations, F&B, and revenue management. 73 actions.",
       "category": "vertical",
       "github": "avansaber/hospitalityclaw",
       "version": "1.0.0",
@@ -691,7 +723,7 @@
         "erpclaw"
       ],
       "has_init_db": true,
-      "action_count": 72,
+      "action_count": 73,
       "tags": [
         "hospitality",
         "hotel",
@@ -710,7 +742,9 @@
       "category": "vertical",
       "github": "avansaber/legalclaw",
       "version": "1.0.0",
-      "requires": [],
+      "requires": [
+        "erpclaw"
+      ],
       "has_init_db": true,
       "action_count": 69,
       "tags": [
@@ -728,13 +762,15 @@
     },
     "nonprofitclaw": {
       "display_name": "NonprofitClaw",
-      "description": "Nonprofit management: donors, donations, campaigns, grants, programs, volunteers, events, and fund accounting. 56 actions.",
+      "description": "Nonprofit management: donors, donations, campaigns, grants, programs, volunteers, events, and fund accounting. 58 actions.",
       "category": "vertical",
       "github": "avansaber/nonprofitclaw",
       "version": "1.0.0",
-      "requires": [],
+      "requires": [
+        "erpclaw"
+      ],
       "has_init_db": true,
-      "action_count": 57,
+      "action_count": 58,
       "tags": [
         "nonprofit",
         "donors",
@@ -858,7 +894,7 @@
     },
     "educlaw-finaid": {
       "display_name": "EduClaw Financial Aid",
-      "description": "Financial aid management: FAFSA processing, aid packages, scholarships, grants, work-study, satisfactory academic progress, and Title IV compliance. 116 actions.",
+      "description": "Financial aid management: FAFSA processing, aid packages, scholarships, grants, work-study, satisfactory academic progress, and Title IV compliance. 117 actions.",
       "category": "sub-vertical",
       "github": "avansaber/educlaw",
       "version": "1.0.0",
@@ -867,7 +903,7 @@
         "educlaw"
       ],
       "has_init_db": true,
-      "action_count": 116,
+      "action_count": 117,
       "tags": [
         "financial-aid",
         "fafsa",
@@ -882,7 +918,7 @@
     },
     "educlaw-k12": {
       "display_name": "EduClaw K-12",
-      "description": "K-12 school management: grade levels, sections, behavior tracking, parent communication, school calendar, and IDEA/COPPA compliance. 76 actions.",
+      "description": "K-12 school management: grade levels, sections, behavior tracking, parent communication, school calendar, and IDEA/COPPA compliance. 77 actions.",
       "category": "sub-vertical",
       "github": "avansaber/educlaw",
       "version": "1.0.0",
@@ -891,7 +927,7 @@
         "educlaw"
       ],
       "has_init_db": true,
-      "action_count": 76,
+      "action_count": 77,
       "tags": [
         "k12",
         "grade-levels",
@@ -906,7 +942,7 @@
     },
     "educlaw-scheduling": {
       "display_name": "EduClaw Scheduling",
-      "description": "Academic scheduling: course scheduling, room assignments, instructor availability, conflict detection, and timetable generation. 56 actions.",
+      "description": "Academic scheduling: course scheduling, room assignments, instructor availability, conflict detection, and timetable generation. 57 actions.",
       "category": "sub-vertical",
       "github": "avansaber/educlaw",
       "version": "1.0.0",
@@ -915,7 +951,7 @@
         "educlaw"
       ],
       "has_init_db": true,
-      "action_count": 56,
+      "action_count": 57,
       "tags": [
         "scheduling",
         "timetable",
@@ -928,7 +964,7 @@
     },
     "educlaw-lms": {
       "display_name": "EduClaw LMS",
-      "description": "Learning management system: online courses, assignments, quizzes, gradebook, discussion forums, and content management. 25 actions.",
+      "description": "Learning management system: online courses, assignments, quizzes, gradebook, discussion forums, and content management. 26 actions.",
       "category": "sub-vertical",
       "github": "avansaber/educlaw",
       "version": "1.0.0",
@@ -937,7 +973,7 @@
         "educlaw"
       ],
       "has_init_db": true,
-      "action_count": 25,
+      "action_count": 26,
       "tags": [
         "lms",
         "online-courses",
@@ -951,16 +987,17 @@
     },
     "educlaw-statereport": {
       "display_name": "EduClaw State Reporting",
-      "description": "State and federal education reporting: Ed-Fi, CEDS, enrollment reports, attendance reports, assessment data, and compliance filing. 98 actions.",
+      "description": "State and federal education reporting: Ed-Fi, CEDS, enrollment reports, attendance reports, assessment data, and compliance filing. 99 actions.",
       "category": "sub-vertical",
       "github": "avansaber/educlaw",
       "version": "1.0.0",
       "requires": [
         "erpclaw",
-        "educlaw"
+        "educlaw",
+        "educlaw-k12"
       ],
       "has_init_db": true,
-      "action_count": 98,
+      "action_count": 99,
       "tags": [
         "state-reporting",
         "ed-fi",
@@ -995,35 +1032,16 @@
       ],
       "subdir": "educlaw-highered"
     },
-    "educlaw-sped": {
-      "display_name": "EduClaw Special Education",
-      "description": "Special education management: IEPs, accommodations, related services, progress monitoring, and IDEA compliance. 20 actions.",
-      "category": "sub-vertical",
-      "github": "avansaber/educlaw",
-      "version": "1.0.0",
-      "requires": [
-        "erpclaw",
-        "educlaw-k12"
-      ],
-      "has_init_db": true,
-      "action_count": 20,
-      "tags": [
-        "special-education",
-        "iep",
-        "accommodations",
-        "related-services",
-        "progress-monitoring",
-        "idea"
-      ],
-      "subdir": "educlaw-sped"
-    },
     "propertyclaw-commercial": {
       "display_name": "PropertyClaw Commercial",
       "description": "Commercial property management: commercial leases, CAM charges, tenant improvements, lease abstracts, and commercial property accounting. 31 actions.",
       "category": "sub-vertical",
       "github": "avansaber/propertyclaw",
       "version": "1.0.0",
-      "requires": [],
+      "requires": [
+        "erpclaw",
+        "propertyclaw"
+      ],
       "has_init_db": true,
       "action_count": 31,
       "tags": [
