@@ -512,8 +512,8 @@ def _cleanup_failed_install(conn, module_name):
         "SELECT install_path FROM erpclaw_module WHERE name = ?",
         (module_name,)
     ).fetchone()
-    if row and row["install_path"] and os.path.isdir(row["install_path"]):
-        shutil.rmtree(row["install_path"], ignore_errors=True)
+    if row and row["install_path"] and os.path.isdir(os.path.expanduser(row["install_path"])):
+        shutil.rmtree(os.path.expanduser(row["install_path"]), ignore_errors=True)
     conn.execute("DELETE FROM erpclaw_module_action WHERE module_name = ?", (module_name,))
     conn.execute("DELETE FROM erpclaw_module WHERE name = ?", (module_name,))
     conn.commit()
@@ -560,7 +560,7 @@ def remove_module(args):
             suggestion=f"Remove dependent modules first: {', '.join(dependents)}"
         )
 
-    install_path = row["install_path"]
+    install_path = os.path.expanduser(row["install_path"])
 
     # Mark as removing
     conn.execute(
@@ -621,7 +621,7 @@ def update_modules(args):
 
     for row in rows:
         module_name = row["name"]
-        install_path = row["install_path"]
+        install_path = os.path.expanduser(row["install_path"])
 
         if not os.path.isdir(install_path):
             failed.append({"module": module_name, "error": "Install directory missing"})
@@ -820,7 +820,7 @@ def module_status(args):
         err(f"Module '{module_name}' is not installed")
 
     mod = row_to_dict(row)
-    install_path = mod["install_path"]
+    install_path = os.path.expanduser(mod["install_path"])
 
     # Get cached actions
     actions = conn.execute(
@@ -928,7 +928,7 @@ def rebuild_action_cache(args):
 
     for row in rows:
         module_name = row["name"]
-        install_path = row["install_path"]
+        install_path = os.path.expanduser(row["install_path"])
 
         if not os.path.isdir(install_path):
             errors.append({"module": module_name, "error": "Install directory missing"})

@@ -1562,6 +1562,13 @@ def submit_delivery_note(conn, args):
         if not warehouse_id:
             err(f"No warehouse specified for item {dni_dict['item_id']} and no default warehouse")
 
+        # B8: Validate warehouse type — only dispatch from stores warehouses
+        wh_type_row = conn.execute(
+            "SELECT warehouse_type FROM warehouse WHERE id = ?", (warehouse_id,)
+        ).fetchone()
+        if wh_type_row and wh_type_row["warehouse_type"] not in ("stores",):
+            err(f"Cannot dispatch from '{wh_type_row['warehouse_type']}' warehouse. Use a 'stores' warehouse.")
+
         sle_entries.append({
             "item_id": dni_dict["item_id"],
             "warehouse_id": warehouse_id,
@@ -1584,6 +1591,25 @@ def submit_delivery_note(conn, args):
     except ValueError as e:
         sys.stderr.write(f"[erpclaw-selling] {e}\n")
         err(f"SLE posting failed: {e}")
+
+    # B12: Update serial number status to 'delivered'
+    for dni in dn_items:
+        dni_d = row_to_dict(dni)
+        serial_nums = dni_d.get("serial_numbers")
+        if serial_nums:
+            for sn in serial_nums.split("\n"):
+                sn = sn.strip()
+                if sn:
+                    conn.execute(
+                        """UPDATE serial_number
+                           SET status = 'delivered',
+                               delivery_document_type = 'delivery_note',
+                               delivery_document_id = ?,
+                               customer_id = ?,
+                               warehouse_id = NULL
+                           WHERE serial_no = ?""",
+                        (args.delivery_note_id, dn_dict["customer_id"], sn),
+                    )
 
     # Build COGS GL entries from SLE data
     sleq = (Q.from_(_t_stock_ledger).select(_t_stock_ledger.star)
