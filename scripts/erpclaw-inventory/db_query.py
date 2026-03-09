@@ -634,10 +634,21 @@ def add_stock_entry(conn, args):
         from_wh = item.get("from_warehouse_id")
         to_wh = item.get("to_warehouse_id")
 
+        # Fall back to company's default warehouse if item-level warehouse not specified
+        if not to_wh or not from_wh:
+            dw_t = Table("company")
+            dw_q = Q.from_(dw_t).select(dw_t.default_warehouse_id).where(dw_t.id == P())
+            dw_row = conn.execute(dw_q.get_sql(), (args.company_id,)).fetchone()
+            default_wh = dw_row["default_warehouse_id"] if dw_row else None
+            if not to_wh and default_wh:
+                to_wh = default_wh
+            if not from_wh and default_wh:
+                from_wh = default_wh
+
         # Validate warehouse per entry type
         if entry_type == "material_receipt":
             if not to_wh:
-                err(f"Item {i}: to_warehouse_id is required for receipt")
+                err(f"Item {i}: to_warehouse_id is required for receipt (set company default warehouse or provide per-item)")
             total_incoming += amount
         elif entry_type == "material_issue":
             if not from_wh:

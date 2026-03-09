@@ -91,16 +91,16 @@ ENTITY_PREFIXES = {
     # educlaw-statereport
     "SUB": "SUB-",
     "INC": "INC-",
-    # PropClaw verticals
-    "propclaw_property": "PROP-",
-    "propclaw_unit": "UNIT-",
-    "propclaw_lease": "LSE-",
-    "propclaw_work_order": "PWO-",
-    "propclaw_application": "APP-",
-    "propclaw_inspection": "INSP-",
-    "propclaw_trust_account": "TRUST-",
-    "propclaw_owner_statement": "STMT-",
-    "propclaw_security_deposit": "DEP-",
+    # PropertyClaw verticals
+    "propertyclaw_property": "PROP-",
+    "propertyclaw_unit": "UNIT-",
+    "propertyclaw_lease": "LSE-",
+    "propertyclaw_work_order": "PWO-",
+    "propertyclaw_application": "APP-",
+    "propertyclaw_inspection": "INSP-",
+    "propertyclaw_trust_account": "TRUST-",
+    "propertyclaw_owner_statement": "STMT-",
+    "propertyclaw_security_deposit": "DEP-",
     # HealthClaw verticals
     "healthclaw_patient": "PAT-",
     "healthclaw_appointment": "APT-",
@@ -113,6 +113,140 @@ ENTITY_PREFIXES = {
     "educlaw_enrollment": "ENR-",
     "educlaw_course": "CRS-",
     "educlaw_fee_invoice": "FEE-",
+    # NonprofitClaw (nonprofit)
+    "nonprofitclaw_donor": "DON-",
+    "nonprofitclaw_donation": "DND-",
+    "nonprofitclaw_fund": "FND-",
+    "nonprofitclaw_fund_transfer": "FT-",
+    "nonprofitclaw_grant": "GRT-",
+    "nonprofitclaw_program": "NPG-",
+    "nonprofitclaw_volunteer": "VOL-",
+    "nonprofitclaw_pledge": "PLG-",
+    "nonprofitclaw_campaign": "NPC-",
+    "nonprofitclaw_tax_receipt": "NTR-",
+    # HospitalityClaw (hospitality)
+    "hospitalityclaw_room_type": "HRT-",
+    "hospitalityclaw_room": "HRM-",
+    "hospitalityclaw_guest": "GST-",
+    "hospitalityclaw_reservation": "HRES-",
+    "hospitalityclaw_group_block": "HGB-",
+    "hospitalityclaw_folio_charge": "HFC-",
+    "hospitalityclaw_housekeeping_task": "HHT-",
+    "hospitalityclaw_rate_plan": "HRP-",
+    "hospitalityclaw_outlet": "HOTL-",
+    "hospitalityclaw_room_service_order": "HRSO-",
+    # ConstructClaw
+    "constructclaw_job": "CJOB-",
+    "constructclaw_estimate": "CEST-",
+    "constructclaw_bid": "CBID-",
+    "constructclaw_subcontract": "CSC-",
+    "constructclaw_daily_report": "CDR-",
+    "constructclaw_pay_application": "CPA-",
+    "constructclaw_rfi": "CRFI-",
+    "constructclaw_submittal": "CSUB-",
+    "constructclaw_pco": "CPCO-",
+    "constructclaw_cco": "CCCO-",
+    "constructclaw_incident": "CINC-",
+    "constructclaw_retention": "CRET-",
+    # FoodClaw
+    "foodclaw_menu": "FMNU-",
+    "foodclaw_menu_item": "FMI-",
+    "foodclaw_recipe": "FRCP-",
+    "foodclaw_ingredient": "FING-",
+    "foodclaw_stock_count": "FSC-",
+    "foodclaw_waste_log": "FWL-",
+    "foodclaw_employee": "FEMP-",
+    "foodclaw_shift": "FSFT-",
+    "foodclaw_catering_event": "FCAT-",
+    "foodclaw_haccp_log": "FHCP-",
+    "foodclaw_inspection": "FINS-",
+    "foodclaw_franchise_unit": "FFU-",
+    # AutomotiveClaw
+    "automotiveclaw_customer": "ACST-",
+    "automotiveclaw_vehicle": "AVEH-",
+    "automotiveclaw_deal": "ADEL-",
+    "automotiveclaw_repair_order": "ARO-",
+    "automotiveclaw_service_line": "ASL-",
+    "automotiveclaw_warranty_claim": "AWC-",
+    "automotiveclaw_part": "APRT-",
+    "automotiveclaw_parts_order": "APO-",
+    # AgricultureClaw
+    "agricultureclaw_parcel": "AGPC-",
+    "agricultureclaw_planting_plan": "AGPP-",
+    "agricultureclaw_crop_type": "AGCT-",
+    "agricultureclaw_field_operation": "AGFO-",
+    "agricultureclaw_scouting_report": "AGSR-",
+    "agricultureclaw_harvest_record": "AGHR-",
+    "agricultureclaw_animal": "AGANL-",
+    "agricultureclaw_health_record": "AGHLR-",
+    "agricultureclaw_delivery_ticket": "AGDT-",
+    # RetailClaw
+    "retailclaw_price_list": "RPL-",
+    "retailclaw_promotion": "RPRO-",
+    "retailclaw_coupon": "RCPN-",
+    "retailclaw_loyalty_program": "RLP-",
+    "retailclaw_loyalty_member": "RLM-",
+    "retailclaw_gift_card": "RGC-",
+    "retailclaw_wholesale_order": "RWSO-",
+    "retailclaw_return_authorization": "RRA-",
+    # LegalClaw
+    "legalclaw_client": "LCL-",
+    "legalclaw_matter": "LMAT-",
+    "legalclaw_time_entry": "LTE-",
+    "legalclaw_expense": "LEXP-",
+    "legalclaw_invoice": "LINV-",
+    "legalclaw_trust_account": "LTA-",
+    "legalclaw_document": "LDOC-",
+    "legalclaw_calendar_event": "LCE-",
+    "legalclaw_conflict_check": "LCC-",
+    # Fleet addon
+    "fleet_vehicle": "FV-",
+    "fleet_fuel_log": "FFL-",
+    "fleet_vehicle_maintenance": "FVM-",
+    # Loans addon
+    "loan_application": "LAPP-",
+    "loan": "LN-",
+    "loan_repayment": "LRP-",
+    # POS addon
+    "pos_profile": "POSP-",
+    "pos_session": "POSS-",
+    "pos_transaction": "POSTR-",
+    # Treasury addon
+    "cash_position": "CPOS-",
+    "cash_forecast": "CFRC-",
+    "investment": "INVST-",
+    "inter_company_transfer": "ICT-",
+    # Logistics addon
+    "logistics_carrier": "LGCR-",
+    "logistics_shipment": "LGSH-",
+    "logistics_freight_charge": "LGFC-",
+    # Maintenance addon
+    "equipment": "EQP-",
+    "maintenance_plan": "MNTP-",
+    "maintenance_work_order": "MNTW-",
+    "downtime_record": "MNDT-",
+    # Alerts addon
+    "alert_rule": "ALRT-",
+    "alert_log": "ALLG-",
+    # Approvals addon
+    "approval_rule": "APRL-",
+    "approval_request": "APRQ-",
+    # Compliance addon
+    "audit_plan": "AUDP-",
+    "audit_finding": "AUDF-",
+    "risk_register": "RISK-",
+    "policy": "PLCY-",
+    # Documents addon
+    "document": "DOCU-",
+    "document_template": "DOCT-",
+    # E-Sign addon
+    "esign_signature_request": "ESGN-",
+    # Planning addon
+    "planning_scenario": "PLSC-",
+    "forecast": "FCST-",
+    # Integrations addon
+    "integration_connector": "INTC-",
+    "integration_sync": "INTS-",
 }
 
 
@@ -123,7 +257,7 @@ def register_prefix(entity_type: str, prefix: str):
     their naming prefixes without modifying shared lib source.
 
     Args:
-        entity_type: e.g. 'propclaw_property', 'buildclaw_project'
+        entity_type: e.g. 'propertyclaw_property', 'buildclaw_project'
         prefix: e.g. 'PROP-', 'BPRJ-'
     """
     ENTITY_PREFIXES[entity_type] = prefix

@@ -94,7 +94,64 @@ def setup_company(conn, args):
         sys.stderr.write(f"[erpclaw-setup] {e}\n")
         err("Company creation failed — check for duplicates or invalid data")
 
-    ok({"company_id": company_id, "name": name, "abbr": abbr})
+    # Auto-create fiscal year for the company
+    fy_id = str(uuid.uuid4())
+    fiscal_month = int(args.fiscal_year_start_month or 1)
+    today = date.today()
+    fy_start_year = today.year if today.month >= fiscal_month else today.year - 1
+    fy_start = date(fy_start_year, fiscal_month, 1)
+    if fiscal_month == 1:
+        fy_end = date(fy_start_year, 12, 31)
+    else:
+        fy_end = date(fy_start_year + 1, fiscal_month, 1) - timedelta(days=1)
+    fy_name = f"FY {fy_start.strftime('%Y-%m-%d')} to {fy_end.strftime('%Y-%m-%d')}"
+    try:
+        t_fy = Table("fiscal_year")
+        q_fy = (Q.into(t_fy)
+                .columns("id", "name", "start_date", "end_date", "company_id")
+                .insert(P(), P(), P(), P(), P()))
+        conn.execute(q_fy.get_sql(),
+                     (fy_id, fy_name, fy_start.isoformat(), fy_end.isoformat(), company_id))
+        conn.commit()
+    except Exception:
+        pass  # Non-fatal — user can create manually
+
+    # Auto-create default cost center
+    cc_id = str(uuid.uuid4())
+    cc_name = f"{name} - Main"
+    try:
+        t_cc = Table("cost_center")
+        q_cc = (Q.into(t_cc)
+                .columns("id", "name", "company_id", "is_group", "disabled")
+                .insert(P(), P(), P(), P(), P()))
+        conn.execute(q_cc.get_sql(), (cc_id, cc_name, company_id, 0, 0))
+        # Set as company default
+        t_co = Table("company")
+        q_co = (Q.update(t_co).set(Field("default_cost_center_id"), P()).where(t_co.id == P()))
+        conn.execute(q_co.get_sql(), (cc_id, company_id))
+        conn.commit()
+    except Exception:
+        pass  # Non-fatal — user can create manually
+
+    # Auto-create default warehouse
+    wh_id = str(uuid.uuid4())
+    wh_name = f"{name} - Main Warehouse"
+    try:
+        t_wh = Table("warehouse")
+        q_wh = (Q.into(t_wh)
+                .columns("id", "name", "company_id", "warehouse_type", "is_group")
+                .insert(P(), P(), P(), P(), P()))
+        conn.execute(q_wh.get_sql(), (wh_id, wh_name, company_id, "stores", 0))
+        # Set as company default
+        t_co2 = Table("company")
+        q_co2 = (Q.update(t_co2).set(Field("default_warehouse_id"), P()).where(t_co2.id == P()))
+        conn.execute(q_co2.get_sql(), (wh_id, company_id))
+        conn.commit()
+    except Exception:
+        pass  # Non-fatal — user can create manually
+
+    ok({"company_id": company_id, "name": name, "abbr": abbr,
+        "fiscal_year_id": fy_id, "cost_center_id": cc_id, "warehouse_id": wh_id})
 
 
 def update_company(conn, args):

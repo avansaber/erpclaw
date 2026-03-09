@@ -57,7 +57,17 @@ def setup_chart_of_accounts(conn, args):
     template = args.template or "us_gaap"
     company_id = args.company_id
     if not company_id:
-        err("--company-id is required")
+        # Auto-detect if only one company exists
+        t_c = Table("company")
+        q_c = Q.from_(t_c).select(t_c.id, t_c.name)
+        companies = conn.execute(q_c.get_sql()).fetchall()
+        if len(companies) == 1:
+            company_id = companies[0]["id"]
+        elif len(companies) > 1:
+            company_list = ", ".join([f"'{c['name']}' ({c['id'][:8]}...)" for c in companies])
+            err(f"Multiple companies found. Please specify --company-id. Available: {company_list}")
+        else:
+            err("No companies found. Create a company first with setup-company.")
 
     t_company = Table("company")
     t_account = Table("account")

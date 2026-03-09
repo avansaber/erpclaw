@@ -1,6 +1,6 @@
 """Cross-skill integration API for ERPClaw verticals.
 
-Provides high-level functions that vertical skills (PropClaw, BuildClaw,
+Provides high-level functions that vertical skills (PropertyClaw, BuildClaw,
 LegalClaw, etc.) call to interact with core ERPClaw skills — without
 directly importing or writing to tables they don't own.
 

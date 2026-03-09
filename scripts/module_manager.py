@@ -204,6 +204,8 @@ def build_action_cache(conn, module_name, install_path):
 
     Uses AST parsing as the primary method, falling back to regex if AST
     yields no results (e.g., dynamically constructed dicts).
+    Also scans sibling .py files in scripts/ for domain modules that
+    define their own ACTIONS dicts (merged via ACTIONS.update()).
 
     Returns the number of actions cached.
     """
@@ -212,6 +214,17 @@ def build_action_cache(conn, module_name, install_path):
     all_actions = _extract_actions_via_ast(script_path)
     if not all_actions:
         all_actions = _extract_actions_via_regex(script_path)
+
+    # Also scan sibling domain modules in scripts/ directory
+    scripts_dir = os.path.join(install_path, "scripts")
+    if os.path.isdir(scripts_dir):
+        for fname in os.listdir(scripts_dir):
+            if fname.endswith(".py") and fname != "db_query.py":
+                domain_path = os.path.join(scripts_dir, fname)
+                domain_actions = _extract_actions_via_ast(domain_path)
+                if not domain_actions:
+                    domain_actions = _extract_actions_via_regex(domain_path)
+                all_actions |= domain_actions
 
     if not all_actions:
         return 0
@@ -431,6 +444,25 @@ def _install_module_inner(args, conn, modules_by_name, depth=0):
                     init_result = json.loads(result.stdout)
                     tables_created = init_result.get("tables_created", 0)
                 except json.JSONDecodeError:
+                    # Many init_db.py scripts print human-readable text, not JSON
+                    # Try to extract number from output like "Created 5 tables"
+                    import re as _re
+                    m = _re.search(r'(\d+)\s+tables?', result.stdout)
+                    if m:
+                        tables_created = int(m.group(1))
+            # If still 0, count module-specific tables directly from DB
+            if tables_created == 0:
+                try:
+                    data_db = os.path.expanduser("~/.openclaw/erpclaw/data.sqlite")
+                    if os.path.isfile(data_db):
+                        dconn = sqlite3.connect(data_db)
+                        prefix = module_name.replace("-", "_") + "_"
+                        cursor = dconn.execute(
+                            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE ?",
+                            (prefix + "%",))
+                        tables_created = cursor.fetchone()[0]
+                        dconn.close()
+                except Exception:
                     pass
         except subprocess.TimeoutExpired:
             _mark_failed(conn, module_name, "init_db.py timed out after 60s")

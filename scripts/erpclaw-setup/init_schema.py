@@ -263,7 +263,7 @@ GL_TABLES = """
 CREATE TABLE IF NOT EXISTS account (
     id              TEXT PRIMARY KEY,
     name            TEXT NOT NULL,
-    account_number  TEXT UNIQUE,
+    account_number  TEXT,
     parent_id       TEXT REFERENCES account(id) ON DELETE RESTRICT,
     root_type       TEXT NOT NULL CHECK(root_type IN ('asset','liability','equity','income','expense')),
     account_type    TEXT CHECK(account_type IN (
@@ -287,7 +287,8 @@ CREATE TABLE IF NOT EXISTS account (
     lft             INTEGER,
     rgt             INTEGER,
     created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    updated_at      TEXT DEFAULT (datetime('now')),
+    UNIQUE(account_number, company_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_account_company ON account(company_id);

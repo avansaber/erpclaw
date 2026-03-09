@@ -77,7 +77,7 @@ PROFILES = {
         "display_name": "Property Management",
         "description": "Real estate: properties, leases, tenants, maintenance, accounting",
         "modules": [
-            "propclaw",
+            "propertyclaw",
         ],
     },
     "healthcare": {
@@ -164,7 +164,7 @@ PROFILES = {
             "erpclaw-integrations",
             "erpclaw-alerts",
             "retailclaw",
-            "propclaw",
+            "propertyclaw",
             "healthclaw",
             "educlaw",
         ],

@@ -575,11 +575,11 @@
       ],
       "subdir": "educlaw"
     },
-    "propclaw": {
-      "display_name": "PropClaw",
+    "propertyclaw": {
+      "display_name": "PropertyClaw",
       "description": "Property management: properties, units, leases, tenants, maintenance requests, and property accounting. 66 actions across 5 domains.",
       "category": "vertical",
-      "github": "avansaber/propclaw",
+      "github": "avansaber/propertyclaw",
       "version": "1.0.0",
       "requires": [
         "erpclaw"
@@ -596,13 +596,13 @@
         "rent",
         "accounting"
       ],
-      "subdir": "propclaw"
+      "subdir": "propertyclaw"
     },
-    "agriclaw": {
-      "display_name": "AgriClaw",
+    "agricultureclaw": {
+      "display_name": "AgricultureClaw",
       "description": "Agricultural operations management: farms, fields, crops, livestock, equipment, harvest tracking, and agricultural accounting. 65 actions.",
       "category": "vertical",
-      "github": "avansaber/agriclaw",
+      "github": "avansaber/agricultureclaw",
       "version": "1.0.0",
       "requires": [],
       "has_init_db": true,
@@ -618,11 +618,11 @@
         "irrigation"
       ]
     },
-    "autoclaw": {
-      "display_name": "AutoClaw",
+    "automotiveclaw": {
+      "display_name": "AutomotiveClaw",
       "description": "Automotive dealership and service management: vehicle inventory, sales, service orders, parts, warranty claims, and customer management. 70 actions.",
       "category": "vertical",
-      "github": "avansaber/autoclaw",
+      "github": "avansaber/automotiveclaw",
       "version": "1.0.0",
       "requires": [],
       "has_init_db": true,
@@ -681,11 +681,11 @@
         "inventory"
       ]
     },
-    "hospclaw": {
-      "display_name": "HospClaw",
+    "hospitalityclaw": {
+      "display_name": "HospitalityClaw",
       "description": "Hospitality management: properties, rooms, reservations, guests, housekeeping, front desk operations, F&B, and revenue management. 80 actions.",
       "category": "vertical",
-      "github": "avansaber/hospclaw",
+      "github": "avansaber/hospitalityclaw",
       "version": "1.0.0",
       "requires": [
         "erpclaw"
@@ -726,11 +726,11 @@
         "trust-accounting"
       ]
     },
-    "npclaw": {
-      "display_name": "NPClaw",
+    "nonprofitclaw": {
+      "display_name": "NonprofitClaw",
       "description": "Nonprofit management: donors, donations, campaigns, grants, programs, volunteers, events, and fund accounting. 56 actions.",
       "category": "vertical",
-      "github": "avansaber/npclaw",
+      "github": "avansaber/nonprofitclaw",
       "version": "1.0.0",
       "requires": [],
       "has_init_db": true,
@@ -1017,11 +1017,11 @@
       ],
       "subdir": "educlaw-sped"
     },
-    "propclaw-commercial": {
-      "display_name": "PropClaw Commercial",
+    "propertyclaw-commercial": {
+      "display_name": "PropertyClaw Commercial",
       "description": "Commercial property management: commercial leases, CAM charges, tenant improvements, lease abstracts, and commercial property accounting. 31 actions.",
       "category": "sub-vertical",
-      "github": "avansaber/propclaw",
+      "github": "avansaber/propertyclaw",
       "version": "1.0.0",
       "requires": [],
       "has_init_db": true,
@@ -1033,7 +1033,7 @@
         "lease-abstracts",
         "commercial-leases"
       ],
-      "subdir": "propclaw-commercial"
+      "subdir": "propertyclaw-commercial"
     }
   }
 }
