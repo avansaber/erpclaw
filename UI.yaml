@@ -121,11 +121,10 @@ domains:
   entities:
   - delivery_note
 - key: sales_billing
-  label: Billing
+  label: Sales Billing
   entities:
   - sales_invoice
   - credit_note
-  - recurring_invoice_template
 - key: suppliers
   label: Suppliers
   entities:
@@ -143,7 +142,7 @@ domains:
   - purchase_receipt
   - landed_cost_voucher
 - key: purchase_billing
-  label: Billing
+  label: Purchase Billing
   entities:
   - purchase_invoice
 - key: meter
@@ -157,16 +156,12 @@ domains:
   entities:
   - rate_plan
   - rate_tier
-  - billing_period
   - prepaid_credit_balance
-- key: billing_adjustment
-  label: Billing Adjustment
-  entities:
-  - billing_adjustment
-- key: recurring_invoice_template
-  label: Recurring Invoice Template
+- key: subscription_billing
+  label: Subscription Billing
   entities:
   - recurring_invoice_template
+  - billing_adjustment
 dashboard:
   kpis:
   - key: total_companies
