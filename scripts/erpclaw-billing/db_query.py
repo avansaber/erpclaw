@@ -1033,7 +1033,7 @@ def generate_invoices(conn, args):
 
     # Try to find selling script (optional — invoice creation skipped if unavailable)
     from erpclaw_lib.dependencies import resolve_skill_script, table_exists
-    selling_script = resolve_skill_script("erpclaw-selling") if table_exists(conn, "sales_invoice") else None
+    selling_script = resolve_skill_script("erpclaw") if table_exists(conn, "sales_invoice") else None
 
     results = []
     for bp_id in bp_ids:

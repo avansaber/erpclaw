@@ -280,6 +280,9 @@ For all actions: `python3 {baseDir}/scripts/db_query.py --action <action> [flags
 | "Create an invoice" | `create-sales-invoice` → `submit-sales-invoice` |
 | "Record a payment" | `add-payment` → `submit-payment` |
 | "Install CRM" | `install-module --module-name erpclaw-growth` |
+| "Install healthclaw" | `install-module --module-name healthclaw` |
+| "Install property module" | `install-module --module-name propertyclaw` |
+| "Install education module" | `install-module --module-name educlaw` |
 | "Set up for retail" | `onboard --profile retail` |
 | "Add employee" | `add-employee` |
 | "Run payroll" | `create-payroll-run` → `generate-salary-slips` → `submit-payroll-run` |

@@ -23,7 +23,7 @@ Usage:
     invoice_id = result["sales_invoice"]["id"]
 
     # Low-level: call any action on any skill
-    result = call_skill_action("erpclaw-selling", "list-customers",
+    result = call_skill_action("erpclaw", "list-customers",
                                {"--company-id": company_id})
 """
 import json
@@ -56,7 +56,7 @@ def call_skill_action(
     create_invoice() and create_payment() use this internally.
 
     Args:
-        skill_name: e.g. 'erpclaw-selling'
+        skill_name: e.g. 'erpclaw'
         action: e.g. 'add-sales-invoice'
         args: Dict of CLI arguments. Keys should include '--' prefix.
               e.g. {"--customer-id": "abc", "--items": '[...]'}
@@ -150,7 +150,7 @@ def create_invoice(
     db_path: Optional[str] = None,
     timeout: int = 30,
 ) -> dict:
-    """Create a Sales Invoice via erpclaw-selling.
+    """Create a Sales Invoice via erpclaw.
 
     This is the standard way for verticals to generate invoices.
     Creates a draft invoice that can be submitted separately.
@@ -169,7 +169,7 @@ def create_invoice(
         timeout: Subprocess timeout.
 
     Returns:
-        Full response dict from erpclaw-selling, typically:
+        Full response dict from erpclaw, typically:
         {"status": "ok", "sales_invoice": {"id": "...", "name": "INV-..."}}
 
     Raises:
@@ -191,7 +191,7 @@ def create_invoice(
         args["--remarks"] = remarks
 
     return call_skill_action(
-        "erpclaw-selling", "add-sales-invoice",
+        "erpclaw", "add-sales-invoice",
         args=args, db_path=db_path, timeout=timeout,
     )
 
@@ -201,7 +201,7 @@ def submit_invoice(
     db_path: Optional[str] = None,
     timeout: int = 30,
 ) -> dict:
-    """Submit (finalize) a Sales Invoice via erpclaw-selling.
+    """Submit (finalize) a Sales Invoice via erpclaw.
 
     This validates the invoice, posts GL entries, and transitions
     the invoice from Draft to Submitted.
@@ -212,13 +212,13 @@ def submit_invoice(
         timeout: Subprocess timeout.
 
     Returns:
-        Response dict from erpclaw-selling.
+        Response dict from erpclaw.
 
     Raises:
         CrossSkillError: On failure.
     """
     return call_skill_action(
-        "erpclaw-selling", "submit-sales-invoice",
+        "erpclaw", "submit-sales-invoice",
         args={"--invoice-id": invoice_id},
         db_path=db_path, timeout=timeout,
     )
@@ -239,7 +239,7 @@ def create_purchase_invoice(
     db_path: Optional[str] = None,
     timeout: int = 30,
 ) -> dict:
-    """Create a Purchase Invoice via erpclaw-buying.
+    """Create a Purchase Invoice via erpclaw.
 
     Args:
         supplier_id: The supplier to invoice.
@@ -253,7 +253,7 @@ def create_purchase_invoice(
         timeout: Subprocess timeout.
 
     Returns:
-        Response dict from erpclaw-buying.
+        Response dict from erpclaw.
 
     Raises:
         CrossSkillError: On failure.
@@ -274,7 +274,7 @@ def create_purchase_invoice(
         args["--remarks"] = remarks
 
     return call_skill_action(
-        "erpclaw-buying", "add-purchase-invoice",
+        "erpclaw", "add-purchase-invoice",
         args=args, db_path=db_path, timeout=timeout,
     )
 
@@ -390,7 +390,7 @@ def create_customer(
     db_path: Optional[str] = None,
     timeout: int = 30,
 ) -> dict:
-    """Create a Customer via erpclaw-selling.
+    """Create a Customer via erpclaw.
 
     This is the correct way for verticals to create customers.
     DO NOT INSERT directly into the customer table.
@@ -410,7 +410,7 @@ def create_customer(
     Raises:
         CrossSkillError: On failure.
     """
-    args = {"--customer-name": customer_name}
+    args = {"--name": customer_name}
     if company_id:
         args["--company-id"] = company_id
     if customer_type:
@@ -421,7 +421,7 @@ def create_customer(
         args["--phone"] = phone
 
     return call_skill_action(
-        "erpclaw-selling", "add-customer",
+        "erpclaw", "add-customer",
         args=args, db_path=db_path, timeout=timeout,
     )
 
@@ -435,7 +435,7 @@ def create_supplier(
     db_path: Optional[str] = None,
     timeout: int = 30,
 ) -> dict:
-    """Create a Supplier via erpclaw-buying.
+    """Create a Supplier via erpclaw.
 
     Args:
         supplier_name: Supplier name.
@@ -452,7 +452,7 @@ def create_supplier(
     Raises:
         CrossSkillError: On failure.
     """
-    args = {"--supplier-name": supplier_name}
+    args = {"--name": supplier_name}
     if company_id:
         args["--company-id"] = company_id
     if supplier_type:
@@ -463,6 +463,6 @@ def create_supplier(
         args["--phone"] = phone
 
     return call_skill_action(
-        "erpclaw-buying", "add-supplier",
+        "erpclaw", "add-supplier",
         args=args, db_path=db_path, timeout=timeout,
     )
