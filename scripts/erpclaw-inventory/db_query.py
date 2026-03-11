@@ -278,6 +278,7 @@ def get_item(conn, args):
 def list_items(conn, args):
     """Query items with filtering."""
     i = Table("item").as_("i")
+    ig = Table("item_group").as_("ig")
 
     # Warehouse filter: items that have stock in a specific warehouse
     warehouse_id = getattr(args, "warehouse_id", None)
@@ -315,7 +316,9 @@ def list_items(conn, args):
     offset = int(args.offset) if args.offset else 0
 
     rows_q = (Q.from_(i)
+              .left_join(ig).on(ig.id == i.item_group_id)
               .select(i.id, i.item_code, i.item_name, i.item_group_id,
+                      ig.name.as_("item_group_name"),
                       i.item_type, i.stock_uom, i.standard_rate, i.status,
                       i.has_batch, i.has_serial)
               .orderby(i.item_name)
@@ -2468,6 +2471,7 @@ def main():
 
     # Warehouse
     parser.add_argument("--warehouse-id")
+    parser.add_argument("--warehouse-name", dest="name")  # alias for --name
     parser.add_argument("--warehouse-type")
     parser.add_argument("--account-id")
     parser.add_argument("--is-group")

@@ -159,6 +159,16 @@ def add_account(conn, args):
     currency = args.currency or "USD"
     is_group = 1 if args.is_group else 0
 
+    # Guard: certain account_types must be leaf (posting) accounts, never groups
+    LEAF_ONLY_TYPES = {
+        "receivable", "payable", "bank", "cash", "tax",
+        "cost_of_goods_sold", "stock", "depreciation",
+        "accumulated_depreciation", "round_off",
+    }
+    if is_group and account_type and account_type.lower() in LEAF_ONLY_TYPES:
+        err(f"Account type '{account_type}' must be a posting (leaf) account, "
+            f"not a group. Remove --is-group to create a postable account.")
+
     # Default balance direction
     balance_direction = "debit_normal"
     if root_type in ("liability", "equity", "income"):
