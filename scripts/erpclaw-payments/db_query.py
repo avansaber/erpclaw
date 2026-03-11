@@ -364,8 +364,20 @@ def list_payments(conn, args):
                   pe.unallocated_amount)
               .orderby(pe.posting_date, order=Order.desc)
               .orderby(pe.created_at, order=Order.desc))
+    # Add party_name resolution via CASE subquery
+    sql = data_q.get_sql()
+    # Insert party_name subquery after SELECT columns
+    party_name_sql = (
+        ",(CASE \"payment_entry\".\"party_type\" "
+        "WHEN 'customer' THEN (SELECT \"name\" FROM \"customer\" WHERE \"id\"=\"payment_entry\".\"party_id\") "
+        "WHEN 'supplier' THEN (SELECT \"name\" FROM \"supplier\" WHERE \"id\"=\"payment_entry\".\"party_id\") "
+        "WHEN 'employee' THEN (SELECT \"full_name\" FROM \"employee\" WHERE \"id\"=\"payment_entry\".\"party_id\") "
+        "ELSE \"payment_entry\".\"party_id\" END) AS \"party_name\""
+    )
+    # Insert before FROM clause
+    sql = sql.replace(" FROM ", party_name_sql + " FROM ", 1)
     rows = conn.execute(
-        data_q.get_sql() + " LIMIT ? OFFSET ?", list_params
+        sql + " LIMIT ? OFFSET ?", list_params
     ).fetchall()
 
     ok({"payments": [row_to_dict(r) for r in rows], "total_count": total_count,

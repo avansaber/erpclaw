@@ -549,7 +549,7 @@ def list_customers(conn, args):
     offset = int(args.offset) if args.offset else 0
 
     list_q = (base.select(c.id, c.name, c.customer_type, c.customer_group,
-                           c.credit_limit, c.status, c.company_id)
+                           c.territory, c.credit_limit, c.status, c.company_id)
               .orderby(c.name)
               .limit(P()).offset(P()))
     if crit:
@@ -740,6 +740,7 @@ def get_quotation(conn, args):
 def list_quotations(conn, args):
     """Query quotations with filtering."""
     q = _t_quotation.as_("q")
+    c = _t_customer.as_("c")
     params = []
     crit = None
 
@@ -773,7 +774,10 @@ def list_quotations(conn, args):
     offset = int(args.offset) if args.offset else 0
 
     list_q = (Q.from_(q)
-              .select(q.id, q.naming_series, q.customer_id, q.quotation_date,
+              .left_join(c).on(c.id == q.customer_id)
+              .select(q.id, q.naming_series, q.customer_id,
+                      c.name.as_("customer_name"),
+                      q.quotation_date,
                       q.grand_total, q.status, q.company_id)
               .orderby(q.quotation_date, order=Order.desc)
               .orderby(q.created_at, order=Order.desc)
@@ -1100,6 +1104,7 @@ def get_sales_order(conn, args):
 def list_sales_orders(conn, args):
     """Query sales orders with filtering."""
     so = _t_sales_order.as_("so")
+    c = _t_customer.as_("c")
     params = []
     crit = None
 
@@ -1133,9 +1138,11 @@ def list_sales_orders(conn, args):
     offset = int(args.offset) if args.offset else 0
 
     list_q = (Q.from_(so)
-              .select(so.id, so.naming_series, so.customer_id, so.order_date,
-                      so.delivery_date, so.grand_total, so.status,
-                      so.per_delivered, so.per_invoiced, so.company_id)
+              .left_join(c).on(c.id == so.customer_id)
+              .select(so.id, so.naming_series, so.customer_id,
+                      c.name.as_("customer_name"),
+                      so.order_date, so.delivery_date, so.grand_total,
+                      so.status, so.per_delivered, so.per_invoiced, so.company_id)
               .orderby(so.order_date, order=Order.desc)
               .orderby(so.created_at, order=Order.desc)
               .limit(P()).offset(P()))
@@ -1454,6 +1461,7 @@ def get_delivery_note(conn, args):
 def list_delivery_notes(conn, args):
     """Query delivery notes with filtering."""
     dn = _t_delivery_note.as_("dn")
+    c = _t_customer.as_("c")
     params = []
     crit = None
 
@@ -1487,7 +1495,10 @@ def list_delivery_notes(conn, args):
     offset = int(args.offset) if args.offset else 0
 
     list_q = (Q.from_(dn)
-              .select(dn.id, dn.naming_series, dn.customer_id, dn.posting_date,
+              .left_join(c).on(c.id == dn.customer_id)
+              .select(dn.id, dn.naming_series, dn.customer_id,
+                      c.name.as_("customer_name"),
+                      dn.posting_date,
                       dn.sales_order_id, dn.status, dn.total_qty, dn.company_id)
               .orderby(dn.posting_date, order=Order.desc)
               .orderby(dn.created_at, order=Order.desc)
@@ -2178,6 +2189,7 @@ def get_sales_invoice(conn, args):
 def list_sales_invoices(conn, args):
     """Query sales invoices with filtering."""
     si = _t_sales_invoice.as_("si")
+    c = _t_customer.as_("c")
     params = []
     crit = None
 
@@ -2211,9 +2223,11 @@ def list_sales_invoices(conn, args):
     offset = int(args.offset) if args.offset else 0
 
     list_q = (Q.from_(si)
-              .select(si.id, si.naming_series, si.customer_id, si.posting_date,
-                      si.due_date, si.grand_total, si.outstanding_amount,
-                      si.status, si.is_return, si.company_id)
+              .left_join(c).on(c.id == si.customer_id)
+              .select(si.id, si.naming_series, si.customer_id,
+                      c.name.as_("customer_name"),
+                      si.posting_date, si.due_date, si.grand_total,
+                      si.outstanding_amount, si.status, si.is_return, si.company_id)
               .orderby(si.posting_date, order=Order.desc)
               .orderby(si.created_at, order=Order.desc)
               .limit(P()).offset(P()))
@@ -2787,6 +2801,60 @@ def create_credit_note(conn, args):
     conn.commit()
     ok({"credit_note_id": si_id, "against_invoice_id": args.against_invoice_id,
          "grand_total": str(grand_total), "is_return": True})
+
+
+# ---------------------------------------------------------------------------
+# 28b. list-credit-notes
+# ---------------------------------------------------------------------------
+
+def list_credit_notes(conn, args):
+    """List credit notes (sales invoices where is_return=1)."""
+    si = _t_sales_invoice.as_("si")
+    c = _t_customer.as_("c")
+    orig = _t_sales_invoice.as_("orig")
+    params = []
+    crit = si.is_return == 1
+
+    if args.company_id:
+        crit = Criterion.all([crit, si.company_id == P()])
+        params.append(args.company_id)
+    if args.customer_id:
+        crit = Criterion.all([crit, si.customer_id == P()])
+        params.append(args.customer_id)
+    if args.doc_status:
+        crit = Criterion.all([crit, si.status == P()])
+        params.append(args.doc_status)
+    if args.from_date:
+        crit = Criterion.all([crit, si.posting_date >= P()])
+        params.append(args.from_date)
+    if args.to_date:
+        crit = Criterion.all([crit, si.posting_date <= P()])
+        params.append(args.to_date)
+
+    count_q = Q.from_(si).select(fn.Count("*")).where(crit)
+    count_row = conn.execute(count_q.get_sql(), params).fetchone()
+    total_count = count_row[0]
+
+    limit = int(args.limit) if args.limit else 20
+    offset = int(args.offset) if args.offset else 0
+
+    list_q = (Q.from_(si)
+              .left_join(c).on(c.id == si.customer_id)
+              .left_join(orig).on(orig.id == si.return_against)
+              .select(si.id, si.naming_series, si.customer_id,
+                      c.name.as_("customer_name"),
+                      orig.naming_series.as_("return_against_name"),
+                      si.posting_date, si.grand_total,
+                      si.outstanding_amount, si.status, si.company_id)
+              .where(crit)
+              .orderby(si.posting_date, order=Order.desc)
+              .orderby(si.created_at, order=Order.desc)
+              .limit(P()).offset(P()))
+    rows = conn.execute(list_q.get_sql(), params + [limit, offset]).fetchall()
+
+    ok({"credit_notes": [row_to_dict(r) for r in rows],
+         "total_count": total_count, "limit": limit, "offset": offset,
+         "has_more": offset + limit < total_count})
 
 
 # ---------------------------------------------------------------------------
@@ -3893,6 +3961,7 @@ ACTIONS = {
     "submit-sales-invoice": submit_sales_invoice,
     "cancel-sales-invoice": cancel_sales_invoice,
     "create-credit-note": create_credit_note,
+    "list-credit-notes": list_credit_notes,
     "update-invoice-outstanding": update_invoice_outstanding,
     "add-sales-partner": add_sales_partner,
     "list-sales-partners": list_sales_partners,

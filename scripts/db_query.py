@@ -207,6 +207,7 @@ ACTION_MAP = {
     "submit-sales-invoice": "erpclaw-selling",
     "cancel-sales-invoice": "erpclaw-selling",
     "create-credit-note": "erpclaw-selling",
+    "list-credit-notes": "erpclaw-selling",
     "update-invoice-outstanding": "erpclaw-selling",
     "add-sales-partner": "erpclaw-selling",
     "list-sales-partners": "erpclaw-selling",
