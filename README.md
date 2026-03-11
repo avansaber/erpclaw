@@ -119,7 +119,22 @@ Modules install from `github.com/avansaber/*` repos via sparse checkout — only
 
 ## Web Dashboard
 
-Install [WebClaw](https://github.com/avansaber/webclaw) for a browser-based UI:
+Two web dashboard options are available:
+
+### ERPClaw Web (Recommended)
+
+[ERPClaw Web](https://github.com/avansaber/erpclaw-web) is a purpose-built dashboard for ERPClaw with live data tables, action execution, AI chat, and real-time WebSocket updates.
+
+```bash
+git clone https://github.com/avansaber/erpclaw-web.git
+cd erpclaw-web && npm install && pip install -r api/requirements.txt
+```
+
+See [erpclaw-web README](https://github.com/avansaber/erpclaw-web#readme) for setup and deployment.
+
+### WebClaw (Universal)
+
+[WebClaw](https://github.com/avansaber/webclaw) is a universal OpenClaw dashboard that works with any skill:
 
 ```
 clawhub install webclaw
@@ -130,7 +145,8 @@ WebClaw reads ERPClaw's SKILL.md and automatically generates forms, data tables,
 ## Links
 
 - **Website**: [erpclaw.ai](https://www.erpclaw.ai)
-- **Web Dashboard**: [WebClaw](https://github.com/avansaber/webclaw)
+- **ERPClaw Web**: [erpclaw-web](https://github.com/avansaber/erpclaw-web) — purpose-built web dashboard
+- **WebClaw**: [webclaw](https://github.com/avansaber/webclaw) — universal OpenClaw dashboard
 - **OpenClaw**: [openclaw.org](https://openclaw.org)
 - **All modules**: [github.com/avansaber](https://github.com/avansaber)
 
