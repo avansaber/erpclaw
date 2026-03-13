@@ -604,7 +604,7 @@
     "agricultureclaw": {
       "display_name": "AgricultureClaw",
       "description": "Agricultural operations management: farms, fields, crops, livestock, equipment, harvest tracking, and agricultural accounting. 63 actions.",
-      "category": "agriculture",
+      "category": "vertical",
       "github": "avansaber/agricultureclaw",
       "version": "1.0.0",
       "requires": [
