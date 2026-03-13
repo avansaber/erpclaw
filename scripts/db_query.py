@@ -15,10 +15,35 @@ import json
 import os
 import sqlite3
 import sys
+from uuid import uuid4
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODULES_DIR = os.path.expanduser("~/.openclaw/erpclaw/modules")
 DB_PATH = os.path.expanduser("~/.openclaw/erpclaw/data.sqlite")
+
+# Session ID for grouping action calls within one test scenario (set via env var)
+_SESSION_ID = os.environ.get("ERPCLAW_TEST_SESSION")
+
+
+def _log_action_call(action_name, routed_to, route_tier):
+    """Log an action call to action_call_log for L2 test verification.
+
+    Only logs when ERPCLAW_TEST_SESSION env var is set (test mode).
+    Silently ignores errors to never break normal operation.
+    """
+    if not _SESSION_ID:
+        return
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(
+            "INSERT INTO action_call_log (id, action_name, routed_to, route_tier, session_id) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (str(uuid4()), action_name, routed_to, route_tier, _SESSION_ID),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass  # Never break normal operation
 
 # Action → domain mapping (365 core entries + aliases + 10 module mgmt)
 # Collisions resolved: status→setup, recurring-template→journals,
@@ -623,29 +648,34 @@ def main():
 
     # Tier 0: Module management actions → module_manager.py
     if action in MODULE_ACTIONS:
+        _log_action_call(action, "module_manager", 0)
         forward_script(os.path.join(BASE_DIR, "module_manager.py"))
         return
 
     # Tier 0: Onboarding actions → onboarding.py
     if action in ONBOARDING_ACTIONS:
+        _log_action_call(action, "onboarding", 0)
         forward_script(os.path.join(BASE_DIR, "onboarding.py"))
         return
 
     # Tier 1: Check aliases (need to override action name)
     if action in ALIASES:
         domain, original_action = ALIASES[action]
+        _log_action_call(action, domain, 1)
         forward(domain, action_override=original_action)
         return
 
     # Tier 2: Check static core action map
     domain = ACTION_MAP.get(action)
     if domain:
+        _log_action_call(action, domain, 2)
         forward(domain)
         return
 
     # Tier 3: Dynamic lookup — check installed modules
     module_name = lookup_module_for_action(action)
     if module_name:
+        _log_action_call(action, module_name, 3)
         forward_module(module_name)
         return
 

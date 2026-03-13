@@ -54,7 +54,7 @@ full double-entry accounting and immutable audit trail.
 - **SQL injection safe**: All queries parameterized. **Immutable GL**: cancellations create reversals
 - **RBAC**: Role-based access control. Passwords hashed with PBKDF2-HMAC-SHA256 (600K iterations)
 - **PII protection**: Employee SSN, salary, and tax data stored locally only
-- **Network features** (user-initiated only): `fetch-exchange-rates` (public API), `install-module` / `update-modules` (GitHub repos)
+- **Network features** (user-initiated only, always requires explicit user confirmation): `fetch-exchange-rates` (public API), `install-module` / `update-modules` (open-source GitHub repos from `github.com/avansaber/*` only). Module installs require user confirmation.
 - **Routing**: `scripts/db_query.py` → domain scripts within package, or installed modules in `~/.openclaw/erpclaw/modules/`
 
 ### Skill Activation Triggers
@@ -65,16 +65,16 @@ Activate this skill when the user mentions: ERP, accounting, invoice, sales orde
 
 When a user describes their business for the first time:
 1. **Detect business type** from context (e.g., "dental practice" → dental, "trucking company" → fleet, "restaurant" → food-service)
-2. **Call `setup-company`** with `--industry <detected-type>` and `--country <country-code>` to auto-install the right modules
-3. **After setup, call `list-all-actions`** to discover newly available module-specific actions
-4. **Use module-specific actions** going forward (e.g., `health-add-patient` instead of `add-customer` for healthcare)
+2. **Ask the user to confirm** the detected type and proposed modules before proceeding
+3. **On confirmation**, call `setup-company` with `--industry <detected-type>` and `--country <country-code>`
+4. **After setup, call `list-all-actions`** to discover newly available module-specific actions
+5. **Use module-specific actions** going forward (e.g., `health-add-patient` instead of `add-customer` for healthcare)
 
-If a user mentions a country other than US:
-- Use the `--country` flag on `setup-company` (e.g., `--country IN` for India, `--country CA` for Canada)
-- This auto-installs the regional compliance module (GST, VAT, etc.)
+If a user mentions a country other than US, confirm with the user, then use `--country` on `setup-company` (e.g., `--country IN` for India, `--country CA` for Canada). This installs the regional compliance module after confirmation.
 
 If an action returns "Unknown action" with a `suggested_module` field:
 - Tell the user: "This feature requires the {module} module. Want me to install it?"
+- **Wait for explicit user confirmation** before installing
 - On confirmation: `--action install-module --module-name {module}`
 - After install: `--action list-all-actions` to refresh available actions
 
@@ -242,22 +242,13 @@ For all actions: `python3 {baseDir}/scripts/db_query.py --action <action> [flags
 
 | Action | Description |
 |--------|-------------|
-| `add-revenue-contract` / `update-revenue-contract` / `get-revenue-contract` / `list-revenue-contracts` | Revenue contract CRUD (ASC 606) |
-| `add-performance-obligation` / `list-performance-obligations` / `satisfy-performance-obligation` | Performance obligations |
-| `add-variable-consideration` / `list-variable-considerations` / `modify-contract` | Variable consideration & mods |
-| `calculate-revenue-schedule` / `generate-revenue-entries` | Revenue schedule & GL posting |
-| `revenue-waterfall-report` / `revenue-recognition-summary` | Revenue reports |
-| `add-lease` / `update-lease` / `get-lease` / `list-leases` / `classify-lease` | Lease CRUD & classification (ASC 842) |
-| `calculate-rou-asset` / `calculate-lease-liability` / `generate-amortization-schedule` / `record-lease-payment` | ROU asset, liability & amortization |
-| `lease-maturity-report` / `lease-disclosure-report` / `lease-summary` | Lease reports |
-| `add-ic-transaction` / `update-ic-transaction` / `get-ic-transaction` / `list-ic-transactions` | Intercompany CRUD |
-| `approve-ic-transaction` / `post-ic-transaction` | IC workflow |
-| `add-transfer-price-rule` / `list-transfer-price-rules` | Transfer pricing |
-| `ic-reconciliation-report` / `ic-elimination-report` | IC reports |
-| `add-consolidation-group` / `list-consolidation-groups` / `add-group-entity` | Consolidation groups |
-| `run-consolidation` / `generate-elimination-entries` / `add-currency-translation` | Consolidation process |
-| `consolidation-trial-balance-report` / `consolidation-summary` | Consolidation reports |
-| `standards-compliance-dashboard` | ASC 606/842 compliance overview |
+| `add-revenue-contract` / `calculate-revenue-schedule` / `generate-revenue-entries` | ASC 606 revenue recognition |
+| `add-performance-obligation` / `satisfy-performance-obligation` / `add-variable-consideration` | Performance obligations & variable consideration |
+| `add-lease` / `classify-lease` / `calculate-rou-asset` / `calculate-lease-liability` | ASC 842 lease accounting |
+| `generate-amortization-schedule` / `record-lease-payment` / `lease-maturity-report` | Lease amortization & reports |
+| `add-ic-transaction` / `approve-ic-transaction` / `post-ic-transaction` / `add-transfer-price-rule` | Intercompany transactions |
+| `add-consolidation-group` / `run-consolidation` / `generate-elimination-entries` | Multi-entity consolidation |
+| `revenue-waterfall-report` / `consolidation-trial-balance-report` / `standards-compliance-dashboard` | Advanced reports |
 
 ### HR & Payroll (50 actions)
 
@@ -265,15 +256,12 @@ For all actions: `python3 {baseDir}/scripts/db_query.py --action <action> [flags
 |--------|-------------|
 | `add-employee` / `update-employee` / `get-employee` / `list-employees` | Employee CRUD |
 | `add-department` / `list-departments` / `add-designation` / `list-designations` | Org structure |
-| `add-leave-type` / `list-leave-types` / `add-leave-allocation` / `get-leave-balance` | Leave config |
-| `add-leave-application` / `approve-leave` / `reject-leave` / `list-leave-applications` | Leave workflow |
-| `mark-attendance` / `bulk-mark-attendance` / `list-attendance` / `add-holiday-list` | Attendance & holidays |
-| `add-expense-claim` / `submit-expense-claim` / `approve-expense-claim` / `reject-expense-claim` / `list-expense-claims` | Expense claims |
-| `record-lifecycle-event` / `hr-status` / `update-expense-claim-status` | HR lifecycle & status |
-| `add-salary-component` / `list-salary-components` / `add-salary-structure` / `get-salary-structure` / `list-salary-structures` | Salary setup |
-| `add-salary-assignment` / `list-salary-assignments` / `add-income-tax-slab` / `update-fica-config` / `update-futa-suta-config` | Payroll config |
-| `create-payroll-run` / `generate-salary-slips` / `submit-payroll-run` / `cancel-payroll-run` / `get-salary-slip` / `list-salary-slips` | Payroll processing |
-| `generate-w2-data` / `add-garnishment` / `update-garnishment` / `get-garnishment` / `list-garnishments` / `payroll-status` | W-2, garnishments & status |
+| `add-leave-type` / `add-leave-allocation` / `add-leave-application` / `approve-leave` / `reject-leave` | Leave management |
+| `mark-attendance` / `bulk-mark-attendance` / `add-holiday-list` | Attendance |
+| `add-expense-claim` / `submit-expense-claim` / `approve-expense-claim` | Expenses |
+| `add-salary-structure` / `add-salary-assignment` / `add-income-tax-slab` / `update-fica-config` | Payroll config |
+| `create-payroll-run` / `generate-salary-slips` / `submit-payroll-run` / `cancel-payroll-run` | Payroll processing |
+| `generate-w2-data` / `add-garnishment` / `list-garnishments` / `payroll-status` | W-2 & garnishments |
 
 ### Module Management (10 actions)
 
@@ -296,31 +284,16 @@ For all actions: `python3 {baseDir}/scripts/db_query.py --action <action> [flags
 | User Says | Action |
 |-----------|--------|
 | "Set up my company" | `setup-company` |
-| "Show trial balance" | `trial-balance` |
 | "Create an invoice" | `create-sales-invoice` → `submit-sales-invoice` |
 | "Record a payment" | `add-payment` → `submit-payment` |
-| "Install CRM" | `install-module --module-name erpclaw-growth` |
-| "Install healthclaw" | `install-module --module-name healthclaw` |
-| "Install property module" | `install-module --module-name propertyclaw` |
-| "Install education module" | `install-module --module-name educlaw` |
-| "Set up for retail" | `onboard --profile retail` |
-| "I run a dental practice" | `setup-company --industry dental` (auto-installs healthclaw + healthclaw-dental) |
-| "I'm in India" | `setup-company --country IN` (auto-installs erpclaw-region-in) |
+| "I run a dental practice" | `setup-company --industry dental` (confirm first, then installs modules) |
+| "I'm in India" | `setup-company --country IN` (confirm first, then installs regional module) |
+| "Set up for retail" | `onboard --profile retail` (confirm first) |
 | "What actions are available?" | `list-all-actions` |
-| "Add employee" | `add-employee` |
 | "Run payroll" | `create-payroll-run` → `generate-salary-slips` → `submit-payroll-run` |
-| "Apply for leave" | `add-leave-application` |
-| "Generate W-2s" | `generate-w2-data` |
 
-Confirm before: `submit-*`, `cancel-*`, `approve-*`, `reject-*`, `run-elimination`, `run-consolidation`, `restore-database`, `close-fiscal-year`, `initialize-database --force`, `install-module`, `remove-module`, `onboard`. All `add-*`, `get-*`, `list-*`, `update-*` actions run immediately.
+**Always confirm with user before running:** `setup-company` (with --industry or --country), `onboard`, `install-module`, `remove-module`, `update-modules`, `submit-*`, `cancel-*`, `approve-*`, `reject-*`, `run-elimination`, `run-consolidation`, `restore-database`, `close-fiscal-year`, `initialize-database --force`. All `add-*`, `get-*`, `list-*`, `update-*` run immediately.
 
 ## Technical Details (Tier 3)
 
-### Architecture
-- **Router**: `scripts/db_query.py` dispatches to 14 core domain scripts + installed modules
-- **Core Domains**: setup, meta, gl, journals, payments, tax, reports, selling, buying, inventory, billing, accounting-adv, hr, payroll
-- **Module System**: Expansion modules installed from GitHub to `~/.openclaw/erpclaw/modules/`
-- **Database**: Single SQLite at `~/.openclaw/erpclaw/data.sqlite`
-- **Shared Library**: `~/.openclaw/erpclaw/lib/erpclaw_lib/` (installed by `initialize-database`)
-- **151 tables** (149 core + 2 module system). Money = TEXT (Decimal), IDs = TEXT (UUID4). GL entries immutable.
-- **Script**: `scripts/db_query.py --action <action-name> [--key value ...]`
+Router: `scripts/db_query.py` → 14 core domains + installed modules. Modules from GitHub to `~/.openclaw/erpclaw/modules/`. Single SQLite DB. 151 tables, Money=TEXT(Decimal), IDs=TEXT(UUID4), GL immutable.

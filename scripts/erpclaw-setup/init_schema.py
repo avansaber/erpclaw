@@ -63,6 +63,20 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp);
 CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log(entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_audit_log_skill ON audit_log(skill);
 
+CREATE TABLE IF NOT EXISTS action_call_log (
+    id              TEXT PRIMARY KEY,
+    timestamp       TEXT DEFAULT (datetime('now')),
+    action_name     TEXT NOT NULL,
+    routed_to       TEXT NOT NULL,          -- domain or module name
+    route_tier      INTEGER NOT NULL,       -- 0=standalone, 1=alias, 2=core, 3=module
+    session_id      TEXT                    -- groups actions within one L2 test scenario
+);
+
+CREATE INDEX IF NOT EXISTS idx_action_call_log_ts ON action_call_log(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_action_call_log_action ON action_call_log(action_name);
+CREATE INDEX IF NOT EXISTS idx_action_call_log_session ON action_call_log(session_id);
+CREATE INDEX IF NOT EXISTS idx_action_call_log_routed ON action_call_log(routed_to);
+
 CREATE TABLE IF NOT EXISTS company (
     id              TEXT PRIMARY KEY,
     name            TEXT NOT NULL UNIQUE,
