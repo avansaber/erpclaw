@@ -239,7 +239,133 @@ def build_action_cache(conn, module_name, install_path):
         [(module_name, a) for a in sorted(all_actions)]
     )
     conn.commit()
+
+    # Check for action name collisions with other modules (non-fatal warning)
+    collisions = conn.execute(
+        """SELECT action_name, module_name FROM erpclaw_module_action
+           WHERE action_name IN ({}) AND module_name != ?""".format(
+            ",".join("?" for _ in all_actions)),
+        list(all_actions) + [module_name]
+    ).fetchall()
+    if collisions:
+        import sys as _sys
+        for c in collisions:
+            _sys.stderr.write(
+                f"[module-manager] WARNING: action '{c['action_name']}' in '{module_name}' "
+                f"collides with '{c['module_name']}'\n"
+            )
+
     return len(all_actions)
+
+
+# ---------------------------------------------------------------------------
+# SKILL.md regeneration — appends installed module actions to deployed SKILL.md
+# ---------------------------------------------------------------------------
+
+def _regenerate_skill_md(conn):
+    """Regenerate the deployed SKILL.md with installed module actions appendix.
+
+    Reads the source SKILL.md as a template, appends an auto-generated section
+    listing all installed module actions, and writes to the deployed location.
+    The source template is the installed skill's SKILL.md (without the appendix).
+    """
+    # Find the deployed SKILL.md path
+    deployed_path = os.path.expanduser("~/clawd/skills/erpclaw/SKILL.md")
+    # Source template is in the same skill directory
+    source_path = os.path.join(SCRIPT_DIR, "..", "SKILL.md")
+
+    # Use source if it exists, otherwise use deployed as template
+    template_path = source_path if os.path.isfile(source_path) else deployed_path
+    if not os.path.isfile(template_path):
+        return  # No SKILL.md to regenerate
+
+    try:
+        with open(template_path, "r") as f:
+            content = f.read()
+    except OSError:
+        return
+
+    # Strip any existing auto-generated appendix
+    marker = "## Installed Module Actions"
+    if marker in content:
+        content = content[:content.index(marker)].rstrip() + "\n"
+
+    # Query installed modules and their actions
+    rows = conn.execute(
+        """SELECT ma.module_name, ma.action_name, m.display_name, m.action_count
+           FROM erpclaw_module_action ma
+           JOIN erpclaw_module m ON m.name = ma.module_name
+           WHERE m.install_status = 'installed' AND m.is_active = 1
+           ORDER BY ma.module_name, ma.action_name"""
+    ).fetchall()
+
+    if not rows:
+        # No modules installed — write template without appendix
+        if os.path.isfile(deployed_path):
+            try:
+                with open(deployed_path, "w") as f:
+                    f.write(content)
+            except OSError:
+                pass
+        return
+
+    # Group actions by module
+    module_actions = {}
+    module_display = {}
+    module_counts = {}
+    for r in rows:
+        mod = r["module_name"]
+        module_actions.setdefault(mod, []).append(r["action_name"])
+        module_display[mod] = r["display_name"]
+        module_counts[mod] = r["action_count"] or len(module_actions[mod])
+
+    # Read module descriptions from SKILL.md files for context
+    def _get_module_desc(module_name):
+        """Read first line of description from module's SKILL.md."""
+        for base in [os.path.join(MODULES_DIR, module_name),
+                     os.path.join(SCRIPT_DIR, "..", "..", module_name)]:
+            skill_path = os.path.join(base, "SKILL.md")
+            if os.path.isfile(skill_path):
+                try:
+                    with open(skill_path, "r") as f:
+                        for line in f:
+                            if line.startswith("description:"):
+                                desc = line.split(":", 1)[1].strip().strip(">").strip()
+                                if desc:
+                                    return desc[:120]
+                except OSError:
+                    pass
+        return ""
+
+    # Build appendix
+    appendix = f"\n\n{marker}\n"
+    appendix += "<!-- AUTO-GENERATED — do not edit manually. Regenerated on module install/uninstall. -->\n\n"
+
+    for mod in sorted(module_actions.keys()):
+        actions = module_actions[mod]
+        display = module_display.get(mod, mod)
+        count = len(actions)
+        desc = _get_module_desc(mod)
+
+        appendix += f"### {display} ({count} actions)\n"
+        if desc:
+            appendix += f"{desc}\n"
+
+        # Show key actions (up to 10)
+        key_actions = actions[:10]
+        appendix += f"Key actions: {', '.join(f'`{a}`' for a in key_actions)}"
+        if len(actions) > 10:
+            appendix += f", ... (+{len(actions) - 10} more)"
+        appendix += "\n\n"
+
+    # Write to deployed path
+    deployed_dir = os.path.dirname(deployed_path)
+    if os.path.isdir(deployed_dir):
+        try:
+            with open(deployed_path, "w") as f:
+                f.write(content + appendix)
+        except OSError:
+            pass  # Non-fatal — skill still works, just without action discovery
 
 
 # ---------------------------------------------------------------------------
@@ -485,6 +611,9 @@ def _install_module_inner(args, conn, modules_by_name, depth=0):
     )
     conn.commit()
 
+    # Regenerate SKILL.md with new module actions
+    _regenerate_skill_md(conn)
+
     return {
         "module": module_name,
         "display_name": display_name,
@@ -579,6 +708,9 @@ def remove_module(args):
     # Remove directory
     if install_path and os.path.isdir(install_path):
         shutil.rmtree(install_path, ignore_errors=True)
+
+    # Regenerate SKILL.md without removed module
+    _regenerate_skill_md(conn)
 
     ok({
         "module": module_name,
@@ -947,12 +1079,84 @@ def rebuild_action_cache(args):
         except Exception as e:
             errors.append({"module": module_name, "error": str(e)})
 
+    # Regenerate SKILL.md with updated actions
+    _regenerate_skill_md(conn)
+
     ok({
         "rebuilt": rebuilt,
         "errors": errors,
         "total_modules": len(rebuilt),
         "total_actions": total_actions,
         "summary": f"Rebuilt cache for {len(rebuilt)} modules ({total_actions} actions), {len(errors)} errors",
+    })
+
+
+# ---------------------------------------------------------------------------
+# Action: list-all-actions
+# ---------------------------------------------------------------------------
+
+def list_all_actions(args):
+    """Return all available actions — core + installed modules."""
+    conn = get_connection()
+
+    # Get core actions from the main ACTION_MAP
+    # We need to read db_query.py to get the ACTION_MAP keys
+    db_query_path = os.path.join(SCRIPT_DIR, "db_query.py")
+    core_actions = _extract_actions_via_regex(db_query_path)
+    # Also add MODULE_ACTIONS and ONBOARDING_ACTIONS
+    core_actions |= {
+        "install-module", "remove-module", "update-modules",
+        "list-modules", "available-modules", "module-status",
+        "search-modules", "rebuild-action-cache",
+        "list-profiles", "onboard", "list-all-actions",
+    }
+
+    # Module actions from cache
+    rows = conn.execute(
+        """SELECT ma.action_name, ma.module_name
+           FROM erpclaw_module_action ma
+           JOIN erpclaw_module m ON m.name = ma.module_name
+           WHERE m.install_status = 'installed' AND m.is_active = 1
+           ORDER BY ma.module_name, ma.action_name"""
+    ).fetchall()
+
+    module_actions = {}
+    for r in rows:
+        module_actions.setdefault(r["module_name"], []).append(r["action_name"])
+
+    ok({
+        "core_actions": sorted(core_actions),
+        "core_count": len(core_actions),
+        "module_actions": module_actions,
+        "module_count": len(module_actions),
+        "total": len(core_actions) + sum(len(v) for v in module_actions.values()),
+    })
+
+
+# ---------------------------------------------------------------------------
+# Action: regenerate-skill-md
+# ---------------------------------------------------------------------------
+
+def regenerate_skill_md_action(args):
+    """Regenerate the deployed SKILL.md with installed module actions."""
+    conn = get_connection()
+    _regenerate_skill_md(conn)
+
+    # Count what was generated
+    rows = conn.execute(
+        """SELECT m.name, COUNT(ma.action_name) as cnt
+           FROM erpclaw_module m
+           LEFT JOIN erpclaw_module_action ma ON m.name = ma.module_name
+           WHERE m.install_status = 'installed' AND m.is_active = 1
+           GROUP BY m.name"""
+    ).fetchall()
+
+    modules = [{"module": r["name"], "actions": r["cnt"]} for r in rows]
+    ok({
+        "regenerated": True,
+        "modules": modules,
+        "total_modules": len(modules),
+        "deployed_path": os.path.expanduser("~/clawd/skills/erpclaw/SKILL.md"),
     })
 
 
@@ -969,6 +1173,8 @@ ACTIONS = {
     "module-status": module_status,
     "search-modules": search_modules,
     "rebuild-action-cache": rebuild_action_cache,
+    "list-all-actions": list_all_actions,
+    "regenerate-skill-md": regenerate_skill_md_action,
 }
 
 

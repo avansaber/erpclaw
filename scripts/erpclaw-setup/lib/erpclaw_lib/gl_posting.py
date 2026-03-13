@@ -245,15 +245,28 @@ def validate_gl_entries(
                     f"Role '{allowed_role}' required"
                 )
 
-    # Step 11: Zero-Amount Rejection
-    for entry in entries:
-        debit = to_decimal(entry.get("debit", "0"))
-        credit = to_decimal(entry.get("credit", "0"))
-        if debit == 0 and credit == 0:
-            acct_name = account_cache.get(entry["account_id"], {}).get("name", entry["account_id"])
+    # Step 11: Zero-Amount Filtering
+    # Zero-amount line items are legitimate (e.g., warranty invoices with $0
+    # line items). Instead of rejecting them, we silently remove them so
+    # they are never inserted into gl_entry. The caller's entries list is
+    # mutated in-place so insert_gl_entries sees the filtered set.
+    entries[:] = [
+        e for e in entries
+        if not (to_decimal(e.get("debit", "0")) == 0
+                and to_decimal(e.get("credit", "0")) == 0)
+    ]
+
+    # After filtering, re-check that we still have balanced entries.
+    # An empty set is valid (nothing to post).
+    if entries:
+        total_debit = sum(to_decimal(e.get("debit", "0")) for e in entries)
+        total_credit = sum(to_decimal(e.get("credit", "0")) for e in entries)
+        if not amounts_equal(total_debit, total_credit):
+            diff = total_debit - total_credit
             raise ValueError(
-                f"GL Validation Step 11 Failed: GL entry line for account '{acct_name}' "
-                f"has zero debit and zero credit -- no-op entries are not permitted"
+                f"GL Validation Step 11 Failed: After removing zero-amount lines, "
+                f"GL entries do not balance: total_debit={total_debit}, "
+                f"total_credit={total_credit}, difference={diff}"
             )
 
     # Step 12: Budget Check
@@ -367,13 +380,17 @@ def insert_gl_entries(
     # 2. Normalize entries
     entries = _normalize_entries(entries)
 
-    # 3. Run 12-step validation
+    # 3. Run 12-step validation (Step 11 may filter out zero-amount entries)
     _warnings = validate_gl_entries(
         conn, entries, company_id, posting_date,
         is_opening=is_opening,
         voucher_type=voucher_type,
         context_role=context_role,
     )
+
+    # 3b. If all entries were zero-amount and got filtered out, nothing to post
+    if not entries:
+        return []
 
     # 4. CWIP restriction for journal entries
     if voucher_type == "journal_entry":

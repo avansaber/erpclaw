@@ -363,6 +363,8 @@ def add_item_group(conn, args):
     if not args.name:
         err("--name is required")
 
+    company_id = getattr(args, "company_id", None)
+
     if args.parent_id:
         ig_t = Table("item_group")
         parent_q = Q.from_(ig_t).select(ig_t.id).where(ig_t.id == P())
@@ -372,12 +374,14 @@ def add_item_group(conn, args):
 
     ig_id = str(uuid.uuid4())
     t = Table("item_group")
-    q = Q.into(t).columns("id", "name", "parent_id").insert(P(), P(), P())
+    q = Q.into(t).columns("id", "name", "company_id", "parent_id").insert(P(), P(), P(), P())
     try:
-        conn.execute(q.get_sql(), (ig_id, args.name, args.parent_id))
+        conn.execute(q.get_sql(), (ig_id, args.name, company_id, args.parent_id))
     except sqlite3.IntegrityError as e:
         sys.stderr.write(f"[erpclaw-inventory] {e}\n")
-        err("Item group creation failed — check for duplicates or invalid data")
+        err(f"Item group '{args.name}' already exists"
+            f"{' for this company' if company_id else ''}"
+            f". Choose a different name or update the existing group.")
 
     audit(conn, "erpclaw-inventory", "add-item-group", "item_group", ig_id,
            new_values={"name": args.name})

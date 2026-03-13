@@ -123,6 +123,52 @@ def _recalc_unallocated(conn, payment_entry_id: str):
     conn.execute(sql, (str(unallocated), payment_entry_id))
 
 
+def _validate_not_group_account(conn, account_id: str, label: str) -> str:
+    """Validate that an account is not a group account.
+
+    If the account is a group (is_group = 1), attempt to find the first
+    leaf child account under it.  If a single leaf child exists, return
+    its ID (auto-resolve).  Otherwise, return an error listing available
+    leaf children so the user can pick one.
+
+    Returns the validated (possibly resolved) account ID.
+    """
+    q = (Q.from_(ACCOUNT)
+         .select(ACCOUNT.id, ACCOUNT.name, ACCOUNT.account_number, ACCOUNT.is_group)
+         .where(ACCOUNT.id == P()))
+    row = conn.execute(q.get_sql(), (account_id,)).fetchone()
+    if not row:
+        return account_id  # Account existence is checked elsewhere
+
+    if not row["is_group"]:
+        return account_id  # Leaf account — OK
+
+    # Group account — try to find leaf children
+    q_children = (Q.from_(ACCOUNT)
+                  .select(ACCOUNT.id, ACCOUNT.name, ACCOUNT.account_number)
+                  .where(ACCOUNT.parent_id == P())
+                  .where(ACCOUNT.is_group == 0)
+                  .where(ACCOUNT.disabled == 0))
+    children = conn.execute(q_children.get_sql(), (account_id,)).fetchall()
+
+    if len(children) == 1:
+        # Single leaf child — auto-resolve
+        child = row_to_dict(children[0])
+        return child["id"]
+
+    if len(children) == 0:
+        err(f"Account '{row['name']}' ({label}) is a group account with no "
+            f"leaf children. Please create a child account under it first.")
+    else:
+        child_list = ", ".join(
+            f"'{row_to_dict(c)['name']}' ({row_to_dict(c)['account_number'] or row_to_dict(c)['id']})"
+            for c in children
+        )
+        err(f"Account '{row['name']}' ({label}) is a group account. "
+            f"Cannot post to group accounts. "
+            f"Please specify one of its leaf children: {child_list}")
+
+
 # ---------------------------------------------------------------------------
 # 1. add-payment
 # ---------------------------------------------------------------------------
@@ -160,11 +206,15 @@ def add_payment(conn, args):
     if not conn.execute(q.get_sql(), (company_id,)).fetchone():
         err(f"Company {company_id} not found")
 
-    # Validate accounts exist
+    # Validate accounts exist and are not group accounts
     qa = Q.from_(ACCOUNT).select(ACCOUNT.id).where(ACCOUNT.id == P())
     for acct_id, label in [(paid_from, "paid-from-account"), (paid_to, "paid-to-account")]:
         if not conn.execute(qa.get_sql(), (acct_id,)).fetchone():
             err(f"Account {acct_id} ({label}) not found")
+
+    # Resolve group accounts to leaf children (or error)
+    paid_from = _validate_not_group_account(conn, paid_from, "paid-from-account")
+    paid_to = _validate_not_group_account(conn, paid_to, "paid-to-account")
 
     amount = round_currency(to_decimal(paid_amount))
     if amount <= 0:
@@ -481,6 +531,19 @@ def submit_payment(conn, args):
     pe = _get_pe_or_err(conn, pe_id)
     if pe["status"] != "draft":
         err(f"Cannot submit: payment is '{pe['status']}' (must be 'draft')")
+
+    # Pre-GL validation: ensure accounts are not group accounts
+    # (catches cases where draft was created before this check existed)
+    for acct_key, label in [("paid_from_account", "paid-from-account"),
+                            ("paid_to_account", "paid-to-account")]:
+        resolved = _validate_not_group_account(conn, pe[acct_key], label)
+        if resolved != pe[acct_key]:
+            # Auto-resolved to leaf child — update the payment entry
+            sql = update_row("payment_entry",
+                             data={acct_key: P(), "updated_at": LiteralValue("datetime('now')")},
+                             where={"id": P()})
+            conn.execute(sql, (resolved, pe_id))
+            pe[acct_key] = resolved
 
     paid_amount = to_decimal(pe["paid_amount"])
     allocations = _get_allocations(conn, pe_id)

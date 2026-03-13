@@ -1394,11 +1394,13 @@ INVENTORY_TABLES = """
 
 CREATE TABLE IF NOT EXISTS item_group (
     id              TEXT PRIMARY KEY,
-    name            TEXT NOT NULL UNIQUE,
+    name            TEXT NOT NULL,
+    company_id      TEXT REFERENCES company(id),
     parent_id       TEXT REFERENCES item_group(id) ON DELETE RESTRICT,
     is_group        INTEGER NOT NULL DEFAULT 0 CHECK(is_group IN (0,1)),
     created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    updated_at      TEXT DEFAULT (datetime('now')),
+    UNIQUE(name, company_id)
 );
 
 CREATE TABLE IF NOT EXISTS item (

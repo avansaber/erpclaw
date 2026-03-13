@@ -21,6 +21,25 @@ from erpclaw_lib.response import ok, err
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# Country → regional module mapping (used by --country flag on onboard)
+COUNTRY_REGION_MAP = {
+    "IN": "erpclaw-region-in", "India": "erpclaw-region-in",
+    "CA": "erpclaw-region-ca", "Canada": "erpclaw-region-ca",
+    "GB": "erpclaw-region-uk", "UK": "erpclaw-region-uk",
+    "United Kingdom": "erpclaw-region-uk",
+    "DE": "erpclaw-region-eu", "FR": "erpclaw-region-eu",
+    "IT": "erpclaw-region-eu", "ES": "erpclaw-region-eu",
+    "NL": "erpclaw-region-eu", "BE": "erpclaw-region-eu",
+    "AT": "erpclaw-region-eu", "PT": "erpclaw-region-eu",
+    "IE": "erpclaw-region-eu", "SE": "erpclaw-region-eu",
+    "FI": "erpclaw-region-eu", "DK": "erpclaw-region-eu",
+    "PL": "erpclaw-region-eu", "CZ": "erpclaw-region-eu",
+    "GR": "erpclaw-region-eu",
+    "Germany": "erpclaw-region-eu", "France": "erpclaw-region-eu",
+    "Italy": "erpclaw-region-eu", "Spain": "erpclaw-region-eu",
+    "Netherlands": "erpclaw-region-eu",
+}
+
 # ---------------------------------------------------------------------------
 # Business Profiles: profile_name → list of module names to install
 # ---------------------------------------------------------------------------
@@ -140,9 +159,52 @@ PROFILES = {
     },
     "nonprofit": {
         "display_name": "Nonprofit / NGO",
-        "description": "Nonprofit: grants, donor management, fund accounting, CRM",
+        "description": "Nonprofit: donors, grants, fund accounting, programs, volunteer tracking, CRM",
         "modules": [
+            "nonprofitclaw",
             "erpclaw-growth",
+        ],
+    },
+    "construction": {
+        "display_name": "Construction / Contracting",
+        "description": "General contracting, subcontracting: job costing, AIA billing, change orders",
+        "modules": [
+            "constructclaw",
+        ],
+    },
+    "agriculture": {
+        "display_name": "Agriculture / Farming",
+        "description": "Crop and livestock farming: field tracking, harvest, equipment, commodity sales",
+        "modules": [
+            "agricultureclaw",
+        ],
+    },
+    "automotive": {
+        "display_name": "Auto Repair / Dealership",
+        "description": "Auto repair shops and dealerships: work orders, parts, vehicles, service history",
+        "modules": [
+            "automotiveclaw",
+        ],
+    },
+    "food-service": {
+        "display_name": "Restaurant / Food Service",
+        "description": "Restaurants, catering, food production: menus, recipes, food cost, waste tracking",
+        "modules": [
+            "foodclaw",
+        ],
+    },
+    "hospitality": {
+        "display_name": "Hotel / Hospitality",
+        "description": "Hotels, venues, resorts: reservations, rooms, housekeeping, events, F&B",
+        "modules": [
+            "hospitalityclaw",
+        ],
+    },
+    "legal": {
+        "display_name": "Law Firm / Legal Practice",
+        "description": "Law firms: matters, time billing, trust accounting, IOLTA, client management",
+        "modules": [
+            "legalclaw",
         ],
     },
     "enterprise": {
@@ -289,12 +351,41 @@ def onboard(conn, args):
         except Exception as e:
             failed.append({"module": module_name, "error": str(e)})
 
+    # Auto-install regional module if --country is provided
+    country = getattr(args, "country", None)
+    region_module = COUNTRY_REGION_MAP.get(country) if country else None
+    if region_module:
+        if region_module in already_installed:
+            skipped.append({"module": region_module, "reason": "already installed"})
+        elif region_module not in modules_by_name:
+            failed.append({"module": region_module, "error": "not found in registry"})
+        else:
+            try:
+                install_args = argparse.Namespace(module_name=region_module)
+                result = _install_module_inner(install_args, conn, modules_by_name, depth=0)
+                installed.append(result)
+                already_installed.add(region_module)
+            except SystemExit:
+                conn = get_connection()
+                check = conn.execute(
+                    "SELECT install_status FROM erpclaw_module WHERE name = ?",
+                    (region_module,)
+                ).fetchone()
+                if check and check["install_status"] == "installed":
+                    installed.append({"module": region_module, "note": "installed (regional)"})
+                    already_installed.add(region_module)
+                else:
+                    failed.append({"module": region_module, "error": "installation interrupted"})
+            except Exception as e:
+                failed.append({"module": region_module, "error": str(e)})
+
     ok({
         "profile": profile_name,
         "display_name": profile["display_name"],
         "installed": installed,
         "skipped": skipped,
         "failed": failed,
+        "region_module": region_module,
         "summary": f"{len(installed)} installed, {len(skipped)} skipped, {len(failed)} failed",
     })
 
@@ -309,6 +400,8 @@ def main():
     parser = argparse.ArgumentParser(description="ERPClaw Onboarding")
     parser.add_argument("--action", required=True, choices=sorted(ACTIONS.keys()))
     parser.add_argument("--profile", help="Business profile name")
+    parser.add_argument("--country", default=None,
+                        help="Country code (e.g. IN, CA, GB, DE) — auto-installs regional module")
     parser.add_argument("--db-path", default=None)
 
     args = parser.parse_args()

@@ -31,27 +31,6 @@
         "rbac"
       ]
     },
-    "webclaw": {
-      "display_name": "WebClaw",
-      "description": "Web dashboard and admin UI for ERPClaw. Adaptive ERP profiles, skill browser, dynamic forms, and AI chat. 12 actions.",
-      "category": "core",
-      "github": "avansaber/webclaw",
-      "version": "2.0.0",
-      "requires": [],
-      "has_init_db": false,
-      "action_count": 12,
-      "tags": [
-        "web",
-        "dashboard",
-        "ui",
-        "admin",
-        "adaptive",
-        "profiles",
-        "skill-browser",
-        "forms",
-        "ai-chat"
-      ]
-    },
     "erpclaw-growth": {
       "display_name": "ERPClaw Growth",
       "description": "CRM, analytics, AI engine, and advanced CRM capabilities. Leads, opportunities, campaigns, KPIs, anomaly detection, forecasting, and scoring. 110 actions across 4 domains.",

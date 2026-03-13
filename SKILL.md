@@ -61,6 +61,25 @@ full double-entry accounting and immutable audit trail.
 
 Activate this skill when the user mentions: ERP, accounting, invoice, sales order, purchase order, customer, supplier, inventory, payment, GL, trial balance, P&L, balance sheet, tax, billing, modules, install module, onboard, CRM, manufacturing, healthcare, education, retail, employee, HR, payroll, salary, leave, attendance, expense claim, W-2, garnishment.
 
+### Auto-Detection (IMPORTANT)
+
+When a user describes their business for the first time:
+1. **Detect business type** from context (e.g., "dental practice" → dental, "trucking company" → fleet, "restaurant" → food-service)
+2. **Call `setup-company`** with `--industry <detected-type>` and `--country <country-code>` to auto-install the right modules
+3. **After setup, call `list-all-actions`** to discover newly available module-specific actions
+4. **Use module-specific actions** going forward (e.g., `health-add-patient` instead of `add-customer` for healthcare)
+
+If a user mentions a country other than US:
+- Use the `--country` flag on `setup-company` (e.g., `--country IN` for India, `--country CA` for Canada)
+- This auto-installs the regional compliance module (GST, VAT, etc.)
+
+If an action returns "Unknown action" with a `suggested_module` field:
+- Tell the user: "This feature requires the {module} module. Want me to install it?"
+- On confirmation: `--action install-module --module-name {module}`
+- After install: `--action list-all-actions` to refresh available actions
+
+Industry values: retail, restaurant, healthcare, dental, veterinary, construction, manufacturing, legal, agriculture, hospitality, property, school, university, nonprofit, automotive, therapy, home-health, consulting, distribution, saas
+
 ### Setup (First Use Only)
 
 ```
@@ -268,6 +287,7 @@ For all actions: `python3 {baseDir}/scripts/db_query.py --action <action> [flags
 | `module-status` | Detailed status for a module (`--module-name <name>`) |
 | `search-modules` | Search catalog by keyword (`--search <query>`) |
 | `rebuild-action-cache` | Rebuild action routing cache |
+| `list-all-actions` | List ALL available actions (core + installed modules) |
 | `list-profiles` | Browse business onboarding profiles |
 | `onboard` | Auto-install modules for a business type (`--profile <name>`) |
 
@@ -284,6 +304,9 @@ For all actions: `python3 {baseDir}/scripts/db_query.py --action <action> [flags
 | "Install property module" | `install-module --module-name propertyclaw` |
 | "Install education module" | `install-module --module-name educlaw` |
 | "Set up for retail" | `onboard --profile retail` |
+| "I run a dental practice" | `setup-company --industry dental` (auto-installs healthclaw + healthclaw-dental) |
+| "I'm in India" | `setup-company --country IN` (auto-installs erpclaw-region-in) |
+| "What actions are available?" | `list-all-actions` |
 | "Add employee" | `add-employee` |
 | "Run payroll" | `create-payroll-run` → `generate-salary-slips` → `submit-payroll-run` |
 | "Apply for leave" | `add-leave-application` |

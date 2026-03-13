@@ -453,6 +453,16 @@ ALIASES = {
     "list-recurring-invoice-templates": ("erpclaw-selling", "list-recurring-templates"),
     # Buying outstanding alias (selling owns the base name)
     "update-purchase-outstanding": ("erpclaw-buying", "update-invoice-outstanding"),
+    # Common LLM guesses (wrong names → correct names)
+    "create-payment": ("erpclaw-payments", "add-payment"),
+    "create-purchase-order": ("erpclaw-buying", "add-purchase-order"),
+    "create-customer": ("erpclaw-selling", "add-customer"),
+    "create-supplier": ("erpclaw-buying", "add-supplier"),
+    "create-employee": ("erpclaw-hr", "add-employee"),
+    "create-item": ("erpclaw-inventory", "add-item"),
+    "add-invoice": ("erpclaw-selling", "create-sales-invoice"),
+    "create-invoice": ("erpclaw-selling", "create-sales-invoice"),
+    "add-sales-invoice": ("erpclaw-selling", "create-sales-invoice"),
 }
 
 
@@ -462,7 +472,8 @@ ALIASES = {
 MODULE_ACTIONS = {
     "install-module", "remove-module", "update-modules",
     "list-modules", "available-modules", "module-status",
-    "search-modules", "rebuild-action-cache",
+    "search-modules", "rebuild-action-cache", "list-all-actions",
+    "regenerate-skill-md",
 }
 
 ONBOARDING_ACTIONS = {
@@ -535,6 +546,41 @@ def forward_module(module_name, action_override=None):
     os.execvp(sys.executable, [sys.executable, script] + args)
 
 
+def _suggest_module_for_action(action):
+    """Check module registry for which uninstalled module might provide this action.
+
+    Scans module_registry.json tags and naming conventions to suggest a module.
+    Returns module name or None.
+    """
+    # First check: does the action name have a known prefix?
+    PREFIX_MAP = {
+        "health-": "healthclaw",
+        "dental-": "healthclaw-dental",
+        "vet-": "healthclaw-vet",
+        "mental-": "healthclaw-mental",
+        "homehealth-": "healthclaw-homehealth",
+        "retail-": "retailclaw",
+        "construction-": "constructclaw",
+        "agri-": "agricultureclaw",
+        "auto-": "automotiveclaw",
+        "food-": "foodclaw",
+        "hotel-": "hospitalityclaw",
+        "legal-": "legalclaw",
+        "nonprofit-": "nonprofitclaw",
+        "edu-": "educlaw",
+        "prop-": "propertyclaw",
+        "india-": "erpclaw-region-in",
+        "canada-": "erpclaw-region-ca",
+        "uk-": "erpclaw-region-uk",
+        "eu-": "erpclaw-region-eu",
+    }
+    for prefix, module in PREFIX_MAP.items():
+        if action.startswith(prefix):
+            return module
+
+    return None
+
+
 def lookup_module_for_action(action):
     """Query erpclaw_module_action table to find which module owns this action.
 
@@ -603,12 +649,23 @@ def main():
         forward_module(module_name)
         return
 
-    # Unknown action
-    print(json.dumps({
-        "status": "error",
-        "error": f"Unknown action: {action}",
-        "hint": "Run --action status for system overview, or --action available-modules to browse installable modules"
-    }))
+    # Unknown action — check if any module provides it
+    suggestion = _suggest_module_for_action(action)
+    if suggestion:
+        print(json.dumps({
+            "status": "error",
+            "error": f"Unknown action: {action}",
+            "hint": f"This action is provided by module '{suggestion}'. "
+                    f"Install it with: --action install-module --module-name {suggestion}",
+            "suggested_module": suggestion,
+        }))
+    else:
+        print(json.dumps({
+            "status": "error",
+            "error": f"Unknown action: {action}",
+            "hint": "Run --action available-modules --search <keyword> to find modules, "
+                    "or --action list-all-actions to see available actions",
+        }))
     sys.exit(1)
 
 
