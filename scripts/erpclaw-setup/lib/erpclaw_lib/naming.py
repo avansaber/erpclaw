@@ -122,6 +122,8 @@ ENTITY_PREFIXES = {
     "nonprofitclaw_program": "NPG-",
     "nonprofitclaw_volunteer": "VOL-",
     "nonprofitclaw_pledge": "PLG-",
+    "nonprofitclaw_grant_expense": "NGE-",
+    "nonprofitclaw_volunteer_shift": "NVS-",
     "nonprofitclaw_campaign": "NPC-",
     "nonprofitclaw_tax_receipt": "NTR-",
     # HospitalityClaw (hospitality)
