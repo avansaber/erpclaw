@@ -1033,6 +1033,7 @@ def generate_invoices(conn, args):
 
     # Try to find selling script (optional — invoice creation skipped if unavailable)
     from erpclaw_lib.dependencies import resolve_skill_script, table_exists
+    from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
     selling_script = resolve_skill_script("erpclaw") if table_exists(conn, "sales_invoice") else None
 
     results = []
@@ -1400,7 +1401,7 @@ ACTIONS = {
 
 
 def main():
-    parser = argparse.ArgumentParser(description="ERPClaw Billing")
+    parser = SafeArgumentParser(description="ERPClaw Billing")
     parser.add_argument("--action", required=True, choices=list(ACTIONS.keys()))
     parser.add_argument("--db-path", default=None)
     # Entity IDs
@@ -1460,7 +1461,8 @@ def main():
     parser.add_argument("--limit", default="20")
     parser.add_argument("--offset", default="0")
 
-    args, _unknown = parser.parse_known_args()
+    args, unknown = parser.parse_known_args()
+    check_unknown_args(parser, unknown)
     check_input_lengths(args)
 
     db_path = args.db_path

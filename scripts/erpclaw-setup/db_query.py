@@ -1854,6 +1854,7 @@ def check_telegram_permission(conn, args):
 def seed_permissions(conn, args):
     """Seed default role permissions from the shared RBAC library."""
     from erpclaw_lib.rbac import seed_role_permissions
+    from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
     seed_role_permissions(conn)
     t = Table("role_permission")
     q = Q.from_(t).select(fn.Count("*").as_("cnt"))
@@ -2166,7 +2167,7 @@ ACTIONS = {
 
 
 def main():
-    parser = argparse.ArgumentParser(description="ERPClaw Setup Skill")
+    parser = SafeArgumentParser(description="ERPClaw Setup Skill")
     parser.add_argument("--action", required=True, choices=sorted(ACTIONS.keys()))
     parser.add_argument("--db-path", default=None,
                         help="SQLite database path (default: ~/.openclaw/erpclaw/data.sqlite)")
@@ -2269,7 +2270,8 @@ def main():
     parser.add_argument("--force", action="store_true", default=False,
                         help="Force re-initialize: drop and recreate the database")
 
-    args, _unknown = parser.parse_known_args()
+    args, unknown = parser.parse_known_args()
+    check_unknown_args(parser, unknown)
     check_input_lengths(args)
 
     # initialize-database handles its own connection lifecycle

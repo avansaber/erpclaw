@@ -2967,6 +2967,7 @@ def import_suppliers(conn, args):
         err(f"File not found: {csv_path}")
 
     from erpclaw_lib.csv_import import validate_csv, parse_csv_rows
+    from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
 
     errors = validate_csv(csv_real, "supplier")
     if errors:
@@ -3054,7 +3055,7 @@ ACTIONS = {
 
 
 def main():
-    parser = argparse.ArgumentParser(description="ERPClaw Buying Skill")
+    parser = SafeArgumentParser(description="ERPClaw Buying Skill")
     parser.add_argument("--action", required=True, choices=sorted(ACTIONS.keys()))
     parser.add_argument("--db-path", default=None)
 
@@ -3114,7 +3115,8 @@ def main():
     parser.add_argument("--limit", default="20")
     parser.add_argument("--offset", default="0")
 
-    args, _unknown = parser.parse_known_args()
+    args, unknown = parser.parse_known_args()
+    check_unknown_args(parser, unknown)
     check_input_lengths(args)
 
     db_path = args.db_path or DEFAULT_DB_PATH

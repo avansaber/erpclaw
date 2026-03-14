@@ -283,8 +283,12 @@ def list_items(conn, args):
     # Warehouse filter: items that have stock in a specific warehouse
     warehouse_id = getattr(args, "warehouse_id", None)
 
+    company_id = getattr(args, "company_id", None)
+
     # Build count query
     count_q = Q.from_(i).select(fn.Count("*"))
+    if company_id:
+        count_q = count_q.join(ig).on(ig.id == i.item_group_id).where(ig.company_id == P())
     if warehouse_id:
         sle = Table("stock_ledger_entry")
         sub = (Q.from_(sle).select(sle.item_id).distinct()
@@ -300,6 +304,8 @@ def list_items(conn, args):
         )
 
     count_params = []
+    if company_id:
+        count_params.append(company_id)
     if warehouse_id:
         count_params.append(warehouse_id)
     if args.item_group:
@@ -323,6 +329,8 @@ def list_items(conn, args):
                       i.has_batch, i.has_serial)
               .orderby(i.item_name)
               .limit(P()).offset(P()))
+    if company_id:
+        rows_q = rows_q.where(ig.company_id == P())
     if warehouse_id:
         sle = Table("stock_ledger_entry")
         sub = (Q.from_(sle).select(sle.item_id).distinct()
@@ -338,6 +346,8 @@ def list_items(conn, args):
         )
 
     row_params = []
+    if company_id:
+        row_params.append(company_id)
     if warehouse_id:
         row_params.append(warehouse_id)
     if args.item_group:
@@ -397,11 +407,17 @@ def list_item_groups(conn, args):
     """List item groups."""
     t = Table("item_group")
 
+    company_id = getattr(args, "company_id", None)
+
     count_q = Q.from_(t).select(fn.Count("*"))
+    if company_id:
+        count_q = count_q.where(t.company_id == P())
     if args.parent_id:
         count_q = count_q.where(t.parent_id == P())
 
     count_params = []
+    if company_id:
+        count_params.append(company_id)
     if args.parent_id:
         count_params.append(args.parent_id)
 
@@ -414,10 +430,14 @@ def list_item_groups(conn, args):
     rows_q = (Q.from_(t).select(t.star)
               .orderby(t.name)
               .limit(P()).offset(P()))
+    if company_id:
+        rows_q = rows_q.where(t.company_id == P())
     if args.parent_id:
         rows_q = rows_q.where(t.parent_id == P())
 
     row_params = []
+    if company_id:
+        row_params.append(company_id)
     if args.parent_id:
         row_params.append(args.parent_id)
     row_params.extend([limit, offset])
@@ -2352,6 +2372,7 @@ def import_items(conn, args):
         err(f"File not found: {csv_path}")
 
     from erpclaw_lib.csv_import import validate_csv, parse_csv_rows
+    from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
 
     errors = validate_csv(csv_real, "item")
     if errors:
@@ -2450,7 +2471,7 @@ ACTIONS = {
 
 
 def main():
-    parser = argparse.ArgumentParser(description="ERPClaw Inventory Skill")
+    parser = SafeArgumentParser(description="ERPClaw Inventory Skill")
     parser.add_argument("--action", required=True, choices=sorted(ACTIONS.keys()))
     parser.add_argument("--db-path", default=None)
 
@@ -2541,7 +2562,8 @@ def main():
     parser.add_argument("--limit", default="20")
     parser.add_argument("--offset", default="0")
 
-    args, _unknown = parser.parse_known_args()
+    args, unknown = parser.parse_known_args()
+    check_unknown_args(parser, unknown)
     check_input_lengths(args)
 
     db_path = args.db_path or DEFAULT_DB_PATH

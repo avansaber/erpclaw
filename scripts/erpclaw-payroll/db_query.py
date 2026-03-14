@@ -31,6 +31,7 @@ try:
     from erpclaw_lib.query import (Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL,
                                     DecimalSum, DecimalAbs, insert_row, update_row)
     from erpclaw_lib.vendor.pypika.terms import LiteralValue, ValueWrapper
+    from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
 except ImportError:
     import json as _json
     print(_json.dumps({"status": "error", "error": "ERPClaw foundation not installed. Install erpclaw-setup first: clawhub install erpclaw-setup", "suggestion": "clawhub install erpclaw-setup"}))
@@ -3519,7 +3520,7 @@ ACTIONS = {
 
 def main():
     """Parse command-line arguments and dispatch to the appropriate action."""
-    parser = argparse.ArgumentParser(
+    parser = SafeArgumentParser(
         description="ERPClaw Payroll Skill -- US payroll processing, "
                     "salary structures, tax withholding, FICA, and W-2 generation."
     )
@@ -3662,7 +3663,8 @@ def main():
     parser.add_argument("--search",
                         help="Free-text search filter")
 
-    args, _unknown = parser.parse_known_args()
+    args, unknown = parser.parse_known_args()
+    check_unknown_args(parser, unknown)
     check_input_lengths(args)
 
     # --- Database connection ---

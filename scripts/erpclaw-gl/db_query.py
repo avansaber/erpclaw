@@ -1586,6 +1586,7 @@ def import_opening_balances(conn, args):
         err(f"File not found: {csv_path}")
 
     from erpclaw_lib.csv_import import validate_csv, parse_csv_rows
+    from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
 
     errors = validate_csv(csv_real, "opening_balance")
     if errors:
@@ -1694,7 +1695,7 @@ ACTIONS = {
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="ERPClaw GL Skill")
+    parser = SafeArgumentParser(description="ERPClaw GL Skill")
     parser.add_argument("--action", required=True, choices=sorted(ACTIONS.keys()))
     parser.add_argument("--db-path", default=None)
 
@@ -1748,7 +1749,8 @@ def main():
     # CSV import
     parser.add_argument("--csv-path", default=None)
 
-    args, _unknown = parser.parse_known_args()
+    args, unknown = parser.parse_known_args()
+    check_unknown_args(parser, unknown)
     check_input_lengths(args)
 
     db_path = args.db_path or DEFAULT_DB_PATH

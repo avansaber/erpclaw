@@ -29,6 +29,7 @@ try:
     from erpclaw_lib.query import Q, P, Table, Field, fn, DecimalSum, DecimalAbs
     from erpclaw_lib.vendor.pypika import Order
     from erpclaw_lib.vendor.pypika.terms import LiteralValue
+    from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
 except ImportError:
     import json as _json
     print(_json.dumps({"status": "error", "error": "ERPClaw foundation not installed. Install erpclaw first: clawhub install erpclaw", "suggestion": "clawhub install erpclaw"}))
@@ -1624,7 +1625,7 @@ ACTIONS = {
 
 
 def main():
-    parser = argparse.ArgumentParser(description="ERPClaw Reports Skill")
+    parser = SafeArgumentParser(description="ERPClaw Reports Skill")
     parser.add_argument("--action", required=True, choices=sorted(ACTIONS.keys()))
     parser.add_argument("--db-path", default=None)
 
@@ -1667,7 +1668,8 @@ def main():
     parser.add_argument("--limit", default="100")
     parser.add_argument("--offset", default="0")
 
-    args, _unknown = parser.parse_known_args()
+    args, unknown = parser.parse_known_args()
+    check_unknown_args(parser, unknown)
     check_input_lengths(args)
 
     db_path = args.db_path or DEFAULT_DB_PATH

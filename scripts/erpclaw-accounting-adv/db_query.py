@@ -17,6 +17,7 @@ try:
     sys.path.insert(0, os.path.expanduser("~/.openclaw/erpclaw/lib"))
     from erpclaw_lib.db import get_connection, ensure_db_exists, DEFAULT_DB_PATH
     from erpclaw_lib.response import ok, err
+    from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
 except ImportError:
     import json as _json
     print(_json.dumps({
@@ -53,7 +54,7 @@ REQUIRED_TABLES = [
 
 
 def main():
-    parser = argparse.ArgumentParser(description=SKILL)
+    parser = SafeArgumentParser(description=SKILL)
     parser.add_argument("--action", required=True, choices=sorted(ACTIONS.keys()))
     parser.add_argument("--db-path", default=None)
 
@@ -129,7 +130,8 @@ def main():
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--offset", type=int, default=0)
 
-    args, _unknown = parser.parse_known_args()
+    args, unknown = parser.parse_known_args()
+    check_unknown_args(parser, unknown)
 
     # DB setup
     db_path = args.db_path or os.environ.get("ERPCLAW_DB_PATH", DEFAULT_DB_PATH)

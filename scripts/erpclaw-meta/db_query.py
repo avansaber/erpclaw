@@ -21,6 +21,7 @@ from pathlib import Path
 try:
     sys.path.insert(0, os.path.expanduser("~/.openclaw/erpclaw/lib"))
     from erpclaw_lib.query import Q, P, Table, Field, fn, Order
+    from erpclaw_lib.args import SafeArgumentParser
     _HAS_PYPIKA = True
 except ImportError:
     _HAS_PYPIKA = False
@@ -1806,7 +1807,7 @@ ACTIONS = {
 
 
 def main():
-    parser = argparse.ArgumentParser(
+    parser = SafeArgumentParser(
         description="ERPClaw meta-package — installation checker and onboarding guide"
     )
     parser.add_argument(
