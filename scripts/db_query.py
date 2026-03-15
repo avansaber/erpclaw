@@ -456,6 +456,14 @@ ACTION_MAP = {
     "list-garnishments": "erpclaw-payroll",
     "get-garnishment": "erpclaw-payroll",
     "payroll-status": "erpclaw-payroll",
+
+    # === ERPClaw OS — Module Validation, Generation & Configuration (6 actions) ===
+    "validate-module": "erpclaw-os",
+    "list-articles": "erpclaw-os",
+    "build-table-registry": "erpclaw-os",
+    "generate-module": "erpclaw-os",
+    "configure-module": "erpclaw-os",
+    "list-industries": "erpclaw-os",
 }
 
 # Aliases: actions that need to be forwarded with a different --action name

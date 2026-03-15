@@ -597,6 +597,25 @@ def _install_module_inner(args, conn, modules_by_name, depth=0):
     # Build action cache
     action_count = build_action_cache(conn, module_name, install_path)
 
+    # If no actions found, try scanning subdirectories (grouped repos like erpclaw-ops)
+    if action_count == 0:
+        scripts_dir = os.path.join(install_path, "scripts")
+        if os.path.isdir(scripts_dir):
+            for subdir in os.listdir(scripts_dir):
+                sub_script = os.path.join(scripts_dir, subdir, "db_query.py")
+                if os.path.isfile(sub_script):
+                    sub_actions = _extract_actions_via_ast(sub_script)
+                    if not sub_actions:
+                        sub_actions = _extract_actions_via_regex(sub_script)
+                    if sub_actions:
+                        conn.executemany(
+                            "INSERT OR REPLACE INTO erpclaw_module_action (module_name, action_name) VALUES (?, ?)",
+                            [(module_name, a) for a in sorted(sub_actions)]
+                        )
+                        action_count += len(sub_actions)
+            if action_count > 0:
+                conn.commit()
+
     # Get git commit hash
     git_commit = _get_git_commit(install_path)
 

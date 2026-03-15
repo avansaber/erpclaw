@@ -3446,6 +3446,46 @@ CREATE INDEX IF NOT EXISTS idx_erpclaw_module_action_module ON erpclaw_module_ac
 
 
 # ===========================================================================
+# SKILL: erpclaw-os (Module Validation / ERPClaw OS)
+# Tables: erpclaw_module_validation, erpclaw_table_ownership
+# ===========================================================================
+
+OS_TABLES = """
+-- =========================================================================
+-- SKILL: erpclaw-os (Module Validation)
+-- =========================================================================
+
+CREATE TABLE IF NOT EXISTS erpclaw_module_validation (
+    id              TEXT PRIMARY KEY,
+    module_name     TEXT NOT NULL,
+    module_path     TEXT NOT NULL,
+    validation_type TEXT NOT NULL CHECK(validation_type IN ('static', 'runtime', 'full')),
+    result          TEXT NOT NULL CHECK(result IN ('pass', 'fail')),
+    violations      TEXT,  -- JSON array of violation objects
+    article_results TEXT,  -- JSON object: {article_number: pass/fail/skip}
+    duration_ms     INTEGER,
+    validated_at    TEXT DEFAULT (datetime('now')),
+    validated_by    TEXT  -- 'human' or 'system'
+);
+
+CREATE INDEX IF NOT EXISTS idx_erpclaw_module_validation_module
+    ON erpclaw_module_validation(module_name);
+CREATE INDEX IF NOT EXISTS idx_erpclaw_module_validation_result
+    ON erpclaw_module_validation(result);
+
+CREATE TABLE IF NOT EXISTS erpclaw_table_ownership (
+    table_name      TEXT PRIMARY KEY,
+    module_name     TEXT NOT NULL,
+    init_db_path    TEXT NOT NULL,
+    discovered_at   TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_erpclaw_table_ownership_module
+    ON erpclaw_table_ownership(module_name);
+"""
+
+
+# ===========================================================================
 # DATABASE INITIALIZATION
 # ===========================================================================
 
@@ -3471,6 +3511,7 @@ ALL_DDL_BLOCKS = [
     ("erpclaw-accounting-adv", ADVACCT_TABLES),
     ("erpclaw-registries",     REGISTRY_TABLES),
     ("erpclaw-modules",        MODULE_TABLES),
+    ("erpclaw-os",             OS_TABLES),
 ]
 
 
