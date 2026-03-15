@@ -457,13 +457,23 @@ ACTION_MAP = {
     "get-garnishment": "erpclaw-payroll",
     "payroll-status": "erpclaw-payroll",
 
-    # === ERPClaw OS — Module Validation, Generation & Configuration (6 actions) ===
+    # === ERPClaw OS — Phase 1+2: Validation, Generation, Deploy, Audit (16 actions) ===
     "validate-module": "erpclaw-os",
     "list-articles": "erpclaw-os",
     "build-table-registry": "erpclaw-os",
     "generate-module": "erpclaw-os",
     "configure-module": "erpclaw-os",
     "list-industries": "erpclaw-os",
+    "classify-operation": "erpclaw-os",
+    "schema-plan": "erpclaw-os",
+    "schema-apply": "erpclaw-os",
+    "schema-rollback": "erpclaw-os",
+    "schema-drift": "erpclaw-os",
+    "deploy-module": "erpclaw-os",
+    "deploy-audit-log": "erpclaw-os",
+    "install-suite": "erpclaw-os",
+    "run-audit": "erpclaw-os",
+    "compliance-weather-status": "erpclaw-os",
 }
 
 # Aliases: actions that need to be forwarded with a different --action name

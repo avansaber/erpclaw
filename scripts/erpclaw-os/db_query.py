@@ -50,6 +50,16 @@ from constitution import ARTICLES, get_static_articles, get_runtime_articles
 from generate_module import generate_module
 from configure_module import configure_module
 from industry_configs import list_industries
+from tier_classifier import handle_classify_operation
+from schema_migrator import (
+    handle_schema_plan, handle_schema_apply,
+    handle_schema_rollback, handle_schema_drift,
+)
+from deploy_pipeline import handle_deploy_module
+from deploy_audit import handle_deploy_audit_log
+from install_suite import handle_install_suite
+from adversarial_audit import handle_run_audit
+from compliance_weather import handle_compliance_weather_status
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +258,16 @@ def main():
         "generate-module",
         "configure-module",
         "list-industries",
+        "classify-operation",
+        "schema-plan",
+        "schema-apply",
+        "schema-rollback",
+        "schema-drift",
+        "deploy-module",
+        "deploy-audit-log",
+        "install-suite",
+        "run-audit",
+        "compliance-weather-status",
     ])
     parser.add_argument("--module-path", help="Path to the module directory to validate")
     parser.add_argument("--validation-type", default="static",
@@ -270,6 +290,24 @@ def main():
     parser.add_argument("--size-tier", default="small",
                         choices=["small", "medium", "large", "enterprise"],
                         help="Business size tier (default: small)")
+    # classify-operation flags
+    parser.add_argument("--action-name", help="Action name to classify (e.g., add-customer)")
+    parser.add_argument("--classify-all", action="store_true",
+                        help="Classify all actions in ACTION_MAP")
+    parser.add_argument("--override-tier", type=int, choices=[0, 1, 2, 3],
+                        help="Override tier for an action (requires --action-name)")
+    parser.add_argument("--override-by", help="Who is setting the override")
+    parser.add_argument("--override-reason", help="Why the override is being set")
+    # schema-migration flags
+    parser.add_argument("--migration-id", help="Migration UUID (for schema-apply/schema-rollback)")
+    # deploy flags
+    parser.add_argument("--skip-sandbox", action="store_true",
+                        help="Skip sandbox testing (for pre-tested modules)")
+    parser.add_argument("--limit", type=int, default=50,
+                        help="Limit for audit log queries (default: 50)")
+    # install-suite flags
+    parser.add_argument("--suite", help="Predefined suite name (e.g., healthcare-full)")
+    parser.add_argument("--modules", help="Comma-separated module list")
 
     args, unknown = parser.parse_known_args()
     check_unknown_args(parser, unknown)
@@ -297,6 +335,72 @@ def main():
 
     elif action == "list-industries":
         handle_list_industries(args)
+
+    elif action == "classify-operation":
+        handle_classify_operation(args)
+
+    elif action == "schema-plan":
+        result = handle_schema_plan(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "schema-apply":
+        result = handle_schema_apply(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "schema-rollback":
+        result = handle_schema_rollback(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "schema-drift":
+        result = handle_schema_drift(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "deploy-module":
+        result = handle_deploy_module(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "deploy-audit-log":
+        result = handle_deploy_audit_log(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "install-suite":
+        result = handle_install_suite(args)
+        if "error" in result and result.get("result") == "error":
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "run-audit":
+        result = handle_run_audit(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "compliance-weather-status":
+        result = handle_compliance_weather_status(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
 
 
 if __name__ == "__main__":
