@@ -29,7 +29,7 @@ try:
     from erpclaw_lib.audit import audit
     from erpclaw_lib.dependencies import check_required_tables
     from erpclaw_lib.query import (Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL,
-                                    DecimalSum, DecimalAbs, insert_row, update_row)
+                                    DecimalSum, DecimalAbs, insert_row, update_row, dynamic_update)
     from erpclaw_lib.vendor.pypika.terms import LiteralValue, ValueWrapper
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
 except ImportError:
@@ -1276,32 +1276,24 @@ def update_garnishment(conn, args):
     if not row:
         err(f"Garnishment {g_id} not found")
 
-    # raw SQL — dynamic column building (columns determined at runtime)
-    updates = []
-    params = []
+    data = {}
     if args.status:
         if args.status not in ("active", "paused", "completed", "cancelled"):
             err("Invalid status")
-        updates.append("status = ?")
-        params.append(args.status)
+        data["status"] = args.status
     if args.amount_or_percentage:
-        updates.append("amount_or_percentage = ?")
-        params.append(args.amount_or_percentage)
+        data["amount_or_percentage"] = args.amount_or_percentage
     if args.total_owed:
-        updates.append("total_owed = ?")
-        params.append(args.total_owed)
+        data["total_owed"] = args.total_owed
     if args.end_date:
-        updates.append("end_date = ?")
-        params.append(args.end_date)
+        data["end_date"] = args.end_date
 
-    if not updates:
+    if not data:
         err("No fields to update")
 
-    updates.append("updated_at = datetime('now')")
-    params.append(g_id)
-    conn.execute(
-        f"UPDATE wage_garnishment SET {', '.join(updates)} WHERE id = ?", params,
-    )
+    data["updated_at"] = LiteralValue("datetime('now')")
+    sql, params = dynamic_update("wage_garnishment", data, where={"id": g_id})
+    conn.execute(sql, params)
     audit(conn, "erpclaw-payroll", "update-garnishment", "wage_garnishment", g_id)
     conn.commit()
     ok({"updated": True})

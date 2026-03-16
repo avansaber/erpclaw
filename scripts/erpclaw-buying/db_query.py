@@ -35,7 +35,7 @@ try:
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.dependencies import check_required_tables
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL, DecimalSum, DecimalAbs
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL, DecimalSum, DecimalAbs, dynamic_update
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
     from erpclaw_lib.vendor.pypika.terms import LiteralValue, ValueWrapper
 except ImportError:
@@ -203,34 +203,29 @@ def update_supplier(conn, args):
              suggestion="Use 'list suppliers' to see available suppliers.")
     args.supplier_id = supplier["id"]  # normalize to id
 
-    updates, params, updated_fields = [], [], []
+    data, updated_fields = {}, []
 
     if args.name is not None:
-        updates.append("name = ?")
-        params.append(args.name)
+        data["name"] = args.name
         updated_fields.append("name")
     if args.payment_terms_id is not None:
-        updates.append("payment_terms_id = ?")
-        params.append(args.payment_terms_id)
+        data["payment_terms_id"] = args.payment_terms_id
         updated_fields.append("payment_terms_id")
     if args.supplier_group is not None:
-        updates.append("supplier_group = ?")
-        params.append(args.supplier_group)
+        data["supplier_group"] = args.supplier_group
         updated_fields.append("supplier_group")
     if args.supplier_type is not None:
         if args.supplier_type not in ("company", "individual"):
             err("--supplier-type must be 'company' or 'individual'")
-        updates.append("supplier_type = ?")
-        params.append(args.supplier_type)
+        data["supplier_type"] = args.supplier_type
         updated_fields.append("supplier_type")
 
     if not updated_fields:
         err("No fields to update")
 
-    # raw SQL — dynamic column list built at runtime
-    updates.append("updated_at = datetime('now')")
-    params.append(args.supplier_id)
-    conn.execute(f"UPDATE supplier SET {', '.join(updates)} WHERE id = ?", params)
+    data["updated_at"] = LiteralValue("datetime('now')")
+    sql, params = dynamic_update("supplier", data, where={"id": args.supplier_id})
+    conn.execute(sql, params)
 
     audit(conn, "erpclaw-buying", "update-supplier", "supplier", args.supplier_id,
            new_values={"updated_fields": updated_fields})

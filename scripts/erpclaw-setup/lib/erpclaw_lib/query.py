@@ -40,7 +40,7 @@ from erpclaw_lib.vendor.pypika import (
     QmarkParameter,
 )
 from erpclaw_lib.vendor.pypika import fn
-from erpclaw_lib.vendor.pypika.terms import Function, ValueWrapper, Star
+from erpclaw_lib.vendor.pypika.terms import Function, LiteralValue, ValueWrapper, Star
 
 
 # ── Aliases for brevity ──
@@ -139,13 +139,71 @@ def update_row(table_name, data, where):
     return q.get_sql()
 
 
+# ── Helper: build dynamic UPDATE (only SET columns that are provided) ──
+
+def dynamic_update(table_name, data, where):
+    """Build UPDATE with dynamic SET columns, returning (sql, params).
+
+    Unlike update_row() which requires pre-placed P() markers and returns
+    only the SQL string, dynamic_update() accepts real values, separates
+    them into parameter placeholders, and returns both the SQL and the
+    ordered parameter list ready for conn.execute().
+
+    LiteralValue entries in *data* or *where* are rendered inline (no
+    placeholder) — use this for SQL expressions like datetime('now').
+
+    Args:
+        table_name: str — target table
+        data: dict — {column: value} pairs to SET.  Values may be plain
+              Python objects (parameterized) or LiteralValue instances
+              (rendered inline).
+        where: dict — {column: value} pairs for the WHERE clause.  Same
+               LiteralValue support as *data*.
+
+    Returns:
+        tuple: (sql_string, params_list)
+
+    Usage:
+        from erpclaw_lib.query import dynamic_update
+        from erpclaw_lib.vendor.pypika.terms import LiteralValue
+
+        data = {
+            "name": "New Name",
+            "status": "active",
+            "updated_at": LiteralValue("datetime('now')"),
+        }
+        where = {"id": entity_id}
+        sql, params = dynamic_update("my_table", data, where)
+        conn.execute(sql, params)
+    """
+    t = Table(table_name)
+    q = Q.update(t)
+    params = []
+
+    for col, val in data.items():
+        if isinstance(val, LiteralValue):
+            q = q.set(Field(col), val)
+        else:
+            q = q.set(Field(col), P())
+            params.append(val)
+
+    for col, val in where.items():
+        if isinstance(val, LiteralValue):
+            q = q.where(Field(col) == val)
+        else:
+            q = q.where(Field(col) == P())
+            params.append(val)
+
+    return q.get_sql(), params
+
+
 # ── Re-exports for clean imports ──
 
 __all__ = [
     'Q', 'P', 'Query', 'Table', 'Field', 'Case', 'Order',
     'Criterion', 'CustomFunction', 'Not', 'NULL',
-    'fn', 'Star', 'ValueWrapper',
+    'fn', 'Star', 'ValueWrapper', 'LiteralValue',
     'DecimalSum', 'DecimalAbs',
-    'where_eq', 'insert_row', 'update_row',
+    'where_eq', 'insert_row', 'update_row', 'dynamic_update',
     'SQLLiteQuery', 'QmarkParameter',
 ]

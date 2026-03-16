@@ -83,7 +83,7 @@ OpenClaw Bot → erpclaw/scripts/db_query.py --action {action} --args
                          └── erpclaw-accounting-adv → ASC 606/842, intercompany
                          │
                          ▼
-              SQLite (~/.openclaw/erpclaw/data.sqlite)
+              SQLite (local database)
               WAL mode, FK enforcement, parameterized queries
 ```
 
@@ -141,6 +141,40 @@ clawhub install webclaw
 ```
 
 WebClaw reads ERPClaw's SKILL.md and automatically generates forms, data tables, charts, and dashboards — zero per-skill configuration needed.
+
+## ERPClaw OS -- Self-Extending ERP
+
+ERPClaw OS is a self-extending ERP platform where AI agents generate, test, and deploy new industry modules autonomously.
+
+### The Constitution
+
+18 machine-readable financial laws govern every generated module. These laws cover naming conventions, data types, GL immutability, transaction atomicity, and audit trail requirements. A module that violates any article is automatically rejected -- no human review needed for mechanical compliance.
+
+### 80/15/5 Theory
+
+ERP module development breaks down as:
+- **80% mechanical** -- schema creation, CRUD actions, naming conventions, audit logging
+- **15% pattern-matching** -- GL posting patterns, cross-skill integration, report templates
+- **5% human judgment** -- business logic edge cases, domain expertise, UX decisions
+
+ERPClaw OS automates the 80% and assists with the 15%, leaving humans to focus on the 5% that matters.
+
+### Current Status
+
+- **Phase 1 (Smart Templates)** -- complete. Industry-specific templates generate full module scaffolding from a single configuration.
+- **Phase 2 (Bounded Autonomy)** -- complete. AI agents generate, validate, and test modules within constitutional bounds.
+- **481 tests passing** across the generation and validation pipeline.
+- **3 proof-of-concept modules generated**: groomingclaw, tattooclaw, storageclaw -- 144/144 tests passed, all constitutional articles satisfied.
+
+### How It Works
+
+1. Define an industry configuration (name, entities, workflows, GL accounts)
+2. ERPClaw OS generates the full module: schema, actions, SKILL.md, tests
+3. The Constitution validator checks all 18 articles
+4. Regression gate runs the full test suite
+5. Deploy audit verifies production readiness
+
+Generated modules are indistinguishable from hand-written ones -- same architecture, same conventions, same test coverage.
 
 ## Links
 

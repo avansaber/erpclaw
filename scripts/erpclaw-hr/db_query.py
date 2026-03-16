@@ -30,7 +30,7 @@ try:
     from erpclaw_lib.dependencies import check_required_tables
     from erpclaw_lib.query import (
         Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL,
-        DecimalSum, DecimalAbs, insert_row, update_row,
+        DecimalSum, DecimalAbs, insert_row, update_row, dynamic_update,
     )
     from erpclaw_lib.vendor.pypika.terms import LiteralValue, ValueWrapper
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
@@ -606,15 +606,9 @@ def update_employee(conn, args):
     if not updates:
         err("No fields to update. Provide at least one optional flag.")
 
-    # raw SQL — dynamic column building (columns determined at runtime)
     updates["updated_at"] = _now_iso()
-    set_clause = ", ".join(f"{col} = ?" for col in updates.keys())
-    params = list(updates.values()) + [args.employee_id]
-
-    conn.execute(
-        f"UPDATE employee SET {set_clause} WHERE id = ?",
-        params,
-    )
+    sql, params = dynamic_update("employee", updates, where={"id": args.employee_id})
+    conn.execute(sql, params)
 
     # Track changed values for audit
     changed = {k: v for k, v in updates.items() if k != "updated_at"}
@@ -2655,18 +2649,12 @@ def update_expense_claim_status(conn, args):
     old_status = claim["status"]
     now = _now_iso()
 
-    # raw SQL — dynamic column building (columns determined at runtime)
     updates = {"status": args.status, "updated_at": now}
     if args.payment_entry_id:
         updates["payment_entry_id"] = args.payment_entry_id
 
-    set_clause = ", ".join(f"{col} = ?" for col in updates.keys())
-    params = list(updates.values()) + [args.expense_claim_id]
-
-    conn.execute(
-        f"UPDATE expense_claim SET {set_clause} WHERE id = ?",
-        params,
-    )
+    sql, params = dynamic_update("expense_claim", updates, where={"id": args.expense_claim_id})
+    conn.execute(sql, params)
 
     audit(conn, "erpclaw-hr", "update-expense-claim-status", "expense_claim",
            args.expense_claim_id,

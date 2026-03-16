@@ -34,7 +34,7 @@ try:
     from erpclaw_lib.audit import audit
     from erpclaw_lib.dependencies import check_required_tables
     from erpclaw_lib.query_helpers import resolve_company_id
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL, DecimalSum, DecimalAbs
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL, DecimalSum, DecimalAbs, dynamic_update
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
     from erpclaw_lib.vendor.pypika.terms import LiteralValue, ValueWrapper
 except ImportError:
@@ -241,11 +241,10 @@ def update_account(conn, args):
     if not updates:
         err("No fields to update")
 
-    # raw SQL — dynamic column building from user-provided update dict
-    set_clause = ", ".join(f"{k} = ?" for k in updates)
-    set_clause += ", updated_at = datetime('now')"
-    values = list(updates.values()) + [acct_id]
-    conn.execute(f"UPDATE account SET {set_clause} WHERE id = ?", values)
+    data = dict(updates)
+    data["updated_at"] = LiteralValue("datetime('now')")
+    sql, values = dynamic_update("account", data, where={"id": acct_id})
+    conn.execute(sql, values)
 
     audit(conn, "erpclaw-gl", "update", "account", acct_id,
            old_values={k: old.get(k) for k in updates},

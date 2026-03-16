@@ -36,7 +36,7 @@ try:
     from erpclaw_lib.audit import audit
     from erpclaw_lib.dependencies import check_required_tables
     from erpclaw_lib.query_helpers import resolve_company_id
-    from erpclaw_lib.query import Q, P, Table, Field, fn, DecimalSum, DecimalAbs
+    from erpclaw_lib.query import Q, P, Table, Field, fn, DecimalSum, DecimalAbs, dynamic_update
     from erpclaw_lib.vendor.pypika import Order
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
     from erpclaw_lib.vendor.pypika.terms import LiteralValue
@@ -181,37 +181,32 @@ def update_item(conn, args):
     if item["status"] == "disabled" and args.item_status != "active":
         err("Cannot update a disabled item (set --status active first)")
 
-    updates, params, updated_fields = [], [], []
+    data, updated_fields = {}, []
 
     if args.item_name is not None:
-        updates.append("item_name = ?")
-        params.append(args.item_name)
+        data["item_name"] = args.item_name
         updated_fields.append("item_name")
     if args.reorder_level is not None:
-        updates.append("reorder_level = ?")
-        params.append(args.reorder_level)
+        data["reorder_level"] = args.reorder_level
         updated_fields.append("reorder_level")
     if args.reorder_qty is not None:
-        updates.append("reorder_qty = ?")
-        params.append(args.reorder_qty)
+        data["reorder_qty"] = args.reorder_qty
         updated_fields.append("reorder_qty")
     if args.standard_rate is not None:
-        updates.append("standard_rate = ?")
-        params.append(str(round_currency(to_decimal(args.standard_rate))))
+        data["standard_rate"] = str(round_currency(to_decimal(args.standard_rate)))
         updated_fields.append("standard_rate")
     if args.item_status is not None:
         if args.item_status not in ("active", "disabled"):
             err("--status must be 'active' or 'disabled'")
-        updates.append("status = ?")
-        params.append(args.item_status)
+        data["status"] = args.item_status
         updated_fields.append("status")
 
     if not updated_fields:
         err("No fields to update")
 
-    updates.append("updated_at = datetime('now')")
-    params.append(args.item_id)
-    conn.execute(f"UPDATE item SET {', '.join(updates)} WHERE id = ?", params)
+    data["updated_at"] = LiteralValue("datetime('now')")
+    sql, params = dynamic_update("item", data, where={"id": args.item_id})
+    conn.execute(sql, params)
 
     audit(conn, "erpclaw-inventory", "update-item", "item", args.item_id,
            new_values={"updated_fields": updated_fields})
@@ -519,11 +514,10 @@ def update_warehouse(conn, args):
         err(f"Warehouse {args.warehouse_id} not found")
     args.warehouse_id = wh["id"]  # normalize to id
 
-    updates, params, updated_fields = [], [], []
+    data, updated_fields = {}, []
 
     if args.name is not None:
-        updates.append("name = ?")
-        params.append(args.name)
+        data["name"] = args.name
         updated_fields.append("name")
     if args.account_id is not None:
         acct_t = Table("account")
@@ -531,17 +525,15 @@ def update_warehouse(conn, args):
         acct = conn.execute(acct_q.get_sql(), (args.account_id,)).fetchone()
         if not acct:
             err(f"Account {args.account_id} not found")
-        updates.append("account_id = ?")
-        params.append(args.account_id)
+        data["account_id"] = args.account_id
         updated_fields.append("account_id")
 
     if not updated_fields:
         err("No fields to update")
 
-    updates.append("updated_at = datetime('now')")
-    params.append(args.warehouse_id)
-    conn.execute(
-        f"UPDATE warehouse SET {', '.join(updates)} WHERE id = ?", params)
+    data["updated_at"] = LiteralValue("datetime('now')")
+    sql, params = dynamic_update("warehouse", data, where={"id": args.warehouse_id})
+    conn.execute(sql, params)
 
     audit(conn, "erpclaw-inventory", "update-warehouse", "warehouse", args.warehouse_id,
            new_values={"updated_fields": updated_fields})

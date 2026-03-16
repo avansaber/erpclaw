@@ -28,7 +28,7 @@ try:
     from erpclaw_lib.audit import audit
     from erpclaw_lib.dependencies import check_required_tables
     from erpclaw_lib.query_helpers import resolve_company_id
-    from erpclaw_lib.query import Q, P, Table, Field, fn, DecimalSum, Order
+    from erpclaw_lib.query import Q, P, Table, Field, fn, DecimalSum, Order, dynamic_update
     from erpclaw_lib.vendor.pypika.terms import LiteralValue, ValueWrapper
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
 except ImportError:
@@ -201,11 +201,10 @@ def update_tax_template(conn, args):
     if not t:
         err(f"Tax template not found: {args.tax_template_id}")
 
-    updates, params, updated_fields = [], [], []
+    data, updated_fields = {}, []
 
     if args.name is not None:
-        updates.append("name = ?")
-        params.append(args.name)
+        data["name"] = args.name
         updated_fields.append("name")
 
     if args.is_default is not None:
@@ -219,8 +218,7 @@ def update_tax_template(conn, args):
             )
             conn.execute(q_clear.get_sql(),
                 (t["company_id"], t["tax_type"], args.tax_template_id))
-        updates.append("is_default = ?")
-        params.append(is_def)
+        data["is_default"] = is_def
         updated_fields.append("is_default")
 
     # Replace lines if provided
@@ -238,12 +236,10 @@ def update_tax_template(conn, args):
         _insert_lines(conn, args.tax_template_id, lines)
         updated_fields.append("lines")
 
-    # Dynamic UPDATE — keep as raw SQL (variable SET columns)
-    if updates:
-        updates.append("updated_at = datetime('now')")
-        params.append(args.tax_template_id)
-        conn.execute(
-            f"UPDATE tax_template SET {', '.join(updates)} WHERE id = ?", params)
+    if data:
+        data["updated_at"] = LiteralValue("datetime('now')")
+        sql, params = dynamic_update("tax_template", data, where={"id": args.tax_template_id})
+        conn.execute(sql, params)
 
     if not updated_fields:
         err("No fields to update")

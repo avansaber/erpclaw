@@ -14,6 +14,7 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
+    from erpclaw_lib.query import dynamic_update
 
     ENTITY_PREFIXES.setdefault("lease", "LEAS-")
 except ImportError:
@@ -122,7 +123,7 @@ def update_lease(conn, args):
     if not conn.execute("SELECT id FROM advacct_lease WHERE id = ?", (lease_id,)).fetchone():
         err(f"Lease {lease_id} not found")
 
-    updates, params, changed = [], [], []
+    data, changed = {}, []
     for arg_name, col_name in {
         "lessee_name": "lessee_name",
         "lessor_name": "lessor_name",
@@ -136,31 +137,27 @@ def update_lease(conn, args):
     }.items():
         val = getattr(args, arg_name, None)
         if val is not None:
-            updates.append(f"{col_name} = ?")
-            params.append(val)
+            data[col_name] = val
             changed.append(col_name)
 
     lease_type = getattr(args, "lease_type", None)
     if lease_type:
         if lease_type not in VALID_LEASE_TYPES:
             err(f"Invalid lease-type: {lease_type}. Must be one of: {', '.join(VALID_LEASE_TYPES)}")
-        updates.append("lease_type = ?")
-        params.append(lease_type)
+        data["lease_type"] = lease_type
         changed.append("lease_type")
 
     term_months = getattr(args, "term_months", None)
     if term_months is not None:
-        updates.append("term_months = ?")
-        params.append(int(term_months))
+        data["term_months"] = int(term_months)
         changed.append("term_months")
 
-    if not updates:
+    if not data:
         err("No fields to update")
 
-    updates.append("updated_at = ?")
-    params.append(_now_iso())
-    params.append(lease_id)
-    conn.execute(f"UPDATE advacct_lease SET {', '.join(updates)} WHERE id = ?", params)
+    data["updated_at"] = _now_iso()
+    sql, params = dynamic_update("advacct_lease", data, where={"id": lease_id})
+    conn.execute(sql, params)
     audit(conn, SKILL, "update-lease", "advacct_lease", lease_id,
           new_values={"updated_fields": changed})
     conn.commit()

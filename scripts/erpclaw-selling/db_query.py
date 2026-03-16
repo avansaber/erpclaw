@@ -36,7 +36,7 @@ try:
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.dependencies import check_required_tables
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL, DecimalSum, DecimalAbs
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL, DecimalSum, DecimalAbs, dynamic_update
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
     from erpclaw_lib.vendor.pypika.terms import LiteralValue, ValueWrapper
 except ImportError:
@@ -439,38 +439,32 @@ def update_customer(conn, args):
              suggestion="Use 'list customers' to see available customers.")
     args.customer_id = cust["id"]  # normalize to id
 
-    # raw SQL — dynamic column building at runtime
-    updates, params, updated_fields = [], [], []
+    data, updated_fields = {}, []
 
     if args.name is not None:
-        updates.append("name = ?")
-        params.append(args.name)
+        data["name"] = args.name
         updated_fields.append("name")
     if args.credit_limit is not None:
-        updates.append("credit_limit = ?")
-        params.append(str(round_currency(to_decimal(args.credit_limit))))
+        data["credit_limit"] = str(round_currency(to_decimal(args.credit_limit)))
         updated_fields.append("credit_limit")
     if args.payment_terms_id is not None:
-        updates.append("payment_terms_id = ?")
-        params.append(args.payment_terms_id)
+        data["payment_terms_id"] = args.payment_terms_id
         updated_fields.append("payment_terms_id")
     if args.customer_group is not None:
-        updates.append("customer_group = ?")
-        params.append(args.customer_group)
+        data["customer_group"] = args.customer_group
         updated_fields.append("customer_group")
     if args.customer_type is not None:
         if args.customer_type not in VALID_CUSTOMER_TYPES:
             err(f"--customer-type must be one of: {', '.join(VALID_CUSTOMER_TYPES)}")
-        updates.append("customer_type = ?")
-        params.append(args.customer_type)
+        data["customer_type"] = args.customer_type
         updated_fields.append("customer_type")
 
     if not updated_fields:
         err("No fields to update")
 
-    updates.append("updated_at = datetime('now')")
-    params.append(args.customer_id)
-    conn.execute(f"UPDATE customer SET {', '.join(updates)} WHERE id = ?", params)
+    data["updated_at"] = LiteralValue("datetime('now')")
+    sql, params = dynamic_update("customer", data, where={"id": args.customer_id})
+    conn.execute(sql, params)
 
     audit(conn, "erpclaw-selling", "update-customer", "customer", args.customer_id,
            new_values={"updated_fields": updated_fields})

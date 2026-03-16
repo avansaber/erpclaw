@@ -1,6 +1,6 @@
 ocui_version: '1.0'
 skill: erpclaw
-skill_version: 2.0.0
+skill_version: 3.2.0
 display_name: ERPClaw
 icon: briefcase
 color: '#2563eb'
