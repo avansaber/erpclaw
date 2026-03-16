@@ -29,6 +29,7 @@ try:
     from erpclaw_lib.audit import audit
     from erpclaw_lib.dependencies import check_required_tables
     from erpclaw_lib.query import Q, P, Table, Field, fn, Order, DecimalSum
+    from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
     from erpclaw_lib.vendor.pypika.terms import ValueWrapper
 except ImportError:
     import json as _json

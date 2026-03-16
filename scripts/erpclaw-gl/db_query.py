@@ -35,6 +35,7 @@ try:
     from erpclaw_lib.dependencies import check_required_tables
     from erpclaw_lib.query_helpers import resolve_company_id
     from erpclaw_lib.query import Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL, DecimalSum, DecimalAbs
+    from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
     from erpclaw_lib.vendor.pypika.terms import LiteralValue, ValueWrapper
 except ImportError:
     import json as _json

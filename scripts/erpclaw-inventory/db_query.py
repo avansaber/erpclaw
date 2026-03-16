@@ -38,6 +38,7 @@ try:
     from erpclaw_lib.query_helpers import resolve_company_id
     from erpclaw_lib.query import Q, P, Table, Field, fn, DecimalSum, DecimalAbs
     from erpclaw_lib.vendor.pypika import Order
+    from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
     from erpclaw_lib.vendor.pypika.terms import LiteralValue
 except ImportError:
     import json as _json
