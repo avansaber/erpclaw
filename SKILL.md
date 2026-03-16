@@ -1,21 +1,17 @@
 ---
 name: erpclaw
-version: 3.1.2
+version: 3.2.0
 description: >
-  AI-native ERP system. Full accounting, invoicing, inventory, purchasing,
+  AI-native ERP system with self-extending OS. Full accounting, invoicing, inventory, purchasing,
   tax, billing, HR, payroll, advanced accounting (ASC 606/842, intercompany, consolidation),
-  and financial reporting in a single install. 371 actions across 14 domains.
-  Modular expansion via GitHub-hosted modules. Double-entry GL, immutable audit trail, US GAAP.
+  and financial reporting. 371+ core actions across 14 domains, 43 expansion modules.
+  Constitutional guardrails, adversarial audit, schema migration. Double-entry GL, immutable audit trail, US GAAP.
 author: AvanSaber
 homepage: https://github.com/avansaber/erpclaw
 source: https://github.com/avansaber/erpclaw
-tier: 0
-category: core
-requires: []
-database: ~/.openclaw/erpclaw/data.sqlite
 user-invocable: true
 tags: [erp, accounting, invoicing, inventory, purchasing, tax, billing, payments, gl, reports, sales, buying, setup, hr, payroll, employees, leave, attendance, salary, revenue-recognition, lease-accounting, intercompany, consolidation]
-metadata: {"openclaw":{"type":"executable","install":{"post":"python3 scripts/erpclaw-setup/db_query.py --action initialize-database"},"requires":{"bins":["python3"],"env":[],"optionalEnv":["ERPCLAW_DB_PATH"]},"os":["darwin","linux"]}}
+metadata: {"openclaw":{"type":"executable","install":{"post":"python3 scripts/erpclaw-setup/db_query.py --action initialize-database"},"requires":{"bins":["python3","git"],"env":[],"optionalEnv":["ERPCLAW_DB_PATH"]},"os":["darwin","linux"]}}
 cron:
   - expression: "0 1 * * *"
     timezone: "America/Chicago"
@@ -263,21 +259,19 @@ For all actions: `python3 {baseDir}/scripts/db_query.py --action <action> [flags
 | `create-payroll-run` / `generate-salary-slips` / `submit-payroll-run` / `cancel-payroll-run` | Payroll processing |
 | `generate-w2-data` / `add-garnishment` / `list-garnishments` / `payroll-status` | W-2 & garnishments |
 
-### Module Management (10 actions)
+### Module Management & OS (23 actions)
 
 | Action | Description |
 |--------|-------------|
 | `install-module` | Install a module from GitHub (`--module-name <name>`) |
 | `remove-module` | Remove an installed module (`--module-name <name>`) |
 | `update-modules` | Update all or a specific module |
-| `list-modules` | List all installed modules |
-| `available-modules` | Browse module catalog (`--category`, `--search`) |
-| `module-status` | Detailed status for a module (`--module-name <name>`) |
-| `search-modules` | Search catalog by keyword (`--search <query>`) |
-| `rebuild-action-cache` | Rebuild action routing cache |
-| `list-all-actions` | List ALL available actions (core + installed modules) |
-| `list-profiles` | Browse business onboarding profiles |
-| `onboard` | Auto-install modules for a business type (`--profile <name>`) |
+| `list-modules` / `available-modules` / `search-modules` / `module-status` | Browse and search module catalog |
+| `rebuild-action-cache` / `list-all-actions` | Refresh available actions after module changes |
+| `list-profiles` / `onboard` | Browse business profiles, auto-install for a business type |
+| `validate-module` / `generate-module` / `configure-module` / `deploy-module` | OS: Module lifecycle (validate, generate, configure, deploy) |
+| `install-suite` / `classify-operation` / `run-audit` / `compliance-weather-status` | OS: Suite install, tier classification, audit |
+| `schema-plan` / `schema-apply` / `schema-rollback` / `schema-drift` / `deploy-audit-log` | OS: Schema migration & deploy audit |
 
 ### Quick Command Reference
 
@@ -296,4 +290,4 @@ For all actions: `python3 {baseDir}/scripts/db_query.py --action <action> [flags
 
 ## Technical Details (Tier 3)
 
-Router: `scripts/db_query.py` → 14 core domains + installed modules. Modules from GitHub to `~/.openclaw/erpclaw/modules/`. Single SQLite DB. 151 tables, Money=TEXT(Decimal), IDs=TEXT(UUID4), GL immutable.
+Router: `scripts/db_query.py` → 14 core domains + erpclaw-os. Modules from GitHub to `~/.openclaw/erpclaw/modules/`. Single SQLite DB (WAL mode). 159 tables, Money=TEXT(Decimal), IDs=TEXT(UUID4), GL immutable. Python 3.10+.
