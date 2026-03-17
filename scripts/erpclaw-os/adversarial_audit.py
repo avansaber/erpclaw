@@ -33,10 +33,11 @@ def ensure_audit_tables(db_path=None):
     """Create audit finding and compliance period tables."""
     db_path = db_path or DEFAULT_DB_PATH
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=5000")
-    conn.executescript("""
+    from erpclaw_lib.db import setup_pragmas
+    setup_pragmas(conn)
+    from erpclaw_lib.query import ddl_now
+    _dn = ddl_now()
+    conn.executescript(f"""
         CREATE TABLE IF NOT EXISTS erpclaw_audit_finding (
             id              TEXT PRIMARY KEY,
             module_name     TEXT NOT NULL,
@@ -46,7 +47,7 @@ def ensure_audit_tables(db_path=None):
             description     TEXT NOT NULL,
             evidence        TEXT,
             status          TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'acknowledged', 'resolved', 'false_positive')),
-            found_at        TEXT DEFAULT (datetime('now')),
+            found_at        TEXT DEFAULT ({_dn}),
             resolved_at     TEXT,
             resolved_by     TEXT
         );
@@ -58,7 +59,7 @@ def ensure_audit_tables(db_path=None):
             start_date      TEXT NOT NULL,
             end_date        TEXT NOT NULL,
             additional_checks TEXT,
-            created_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT ({_dn})
         );
     """)
     conn.commit()
@@ -77,9 +78,8 @@ def record_finding(module_name, finding_type, severity, description,
 
     finding_id = str(uuid.uuid4())
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=5000")
+    from erpclaw_lib.db import setup_pragmas
+    setup_pragmas(conn)
     conn.execute("""
         INSERT INTO erpclaw_audit_finding
             (id, module_name, finding_type, severity, article, description, evidence, found_at)
@@ -122,11 +122,11 @@ def check_gl_balance_invariant(db_path=None):
     try:
         rows = conn.execute("""
             SELECT voucher_id, voucher_type,
-                   SUM(CAST(debit_amount AS REAL)) as total_debit,
-                   SUM(CAST(credit_amount AS REAL)) as total_credit
+                   SUM(CAST(debit_amount AS NUMERIC)) as total_debit,
+                   SUM(CAST(credit_amount AS NUMERIC)) as total_credit
             FROM gl_entry
             GROUP BY voucher_id, voucher_type
-            HAVING ABS(SUM(CAST(debit_amount AS REAL)) - SUM(CAST(credit_amount AS REAL))) > 0.01
+            HAVING ABS(SUM(CAST(debit_amount AS NUMERIC)) - SUM(CAST(credit_amount AS NUMERIC))) > 0.01
         """).fetchall()
 
         for row in rows:
@@ -178,7 +178,7 @@ def check_account_anchoring(db_path=None):
             FROM gl_entry g
             JOIN account a ON g.account_id = a.id
             WHERE g.voucher_type = 'Sales Invoice'
-              AND CAST(g.credit_amount AS REAL) > 0
+              AND CAST(g.credit_amount AS NUMERIC) > 0
               AND a.root_type = 'expense'
         """).fetchall()
 
@@ -205,7 +205,7 @@ def check_account_anchoring(db_path=None):
             FROM gl_entry g
             JOIN account a ON g.account_id = a.id
             WHERE g.voucher_type = 'Purchase Invoice'
-              AND CAST(g.debit_amount AS REAL) > 0
+              AND CAST(g.debit_amount AS NUMERIC) > 0
               AND a.root_type = 'income'
         """).fetchall()
 

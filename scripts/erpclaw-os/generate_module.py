@@ -219,6 +219,7 @@ Run: python3 init_db.py [db_path]
 import os
 import sqlite3
 import sys
+sys.path.insert(0, os.path.expanduser("~/.openclaw/erpclaw/lib"))
 
 
 DEFAULT_DB_PATH = os.path.expanduser("~/.openclaw/erpclaw/data.sqlite")
@@ -232,7 +233,8 @@ REQUIRED_FOUNDATION = [
 def init_{module_name.replace("-", "_")}_schema(db_path=None):
     db_path = db_path or DEFAULT_DB_PATH
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA foreign_keys=ON")
+    from erpclaw_lib.db import setup_pragmas
+    setup_pragmas(conn)
 
     # Verify ERPClaw foundation
     tables = [r[0] for r in conn.execute(
@@ -1008,8 +1010,8 @@ class _DecimalSum:
 def get_conn(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA busy_timeout = 5000")
+    from erpclaw_lib.db import setup_pragmas
+    setup_pragmas(conn)
     conn.create_aggregate("decimal_sum", 1, _DecimalSum)
     return conn
 

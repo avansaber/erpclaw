@@ -42,13 +42,13 @@ SETUP_TABLES = """
 CREATE TABLE IF NOT EXISTS schema_version (
     module          TEXT NOT NULL,
     version         INTEGER NOT NULL DEFAULT 1,
-    updated_at      TEXT DEFAULT (datetime('now')),
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (module)
 );
 
 CREATE TABLE IF NOT EXISTS audit_log (
     id              TEXT PRIMARY KEY,
-    timestamp       TEXT DEFAULT (datetime('now')),
+    timestamp       TEXT DEFAULT CURRENT_TIMESTAMP,
     user_id         TEXT,
     skill           TEXT NOT NULL,
     action          TEXT NOT NULL,
@@ -65,7 +65,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_skill ON audit_log(skill);
 
 CREATE TABLE IF NOT EXISTS action_call_log (
     id              TEXT PRIMARY KEY,
-    timestamp       TEXT DEFAULT (datetime('now')),
+    timestamp       TEXT DEFAULT CURRENT_TIMESTAMP,
     action_name     TEXT NOT NULL,
     routed_to       TEXT NOT NULL,          -- domain or module name
     route_tier      INTEGER NOT NULL,       -- 0=standalone, 1=alias, 2=core, 3=module
@@ -103,8 +103,8 @@ CREATE TABLE IF NOT EXISTS company (
     accounts_frozen_till_date     TEXT,
     role_allowed_for_frozen_entries TEXT,
     fiscal_year_start_month       INTEGER NOT NULL DEFAULT 1,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS currency (
@@ -122,8 +122,8 @@ CREATE TABLE IF NOT EXISTS exchange_rate (
     rate            TEXT NOT NULL,     -- decimal(12,6) stored as TEXT
     effective_date  TEXT NOT NULL,     -- YYYY-MM-DD
     source          TEXT NOT NULL DEFAULT 'manual' CHECK(source IN ('manual','api','bank_feed')),
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_exchange_rate_pair_date
@@ -136,8 +136,8 @@ CREATE TABLE IF NOT EXISTS payment_terms (
     discount_percentage TEXT,  -- decimal
     discount_days   INTEGER,
     description     TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS uom (
@@ -152,7 +152,7 @@ CREATE TABLE IF NOT EXISTS uom_conversion (
     to_uom          TEXT NOT NULL REFERENCES uom(id) ON DELETE RESTRICT,
     conversion_factor TEXT NOT NULL,  -- decimal
     item_id         TEXT,             -- nullable, for item-specific conversions
-    created_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS regional_settings (
@@ -160,8 +160,8 @@ CREATE TABLE IF NOT EXISTS regional_settings (
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
     key             TEXT NOT NULL,
     value           TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now')),
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(company_id, key)
 );
 
@@ -176,8 +176,8 @@ CREATE TABLE IF NOT EXISTS custom_field (
     default_value   TEXT,
     insert_after    TEXT,   -- field name to position after
     owner_skill     TEXT NOT NULL,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now')),
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(table_name, field_name)
 );
 
@@ -188,7 +188,7 @@ CREATE TABLE IF NOT EXISTS property_setter (
     property        TEXT NOT NULL,  -- e.g. 'mandatory', 'hidden', 'default'
     value           TEXT,
     owner_skill     TEXT NOT NULL,
-    created_at      TEXT DEFAULT (datetime('now')),
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(table_name, field_name, property)
 );
 
@@ -204,8 +204,8 @@ CREATE TABLE IF NOT EXISTS erp_user (
     status          TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','disabled','locked')),
     company_ids     TEXT,   -- JSON array of company IDs this user can access
     last_login      TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_erp_user_username ON erp_user(username);
@@ -216,7 +216,7 @@ CREATE TABLE IF NOT EXISTS role (
     name            TEXT NOT NULL UNIQUE,
     description     TEXT,
     is_system       INTEGER NOT NULL DEFAULT 0 CHECK(is_system IN (0,1)),
-    created_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS user_role (
@@ -224,7 +224,7 @@ CREATE TABLE IF NOT EXISTS user_role (
     user_id         TEXT NOT NULL REFERENCES erp_user(id) ON DELETE CASCADE,
     role_id         TEXT NOT NULL REFERENCES role(id) ON DELETE CASCADE,
     company_id      TEXT REFERENCES company(id) ON DELETE CASCADE,
-    created_at      TEXT DEFAULT (datetime('now')),
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(user_id, role_id, company_id)
 );
 
@@ -238,7 +238,7 @@ CREATE TABLE IF NOT EXISTS role_permission (
     skill           TEXT NOT NULL,          -- e.g. 'erpclaw-gl', 'erpclaw-payments'
     action_pattern  TEXT NOT NULL,          -- e.g. 'submit-*', 'list-*', '*'
     allowed         INTEGER NOT NULL DEFAULT 1 CHECK(allowed IN (0,1)),
-    created_at      TEXT DEFAULT (datetime('now')),
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(role_id, skill, action_pattern)
 );
 
@@ -254,7 +254,7 @@ CREATE TABLE IF NOT EXISTS user_permission (
     can_write       INTEGER NOT NULL DEFAULT 0 CHECK(can_write IN (0,1)),
     can_submit      INTEGER NOT NULL DEFAULT 0 CHECK(can_submit IN (0,1)),
     can_cancel      INTEGER NOT NULL DEFAULT 0 CHECK(can_cancel IN (0,1)),
-    created_at      TEXT DEFAULT (datetime('now')),
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(user_id, entity_type, entity_id)
 );
 
@@ -301,8 +301,8 @@ CREATE TABLE IF NOT EXISTS account (
     depth           INTEGER NOT NULL DEFAULT 0,
     lft             INTEGER,
     rgt             INTEGER,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now')),
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(account_number, company_id)
 );
 
@@ -314,7 +314,7 @@ CREATE INDEX IF NOT EXISTS idx_account_type ON account(account_type);
 CREATE TABLE IF NOT EXISTS gl_entry (
     id              TEXT PRIMARY KEY,
     posting_date    TEXT NOT NULL,     -- YYYY-MM-DD
-    created_at      TEXT DEFAULT (datetime('now')),
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
     account_id      TEXT NOT NULL REFERENCES account(id) ON DELETE RESTRICT,
     party_type      TEXT CHECK(party_type IN ('customer','supplier','employee')),
     party_id        TEXT,
@@ -363,8 +363,8 @@ CREATE TABLE IF NOT EXISTS fiscal_year (
     end_date        TEXT NOT NULL,
     is_closed       INTEGER NOT NULL DEFAULT 0 CHECK(is_closed IN (0,1)),
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_fiscal_year_company ON fiscal_year(company_id);
@@ -379,8 +379,8 @@ CREATE TABLE IF NOT EXISTS period_closing_voucher (
     status          TEXT NOT NULL DEFAULT 'draft'
                     CHECK(status IN ('draft','submitted','cancelled')),
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS cost_center (
@@ -389,8 +389,8 @@ CREATE TABLE IF NOT EXISTS cost_center (
     parent_id       TEXT REFERENCES cost_center(id) ON DELETE RESTRICT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
     is_group        INTEGER NOT NULL DEFAULT 0 CHECK(is_group IN (0,1)),
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_cost_center_company ON cost_center(company_id);
@@ -407,8 +407,8 @@ CREATE TABLE IF NOT EXISTS budget (
     action_if_exceeded TEXT NOT NULL DEFAULT 'warn'
                     CHECK(action_if_exceeded IN ('warn','stop','ignore')),
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_budget_fiscal_year ON budget(fiscal_year_id);
@@ -455,8 +455,8 @@ CREATE TABLE IF NOT EXISTS journal_entry (
                     CHECK(status IN ('draft','submitted','cancelled','amended')),
     amended_from    TEXT REFERENCES journal_entry(id) ON DELETE RESTRICT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_journal_entry_status ON journal_entry(status);
@@ -501,8 +501,8 @@ CREATE TABLE IF NOT EXISTS recurring_journal_template (
     remark          TEXT,
     status          TEXT NOT NULL DEFAULT 'active'
                     CHECK(status IN ('active','paused','completed')),
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_rjt_company ON recurring_journal_template(company_id);
@@ -541,8 +541,8 @@ CREATE TABLE IF NOT EXISTS payment_entry (
                     CHECK(status IN ('draft','submitted','cancelled')),
     unallocated_amount TEXT NOT NULL DEFAULT '0',
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_payment_entry_status ON payment_entry(status);
@@ -560,7 +560,7 @@ CREATE TABLE IF NOT EXISTS payment_allocation (
     voucher_id      TEXT NOT NULL,
     allocated_amount TEXT NOT NULL DEFAULT '0',
     exchange_gain_loss TEXT NOT NULL DEFAULT '0',
-    created_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_payment_alloc_payment ON payment_allocation(payment_entry_id);
@@ -573,7 +573,7 @@ CREATE TABLE IF NOT EXISTS payment_deduction (
     amount          TEXT NOT NULL DEFAULT '0',
     type            TEXT NOT NULL CHECK(type IN ('tds','commission','early_payment_discount','other')),
     description     TEXT,
-    created_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_payment_deduction_pe ON payment_deduction(payment_entry_id);
@@ -593,8 +593,8 @@ CREATE TABLE IF NOT EXISTS payment_ledger_entry (
     currency        TEXT NOT NULL DEFAULT 'USD',
     delinked        INTEGER NOT NULL DEFAULT 0 CHECK(delinked IN (0,1)),
     remarks         TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_ple_party ON payment_ledger_entry(party_type, party_id);
@@ -621,8 +621,8 @@ CREATE TABLE IF NOT EXISTS tax_category (
     id              TEXT PRIMARY KEY,
     name            TEXT NOT NULL UNIQUE,
     description     TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS tax_template (
@@ -632,8 +632,8 @@ CREATE TABLE IF NOT EXISTS tax_template (
     is_default      INTEGER NOT NULL DEFAULT 0 CHECK(is_default IN (0,1)),
     tax_category_id TEXT REFERENCES tax_category(id) ON DELETE RESTRICT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now')),
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(name, company_id)
 );
 
@@ -677,8 +677,8 @@ CREATE TABLE IF NOT EXISTS tax_rule (
     tax_category_id TEXT REFERENCES tax_category(id) ON DELETE RESTRICT,
     priority        INTEGER NOT NULL DEFAULT 0,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_tax_rule_company ON tax_rule(company_id);
@@ -689,7 +689,7 @@ CREATE TABLE IF NOT EXISTS item_tax_template (
     item_id         TEXT NOT NULL,
     tax_template_id TEXT NOT NULL REFERENCES tax_template(id) ON DELETE RESTRICT,
     tax_rate        TEXT,  -- override rate, nullable
-    created_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_item_tax_template_item ON item_tax_template(item_id);
@@ -703,8 +703,8 @@ CREATE TABLE IF NOT EXISTS tax_withholding_category (
     tax_on_excess_amount INTEGER NOT NULL DEFAULT 0
                     CHECK(tax_on_excess_amount IN (0,1)),
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS tax_withholding_group (
@@ -715,7 +715,7 @@ CREATE TABLE IF NOT EXISTS tax_withholding_group (
     effective_from  TEXT NOT NULL,
     effective_to    TEXT,
     account_id      TEXT NOT NULL REFERENCES account(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_twg_category ON tax_withholding_group(category_id);
@@ -732,7 +732,7 @@ CREATE TABLE IF NOT EXISTS tax_withholding_entry (
     taxable_voucher_id   TEXT,
     withholding_voucher_type TEXT,
     withholding_voucher_id   TEXT,
-    created_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_twe_party ON tax_withholding_entry(party_type, party_id);
@@ -774,8 +774,8 @@ CREATE TABLE IF NOT EXISTS customer (
     status          TEXT NOT NULL DEFAULT 'active'
                     CHECK(status IN ('active','inactive','blocked')),
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_customer_status ON customer(status);
@@ -789,8 +789,8 @@ CREATE TABLE IF NOT EXISTS price_list (
     selling         INTEGER NOT NULL DEFAULT 0 CHECK(selling IN (0,1)),
     buying          INTEGER NOT NULL DEFAULT 0 CHECK(buying IN (0,1)),
     enabled         INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS item_price (
@@ -802,8 +802,8 @@ CREATE TABLE IF NOT EXISTS item_price (
     valid_from      TEXT,
     valid_to        TEXT,
     currency        TEXT NOT NULL DEFAULT 'USD',
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_item_price_item ON item_price(item_id);
@@ -824,8 +824,8 @@ CREATE TABLE IF NOT EXISTS pricing_rule (
     priority        INTEGER NOT NULL DEFAULT 0,
     active          INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS quotation (
@@ -846,8 +846,8 @@ CREATE TABLE IF NOT EXISTS quotation (
     converted_to    TEXT,
     terms_and_conditions TEXT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_quotation_status ON quotation(status);
@@ -891,8 +891,8 @@ CREATE TABLE IF NOT EXISTS sales_order (
     per_invoiced     TEXT NOT NULL DEFAULT '0',
     quotation_id    TEXT REFERENCES quotation(id) ON DELETE RESTRICT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_sales_order_status ON sales_order(status);
@@ -927,8 +927,8 @@ CREATE TABLE IF NOT EXISTS delivery_note (
                     CHECK(status IN ('draft','submitted','cancelled')),
     total_qty       TEXT NOT NULL DEFAULT '0',
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_delivery_note_status ON delivery_note(status);
@@ -977,8 +977,8 @@ CREATE TABLE IF NOT EXISTS sales_invoice (
     update_stock    INTEGER NOT NULL DEFAULT 1 CHECK(update_stock IN (0,1)),
     amended_from    TEXT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_sales_invoice_status ON sales_invoice(status);
@@ -1010,8 +1010,8 @@ CREATE TABLE IF NOT EXISTS sales_partner (
     commission_rate TEXT NOT NULL DEFAULT '0',
     territory       TEXT,
     contact_info    TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS blanket_order (
@@ -1027,8 +1027,8 @@ CREATE TABLE IF NOT EXISTS blanket_order (
     status          TEXT NOT NULL DEFAULT 'draft'
                     CHECK(status IN ('draft','active','closed','cancelled')),
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS recurring_invoice_template (
@@ -1045,8 +1045,8 @@ CREATE TABLE IF NOT EXISTS recurring_invoice_template (
     status          TEXT NOT NULL DEFAULT 'draft'
                     CHECK(status IN ('draft','active','paused','completed','cancelled')),
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS recurring_invoice_template_item (
@@ -1099,8 +1099,8 @@ CREATE TABLE IF NOT EXISTS supplier (
     status          TEXT NOT NULL DEFAULT 'active'
                     CHECK(status IN ('active','inactive','blocked')),
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_supplier_status ON supplier(status);
@@ -1116,8 +1116,8 @@ CREATE TABLE IF NOT EXISTS material_request (
     status          TEXT NOT NULL DEFAULT 'draft'
                     CHECK(status IN ('draft','submitted','partially_ordered','ordered','cancelled')),
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_material_request_status ON material_request(status);
@@ -1143,8 +1143,8 @@ CREATE TABLE IF NOT EXISTS request_for_quotation (
     status          TEXT NOT NULL DEFAULT 'draft'
                     CHECK(status IN ('draft','submitted','quotation_received','cancelled')),
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS rfq_supplier (
@@ -1183,8 +1183,8 @@ CREATE TABLE IF NOT EXISTS supplier_quotation (
     status          TEXT NOT NULL DEFAULT 'draft'
                     CHECK(status IN ('draft','submitted','ordered','expired','cancelled')),
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_supplier_quotation_supplier ON supplier_quotation(supplier_id);
@@ -1225,8 +1225,8 @@ CREATE TABLE IF NOT EXISTS purchase_order (
     per_invoiced    TEXT NOT NULL DEFAULT '0',
     supplier_quotation_id TEXT REFERENCES supplier_quotation(id) ON DELETE RESTRICT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_purchase_order_status ON purchase_order(status);
@@ -1261,8 +1261,8 @@ CREATE TABLE IF NOT EXISTS purchase_receipt (
                     CHECK(status IN ('draft','submitted','cancelled')),
     total_qty       TEXT NOT NULL DEFAULT '0',
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_purchase_receipt_status ON purchase_receipt(status);
@@ -1313,8 +1313,8 @@ CREATE TABLE IF NOT EXISTS purchase_invoice (
     update_stock    INTEGER NOT NULL DEFAULT 1 CHECK(update_stock IN (0,1)),
     amended_from    TEXT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_purchase_invoice_status ON purchase_invoice(status);
@@ -1347,8 +1347,8 @@ CREATE TABLE IF NOT EXISTS landed_cost_voucher (
     status          TEXT NOT NULL DEFAULT 'draft'
                     CHECK(status IN ('draft','submitted','cancelled')),
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS landed_cost_item (
@@ -1386,7 +1386,7 @@ CREATE TABLE IF NOT EXISTS supplier_score (
     responsiveness_score TEXT NOT NULL DEFAULT '0',
     factors         TEXT,
     auto_computed   INTEGER NOT NULL DEFAULT 1 CHECK(auto_computed IN (0,1)),
-    created_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_supplier_score_supplier ON supplier_score(supplier_id);
@@ -1412,8 +1412,8 @@ CREATE TABLE IF NOT EXISTS item_group (
     company_id      TEXT REFERENCES company(id),
     parent_id       TEXT REFERENCES item_group(id) ON DELETE RESTRICT,
     is_group        INTEGER NOT NULL DEFAULT 0 CHECK(is_group IN (0,1)),
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now')),
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(name, company_id)
 );
 
@@ -1448,8 +1448,8 @@ CREATE TABLE IF NOT EXISTS item (
     last_purchase_rate TEXT NOT NULL DEFAULT '0',
     status          TEXT NOT NULL DEFAULT 'active'
                     CHECK(status IN ('active','disabled')),
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_item_code ON item(item_code);
@@ -1462,7 +1462,7 @@ CREATE TABLE IF NOT EXISTS item_attribute (
     item_id         TEXT NOT NULL REFERENCES item(id) ON DELETE RESTRICT,
     attribute_name  TEXT NOT NULL,
     attribute_values TEXT,  -- JSON array
-    created_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_item_attribute_item ON item_attribute(item_id);
@@ -1477,8 +1477,8 @@ CREATE TABLE IF NOT EXISTS warehouse (
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
     account_id      TEXT REFERENCES account(id) ON DELETE RESTRICT,
     is_group        INTEGER NOT NULL DEFAULT 0 CHECK(is_group IN (0,1)),
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_warehouse_company ON warehouse(company_id);
@@ -1504,8 +1504,8 @@ CREATE TABLE IF NOT EXISTS stock_entry (
     status          TEXT NOT NULL DEFAULT 'draft'
                     CHECK(status IN ('draft','submitted','cancelled')),
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_stock_entry_status ON stock_entry(status);
@@ -1552,7 +1552,7 @@ CREATE TABLE IF NOT EXISTS stock_ledger_entry (
     incoming_rate   TEXT NOT NULL DEFAULT '0',
     is_cancelled    INTEGER NOT NULL DEFAULT 0 CHECK(is_cancelled IN (0,1)),
     fiscal_year     TEXT,
-    created_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP
     -- NOTE: stock_ledger_entry is immutable — no updated_at column
 );
 
@@ -1574,8 +1574,8 @@ CREATE TABLE IF NOT EXISTS batch (
     reference_id    TEXT,
     status          TEXT NOT NULL DEFAULT 'active'
                     CHECK(status IN ('active','expired')),
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_batch_item ON batch(item_id);
@@ -1595,8 +1595,8 @@ CREATE TABLE IF NOT EXISTS serial_number (
     supplier_id     TEXT,
     customer_id     TEXT,
     warranty_expiry_date TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_serial_item ON serial_number(item_id);
@@ -1613,8 +1613,8 @@ CREATE TABLE IF NOT EXISTS stock_reconciliation (
                     CHECK(status IN ('draft','submitted','cancelled')),
     difference_amount TEXT NOT NULL DEFAULT '0',
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS stock_reconciliation_item (
@@ -1640,8 +1640,8 @@ CREATE TABLE IF NOT EXISTS product_bundle (
     description     TEXT,
     status          TEXT NOT NULL DEFAULT 'active'
                     CHECK(status IN ('active','disabled')),
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS product_bundle_item (
@@ -1684,8 +1684,8 @@ CREATE TABLE IF NOT EXISTS meter (
     status          TEXT NOT NULL DEFAULT 'active'
                     CHECK(status IN ('active','disconnected','removed','suspended')),
     metadata        TEXT,  -- JSON
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_meter_customer ON meter(customer_id);
@@ -1707,7 +1707,7 @@ CREATE TABLE IF NOT EXISTS meter_reading (
     validated       INTEGER NOT NULL DEFAULT 0 CHECK(validated IN (0,1)),
     validation_notes TEXT,
     estimated_reason TEXT,
-    created_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP
     -- NOTE: meter_reading is effectively immutable
 );
 
@@ -1731,8 +1731,8 @@ CREATE TABLE IF NOT EXISTS rate_plan (
     minimum_commitment TEXT,
     overage_rate    TEXT,
     metadata        TEXT,  -- JSON
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS rate_tier (
@@ -1772,8 +1772,8 @@ CREATE TABLE IF NOT EXISTS billing_period (
                     CHECK(status IN ('open','rated','invoiced','paid','disputed','void')),
     rated_at        TEXT,
     invoiced_at     TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_billing_period_customer ON billing_period(customer_id);
@@ -1790,7 +1790,7 @@ CREATE TABLE IF NOT EXISTS billing_adjustment (
     amount          TEXT NOT NULL DEFAULT '0',
     reason          TEXT,
     approved_by     TEXT,
-    created_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_billing_adj_period ON billing_adjustment(billing_period_id);
@@ -1806,8 +1806,8 @@ CREATE TABLE IF NOT EXISTS prepaid_credit_balance (
     overage_amount  TEXT NOT NULL DEFAULT '0',
     status          TEXT NOT NULL DEFAULT 'active'
                     CHECK(status IN ('active','exhausted','expired')),
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_prepaid_customer ON prepaid_credit_balance(customer_id);
@@ -1833,8 +1833,8 @@ CREATE TABLE IF NOT EXISTS operation (
     description     TEXT,
     default_workstation_id TEXT,
     is_active       INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS workstation (
@@ -1848,16 +1848,16 @@ CREATE TABLE IF NOT EXISTS workstation (
     status          TEXT NOT NULL DEFAULT 'active'
                     CHECK(status IN ('active','maintenance','offline')),
     description     TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS routing (
     id              TEXT PRIMARY KEY,
     name            TEXT NOT NULL UNIQUE,
     description     TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS routing_operation (
@@ -1886,8 +1886,8 @@ CREATE TABLE IF NOT EXISTS bom (
     with_operations INTEGER NOT NULL DEFAULT 0 CHECK(with_operations IN (0,1)),
     routing_id      TEXT REFERENCES routing(id) ON DELETE RESTRICT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_bom_item ON bom(item_id);
@@ -1945,8 +1945,8 @@ CREATE TABLE IF NOT EXISTS work_order (
                     )),
     material_transferred_for_manufacturing TEXT NOT NULL DEFAULT '0',
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_work_order_status ON work_order(status);
@@ -1980,8 +1980,8 @@ CREATE TABLE IF NOT EXISTS job_card (
     status          TEXT NOT NULL DEFAULT 'open'
                     CHECK(status IN ('open','in_process','completed','cancelled')),
     remarks         TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_job_card_wo ON job_card(work_order_id);
@@ -1995,8 +1995,8 @@ CREATE TABLE IF NOT EXISTS production_plan (
     status          TEXT NOT NULL DEFAULT 'draft'
                     CHECK(status IN ('draft','submitted','material_requested','cancelled')),
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS production_plan_item (
@@ -2042,8 +2042,8 @@ CREATE TABLE IF NOT EXISTS subcontracting_order (
     materials_transferred TEXT NOT NULL DEFAULT '0',
     received_qty    TEXT NOT NULL DEFAULT '0',
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_subcon_supplier ON subcontracting_order(supplier_id);
@@ -2070,8 +2070,8 @@ CREATE TABLE IF NOT EXISTS department (
     parent_id       TEXT REFERENCES department(id) ON DELETE RESTRICT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
     cost_center_id  TEXT REFERENCES cost_center(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_department_company ON department(company_id);
@@ -2080,16 +2080,16 @@ CREATE TABLE IF NOT EXISTS designation (
     id              TEXT PRIMARY KEY,
     name            TEXT NOT NULL UNIQUE,
     description     TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS employee_grade (
     id              TEXT PRIMARY KEY,
     name            TEXT NOT NULL UNIQUE,
     description     TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS holiday_list (
@@ -2098,8 +2098,8 @@ CREATE TABLE IF NOT EXISTS holiday_list (
     from_date       TEXT NOT NULL,
     to_date         TEXT NOT NULL,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS holiday (
@@ -2154,8 +2154,8 @@ CREATE TABLE IF NOT EXISTS employee (
     holiday_list_id TEXT REFERENCES holiday_list(id) ON DELETE RESTRICT,
     attendance_device_id TEXT,
     payroll_cost_center_id TEXT REFERENCES cost_center(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_employee_status ON employee(status);
@@ -2171,8 +2171,8 @@ CREATE TABLE IF NOT EXISTS leave_type (
     is_paid_leave   INTEGER NOT NULL DEFAULT 1 CHECK(is_paid_leave IN (0,1)),
     is_compensatory INTEGER NOT NULL DEFAULT 0 CHECK(is_compensatory IN (0,1)),
     applicable_after_days INTEGER NOT NULL DEFAULT 0,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS leave_allocation (
@@ -2184,8 +2184,8 @@ CREATE TABLE IF NOT EXISTS leave_allocation (
     used_leaves     TEXT NOT NULL DEFAULT '0',
     remaining_leaves TEXT NOT NULL DEFAULT '0',
     carry_forwarded_from TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_leave_alloc_employee ON leave_allocation(employee_id);
@@ -2204,8 +2204,8 @@ CREATE TABLE IF NOT EXISTS leave_application (
     status          TEXT NOT NULL DEFAULT 'draft'
                     CHECK(status IN ('draft','approved','rejected','cancelled')),
     approved_by     TEXT REFERENCES employee(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_leave_app_employee ON leave_application(employee_id);
@@ -2226,7 +2226,7 @@ CREATE TABLE IF NOT EXISTS attendance (
     early_exit      INTEGER NOT NULL DEFAULT 0 CHECK(early_exit IN (0,1)),
     source          TEXT NOT NULL DEFAULT 'manual'
                     CHECK(source IN ('manual','biometric','app')),
-    created_at      TEXT DEFAULT (datetime('now')),
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(employee_id, attendance_date)
 );
 
@@ -2245,8 +2245,8 @@ CREATE TABLE IF NOT EXISTS expense_claim (
     approval_date   TEXT,
     payment_entry_id TEXT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_expense_claim_employee ON expense_claim(employee_id);
@@ -2277,7 +2277,7 @@ CREATE TABLE IF NOT EXISTS employee_lifecycle_event (
     details         TEXT,  -- JSON
     old_values      TEXT,  -- JSON
     new_values      TEXT,  -- JSON
-    created_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_lifecycle_employee ON employee_lifecycle_event(employee_id);
@@ -2306,8 +2306,8 @@ CREATE TABLE IF NOT EXISTS salary_structure (
     currency        TEXT NOT NULL DEFAULT 'USD',
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
     is_active       INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS salary_component (
@@ -2325,8 +2325,8 @@ CREATE TABLE IF NOT EXISTS salary_component (
     depends_on_payment_days INTEGER NOT NULL DEFAULT 1
                     CHECK(depends_on_payment_days IN (0,1)),
     gl_account_id   TEXT REFERENCES account(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS salary_structure_detail (
@@ -2351,8 +2351,8 @@ CREATE TABLE IF NOT EXISTS salary_assignment (
     effective_to    TEXT,
     currency        TEXT NOT NULL DEFAULT 'USD',
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_salary_assign_employee ON salary_assignment(employee_id);
@@ -2373,8 +2373,8 @@ CREATE TABLE IF NOT EXISTS payroll_run (
                     CHECK(status IN ('draft','submitted','paid','cancelled')),
     payment_entry_id TEXT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_payroll_run_status ON payroll_run(status);
@@ -2396,8 +2396,8 @@ CREATE TABLE IF NOT EXISTS salary_slip (
     status          TEXT NOT NULL DEFAULT 'draft'
                     CHECK(status IN ('draft','submitted','paid','cancelled')),
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_salary_slip_payroll ON salary_slip(payroll_run_id);
@@ -2426,8 +2426,8 @@ CREATE TABLE IF NOT EXISTS income_tax_slab (
     effective_from  TEXT NOT NULL,
     standard_deduction TEXT NOT NULL DEFAULT '0',
     is_active       INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_tax_slab_jurisdiction ON income_tax_slab(tax_jurisdiction);
@@ -2453,7 +2453,7 @@ CREATE TABLE IF NOT EXISTS fica_config (
     medicare_employer_rate TEXT NOT NULL,
     additional_medicare_threshold TEXT NOT NULL,
     additional_medicare_rate TEXT NOT NULL,
-    created_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS futa_suta_config (
@@ -2463,7 +2463,7 @@ CREATE TABLE IF NOT EXISTS futa_suta_config (
     wage_base       TEXT NOT NULL,
     rate            TEXT NOT NULL,
     employer_rate_override TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(tax_year, state_code)
 );
 
@@ -2485,8 +2485,8 @@ CREATE TABLE IF NOT EXISTS wage_garnishment (
     start_date      TEXT NOT NULL,
     end_date        TEXT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_garnishment_employee ON wage_garnishment(employee_id);
@@ -2499,8 +2499,8 @@ CREATE TABLE IF NOT EXISTS employee_tax_exemption_category (
     max_exemption_amount TEXT NOT NULL DEFAULT '0',
     parent_category_id TEXT REFERENCES employee_tax_exemption_category(id) ON DELETE RESTRICT,
     description     TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS employee_tax_exemption_declaration (
@@ -2511,8 +2511,8 @@ CREATE TABLE IF NOT EXISTS employee_tax_exemption_declaration (
     declared_amount TEXT NOT NULL DEFAULT '0',
     proof_submitted INTEGER NOT NULL DEFAULT 0 CHECK(proof_submitted IN (0,1)),
     approved        INTEGER NOT NULL DEFAULT 0 CHECK(approved IN (0,1)),
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_exemption_decl_employee ON employee_tax_exemption_declaration(employee_id);
@@ -2534,7 +2534,7 @@ CREATE TABLE IF NOT EXISTS lead_source (
     id              TEXT PRIMARY KEY,
     name            TEXT NOT NULL UNIQUE,
     description     TEXT,
-    created_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS lead (
@@ -2558,8 +2558,8 @@ CREATE TABLE IF NOT EXISTS lead (
     assigned_to     TEXT,
     notes           TEXT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_lead_status ON lead(status);
@@ -2589,8 +2589,8 @@ CREATE TABLE IF NOT EXISTS opportunity (
     next_follow_up_date TEXT,
     quotation_id    TEXT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_opportunity_stage ON opportunity(stage);
@@ -2608,8 +2608,8 @@ CREATE TABLE IF NOT EXISTS campaign (
     status          TEXT NOT NULL DEFAULT 'planned'
                     CHECK(status IN ('planned','active','completed')),
     description     TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_campaign_status ON campaign(status);
@@ -2618,7 +2618,7 @@ CREATE TABLE IF NOT EXISTS campaign_lead (
     id              TEXT PRIMARY KEY,
     campaign_id     TEXT NOT NULL REFERENCES campaign(id) ON DELETE RESTRICT,
     lead_id         TEXT NOT NULL REFERENCES lead(id) ON DELETE RESTRICT,
-    added_date      TEXT DEFAULT (datetime('now')),
+    added_date      TEXT DEFAULT CURRENT_TIMESTAMP,
     converted       INTEGER NOT NULL DEFAULT 0 CHECK(converted IN (0,1))
 );
 
@@ -2635,7 +2635,7 @@ CREATE TABLE IF NOT EXISTS crm_activity (
     customer_id     TEXT REFERENCES customer(id) ON DELETE RESTRICT,
     created_by      TEXT,
     next_action_date TEXT,
-    created_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_crm_activity_lead ON crm_activity(lead_id);
@@ -2654,7 +2654,7 @@ CREATE TABLE IF NOT EXISTS communication (
     sent_or_received TEXT NOT NULL DEFAULT 'sent'
                     CHECK(sent_or_received IN ('sent','received')),
     communication_date TEXT NOT NULL,
-    created_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_communication_ref ON communication(reference_type, reference_id);
@@ -2693,8 +2693,8 @@ CREATE TABLE IF NOT EXISTS project (
     percent_complete TEXT NOT NULL DEFAULT '0',
     cost_center_id  TEXT REFERENCES cost_center(id) ON DELETE RESTRICT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_project_status ON project(status);
@@ -2718,8 +2718,8 @@ CREATE TABLE IF NOT EXISTS task (
     actual_hours    TEXT NOT NULL DEFAULT '0',
     depends_on      TEXT,  -- JSON array of task IDs
     description     TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_task_project ON task(project_id);
@@ -2735,8 +2735,8 @@ CREATE TABLE IF NOT EXISTS milestone (
     status          TEXT NOT NULL DEFAULT 'pending'
                     CHECK(status IN ('pending','completed','missed')),
     description     TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_milestone_project ON milestone(project_id);
@@ -2756,8 +2756,8 @@ CREATE TABLE IF NOT EXISTS timesheet (
                     CHECK(status IN ('draft','submitted','billed','cancelled')),
     sales_invoice_id TEXT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_timesheet_employee ON timesheet(employee_id);
@@ -2804,8 +2804,8 @@ CREATE TABLE IF NOT EXISTS asset_category (
     depreciation_account_id TEXT REFERENCES account(id) ON DELETE RESTRICT,
     accumulated_depreciation_account_id TEXT REFERENCES account(id) ON DELETE RESTRICT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS asset (
@@ -2831,8 +2831,8 @@ CREATE TABLE IF NOT EXISTS asset (
     custodian_employee_id TEXT,
     warranty_expiry_date TEXT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_asset_status ON asset(status);
@@ -2866,7 +2866,7 @@ CREATE TABLE IF NOT EXISTS asset_movement (
     to_employee_id  TEXT,
     movement_date   TEXT NOT NULL,
     reason          TEXT,
-    created_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_asset_movement_asset ON asset_movement(asset_id);
@@ -2883,8 +2883,8 @@ CREATE TABLE IF NOT EXISTS asset_maintenance (
     status          TEXT NOT NULL DEFAULT 'planned'
                     CHECK(status IN ('planned','overdue','completed')),
     next_due_date   TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_asset_maint_asset ON asset_maintenance(asset_id);
@@ -2900,7 +2900,7 @@ CREATE TABLE IF NOT EXISTS asset_disposal (
     gain_or_loss    TEXT NOT NULL DEFAULT '0',
     journal_entry_id TEXT,
     buyer_details   TEXT,
-    created_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_asset_disposal_asset ON asset_disposal(asset_id);
@@ -2925,8 +2925,8 @@ CREATE TABLE IF NOT EXISTS quality_inspection_template (
     item_id         TEXT REFERENCES item(id) ON DELETE RESTRICT,
     inspection_type TEXT NOT NULL CHECK(inspection_type IN ('incoming','outgoing','in_process')),
     description     TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS quality_inspection_parameter (
@@ -2959,7 +2959,7 @@ CREATE TABLE IF NOT EXISTS quality_inspection (
     status          TEXT NOT NULL DEFAULT 'accepted'
                     CHECK(status IN ('accepted','rejected','partially_accepted')),
     remarks         TEXT,
-    created_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_qi_item ON quality_inspection(item_id);
@@ -2994,8 +2994,8 @@ CREATE TABLE IF NOT EXISTS non_conformance (
     status          TEXT NOT NULL DEFAULT 'open'
                     CHECK(status IN ('open','investigating','resolved','closed')),
     resolution_date TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_nc_status ON non_conformance(status);
@@ -3012,8 +3012,8 @@ CREATE TABLE IF NOT EXISTS quality_goal (
     status          TEXT NOT NULL DEFAULT 'on_track'
                     CHECK(status IN ('on_track','at_risk','behind')),
     review_date     TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 """
 
@@ -3036,8 +3036,8 @@ CREATE TABLE IF NOT EXISTS service_level_agreement (
     priority_resolution_times TEXT,  -- JSON
     working_hours   TEXT,
     is_default      INTEGER NOT NULL DEFAULT 0 CHECK(is_default IN (0,1)),
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS issue (
@@ -3065,8 +3065,8 @@ CREATE TABLE IF NOT EXISTS issue (
     resolved_at     TEXT,
     sla_breached    INTEGER NOT NULL DEFAULT 0 CHECK(sla_breached IN (0,1)),
     resolution_notes TEXT,
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_issue_status ON issue(status);
@@ -3079,7 +3079,7 @@ CREATE TABLE IF NOT EXISTS issue_comment (
     comment_by      TEXT NOT NULL CHECK(comment_by IN ('employee','customer')),
     comment_text    TEXT NOT NULL,
     is_internal     INTEGER NOT NULL DEFAULT 0 CHECK(is_internal IN (0,1)),
-    created_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_issue_comment_issue ON issue_comment(issue_id);
@@ -3097,8 +3097,8 @@ CREATE TABLE IF NOT EXISTS warranty_claim (
     cost            TEXT NOT NULL DEFAULT '0',
     status          TEXT NOT NULL DEFAULT 'open'
                     CHECK(status IN ('open','in_progress','resolved','closed')),
-    created_at      TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_warranty_customer ON warranty_claim(customer_id);
@@ -3141,8 +3141,8 @@ CREATE TABLE IF NOT EXISTS advacct_revenue_contract (
                         CHECK(contract_status IN ('draft','active','modified','completed','terminated')),
     modification_count  INTEGER NOT NULL DEFAULT 0,
     company_id          TEXT NOT NULL REFERENCES company(id),
-    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_advacct_rcon_company ON advacct_revenue_contract(company_id);
@@ -3164,8 +3164,8 @@ CREATE TABLE IF NOT EXISTS advacct_performance_obligation (
                         CHECK(obligation_status IN ('unsatisfied','partially_satisfied','satisfied')),
     satisfied_date      TEXT,
     company_id          TEXT NOT NULL REFERENCES company(id),
-    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_advacct_po_contract ON advacct_performance_obligation(contract_id);
@@ -3182,7 +3182,7 @@ CREATE TABLE IF NOT EXISTS advacct_variable_consideration (
                         CHECK(method IN ('expected_value','most_likely')),
     probability         TEXT NOT NULL DEFAULT '0',
     company_id          TEXT NOT NULL REFERENCES company(id),
-    created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_advacct_vc_contract ON advacct_variable_consideration(contract_id);
@@ -3195,7 +3195,7 @@ CREATE TABLE IF NOT EXISTS advacct_revenue_schedule (
     amount              TEXT NOT NULL DEFAULT '0',
     recognized          INTEGER NOT NULL DEFAULT 0,
     company_id          TEXT NOT NULL REFERENCES company(id),
-    created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_advacct_rs_obligation ON advacct_revenue_schedule(obligation_id);
@@ -3224,8 +3224,8 @@ CREATE TABLE IF NOT EXISTS advacct_lease (
     lease_status            TEXT NOT NULL DEFAULT 'draft'
                             CHECK(lease_status IN ('draft','active','modified','expired','terminated')),
     company_id              TEXT NOT NULL REFERENCES company(id),
-    created_at              TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_advacct_lease_company ON advacct_lease(company_id);
@@ -3243,7 +3243,7 @@ CREATE TABLE IF NOT EXISTS advacct_lease_payment (
     payment_status      TEXT NOT NULL DEFAULT 'scheduled'
                         CHECK(payment_status IN ('scheduled','paid','overdue')),
     company_id          TEXT NOT NULL REFERENCES company(id),
-    created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_advacct_lpay_lease ON advacct_lease_payment(lease_id);
@@ -3261,7 +3261,7 @@ CREATE TABLE IF NOT EXISTS advacct_amortization_entry (
     principal           TEXT NOT NULL DEFAULT '0',
     closing_balance     TEXT NOT NULL DEFAULT '0',
     company_id          TEXT NOT NULL REFERENCES company(id),
-    created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_advacct_amort_lease ON advacct_amortization_entry(lease_id);
@@ -3286,8 +3286,8 @@ CREATE TABLE IF NOT EXISTS advacct_ic_transaction (
                             CHECK(ic_status IN ('draft','pending_approval','approved','posted','eliminated')),
     posted_date             TEXT,
     company_id              TEXT NOT NULL REFERENCES company(id),
-    created_at              TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_advacct_ict_from ON advacct_ic_transaction(from_company_id);
@@ -3308,7 +3308,7 @@ CREATE TABLE IF NOT EXISTS advacct_transfer_price_rule (
     effective_date      TEXT,
     expiry_date         TEXT,
     company_id          TEXT NOT NULL REFERENCES company(id),
-    created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_advacct_tpr_companies ON advacct_transfer_price_rule(from_company_id, to_company_id);
@@ -3326,8 +3326,8 @@ CREATE TABLE IF NOT EXISTS advacct_consolidation_group (
     group_status            TEXT NOT NULL DEFAULT 'active'
                             CHECK(group_status IN ('active','inactive')),
     company_id              TEXT NOT NULL REFERENCES company(id),
-    created_at              TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_advacct_cgrp_company ON advacct_consolidation_group(company_id);
@@ -3344,7 +3344,7 @@ CREATE TABLE IF NOT EXISTS advacct_group_entity (
                             CHECK(consolidation_method IN ('full','proportional','equity')),
     is_active               INTEGER NOT NULL DEFAULT 1,
     company_id              TEXT NOT NULL REFERENCES company(id),
-    created_at              TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_advacct_ge_group ON advacct_group_entity(group_id);
@@ -3362,7 +3362,7 @@ CREATE TABLE IF NOT EXISTS advacct_elimination_entry (
     entry_type          TEXT NOT NULL DEFAULT 'ic_elimination'
                         CHECK(entry_type IN ('ic_elimination','minority_interest','currency_translation','goodwill')),
     company_id          TEXT NOT NULL REFERENCES company(id),
-    created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_advacct_ee_group ON advacct_elimination_entry(group_id);
@@ -3417,8 +3417,8 @@ CREATE TABLE IF NOT EXISTS erpclaw_module (
                     CHECK(category IN ('core','expansion','infrastructure','vertical','sub-vertical','regional')),
     github_repo     TEXT NOT NULL DEFAULT '',
     install_path    TEXT NOT NULL DEFAULT '',
-    installed_at    TEXT DEFAULT (datetime('now')),
-    updated_at      TEXT DEFAULT (datetime('now')),
+    installed_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
     install_status  TEXT NOT NULL DEFAULT 'pending'
                     CHECK(install_status IN ('pending','updating','installed','failed','removing')),
     git_commit      TEXT,
@@ -3464,7 +3464,7 @@ CREATE TABLE IF NOT EXISTS erpclaw_module_validation (
     violations      TEXT,  -- JSON array of violation objects
     article_results TEXT,  -- JSON object: {article_number: pass/fail/skip}
     duration_ms     INTEGER,
-    validated_at    TEXT DEFAULT (datetime('now')),
+    validated_at    TEXT DEFAULT CURRENT_TIMESTAMP,
     validated_by    TEXT  -- 'human' or 'system'
 );
 
@@ -3477,11 +3477,133 @@ CREATE TABLE IF NOT EXISTS erpclaw_table_ownership (
     table_name      TEXT PRIMARY KEY,
     module_name     TEXT NOT NULL,
     init_db_path    TEXT NOT NULL,
-    discovered_at   TEXT DEFAULT (datetime('now'))
+    discovered_at   TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_erpclaw_table_ownership_module
     ON erpclaw_table_ownership(module_name);
+
+-- Phase 3 (3a): Semantic Correctness Engine
+CREATE TABLE IF NOT EXISTS erpclaw_semantic_rule (
+    id              TEXT PRIMARY KEY,
+    rule_name       TEXT NOT NULL UNIQUE,
+    category        TEXT NOT NULL CHECK(category IN ('account_classification', 'posting_pattern', 'period_validation')),
+    description     TEXT NOT NULL,
+    rule_definition TEXT NOT NULL,
+    severity        TEXT NOT NULL CHECK(severity IN ('critical', 'warning', 'info')),
+    source_module   TEXT,
+    is_active       INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0, 1)),
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS erpclaw_semantic_finding (
+    id              TEXT PRIMARY KEY,
+    module_name     TEXT NOT NULL,
+    rule_id         TEXT NOT NULL REFERENCES erpclaw_semantic_rule(id),
+    finding_type    TEXT NOT NULL CHECK(finding_type IN ('account_classification', 'posting_pattern', 'period_validation')),
+    severity        TEXT NOT NULL CHECK(severity IN ('critical', 'warning', 'info')),
+    description     TEXT NOT NULL,
+    evidence        TEXT,
+    status          TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'acknowledged', 'resolved', 'false_positive')),
+    found_at        TEXT DEFAULT CURRENT_TIMESTAMP,
+    resolved_at     TEXT,
+    resolved_by     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_erpclaw_semantic_finding_module
+    ON erpclaw_semantic_finding(module_name);
+CREATE INDEX IF NOT EXISTS idx_erpclaw_semantic_finding_rule
+    ON erpclaw_semantic_finding(rule_id);
+CREATE INDEX IF NOT EXISTS idx_erpclaw_semantic_finding_status
+    ON erpclaw_semantic_finding(status);
+
+-- Phase 3 (3b): Deploy Audit (must precede improvement_log FK)
+CREATE TABLE IF NOT EXISTS erpclaw_deploy_audit (
+    id              TEXT PRIMARY KEY,
+    module_name     TEXT NOT NULL,
+    pipeline_result TEXT NOT NULL CHECK(pipeline_result IN ('deployed', 'queued', 'rejected', 'failed')),
+    tier            INTEGER,
+    steps           TEXT NOT NULL,
+    git_commit      TEXT,
+    human_approved  INTEGER CHECK(human_approved IN (0, 1)),
+    approved_by     TEXT,
+    deployed_at     TEXT DEFAULT CURRENT_TIMESTAMP,
+    reasoning       TEXT
+);
+
+-- Phase 3 (3b): Self-Improvement Log
+CREATE TABLE IF NOT EXISTS erpclaw_improvement_log (
+    id              TEXT PRIMARY KEY,
+    module_name     TEXT,
+    category        TEXT NOT NULL CHECK(category IN ('performance', 'usability', 'coverage', 'semantic', 'structural')),
+    description     TEXT NOT NULL,
+    evidence        TEXT,
+    proposed_diff   TEXT,
+    expected_impact TEXT,
+    source          TEXT NOT NULL CHECK(source IN ('heartbeat', 'dgm', 'semantic', 'manual', 'gap_detector')),
+    status          TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed', 'approved', 'rejected', 'deferred', 'deployed')),
+    proposed_at     TEXT DEFAULT CURRENT_TIMESTAMP,
+    reviewed_at     TEXT,
+    reviewed_by     TEXT,
+    review_notes    TEXT,
+    deploy_audit_id TEXT REFERENCES erpclaw_deploy_audit(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_erpclaw_improvement_log_category
+    ON erpclaw_improvement_log(category);
+CREATE INDEX IF NOT EXISTS idx_erpclaw_improvement_log_status
+    ON erpclaw_improvement_log(status);
+CREATE INDEX IF NOT EXISTS idx_erpclaw_improvement_log_source
+    ON erpclaw_improvement_log(source);
+CREATE INDEX IF NOT EXISTS idx_erpclaw_improvement_log_proposed_at
+    ON erpclaw_improvement_log(proposed_at);
+
+-- Phase 3 (3c): DGM Variant Engine
+CREATE TABLE IF NOT EXISTS erpclaw_dgm_run (
+    id              TEXT PRIMARY KEY,
+    module_name     TEXT NOT NULL,
+    action_name     TEXT NOT NULL,
+    variant_count   INTEGER NOT NULL,
+    best_variant_id TEXT,
+    current_exec_ms INTEGER,
+    best_exec_ms    INTEGER,
+    improvement_pct TEXT,
+    status          TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed', 'no_improvement')),
+    improvement_id  TEXT REFERENCES erpclaw_improvement_log(id),
+    started_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    completed_at    TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_erpclaw_dgm_run_module
+    ON erpclaw_dgm_run(module_name);
+CREATE INDEX IF NOT EXISTS idx_erpclaw_dgm_run_status
+    ON erpclaw_dgm_run(status);
+
+CREATE TABLE IF NOT EXISTS erpclaw_dgm_variant (
+    id              TEXT PRIMARY KEY,
+    run_id          TEXT NOT NULL REFERENCES erpclaw_dgm_run(id),
+    module_name     TEXT NOT NULL,
+    action_name     TEXT NOT NULL,
+    variant_number  INTEGER NOT NULL,
+    variant_code    TEXT NOT NULL,
+    variant_diff    TEXT,
+    mutation_type   TEXT NOT NULL CHECK(mutation_type IN ('query_optimization', 'algorithm_change', 'caching', 'parameter_reorder', 'data_structure', 'batch_processing')),
+    exec_time_ms    INTEGER,
+    memory_kb       INTEGER,
+    test_pass_count INTEGER,
+    test_total      INTEGER,
+    composite_score TEXT,
+    is_selected     INTEGER NOT NULL DEFAULT 0 CHECK(is_selected IN (0, 1)),
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_erpclaw_dgm_variant_run
+    ON erpclaw_dgm_variant(run_id);
+CREATE INDEX IF NOT EXISTS idx_erpclaw_dgm_variant_module
+    ON erpclaw_dgm_variant(module_name);
+CREATE INDEX IF NOT EXISTS idx_erpclaw_dgm_variant_selected
+    ON erpclaw_dgm_variant(is_selected);
 """
 
 
@@ -3524,20 +3646,28 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
 
     conn = sqlite3.connect(db_path)
     try:
-        # Enable WAL mode and foreign keys
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA busy_timeout = 5000")
+        # Enable WAL mode and foreign keys via centralized setup
+        try:
+            from erpclaw_lib.db import setup_pragmas
+            setup_pragmas(conn)
+        except ImportError:
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute("PRAGMA busy_timeout = 5000")
 
         # Execute all DDL blocks in order
         for skill_name, ddl_sql in ALL_DDL_BLOCKS:
             conn.executescript(ddl_sql)
-            # Register the schema version for each skill
-            conn.execute(
-                """INSERT OR IGNORE INTO schema_version (module, version, updated_at)
-                   VALUES (?, 1, datetime('now'))""",
-                (skill_name,)
-            )
+            # Register the schema version for each skill (idempotent)
+            existing = conn.execute(
+                "SELECT 1 FROM schema_version WHERE module = ?", (skill_name,)
+            ).fetchone()
+            if not existing:
+                conn.execute(
+                    """INSERT INTO schema_version (module, version, updated_at)
+                       VALUES (?, 1, datetime('now'))""",
+                    (skill_name,)
+                )
 
         conn.commit()
 
@@ -3558,11 +3688,15 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             ("Analytics User", "Read-only access to reports, analytics, and dashboards", 1),
         ]
         for role_name, desc, is_sys in DEFAULT_ROLES:
-            conn.execute(
-                """INSERT OR IGNORE INTO role (id, name, description, is_system)
-                   VALUES (?, ?, ?, ?)""",
-                (str(uuid.uuid4()), role_name, desc, is_sys)
-            )
+            existing = conn.execute(
+                "SELECT 1 FROM role WHERE name = ?", (role_name,)
+            ).fetchone()
+            if not existing:
+                conn.execute(
+                    """INSERT INTO role (id, name, description, is_system)
+                       VALUES (?, ?, ?, ?)""",
+                    (str(uuid.uuid4()), role_name, desc, is_sys)
+                )
         conn.commit()
 
         # Verify: count tables

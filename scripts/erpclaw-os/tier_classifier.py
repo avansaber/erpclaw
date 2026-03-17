@@ -354,13 +354,14 @@ def classify_with_persistence(action_name, module_name, db_path):
 def ensure_tier_table(db_path):
     """Create the erpclaw_tier_classification table if it doesn't exist."""
     conn = sqlite3.connect(db_path)
-    conn.execute("""
+    from erpclaw_lib.query import ddl_now
+    conn.execute(f"""
         CREATE TABLE IF NOT EXISTS erpclaw_tier_classification (
             action_name     TEXT PRIMARY KEY,
             module_name     TEXT NOT NULL,
             tier            INTEGER NOT NULL CHECK(tier IN (0, 1, 2, 3)),
             reasoning       TEXT,
-            classified_at   TEXT DEFAULT (datetime('now')),
+            classified_at   TEXT DEFAULT ({ddl_now()}),
             override_by     TEXT,
             override_reason TEXT
         )
@@ -373,7 +374,8 @@ def _persist_classification(db_path, result):
     """Persist a classification result to the database."""
     try:
         conn = sqlite3.connect(db_path)
-        conn.execute("PRAGMA busy_timeout = 5000")
+        from erpclaw_lib.db import setup_pragmas
+        setup_pragmas(conn)
         conn.execute("""
             INSERT INTO erpclaw_tier_classification
                 (action_name, module_name, tier, reasoning, classified_at, override_by, override_reason)

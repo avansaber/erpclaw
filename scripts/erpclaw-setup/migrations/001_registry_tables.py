@@ -47,9 +47,9 @@ def run_migration(db_path=None):
 
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    from erpclaw_lib.db import setup_pragmas
+    setup_pragmas(conn)
     conn.execute("PRAGMA foreign_keys=OFF")  # Must be OFF during table rebuild
-    conn.execute("PRAGMA busy_timeout=5000")
 
     try:
         # Step 1: Create registry tables if they don't exist
@@ -134,10 +134,15 @@ def _seed_registries(conn):
         ("elimination_entry", "erpclaw-gl", "Elimination Entry"),
     ]
     for vt, skill, label in gl_vtypes:
-        conn.execute(
-            "INSERT OR IGNORE INTO voucher_type_registry VALUES (?, ?, ?, 'gl_entry')",
-            (vt, skill, label),
-        )
+        existing = conn.execute(
+            "SELECT 1 FROM voucher_type_registry WHERE voucher_type = ? AND target_table = 'gl_entry'",
+            (vt,),
+        ).fetchone()
+        if not existing:
+            conn.execute(
+                "INSERT INTO voucher_type_registry VALUES (?, ?, ?, 'gl_entry')",
+                (vt, skill, label),
+            )
 
     # SLE voucher types
     sle_vtypes = [
@@ -153,10 +158,15 @@ def _seed_registries(conn):
         ("stock_revaluation", "erpclaw-inventory", "Stock Revaluation"),
     ]
     for vt, skill, label in sle_vtypes:
-        conn.execute(
-            "INSERT OR IGNORE INTO voucher_type_registry VALUES (?, ?, ?, 'stock_ledger_entry')",
-            (vt, skill, label),
-        )
+        existing = conn.execute(
+            "SELECT 1 FROM voucher_type_registry WHERE voucher_type = ? AND target_table = 'stock_ledger_entry'",
+            (vt,),
+        ).fetchone()
+        if not existing:
+            conn.execute(
+                "INSERT INTO voucher_type_registry VALUES (?, ?, ?, 'stock_ledger_entry')",
+                (vt, skill, label),
+            )
 
     # Payment allocation voucher types
     pa_vtypes = [
@@ -166,10 +176,15 @@ def _seed_registries(conn):
         ("debit_note", "erpclaw-buying", "Debit Note"),
     ]
     for vt, skill, label in pa_vtypes:
-        conn.execute(
-            "INSERT OR IGNORE INTO voucher_type_registry VALUES (?, ?, ?, 'payment_allocation')",
-            (vt, skill, label),
-        )
+        existing = conn.execute(
+            "SELECT 1 FROM voucher_type_registry WHERE voucher_type = ? AND target_table = 'payment_allocation'",
+            (vt,),
+        ).fetchone()
+        if not existing:
+            conn.execute(
+                "INSERT INTO voucher_type_registry VALUES (?, ?, ?, 'payment_allocation')",
+                (vt, skill, label),
+            )
 
     # Party types
     for pt, skill, label in [
@@ -177,10 +192,15 @@ def _seed_registries(conn):
         ("supplier", "erpclaw-buying", "Supplier"),
         ("employee", "erpclaw-hr", "Employee"),
     ]:
-        conn.execute(
-            "INSERT OR IGNORE INTO party_type_registry VALUES (?, ?, ?)",
-            (pt, skill, label),
-        )
+        existing = conn.execute(
+            "SELECT 1 FROM party_type_registry WHERE party_type = ?",
+            (pt,),
+        ).fetchone()
+        if not existing:
+            conn.execute(
+                "INSERT INTO party_type_registry VALUES (?, ?, ?)",
+                (pt, skill, label),
+            )
 
     # Account types
     for at, skill, label in [
@@ -206,10 +226,15 @@ def _seed_registries(conn):
         ("asset_received_not_billed", "erpclaw-assets", "Asset Received Not Billed"),
         ("trust", "erpclaw-gl", "Trust"),
     ]:
-        conn.execute(
-            "INSERT OR IGNORE INTO account_type_registry VALUES (?, ?, ?)",
-            (at, skill, label),
-        )
+        existing = conn.execute(
+            "SELECT 1 FROM account_type_registry WHERE account_type = ?",
+            (at,),
+        ).fetchone()
+        if not existing:
+            conn.execute(
+                "INSERT INTO account_type_registry VALUES (?, ?, ?)",
+                (at, skill, label),
+            )
 
     print(f"  Seeded type registries: "
           f"{len(gl_vtypes)} GL voucher types, "

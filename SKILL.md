@@ -272,6 +272,11 @@ For all actions: `python3 {baseDir}/scripts/db_query.py --action <action> [flags
 | `validate-module` / `generate-module` / `configure-module` / `deploy-module` | OS: Module lifecycle (validate, generate, configure, deploy) |
 | `install-suite` / `classify-operation` / `run-audit` / `compliance-weather-status` | OS: Suite install, tier classification, audit |
 | `schema-plan` / `schema-apply` / `schema-rollback` / `schema-drift` / `deploy-audit-log` | OS: Schema migration & deploy audit |
+| `semantic-check` / `semantic-rules-list` | OS: Semantic correctness — validates GL postings use correct account types |
+| `log-improvement` / `list-improvements` / `review-improvement` | OS: Self-improvement log — track AI-proposed changes |
+| `dgm-run-variant` / `dgm-list-variants` / `dgm-select-best` | OS: DGM variant engine — evolutionary optimization (non-financial code only) |
+| `heartbeat-analyze` / `heartbeat-report` / `heartbeat-suggest` | OS: Heartbeat — usage patterns, gap detection, module suggestions |
+| `detect-gaps` / `suggest-modules` | OS: Gap detection — identifies missing modules for your industry |
 
 ### Quick Command Reference
 

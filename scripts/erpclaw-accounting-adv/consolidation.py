@@ -96,7 +96,7 @@ def list_consolidation_groups(conn, args):
         where.append("group_status = ?")
         params.append(args.group_status)
     if getattr(args, "search", None):
-        where.append("(name LIKE ?)")
+        where.append("(LOWER(name) LIKE LOWER(?))")
         params.append(f"%{args.search}%")
 
     where_sql = " AND ".join(where)
@@ -375,7 +375,7 @@ def consolidation_summary(conn, args):
     ).fetchone()[0]
 
     by_type = conn.execute("""
-        SELECT entry_type, COUNT(*) as cnt, SUM(CAST(amount AS REAL)) as total
+        SELECT entry_type, COUNT(*) as cnt, SUM(CAST(amount AS NUMERIC)) as total
         FROM advacct_elimination_entry WHERE group_id = ?
         GROUP BY entry_type
     """, (group_id,)).fetchall()

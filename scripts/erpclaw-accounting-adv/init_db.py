@@ -22,9 +22,8 @@ REQUIRED_FOUNDATION = [
 def create_accounting_adv_tables(db_path=None):
     db_path = db_path or os.environ.get("ERPCLAW_DB_PATH", DEFAULT_DB_PATH)
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=5000")
+    from erpclaw_lib.db import setup_pragmas
+    setup_pragmas(conn)
 
     # -- Verify ERPClaw foundation --
     tables = [r[0] for r in conn.execute(
@@ -59,8 +58,8 @@ def create_accounting_adv_tables(db_path=None):
                                 CHECK(contract_status IN ('draft','active','modified','completed','terminated')),
             modification_count  INTEGER NOT NULL DEFAULT 0,
             company_id          TEXT NOT NULL REFERENCES company(id),
-            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -86,8 +85,8 @@ def create_accounting_adv_tables(db_path=None):
                                 CHECK(obligation_status IN ('unsatisfied','partially_satisfied','satisfied')),
             satisfied_date      TEXT,
             company_id          TEXT NOT NULL REFERENCES company(id),
-            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -108,7 +107,7 @@ def create_accounting_adv_tables(db_path=None):
                                 CHECK(method IN ('expected_value','most_likely')),
             probability         TEXT NOT NULL DEFAULT '0',
             company_id          TEXT NOT NULL REFERENCES company(id),
-            created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -125,7 +124,7 @@ def create_accounting_adv_tables(db_path=None):
             amount              TEXT NOT NULL DEFAULT '0',
             recognized          INTEGER NOT NULL DEFAULT 0,
             company_id          TEXT NOT NULL REFERENCES company(id),
-            created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -160,8 +159,8 @@ def create_accounting_adv_tables(db_path=None):
             lease_status            TEXT NOT NULL DEFAULT 'draft'
                                     CHECK(lease_status IN ('draft','active','modified','expired','terminated')),
             company_id              TEXT NOT NULL REFERENCES company(id),
-            created_at              TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -183,7 +182,7 @@ def create_accounting_adv_tables(db_path=None):
             payment_status      TEXT NOT NULL DEFAULT 'scheduled'
                                 CHECK(payment_status IN ('scheduled','paid','overdue')),
             company_id          TEXT NOT NULL REFERENCES company(id),
-            created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -205,7 +204,7 @@ def create_accounting_adv_tables(db_path=None):
             principal           TEXT NOT NULL DEFAULT '0',
             closing_balance     TEXT NOT NULL DEFAULT '0',
             company_id          TEXT NOT NULL REFERENCES company(id),
-            created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -236,8 +235,8 @@ def create_accounting_adv_tables(db_path=None):
                                     CHECK(ic_status IN ('draft','pending_approval','approved','posted','eliminated')),
             posted_date             TEXT,
             company_id              TEXT NOT NULL REFERENCES company(id),
-            created_at              TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -262,7 +261,7 @@ def create_accounting_adv_tables(db_path=None):
             effective_date      TEXT,
             expiry_date         TEXT,
             company_id          TEXT NOT NULL REFERENCES company(id),
-            created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -286,8 +285,8 @@ def create_accounting_adv_tables(db_path=None):
             group_status            TEXT NOT NULL DEFAULT 'active'
                                     CHECK(group_status IN ('active','inactive')),
             company_id              TEXT NOT NULL REFERENCES company(id),
-            created_at              TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -308,7 +307,7 @@ def create_accounting_adv_tables(db_path=None):
                                     CHECK(consolidation_method IN ('full','proportional','equity')),
             is_active               INTEGER NOT NULL DEFAULT 1,
             company_id              TEXT NOT NULL REFERENCES company(id),
-            created_at              TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -330,7 +329,7 @@ def create_accounting_adv_tables(db_path=None):
             entry_type          TEXT NOT NULL DEFAULT 'ic_elimination'
                                 CHECK(entry_type IN ('ic_elimination','minority_interest','currency_translation','goodwill')),
             company_id          TEXT NOT NULL REFERENCES company(id),
-            created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1

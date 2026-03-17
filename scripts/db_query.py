@@ -474,6 +474,29 @@ ACTION_MAP = {
     "install-suite": "erpclaw-os",
     "run-audit": "erpclaw-os",
     "compliance-weather-status": "erpclaw-os",
+
+    # === ERPClaw OS — Phase 3a: Semantic Correctness Engine (2 actions) ===
+    "semantic-check": "erpclaw-os",
+    "semantic-rules-list": "erpclaw-os",
+
+    # === ERPClaw OS — Phase 3b: Self-Improvement Log (3 actions) ===
+    "log-improvement": "erpclaw-os",
+    "list-improvements": "erpclaw-os",
+    "review-improvement": "erpclaw-os",
+
+    # === ERPClaw OS — Phase 3c: DGM Variant Engine (3 actions) ===
+    "dgm-run-variant": "erpclaw-os",
+    "dgm-list-variants": "erpclaw-os",
+    "dgm-select-best": "erpclaw-os",
+
+    # === ERPClaw OS — Phase 3e: Gap Detection + Module Suggestions (2 actions) ===
+    "detect-gaps": "erpclaw-os",
+    "suggest-modules": "erpclaw-os",
+
+    # === ERPClaw OS — Phase 3d: Heartbeat Analysis Engine (3 actions) ===
+    "heartbeat-analyze": "erpclaw-os",
+    "heartbeat-report": "erpclaw-os",
+    "heartbeat-suggest": "erpclaw-os",
 }
 
 # Aliases: actions that need to be forwarded with a different --action name

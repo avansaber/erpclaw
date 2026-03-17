@@ -38,7 +38,8 @@ def check_gl_invariants(db_path: str) -> dict:
     """
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
+    from erpclaw_lib.db import setup_pragmas
+    setup_pragmas(conn)
 
     try:
         # Check if gl_entry table exists

@@ -34,7 +34,7 @@ try:
     from erpclaw_lib.audit import audit
     from erpclaw_lib.dependencies import check_required_tables
     from erpclaw_lib.query_helpers import resolve_company_id
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL, DecimalSum, DecimalAbs, dynamic_update
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL, DecimalSum, DecimalAbs, dynamic_update, now
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
     from erpclaw_lib.vendor.pypika.terms import LiteralValue, ValueWrapper
 except ImportError:
@@ -242,7 +242,7 @@ def update_account(conn, args):
         err("No fields to update")
 
     data = dict(updates)
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = now()
     sql, values = dynamic_update("account", data, where={"id": acct_id})
     conn.execute(sql, values)
 
@@ -357,7 +357,7 @@ def freeze_account(conn, args):
         err(f"Account {acct_id} not found")
     q = (Q.update(t)
          .set(Field("is_frozen"), 1)
-         .set(Field("updated_at"), LiteralValue("datetime('now')"))
+         .set(Field("updated_at"), now())
          .where(t.id == P()))
     conn.execute(q.get_sql(), (acct_id,))
     audit(conn, "erpclaw-gl", "freeze", "account", acct_id, new_values={"is_frozen": 1})
@@ -376,7 +376,7 @@ def unfreeze_account(conn, args):
         err(f"Account {acct_id} not found")
     q = (Q.update(t)
          .set(Field("is_frozen"), 0)
-         .set(Field("updated_at"), LiteralValue("datetime('now')"))
+         .set(Field("updated_at"), now())
          .where(t.id == P()))
     conn.execute(q.get_sql(), (acct_id,))
     audit(conn, "erpclaw-gl", "unfreeze", "account", acct_id, new_values={"is_frozen": 0})
@@ -761,7 +761,7 @@ def close_fiscal_year(conn, args):
     # Close the fiscal year
     q = (Q.update(t_fy)
          .set(Field("is_closed"), 1)
-         .set(Field("updated_at"), LiteralValue("datetime('now')"))
+         .set(Field("updated_at"), now())
          .where(t_fy.id == P()))
     conn.execute(q.get_sql(), (fy_id,))
 
@@ -899,14 +899,14 @@ def reopen_fiscal_year(conn, args):
 
         q = (Q.update(t_pcv)
              .set(Field("status"), ValueWrapper("cancelled"))
-             .set(Field("updated_at"), LiteralValue("datetime('now')"))
+             .set(Field("updated_at"), now())
              .where(t_pcv.id == P()))
         conn.execute(q.get_sql(), (pcv["id"],))
         pcv_reversed = True
 
     q = (Q.update(t_fy)
          .set(Field("is_closed"), 0)
-         .set(Field("updated_at"), LiteralValue("datetime('now')"))
+         .set(Field("updated_at"), now())
          .where(t_fy.id == P()))
     conn.execute(q.get_sql(), (fy_id,))
 
@@ -1378,13 +1378,13 @@ def revalue_foreign_balances(conn, args):
     for acct in accounts:
         acct_currency = acct["currency"]
 
-        # raw SQL — uses CAST(column AS REAL) which PyPika doesn't support cleanly
+        # raw SQL — uses CAST(column AS NUMERIC) which PyPika doesn't support cleanly
         bal = conn.execute(
             """SELECT
-                COALESCE(SUM(CAST(debit AS REAL)), 0) as total_debit,
-                COALESCE(SUM(CAST(credit AS REAL)), 0) as total_credit,
-                COALESCE(SUM(CAST(debit_base AS REAL)), 0) as total_debit_base,
-                COALESCE(SUM(CAST(credit_base AS REAL)), 0) as total_credit_base
+                COALESCE(SUM(CAST(debit AS NUMERIC)), 0) as total_debit,
+                COALESCE(SUM(CAST(credit AS NUMERIC)), 0) as total_credit,
+                COALESCE(SUM(CAST(debit_base AS NUMERIC)), 0) as total_debit_base,
+                COALESCE(SUM(CAST(credit_base AS NUMERIC)), 0) as total_credit_base
                FROM gl_entry
                WHERE account_id = ? AND is_cancelled = 0 AND posting_date <= ?""",
             (acct["id"], as_of_date),

@@ -41,10 +41,10 @@ def ensure_migration_table(db_path=None):
     """Create erpclaw_schema_migration table if it doesn't exist."""
     db_path = db_path or DEFAULT_DB_PATH
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=5000")
-    conn.executescript("""
+    from erpclaw_lib.db import setup_pragmas
+    setup_pragmas(conn)
+    from erpclaw_lib.query import ddl_now
+    conn.executescript(f"""
         CREATE TABLE IF NOT EXISTS erpclaw_schema_migration (
             id              TEXT PRIMARY KEY,
             module_name     TEXT NOT NULL,
@@ -52,7 +52,7 @@ def ensure_migration_table(db_path=None):
             ddl_statements  TEXT NOT NULL,
             status          TEXT NOT NULL CHECK(status IN ('planned', 'applied', 'rolled_back', 'failed')),
             previous_schema TEXT,
-            planned_at      TEXT DEFAULT (datetime('now')),
+            planned_at      TEXT DEFAULT ({ddl_now()}),
             applied_at      TEXT,
             rolled_back_at  TEXT,
             applied_by      TEXT
@@ -144,9 +144,8 @@ def plan_migration(module_path, db_path=None, src_root=None):
 
     ensure_migration_table(db_path)
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=5000")
+    from erpclaw_lib.db import setup_pragmas
+    setup_pragmas(conn)
     conn.execute("""
         INSERT INTO erpclaw_schema_migration
             (id, module_name, migration_type, ddl_statements, status, previous_schema, planned_at)
@@ -193,9 +192,8 @@ def apply_migration(migration_id, db_path=None, applied_by=None):
     ensure_migration_table(db_path)
 
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=5000")
+    from erpclaw_lib.db import setup_pragmas
+    setup_pragmas(conn)
 
     # 1. Load migration record
     row = conn.execute(
@@ -285,9 +283,8 @@ def rollback_migration(migration_id, db_path=None):
     ensure_migration_table(db_path)
 
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=5000")
+    from erpclaw_lib.db import setup_pragmas
+    setup_pragmas(conn)
 
     # 1. Load migration record
     row = conn.execute(

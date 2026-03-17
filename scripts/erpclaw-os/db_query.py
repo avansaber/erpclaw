@@ -60,6 +60,23 @@ from deploy_audit import handle_deploy_audit_log
 from install_suite import handle_install_suite
 from adversarial_audit import handle_run_audit
 from compliance_weather import handle_compliance_weather_status
+from improvement_log import (
+    handle_log_improvement,
+    handle_list_improvements,
+    handle_review_improvement,
+)
+from semantic_engine import handle_semantic_check, handle_semantic_rules_list
+from dgm_engine import (
+    handle_dgm_run_variant,
+    handle_dgm_list_variants,
+    handle_dgm_select_best,
+)
+from gap_detector import handle_detect_gaps, handle_suggest_modules
+from heartbeat_analysis import (
+    handle_heartbeat_analyze,
+    handle_heartbeat_report,
+    handle_heartbeat_suggest,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +285,19 @@ def main():
         "install-suite",
         "run-audit",
         "compliance-weather-status",
+        "log-improvement",
+        "list-improvements",
+        "review-improvement",
+        "semantic-check",
+        "semantic-rules-list",
+        "dgm-run-variant",
+        "dgm-list-variants",
+        "dgm-select-best",
+        "detect-gaps",
+        "suggest-modules",
+        "heartbeat-analyze",
+        "heartbeat-report",
+        "heartbeat-suggest",
     ])
     parser.add_argument("--module-path", help="Path to the module directory to validate")
     parser.add_argument("--validation-type", default="static",
@@ -308,6 +338,47 @@ def main():
     # install-suite flags
     parser.add_argument("--suite", help="Predefined suite name (e.g., healthcare-full)")
     parser.add_argument("--modules", help="Comma-separated module list")
+    # improvement-log flags
+    parser.add_argument("--category",
+                        choices=["performance", "usability", "coverage", "semantic", "structural"],
+                        help="Improvement category")
+    parser.add_argument("--description", help="Description of the proposed improvement")
+    parser.add_argument("--source",
+                        choices=["heartbeat", "dgm", "semantic", "manual", "gap_detector"],
+                        help="Source system that detected the improvement")
+    parser.add_argument("--evidence", help="JSON evidence supporting the improvement")
+    parser.add_argument("--expected-impact", dest="expected_impact",
+                        help="JSON expected impact of the improvement")
+    parser.add_argument("--proposed-diff", dest="proposed_diff",
+                        help="JSON proposed code/config diff")
+    parser.add_argument("--improvement-id", dest="improvement_id",
+                        help="Improvement UUID (for review-improvement)")
+    parser.add_argument("--status", dest="new_status",
+                        choices=["approved", "rejected", "deferred"],
+                        help="Review status (for review-improvement)")
+    parser.add_argument("--status-filter", dest="status_filter",
+                        choices=["proposed", "approved", "rejected", "deferred", "deployed"],
+                        help="Filter by status (for list-improvements)")
+    parser.add_argument("--review-notes", dest="review_notes",
+                        help="Notes from the reviewer")
+    parser.add_argument("--reviewed-by", dest="reviewed_by",
+                        help="Who reviewed the improvement (default: system)")
+    parser.add_argument("--from-date", dest="from_date",
+                        help="Filter improvements proposed on or after this date (ISO 8601)")
+    parser.add_argument("--to-date", dest="to_date",
+                        help="Filter improvements proposed on or before this date (ISO 8601)")
+    parser.add_argument("--offset", type=int, default=0,
+                        help="Offset for pagination (default: 0)")
+    parser.add_argument("--deploy", action="store_true",
+                        help="Create deploy_audit entry when approving")
+    # DGM variant engine flags
+    parser.add_argument("--variant-count", dest="variant_count", type=int, default=3,
+                        help="Number of variants to generate (default: 3)")
+    parser.add_argument("--run-id", dest="run_id",
+                        help="DGM run UUID (for dgm-list-variants, dgm-select-best)")
+    # gap-detector flags
+    parser.add_argument("--registry-path", dest="registry_path",
+                        help="Path to module_registry.json (for detect-gaps, suggest-modules)")
 
     args, unknown = parser.parse_known_args()
     check_unknown_args(parser, unknown)
@@ -397,6 +468,97 @@ def main():
 
     elif action == "compliance-weather-status":
         result = handle_compliance_weather_status(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "log-improvement":
+        result = handle_log_improvement(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "list-improvements":
+        result = handle_list_improvements(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "review-improvement":
+        result = handle_review_improvement(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "semantic-check":
+        result = handle_semantic_check(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "semantic-rules-list":
+        result = handle_semantic_rules_list(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "dgm-run-variant":
+        result = handle_dgm_run_variant(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "dgm-list-variants":
+        result = handle_dgm_list_variants(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "dgm-select-best":
+        result = handle_dgm_select_best(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "detect-gaps":
+        result = handle_detect_gaps(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "suggest-modules":
+        result = handle_suggest_modules(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "heartbeat-analyze":
+        result = handle_heartbeat_analyze(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "heartbeat-report":
+        result = handle_heartbeat_report(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "heartbeat-suggest":
+        result = handle_heartbeat_suggest(args)
         if "error" in result:
             err(result["error"])
         else:

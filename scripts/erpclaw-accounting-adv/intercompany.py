@@ -189,7 +189,7 @@ def list_ic_transactions(conn, args):
         where.append("ic_status = ?")
         params.append(args.ic_status)
     if getattr(args, "search", None):
-        where.append("(description LIKE ?)")
+        where.append("(LOWER(description) LIKE LOWER(?))")
         params.append(f"%{args.search}%")
 
     where_sql = " AND ".join(where)
@@ -351,7 +351,7 @@ def ic_reconciliation_report(conn, args):
     rows = conn.execute(f"""
         SELECT from_company_id, to_company_id, transaction_type,
                COUNT(*) as transaction_count,
-               SUM(CAST(amount AS REAL)) as total_amount,
+               SUM(CAST(amount AS NUMERIC)) as total_amount,
                ic_status
         FROM advacct_ic_transaction
         WHERE {where_sql}

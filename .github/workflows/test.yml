@@ -1,0 +1,26 @@
+name: Tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install pytest
+        run: pip install pytest
+      - name: Setup erpclaw_lib
+        run: |
+          mkdir -p ~/.openclaw/erpclaw/lib
+          cp -r scripts/erpclaw-setup/lib/erpclaw_lib ~/.openclaw/erpclaw/lib/
+      - name: Run unit tests
+        run: |
+          pytest scripts/ -q --tb=short \
+            --ignore=scripts/erpclaw-setup/lib \
+            --ignore=scripts/erpclaw-os/tests/test_existing_modules.py

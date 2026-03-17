@@ -107,7 +107,8 @@ def get_live_schema(db_path):
         return {}
 
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA foreign_keys=ON")
+    from erpclaw_lib.db import setup_pragmas
+    setup_pragmas(conn)
     tables = {}
 
     # Get all user tables (skip sqlite_ internal tables)

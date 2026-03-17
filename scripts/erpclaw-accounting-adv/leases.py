@@ -209,7 +209,7 @@ def list_leases(conn, args):
         where.append("lease_status = ?")
         params.append(args.lease_status)
     if getattr(args, "search", None):
-        where.append("(lessee_name LIKE ? OR lessor_name LIKE ? OR asset_description LIKE ?)")
+        where.append("(LOWER(lessee_name) LIKE LOWER(?) OR LOWER(lessor_name) LIKE LOWER(?) OR LOWER(asset_description) LIKE LOWER(?))")
         params.extend([f"%{args.search}%"] * 3)
 
     where_sql = " AND ".join(where)
@@ -521,9 +521,9 @@ def lease_disclosure_report(conn, args):
     rows = conn.execute(f"""
         SELECT l.lease_type,
                COUNT(*) as lease_count,
-               SUM(CAST(l.monthly_payment AS REAL)) as total_monthly_payments,
-               SUM(CAST(COALESCE(l.rou_asset_value, '0') AS REAL)) as total_rou_assets,
-               SUM(CAST(COALESCE(l.lease_liability, '0') AS REAL)) as total_lease_liabilities
+               SUM(CAST(l.monthly_payment AS NUMERIC)) as total_monthly_payments,
+               SUM(CAST(COALESCE(l.rou_asset_value, '0') AS NUMERIC)) as total_rou_assets,
+               SUM(CAST(COALESCE(l.lease_liability, '0') AS NUMERIC)) as total_lease_liabilities
         FROM advacct_lease l
         WHERE {where_sql}
         GROUP BY l.lease_type

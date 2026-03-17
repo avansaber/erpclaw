@@ -201,8 +201,8 @@ def get_db_info(db_path):
     info["database_exists"] = True
     try:
         conn = sqlite3.connect(db_path, timeout=5)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
+        from erpclaw_lib.db import setup_pragmas
+        setup_pragmas(conn)
 
         rows = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
@@ -397,8 +397,8 @@ def seed_demo_data(args):
     try:
         conn = sqlite3.connect(db_path, timeout=5)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
+        from erpclaw_lib.db import setup_pragmas
+        setup_pragmas(conn)
 
         target_company_id = None
         if use_existing_company:
@@ -680,8 +680,8 @@ def seed_demo_data(args):
     try:
         conn = sqlite3.connect(db_path, timeout=5)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
+        from erpclaw_lib.db import setup_pragmas
+        setup_pragmas(conn)
 
         account_map = {
             "cash":                  "1111",  # Petty Cash
@@ -1271,8 +1271,8 @@ def seed_demo_data(args):
     try:
         conn = sqlite3.connect(db_path, timeout=5)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
+        from erpclaw_lib.db import setup_pragmas
+        setup_pragmas(conn)
         if _HAS_PYPIKA:
             it = Table("item")
             q = Q.from_(it).select(it.id, it.item_code)

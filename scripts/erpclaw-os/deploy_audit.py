@@ -20,10 +20,10 @@ def ensure_deploy_audit_table(db_path=None):
     """Create erpclaw_deploy_audit table if it doesn't exist."""
     db_path = db_path or DEFAULT_DB_PATH
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=5000")
-    conn.executescript("""
+    from erpclaw_lib.db import setup_pragmas
+    setup_pragmas(conn)
+    from erpclaw_lib.query import ddl_now
+    conn.executescript(f"""
         CREATE TABLE IF NOT EXISTS erpclaw_deploy_audit (
             id              TEXT PRIMARY KEY,
             module_name     TEXT NOT NULL,
@@ -33,7 +33,7 @@ def ensure_deploy_audit_table(db_path=None):
             git_commit      TEXT,
             human_approved  INTEGER CHECK(human_approved IN (0, 1)),
             approved_by     TEXT,
-            deployed_at     TEXT DEFAULT (datetime('now')),
+            deployed_at     TEXT DEFAULT ({ddl_now()}),
             reasoning       TEXT
         );
     """)
@@ -65,9 +65,8 @@ def record_deployment(module_name, pipeline_result, tier=None, steps=None,
 
     audit_id = str(uuid.uuid4())
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=5000")
+    from erpclaw_lib.db import setup_pragmas
+    setup_pragmas(conn)
     conn.execute("""
         INSERT INTO erpclaw_deploy_audit
             (id, module_name, pipeline_result, tier, steps, git_commit,

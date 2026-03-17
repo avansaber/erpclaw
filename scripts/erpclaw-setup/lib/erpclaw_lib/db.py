@@ -12,6 +12,32 @@ from decimal import Decimal
 DEFAULT_DB_PATH = os.path.expanduser("~/.openclaw/erpclaw/data.sqlite")
 
 
+def get_dialect():
+    """Return the configured database dialect."""
+    return os.environ.get("ERPCLAW_DB_DIALECT", "sqlite")
+
+
+def setup_pragmas(conn):
+    """Apply vendor-specific connection settings.
+
+    For SQLite: WAL mode, FK enforcement, busy timeout.
+    For PostgreSQL: lock timeout (via cursor for psycopg2 compatibility).
+    For MySQL: no equivalent needed (InnoDB handles these).
+    """
+    dialect = get_dialect()
+    if dialect == "sqlite":
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA busy_timeout=5000")
+    elif dialect == "postgresql":
+        cur = conn.cursor() if hasattr(conn, 'cursor') else conn
+        try:
+            cur.execute("SET lock_timeout = '5s'")
+        finally:
+            if cur is not conn:
+                cur.close()
+
+
 class _DecimalSum:
     """Custom SQLite aggregate: SUM using Python Decimal for precision.
 

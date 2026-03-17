@@ -45,8 +45,8 @@ def _get_connection(db_path=None):
         path = db_path or os.path.expanduser("~/.openclaw/erpclaw/data.sqlite")
         conn = sqlite3.connect(path)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA busy_timeout = 5000")
+        from erpclaw_lib.db import setup_pragmas as _sp
+        _sp(conn)
         return conn
 
 
