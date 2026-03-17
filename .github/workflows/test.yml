@@ -21,6 +21,7 @@ jobs:
           cp -r scripts/erpclaw-setup/lib/erpclaw_lib ~/.openclaw/erpclaw/lib/
       - name: Run unit tests
         run: |
-          pytest scripts/ -q --tb=short \
+          python -m pytest scripts/ -q --tb=short \
             --ignore=scripts/erpclaw-setup/lib \
-            --ignore=scripts/erpclaw-os/tests/test_existing_modules.py
+            --ignore=scripts/erpclaw-os/tests/test_existing_modules.py \
+            || { ec=$?; [ $ec -eq 5 ] && echo "No tests collected — skipping" && exit 0; exit $ec; }
