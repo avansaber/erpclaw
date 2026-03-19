@@ -92,10 +92,11 @@ ACTION_MAP = {
     "check-telegram-permission": "erpclaw-setup",
     "onboarding-step": "erpclaw-setup",
 
-    # === Meta (3 actions) ===
+    # === Meta (4 actions) ===
     "check-installation": "erpclaw-meta",
     "install-guide": "erpclaw-meta",
     "seed-demo-data": "erpclaw-meta",
+    "setup-web-dashboard": "erpclaw-meta",
 
     # === General Ledger (28 actions) ===
     "setup-chart-of-accounts": "erpclaw-gl",

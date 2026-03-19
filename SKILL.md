@@ -95,7 +95,7 @@ New here? Just describe your business — the onboard action detects your indust
 
 ## All Actions (Tier 2)
 
-Run `list-all-actions` for the complete list of all available actions. Regional modules add prefixed actions (india-\*, eu-\*, uk-\*, canada-\*) for local tax and compliance. For a web dashboard, ask about webclaw (universal) or erpclaw-web (purpose-built, see README).
+Run `list-all-actions` for the complete list of all available actions. Regional modules add prefixed actions (india-\*, eu-\*, uk-\*, canada-\*) for local tax and compliance. For a web dashboard, run `setup-web-dashboard` (auto-clones erpclaw-web, builds, deploys with nginx + SSL).
 
 ### Setup & Admin (44 actions)
 
@@ -104,7 +104,7 @@ Run `list-all-actions` for the complete list of all available actions. Regional 
 | `initialize-database` / `setup-company` / `update-company` / `get-company` / `list-companies` | DB init & company CRUD |
 | `add-currency` / `list-currencies` / `add-exchange-rate` / `get-exchange-rate` / `list-exchange-rates` | Currency & FX |
 | `add-payment-terms` / `list-payment-terms` / `add-uom` / `list-uoms` / `add-uom-conversion` | Terms & UoMs |
-| `seed-defaults` / `seed-demo-data` / `check-installation` / `install-guide` | Seeding & install |
+| `seed-defaults` / `seed-demo-data` / `check-installation` / `install-guide` / `setup-web-dashboard` | Seeding & install |
 | `add-user` / `update-user` / `get-user` / `list-users` | User management |
 | `add-role` / `list-roles` / `assign-role` / `revoke-role` / `set-password` / `seed-permissions` | RBAC & security |
 | `link-telegram-user` / `unlink-telegram-user` / `check-telegram-permission` | Telegram integration |
