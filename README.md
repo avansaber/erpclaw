@@ -1,6 +1,6 @@
 # ERPClaw — AI-Native ERP for OpenClaw
 
-A complete ERP system built as an [OpenClaw](https://openclaw.org) skill. Full double-entry accounting, invoicing, inventory, purchasing, tax, billing, HR, payroll, and financial reporting — all in a single install. 365+ actions across 14 domains.
+A complete ERP system built as an [OpenClaw](https://openclaw.org) skill. Full double-entry accounting, invoicing, inventory, purchasing, tax, billing, HR, payroll, and financial reporting — all in a single install. 413 actions across 14 domains.
 
 ## Features
 
@@ -15,7 +15,7 @@ A complete ERP system built as an [OpenClaw](https://openclaw.org) skill. Full d
 - **Payroll** — salary structures, FICA, federal/state income tax, W-2 generation, garnishments
 - **Advanced Accounting** — ASC 606 revenue recognition, ASC 842 lease accounting, intercompany transactions, consolidation
 - **Reports** — trial balance, P&L, balance sheet, cash flow, AR/AP aging, inventory valuation
-- **Module system** — 44 additional modules available via `install-module` from GitHub
+- **Module system** — 43 additional modules (44 total including core) available via `install-module` from GitHub
 
 ## Quick Start
 
@@ -25,7 +25,7 @@ A complete ERP system built as an [OpenClaw](https://openclaw.org) skill. Full d
 clawhub install erpclaw
 ```
 
-This installs the core ERP (365+ actions) and initializes the database.
+This installs the core ERP (413 actions) and initializes the database.
 
 ### First Steps
 
@@ -42,7 +42,7 @@ The bot will:
 
 ### Adding Modules
 
-ERPClaw has 44 additional modules for specific industries and features:
+ERPClaw has 43 additional modules for specific industries and features:
 
 ```
 "I need manufacturing capabilities"
@@ -99,7 +99,7 @@ OpenClaw Bot → erpclaw/scripts/db_query.py --action {action} --args
 
 Single SQLite database at `~/.openclaw/erpclaw/data.sqlite`:
 
-- **685+ tables** across all modules
+- **688 tables** across all modules (188 core)
 - WAL mode for concurrent reads
 - Foreign key enforcement ON
 - `PRAGMA busy_timeout = 5000`
@@ -107,7 +107,7 @@ Single SQLite database at `~/.openclaw/erpclaw/data.sqlite`:
 
 ## Module Registry
 
-The module registry (`scripts/module_registry.json`) tracks all 45 modules across 14 GitHub repositories. Use `install-module` to add any module:
+The module registry (`scripts/module_registry.json`) tracks all 44 modules across 14 GitHub repositories. Use `install-module` to add any module:
 
 ```
 "Install the manufacturing module"
@@ -163,7 +163,8 @@ ERPClaw OS automates the 80% and assists with the 15%, leaving humans to focus o
 
 - **Phase 1 (Smart Templates)** -- complete. Industry-specific templates generate full module scaffolding from a single configuration.
 - **Phase 2 (Bounded Autonomy)** -- complete. AI agents generate, validate, and test modules within constitutional bounds.
-- **481 tests passing** across the generation and validation pipeline.
+- **Phase 3 (Adult)** -- complete. Semantic correctness engine, self-improvement log, DGM variant engine, heartbeat analysis, gap detection. 13 new actions, 5 new tables.
+- **7,627+ tests passing** across L0 constitutional, L1 unit, L2 contract, and L3 smoke layers.
 - **3 proof-of-concept modules generated**: groomingclaw, tattooclaw, storageclaw -- 144/144 tests passed, all constitutional articles satisfied.
 
 ### How It Works
