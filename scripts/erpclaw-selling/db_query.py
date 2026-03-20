@@ -79,6 +79,8 @@ _t_ic_account_map = Table("intercompany_account_map")
 _t_purchase_invoice = Table("purchase_invoice")
 _t_purchase_invoice_item = Table("purchase_invoice_item")
 _t_supplier = Table("supplier")
+_t_blanket_order = Table("blanket_order")
+_t_blanket_order_item = Table("blanket_order_item")
 
 
 # ---------------------------------------------------------------------------
@@ -1303,6 +1305,8 @@ def create_delivery_note(conn, args):
     so = conn.execute(soq.get_sql(), (args.sales_order_id,)).fetchone()
     if not so:
         err(f"Sales order {args.sales_order_id} not found")
+    if so["status"] == "closed":
+        err("Cannot create DN: sales order is closed")
     if so["status"] not in ("confirmed", "partially_delivered"):
         err(f"Cannot create DN: sales order is '{so['status']}' (must be 'confirmed' or 'partially_delivered')")
 
@@ -1866,6 +1870,8 @@ def create_sales_invoice(conn, args):
         so = conn.execute(soq.get_sql(), (sales_order_id,)).fetchone()
         if not so:
             err(f"Sales order {sales_order_id} not found")
+        if so["status"] == "closed":
+            err("Cannot invoice: sales order is closed")
         if so["status"] not in ("confirmed", "partially_delivered", "fully_delivered",
                                  "partially_invoiced"):
             err(f"Cannot invoice: sales order is '{so['status']}'")
@@ -3375,7 +3381,336 @@ def generate_recurring_invoices(conn, args):
 
 
 # ---------------------------------------------------------------------------
-# 36. status
+# 36. add-blanket-order
+# ---------------------------------------------------------------------------
+
+def add_blanket_order(conn, args):
+    """Create a blanket sales order (framework agreement with a customer)."""
+    if not args.customer_id:
+        err("--customer-id is required")
+    if not args.items:
+        err("--items is required (JSON array)")
+    if not args.company_id:
+        err("--company-id is required")
+    if not args.valid_from:
+        err("--valid-from is required")
+    if not args.valid_to:
+        err("--valid-to is required")
+
+    # Validate customer
+    csq = (Q.from_(_t_customer).select(_t_customer.id)
+           .where((_t_customer.id == P()) | (_t_customer.name == P()))
+           .where(_t_customer.status == ValueWrapper("active")))
+    cust = conn.execute(csq.get_sql(),
+        (args.customer_id, args.customer_id)).fetchone()
+    if not cust:
+        err(f"Active customer {args.customer_id} not found")
+    customer_id = cust["id"]
+
+    coq = Q.from_(_t_company).select(_t_company.id).where(_t_company.id == P())
+    if not conn.execute(coq.get_sql(), (args.company_id,)).fetchone():
+        err(f"Company {args.company_id} not found")
+
+    if args.valid_to <= args.valid_from:
+        err("--valid-to must be after --valid-from")
+
+    items = _parse_json_arg(args.items, "items")
+    if not items or not isinstance(items, list):
+        err("--items must be a non-empty JSON array")
+
+    bo_id = str(uuid.uuid4())
+    total_qty = Decimal("0")
+
+    # Insert parent blanket_order
+    bo_ins = (Q.into(_t_blanket_order)
+              .columns("id", "customer_id", "blanket_order_type",
+                        "valid_from", "valid_to", "status", "company_id")
+              .insert(P(), P(), ValueWrapper("selling"),
+                      P(), P(), ValueWrapper("draft"), P()))
+    conn.execute(bo_ins.get_sql(),
+        (bo_id, customer_id, args.valid_from, args.valid_to, args.company_id))
+
+    # Insert child items
+    boi_ins = (Q.into(_t_blanket_order_item)
+               .columns("id", "blanket_order_id", "item_id", "quantity",
+                         "uom", "rate", "amount")
+               .insert(P(), P(), P(), P(), P(), P(), P()))
+    boi_ins_sql = boi_ins.get_sql()
+    for i, item in enumerate(items):
+        item_id = item.get("item_id")
+        if not item_id:
+            err(f"Item {i}: item_id is required")
+        qty = to_decimal(item.get("qty", "0"))
+        if qty <= 0:
+            err(f"Item {i}: qty must be > 0")
+        rate = to_decimal(item.get("rate", "0"))
+        if rate <= 0:
+            err(f"Item {i}: rate must be > 0")
+        amount = round_currency(qty * rate)
+        total_qty += qty
+
+        conn.execute(boi_ins_sql,
+            (str(uuid.uuid4()), bo_id, item_id, str(round_currency(qty)),
+             item.get("uom"), str(round_currency(rate)), str(amount)))
+
+    # Update totals
+    uq = (Q.update(_t_blanket_order)
+          .set(_t_blanket_order.total_qty, P())
+          .where(_t_blanket_order.id == P()))
+    conn.execute(uq.get_sql(), (str(round_currency(total_qty)), bo_id))
+
+    audit(conn, "erpclaw-selling", "add-blanket-order", "blanket_order", bo_id,
+           new_values={"customer_id": customer_id, "total_qty": str(total_qty)})
+    conn.commit()
+    ok({"blanket_order_id": bo_id, "customer_id": customer_id,
+         "total_qty": str(round_currency(total_qty)),
+         "valid_from": args.valid_from, "valid_to": args.valid_to})
+
+
+# ---------------------------------------------------------------------------
+# 37. submit-blanket-order
+# ---------------------------------------------------------------------------
+
+def submit_blanket_order(conn, args):
+    """Activate a blanket sales order."""
+    if not args.blanket_order_id:
+        err("--blanket-order-id is required")
+
+    boq = (Q.from_(_t_blanket_order).select(_t_blanket_order.star)
+           .where(_t_blanket_order.id == P()))
+    bo = conn.execute(boq.get_sql(), (args.blanket_order_id,)).fetchone()
+    if not bo:
+        err(f"Blanket order {args.blanket_order_id} not found")
+    if bo["status"] != "draft":
+        err(f"Cannot submit: blanket order is '{bo['status']}' (must be 'draft')")
+    if bo["blanket_order_type"] != "selling":
+        err("This blanket order is not a selling type")
+
+    uq = (Q.update(_t_blanket_order)
+          .set(_t_blanket_order.status, ValueWrapper("active"))
+          .set(_t_blanket_order.updated_at, LiteralValue("datetime('now')"))
+          .where(_t_blanket_order.id == P()))
+    conn.execute(uq.get_sql(), (args.blanket_order_id,))
+
+    audit(conn, "erpclaw-selling", "submit-blanket-order", "blanket_order",
+           args.blanket_order_id, new_values={"status": "active"})
+    conn.commit()
+    ok({"blanket_order_id": args.blanket_order_id, "doc_status": "active"})
+
+
+# ---------------------------------------------------------------------------
+# 38. get-blanket-order
+# ---------------------------------------------------------------------------
+
+def get_blanket_order(conn, args):
+    """Get a blanket sales order with its items."""
+    if not args.blanket_order_id:
+        err("--blanket-order-id is required")
+
+    boq = (Q.from_(_t_blanket_order).select(_t_blanket_order.star)
+           .where(_t_blanket_order.id == P()))
+    bo = conn.execute(boq.get_sql(), (args.blanket_order_id,)).fetchone()
+    if not bo:
+        err(f"Blanket order {args.blanket_order_id} not found")
+
+    data = row_to_dict(bo)
+
+    # Fetch items
+    boiq = (Q.from_(_t_blanket_order_item).select(_t_blanket_order_item.star)
+            .where(_t_blanket_order_item.blanket_order_id == P()))
+    items = conn.execute(boiq.get_sql(), (args.blanket_order_id,)).fetchall()
+    data["items"] = [row_to_dict(r) for r in items]
+
+    ok(data)
+
+
+# ---------------------------------------------------------------------------
+# 39. list-blanket-orders
+# ---------------------------------------------------------------------------
+
+def list_blanket_orders(conn, args):
+    """List blanket sales orders."""
+    bo = _t_blanket_order.as_("bo")
+    params = []
+    crit = (bo.blanket_order_type == ValueWrapper("selling"))
+
+    if args.company_id:
+        crit = Criterion.all([crit, bo.company_id == P()])
+        params.append(args.company_id)
+    if args.customer_id:
+        crit = Criterion.all([crit, bo.customer_id == P()])
+        params.append(args.customer_id)
+    if args.doc_status:
+        crit = Criterion.all([crit, bo.status == P()])
+        params.append(args.doc_status)
+
+    count_q = Q.from_(bo).select(fn.Count("*")).where(crit)
+    total_count = conn.execute(count_q.get_sql(), params).fetchone()[0]
+
+    limit = int(args.limit) if args.limit else 20
+    offset = int(args.offset) if args.offset else 0
+
+    list_q = (Q.from_(bo).select(bo.star)
+              .where(crit)
+              .orderby(bo.created_at, order=Order.desc)
+              .limit(P()).offset(P()))
+    rows = conn.execute(list_q.get_sql(), params + [limit, offset]).fetchall()
+
+    ok({"blanket_orders": [row_to_dict(r) for r in rows],
+         "total_count": total_count, "limit": limit, "offset": offset,
+         "has_more": offset + limit < total_count})
+
+
+# ---------------------------------------------------------------------------
+# 40. create-so-from-blanket
+# ---------------------------------------------------------------------------
+
+def create_so_from_blanket(conn, args):
+    """Create a sales order drawing down from an active blanket order."""
+    if not args.blanket_order_id:
+        err("--blanket-order-id is required")
+    if not args.items:
+        err("--items is required (JSON array)")
+
+    # Validate blanket order
+    boq = (Q.from_(_t_blanket_order).select(_t_blanket_order.star)
+           .where(_t_blanket_order.id == P()))
+    bo = conn.execute(boq.get_sql(), (args.blanket_order_id,)).fetchone()
+    if not bo:
+        err(f"Blanket order {args.blanket_order_id} not found")
+    if bo["status"] != "active":
+        err(f"Cannot create SO: blanket order is '{bo['status']}' (must be 'active')")
+    if bo["blanket_order_type"] != "selling":
+        err("This blanket order is not a selling type")
+
+    # Check expiry
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if bo["valid_to"] < today:
+        err(f"Blanket order expired on {bo['valid_to']}")
+
+    customer_id = bo["customer_id"]
+    company_id = bo["company_id"]
+
+    # Fetch blanket items for validation
+    boiq = (Q.from_(_t_blanket_order_item).select(_t_blanket_order_item.star)
+            .where(_t_blanket_order_item.blanket_order_id == P()))
+    bo_items = conn.execute(boiq.get_sql(), (args.blanket_order_id,)).fetchall()
+    bo_items_map = {}
+    for bi in bo_items:
+        bid = row_to_dict(bi)
+        bo_items_map[bid["item_id"]] = bid
+
+    items = _parse_json_arg(args.items, "items")
+    if not items or not isinstance(items, list):
+        err("--items must be a non-empty JSON array")
+
+    # Validate quantities against blanket
+    so_id = str(uuid.uuid4())
+    posting_date = args.posting_date or today
+    total_amount = Decimal("0")
+    so_item_rows = []
+    blanket_updates = []  # (boi_id, new_ordered_qty)
+
+    for i, item in enumerate(items):
+        item_id = item.get("item_id")
+        if not item_id:
+            err(f"Item {i}: item_id is required")
+        qty = to_decimal(item.get("qty", "0"))
+        if qty <= 0:
+            err(f"Item {i}: qty must be > 0")
+
+        if item_id not in bo_items_map:
+            err(f"Item {i}: item {item_id} not in blanket order")
+
+        bi = bo_items_map[item_id]
+        max_qty = to_decimal(bi["quantity"])
+        ordered = to_decimal(bi["ordered_qty"])
+        remaining = max_qty - ordered
+
+        if qty > remaining:
+            err(f"Item {i}: requested qty {qty} exceeds remaining blanket qty {remaining}")
+
+        rate = to_decimal(item.get("rate") or bi["rate"])
+        amount = round_currency(qty * rate)
+        total_amount += amount
+
+        so_item_rows.append({
+            "item_id": item_id,
+            "qty": str(round_currency(qty)),
+            "uom": item.get("uom") or bi.get("uom"),
+            "rate": str(round_currency(rate)),
+            "amount": str(amount),
+            "warehouse_id": item.get("warehouse_id"),
+        })
+        blanket_updates.append((bi["id"], str(round_currency(ordered + qty))))
+
+    total_amount = round_currency(total_amount)
+    tax_amount, _ = _calculate_tax(conn, total_amount, args.tax_template_id)
+    grand_total = round_currency(total_amount + tax_amount)
+
+    # Insert SO
+    so_ins = (Q.into(_t_sales_order)
+              .columns("id", "customer_id", "order_date", "delivery_date",
+                        "total_amount", "tax_amount", "grand_total",
+                        "tax_template_id", "status", "company_id")
+              .insert(P(), P(), P(), P(), P(), P(), P(), P(),
+                      ValueWrapper("draft"), P()))
+    conn.execute(so_ins.get_sql(),
+        (so_id, customer_id, posting_date, args.delivery_date,
+         str(total_amount), str(tax_amount), str(grand_total),
+         args.tax_template_id, company_id))
+
+    # Insert SO items
+    soi_ins = (Q.into(_t_sales_order_item)
+               .columns("id", "sales_order_id", "item_id", "quantity", "uom",
+                         "rate", "amount", "discount_percentage",
+                         "net_amount", "warehouse_id")
+               .insert(P(), P(), P(), P(), P(), P(), P(),
+                       ValueWrapper("0"), P(), P()))
+    soi_ins_sql = soi_ins.get_sql()
+    for row in so_item_rows:
+        conn.execute(soi_ins_sql,
+            (str(uuid.uuid4()), so_id, row["item_id"], row["qty"],
+             row["uom"], row["rate"], row["amount"],
+             row["amount"], row["warehouse_id"]))
+
+    # Update blanket order item ordered_qty
+    boi_uq = (Q.update(_t_blanket_order_item)
+              .set(_t_blanket_order_item.ordered_qty, P())
+              .where(_t_blanket_order_item.id == P()))
+    boi_uq_sql = boi_uq.get_sql()
+    for boi_id, new_ordered in blanket_updates:
+        conn.execute(boi_uq_sql, (new_ordered, boi_id))
+
+    # Update blanket order total ordered_qty
+    total_ordered = sum(to_decimal(x[1]) for x in blanket_updates)
+    # Re-fetch actual total from all items
+    boiq2 = (Q.from_(_t_blanket_order_item)
+             .select(fn.Count("*").as_("cnt"))
+             .where(_t_blanket_order_item.blanket_order_id == P()))
+    # Actually compute ordered across all items
+    ordered_sum = conn.execute(
+        """SELECT COALESCE(decimal_sum(ordered_qty), '0') as total
+           FROM blanket_order_item WHERE blanket_order_id = ?""",
+        (args.blanket_order_id,)).fetchone()["total"]
+    bo_uq = (Q.update(_t_blanket_order)
+             .set(_t_blanket_order.ordered_qty, P())
+             .set(_t_blanket_order.updated_at, LiteralValue("datetime('now')"))
+             .where(_t_blanket_order.id == P()))
+    conn.execute(bo_uq.get_sql(), (ordered_sum, args.blanket_order_id))
+
+    audit(conn, "erpclaw-selling", "create-so-from-blanket", "sales_order", so_id,
+           new_values={"blanket_order_id": args.blanket_order_id,
+                       "grand_total": str(grand_total)})
+    conn.commit()
+    ok({"sales_order_id": so_id,
+         "blanket_order_id": args.blanket_order_id,
+         "total_amount": str(total_amount),
+         "grand_total": str(grand_total)})
+
+
+# ---------------------------------------------------------------------------
+# 41. status
 # ---------------------------------------------------------------------------
 
 def status_action(conn, args):
@@ -3925,6 +4260,525 @@ def cancel_intercompany_invoice(conn, args):
 
 
 # ---------------------------------------------------------------------------
+# close-sales-order
+# ---------------------------------------------------------------------------
+
+def close_sales_order(conn, args):
+    """Close a partially-fulfilled SO. Prevents further DNs/invoices but
+    preserves existing child documents."""
+    if not args.sales_order_id:
+        err("--sales-order-id is required")
+
+    soq = (Q.from_(_t_sales_order).select(_t_sales_order.star)
+           .where(_t_sales_order.id == P()))
+    so = conn.execute(soq.get_sql(), (args.sales_order_id,)).fetchone()
+    if not so:
+        err(f"Sales order {args.sales_order_id} not found")
+    if so["status"] in ("draft", "cancelled", "closed"):
+        err(f"Cannot close: sales order is '{so['status']}'")
+
+    close_reason = args.reason or None
+    closed_by = args.closed_by or None
+
+    uq = (Q.update(_t_sales_order)
+          .set("status", ValueWrapper("closed"))
+          .set("close_reason", P())
+          .set("closed_by", P())
+          .set("updated_at", LiteralValue("datetime('now')"))
+          .where(_t_sales_order.id == P()))
+    conn.execute(uq.get_sql(), (close_reason, closed_by, args.sales_order_id))
+
+    audit(conn, "erpclaw-selling", "close-sales-order", "sales_order",
+          args.sales_order_id,
+          new_values={"status": "closed", "close_reason": close_reason,
+                      "closed_by": closed_by})
+    conn.commit()
+    ok({"sales_order_id": args.sales_order_id, "doc_status": "closed",
+        "close_reason": close_reason, "closed_by": closed_by})
+
+
+# ---------------------------------------------------------------------------
+# amend-sales-order
+# ---------------------------------------------------------------------------
+
+def amend_sales_order(conn, args):
+    """Amend a sales order: cancel original (if no child docs) and create a
+    new SO linked via amended_from. Changes supplied via --items JSON;
+    unspecified items are copied from the original."""
+    if not args.sales_order_id:
+        err("--sales-order-id is required")
+
+    soq = (Q.from_(_t_sales_order).select(_t_sales_order.star)
+           .where(_t_sales_order.id == P()))
+    so = conn.execute(soq.get_sql(), (args.sales_order_id,)).fetchone()
+    if not so:
+        err(f"Sales order {args.sales_order_id} not found")
+    if so["status"] in ("draft", "cancelled", "closed"):
+        err(f"Cannot amend: sales order is '{so['status']}'")
+
+    # Block if any active delivery notes exist
+    dnc = (Q.from_(_t_delivery_note)
+           .select(fn.Count("*").as_("cnt"))
+           .where(_t_delivery_note.sales_order_id == P())
+           .where(_t_delivery_note.status != ValueWrapper("cancelled")))
+    dn_count = conn.execute(dnc.get_sql(), (args.sales_order_id,)).fetchone()["cnt"]
+    if dn_count > 0:
+        err(f"Cannot amend: {dn_count} active delivery note(s) linked to this order")
+
+    # Block if any active invoices exist
+    sic = (Q.from_(_t_sales_invoice)
+           .select(fn.Count("*").as_("cnt"))
+           .where(_t_sales_invoice.sales_order_id == P())
+           .where(_t_sales_invoice.status != ValueWrapper("cancelled")))
+    si_count = conn.execute(sic.get_sql(), (args.sales_order_id,)).fetchone()["cnt"]
+    if si_count > 0:
+        err(f"Cannot amend: {si_count} active sales invoice(s) linked to this order")
+
+    so_dict = row_to_dict(so)
+
+    # Cancel original SO
+    uq_cancel = (Q.update(_t_sales_order)
+                 .set("status", ValueWrapper("cancelled"))
+                 .set("updated_at", LiteralValue("datetime('now')"))
+                 .where(_t_sales_order.id == P()))
+    conn.execute(uq_cancel.get_sql(), (args.sales_order_id,))
+    audit(conn, "erpclaw-selling", "amend-sales-order", "sales_order",
+          args.sales_order_id,
+          new_values={"status": "cancelled", "reason": "amended"})
+
+    # Determine items for the new SO
+    if args.items:
+        items = _parse_json_arg(args.items, "items")
+    else:
+        # Copy items from original
+        soiq = (Q.from_(_t_sales_order_item).select(_t_sales_order_item.star)
+                .where(_t_sales_order_item.sales_order_id == P())
+                .orderby(_t_sales_order_item.rowid))
+        so_items = conn.execute(soiq.get_sql(), (args.sales_order_id,)).fetchall()
+        items = []
+        for soi in so_items:
+            soi_d = row_to_dict(soi)
+            items.append({
+                "item_id": soi_d["item_id"],
+                "qty": soi_d["quantity"],
+                "rate": soi_d["rate"],
+                "warehouse_id": soi_d.get("warehouse_id"),
+            })
+
+    total_amount, item_rows = _calculate_line_items(
+        conn, items, so_dict["company_id"], so_dict["customer_id"],
+        so_dict["order_date"], apply_pricing=True)
+    tax_amount, _ = _calculate_tax(conn, total_amount, so_dict.get("tax_template_id"))
+    grand_total = round_currency(total_amount + tax_amount)
+
+    new_so_id = str(uuid.uuid4())
+
+    so_ins = (Q.into(_t_sales_order)
+              .columns("id", "customer_id", "order_date", "delivery_date",
+                        "total_amount", "tax_amount", "grand_total",
+                        "tax_template_id", "status", "company_id",
+                        "amended_from")
+              .insert(P(), P(), P(), P(), P(), P(), P(), P(),
+                      ValueWrapper("draft"), P(), P()))
+    conn.execute(so_ins.get_sql(),
+        (new_so_id, so_dict["customer_id"], so_dict["order_date"],
+         so_dict.get("delivery_date"),
+         str(total_amount), str(tax_amount), str(grand_total),
+         so_dict.get("tax_template_id"), so_dict["company_id"],
+         args.sales_order_id),
+    )
+
+    soi_ins = (Q.into(_t_sales_order_item)
+               .columns("id", "sales_order_id", "item_id", "quantity", "uom",
+                         "rate", "amount", "discount_percentage",
+                         "net_amount", "warehouse_id")
+               .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(), P()))
+    soi_ins_sql = soi_ins.get_sql()
+    for row in item_rows:
+        conn.execute(soi_ins_sql,
+            (str(uuid.uuid4()), new_so_id, row["item_id"], row["qty"],
+             row["uom"], row["rate"], row["amount"],
+             row["discount_percentage"], row["net_amount"],
+             row["warehouse_id"]),
+        )
+
+    audit(conn, "erpclaw-selling", "amend-sales-order", "sales_order", new_so_id,
+          new_values={"amended_from": args.sales_order_id,
+                      "grand_total": str(grand_total)})
+    conn.commit()
+    ok({"new_sales_order_id": new_so_id, "amended_from": args.sales_order_id,
+        "original_status": "cancelled",
+        "total_amount": str(total_amount), "tax_amount": str(tax_amount),
+        "grand_total": str(grand_total)})
+
+
+# ---------------------------------------------------------------------------
+# get-amendment-history
+# ---------------------------------------------------------------------------
+
+def get_amendment_history(conn, args):
+    """Trace the full amendment chain for a sales order (both ancestors and
+    descendants)."""
+    if not args.sales_order_id:
+        err("--sales-order-id is required")
+
+    soq = (Q.from_(_t_sales_order).select(_t_sales_order.star)
+           .where(_t_sales_order.id == P()))
+    so = conn.execute(soq.get_sql(), (args.sales_order_id,)).fetchone()
+    if not so:
+        err(f"Sales order {args.sales_order_id} not found")
+
+    chain = []
+
+    # Walk backwards to root
+    current_id = args.sales_order_id
+    ancestors = []
+    while True:
+        row = conn.execute(soq.get_sql(), (current_id,)).fetchone()
+        if not row:
+            break
+        row_d = row_to_dict(row)
+        if row_d.get("amended_from"):
+            ancestors.append({
+                "sales_order_id": current_id,
+                "status": row_d["status"],
+                "amended_from": row_d["amended_from"],
+                "grand_total": row_d["grand_total"],
+            })
+            current_id = row_d["amended_from"]
+        else:
+            # This is the root
+            ancestors.append({
+                "sales_order_id": current_id,
+                "status": row_d["status"],
+                "amended_from": None,
+                "grand_total": row_d["grand_total"],
+            })
+            break
+
+    ancestors.reverse()
+    chain.extend(ancestors)
+
+    # Walk forward to find descendants
+    current_id = args.sales_order_id
+    descq = (Q.from_(_t_sales_order)
+             .select(_t_sales_order.id, _t_sales_order.status,
+                     _t_sales_order.amended_from, _t_sales_order.grand_total)
+             .where(_t_sales_order.amended_from == P()))
+    while True:
+        desc = conn.execute(descq.get_sql(), (current_id,)).fetchone()
+        if not desc:
+            break
+        desc_d = row_to_dict(desc)
+        chain.append({
+            "sales_order_id": desc_d["id"],
+            "status": desc_d["status"],
+            "amended_from": desc_d["amended_from"],
+            "grand_total": desc_d["grand_total"],
+        })
+        current_id = desc_d["id"]
+
+    ok({"sales_order_id": args.sales_order_id,
+        "amendment_chain": chain,
+        "chain_length": len(chain)})
+
+
+# ---------------------------------------------------------------------------
+# Feature #15: Drop Shipment (Sprint 7)
+# ---------------------------------------------------------------------------
+
+
+def create_drop_ship_order(conn, args):
+    """Create a purchase order from SO drop-ship items.
+
+    Required: --sales-order-id, --supplier-id
+    Optional: --posting-date
+
+    Creates a PO with delivery_address = customer address.
+    Links PO items back to SO items via purchase_order_item.
+    """
+    if not args.sales_order_id:
+        err("--sales-order-id is required")
+    if not args.supplier_id:
+        err("--supplier-id is required")
+
+    # Validate SO
+    soq = (Q.from_(_t_sales_order).select(_t_sales_order.star)
+           .where(_t_sales_order.id == P()))
+    so = conn.execute(soq.get_sql(), (args.sales_order_id,)).fetchone()
+    if not so:
+        err(f"Sales order {args.sales_order_id} not found")
+    so_dict = row_to_dict(so)
+    if so_dict["status"] not in ("confirmed", "partially_delivered"):
+        err(f"Cannot create drop-ship PO: SO status is '{so_dict['status']}'")
+
+    # Validate supplier
+    sup_t = Table("supplier")
+    sq = Q.from_(sup_t).select(sup_t.star).where(sup_t.id == P())
+    supplier = conn.execute(sq.get_sql(), (args.supplier_id,)).fetchone()
+    if not supplier:
+        err(f"Supplier {args.supplier_id} not found")
+
+    # Get SO items with is_drop_ship = 1
+    soiq = (Q.from_(_t_sales_order_item).select(_t_sales_order_item.star)
+            .where(_t_sales_order_item.sales_order_id == P())
+            .where(_t_sales_order_item.is_drop_ship == 1)
+            .orderby(_t_sales_order_item.rowid))
+    so_items = conn.execute(soiq.get_sql(), (args.sales_order_id,)).fetchall()
+    if not so_items:
+        err("No drop-ship items found in this sales order")
+
+    posting_date = args.posting_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    po_id = str(uuid.uuid4())
+
+    # Get customer address for delivery
+    cust_t = Table("customer")
+    cust_q = Q.from_(cust_t).select(cust_t.primary_address).where(cust_t.id == P())
+    cust_row = conn.execute(cust_q.get_sql(), (so_dict["customer_id"],)).fetchone()
+    delivery_address = row_to_dict(cust_row).get("primary_address") if cust_row else None
+
+    total_amount = Decimal("0")
+    po_items = []
+
+    for soi_row in so_items:
+        soi = row_to_dict(soi_row)
+        remaining = to_decimal(soi["quantity"]) - to_decimal(soi["delivered_qty"])
+        if remaining <= 0:
+            continue
+
+        rate = to_decimal(soi["rate"])
+        amount = round_currency(remaining * rate)
+        total_amount += amount
+
+        po_items.append({
+            "id": str(uuid.uuid4()),
+            "item_id": soi["item_id"],
+            "qty": str(round_currency(remaining)),
+            "uom": soi.get("uom"),
+            "rate": str(round_currency(rate)),
+            "amount": str(amount),
+            "so_item_id": soi["id"],
+            "warehouse_id": soi.get("warehouse_id"),
+        })
+
+    if not po_items:
+        err("No drop-ship items with remaining quantity")
+
+    # Insert PO
+    po_t = Table("purchase_order")
+    po_ins = (Q.into(po_t)
+              .columns("id", "supplier_id", "order_date", "total_amount",
+                       "tax_amount", "grand_total", "status", "company_id",
+                       "delivery_address")
+              .insert(P(), P(), P(), P(), P(), P(), ValueWrapper("draft"),
+                      P(), P()))
+    conn.execute(po_ins.get_sql(),
+                 (po_id, args.supplier_id, posting_date,
+                  str(round_currency(total_amount)), "0",
+                  str(round_currency(total_amount)),
+                  so_dict["company_id"], delivery_address))
+
+    # Insert PO items
+    poi_t = Table("purchase_order_item")
+    poi_ins = (Q.into(poi_t)
+               .columns("id", "purchase_order_id", "item_id", "quantity",
+                         "uom", "rate", "amount", "discount_percentage",
+                         "net_amount", "warehouse_id")
+               .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(), P()))
+    poi_sql = poi_ins.get_sql()
+    for item in po_items:
+        conn.execute(poi_sql,
+                     (item["id"], po_id, item["item_id"], item["qty"],
+                      item["uom"], item["rate"], item["amount"],
+                      "0", item["amount"], item["warehouse_id"]))
+
+    audit(conn, "erpclaw-selling", "create-drop-ship-order",
+          "purchase_order", po_id,
+          new_values={"sales_order_id": args.sales_order_id,
+                      "supplier_id": args.supplier_id,
+                      "item_count": len(po_items)})
+    conn.commit()
+
+    ok({
+        "purchase_order_id": po_id,
+        "sales_order_id": args.sales_order_id,
+        "supplier_id": args.supplier_id,
+        "delivery_address": delivery_address,
+        "total_amount": str(round_currency(total_amount)),
+        "item_count": len(po_items),
+        "message": "Drop-ship purchase order created",
+    })
+
+
+# ---------------------------------------------------------------------------
+# Feature #16: Packing Slip (Sprint 7)
+# ---------------------------------------------------------------------------
+
+_t_packing_slip = Table("packing_slip")
+_t_packing_slip_item = Table("packing_slip_item")
+
+
+def add_packing_slip(conn, args):
+    """Add a packing slip linked to a delivery note.
+
+    Required: --delivery-note-id, --items (JSON)
+    Items format: [{"delivery_note_item_id": "...", "qty_packed": "10"}]
+    Optional: --notes
+    """
+    if not args.delivery_note_id:
+        err("--delivery-note-id is required")
+    if not args.items:
+        err("--items is required")
+
+    # Validate DN exists
+    dnq = (Q.from_(_t_delivery_note).select(_t_delivery_note.star)
+           .where(_t_delivery_note.id == P()))
+    dn = conn.execute(dnq.get_sql(), (args.delivery_note_id,)).fetchone()
+    if not dn:
+        err(f"Delivery note {args.delivery_note_id} not found")
+    dn_dict = row_to_dict(dn)
+
+    items_arg = _parse_json_arg(args.items, "items")
+    if not items_arg or not isinstance(items_arg, list):
+        err("--items must be a non-empty JSON array")
+
+    posting_date = args.posting_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    ps_id = str(uuid.uuid4())
+
+    # Validate each item
+    ps_items = []
+    for i, item in enumerate(items_arg):
+        dni_id = item.get("delivery_note_item_id")
+        if not dni_id:
+            err(f"Item {i}: delivery_note_item_id is required")
+
+        # Look up DN item
+        dniq = (Q.from_(_t_delivery_note_item).select(_t_delivery_note_item.star)
+                .where(_t_delivery_note_item.id == P())
+                .where(_t_delivery_note_item.delivery_note_id == P()))
+        dni = conn.execute(dniq.get_sql(), (dni_id, args.delivery_note_id)).fetchone()
+        if not dni:
+            err(f"Item {i}: delivery note item {dni_id} not found in DN {args.delivery_note_id}")
+
+        dni_dict = row_to_dict(dni)
+        qty_packed = to_decimal(item.get("qty_packed", "0"))
+        dn_qty = to_decimal(dni_dict["quantity"])
+
+        if qty_packed <= 0:
+            err(f"Item {i}: qty_packed must be > 0")
+
+        # Check total packed qty across all packing slips for this DN item
+        existing_q = (Q.from_(_t_packing_slip_item)
+                      .select(fn.Sum(_t_packing_slip_item.qty_packed))
+                      .where(_t_packing_slip_item.delivery_note_item_id == P()))
+        existing = conn.execute(existing_q.get_sql(), (dni_id,)).fetchone()
+        already_packed = to_decimal(str(existing[0])) if existing and existing[0] else Decimal("0")
+
+        if qty_packed + already_packed > dn_qty:
+            err(f"Item {i}: packed qty {qty_packed} + already packed {already_packed} "
+                f"exceeds DN qty {dn_qty}")
+
+        ps_items.append({
+            "id": str(uuid.uuid4()),
+            "item_id": dni_dict["item_id"],
+            "delivery_note_item_id": dni_id,
+            "qty_packed": str(round_currency(qty_packed)),
+            "uom": dni_dict.get("uom"),
+            "notes": item.get("notes"),
+        })
+
+    # Insert packing slip
+    ps_ins = (Q.into(_t_packing_slip)
+              .columns("id", "delivery_note_id", "posting_date", "notes",
+                        "company_id", "created_at", "updated_at")
+              .insert(P(), P(), P(), P(), P(), P(), P()))
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    conn.execute(ps_ins.get_sql(),
+                 (ps_id, args.delivery_note_id, posting_date,
+                  getattr(args, "notes", None) or getattr(args, "reason", None),
+                  dn_dict["company_id"], now, now))
+
+    # Insert packing slip items
+    psi_ins = (Q.into(_t_packing_slip_item)
+               .columns("id", "packing_slip_id", "item_id",
+                         "delivery_note_item_id", "qty_packed", "uom", "notes")
+               .insert(P(), P(), P(), P(), P(), P(), P()))
+    psi_sql = psi_ins.get_sql()
+    for item in ps_items:
+        conn.execute(psi_sql,
+                     (item["id"], ps_id, item["item_id"],
+                      item["delivery_note_item_id"], item["qty_packed"],
+                      item["uom"], item["notes"]))
+
+    audit(conn, "erpclaw-selling", "add-packing-slip",
+          "packing_slip", ps_id,
+          new_values={"delivery_note_id": args.delivery_note_id,
+                      "item_count": len(ps_items)})
+    conn.commit()
+
+    ok({
+        "packing_slip_id": ps_id,
+        "delivery_note_id": args.delivery_note_id,
+        "item_count": len(ps_items),
+        "message": "Packing slip created",
+    })
+
+
+def get_packing_slip(conn, args):
+    """Get a packing slip with its items.
+
+    Required: --packing-slip-id
+    """
+    if not args.packing_slip_id:
+        err("--packing-slip-id is required")
+
+    psq = (Q.from_(_t_packing_slip).select(_t_packing_slip.star)
+           .where(_t_packing_slip.id == P()))
+    ps = conn.execute(psq.get_sql(), (args.packing_slip_id,)).fetchone()
+    if not ps:
+        err(f"Packing slip {args.packing_slip_id} not found")
+
+    data = row_to_dict(ps)
+
+    psiq = (Q.from_(_t_packing_slip_item)
+            .left_join(_t_item).on(_t_item.id == _t_packing_slip_item.item_id)
+            .select(_t_packing_slip_item.star,
+                    _t_item.item_code, _t_item.item_name)
+            .where(_t_packing_slip_item.packing_slip_id == P())
+            .orderby(_t_packing_slip_item.rowid))
+    items = conn.execute(psiq.get_sql(), (args.packing_slip_id,)).fetchall()
+    data["items"] = [row_to_dict(r) for r in items]
+
+    ok(data)
+
+
+def list_packing_slips(conn, args):
+    """List packing slips.
+
+    Optional: --delivery-note-id, --company-id
+    """
+    ps = _t_packing_slip.as_("ps")
+    q = Q.from_(ps).select(ps.star)
+    params = []
+
+    if args.delivery_note_id:
+        q = q.where(ps.delivery_note_id == P())
+        params.append(args.delivery_note_id)
+
+    if args.company_id:
+        q = q.where(ps.company_id == P())
+        params.append(args.company_id)
+
+    q = q.orderby(ps.created_at, order=Order.desc)
+    limit = int(args.limit) if args.limit else 20
+    offset = int(args.offset) if args.offset else 0
+    q = q.limit(limit).offset(offset)
+
+    rows = conn.execute(q.get_sql(), params).fetchall()
+    ok({"packing_slips": [row_to_dict(r) for r in rows], "count": len(rows)})
+
+
+# ---------------------------------------------------------------------------
 # Action dispatch
 # ---------------------------------------------------------------------------
 
@@ -3945,6 +4799,9 @@ ACTIONS = {
     "list-sales-orders": list_sales_orders,
     "submit-sales-order": submit_sales_order,
     "cancel-sales-order": cancel_sales_order,
+    "close-sales-order": close_sales_order,
+    "amend-sales-order": amend_sales_order,
+    "get-amendment-history": get_amendment_history,
     "create-delivery-note": create_delivery_note,
     "get-delivery-note": get_delivery_note,
     "list-delivery-notes": list_delivery_notes,
@@ -3965,12 +4822,24 @@ ACTIONS = {
     "update-recurring-template": update_recurring_template,
     "list-recurring-templates": list_recurring_templates,
     "generate-recurring-invoices": generate_recurring_invoices,
+    "add-blanket-order": add_blanket_order,
+    "submit-blanket-order": submit_blanket_order,
+    "get-blanket-order": get_blanket_order,
+    "list-blanket-orders": list_blanket_orders,
+    "create-so-from-blanket": create_so_from_blanket,
     "import-customers": import_customers,
     "add-intercompany-account-map": add_intercompany_account_map,
     "list-intercompany-account-maps": list_intercompany_account_maps,
     "create-intercompany-invoice": create_intercompany_invoice,
     "list-intercompany-invoices": list_intercompany_invoices,
     "cancel-intercompany-invoice": cancel_intercompany_invoice,
+
+    # --- Sprint 7: Drop Shipment & Packing Slip ---
+    "create-drop-ship-order": create_drop_ship_order,
+    "add-packing-slip": add_packing_slip,
+    "get-packing-slip": get_packing_slip,
+    "list-packing-slips": list_packing_slips,
+
     "status": status_action,
 }
 
@@ -4014,9 +4883,10 @@ def main():
     parser.add_argument("--sales-invoice-id")
     parser.add_argument("--due-date")
 
-    # Credit note fields
+    # Credit note / close fields
     parser.add_argument("--against-invoice-id")
     parser.add_argument("--reason")
+    parser.add_argument("--closed-by")
 
     # Payment / outstanding
     parser.add_argument("--amount")
@@ -4032,11 +4902,22 @@ def main():
     parser.add_argument("--as-of-date")
     parser.add_argument("--template-status", dest="template_status")
 
+    # Blanket order fields
+    parser.add_argument("--blanket-order-id")
+    parser.add_argument("--valid-from")
+    parser.add_argument("--valid-to")
+
     # Intercompany fields
     parser.add_argument("--target-company-id")
     parser.add_argument("--supplier-id")
     parser.add_argument("--source-account-id")
     parser.add_argument("--target-account-id")
+
+    # Packing slip fields (Feature #16)
+    parser.add_argument("--packing-slip-id")
+
+    # Warehouse override
+    parser.add_argument("--warehouse-id")
 
     # Status filter (for list queries)
     parser.add_argument("--status", dest="doc_status")

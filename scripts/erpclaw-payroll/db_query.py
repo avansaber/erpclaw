@@ -241,6 +241,9 @@ def add_salary_component(conn, args):
     is_pre_tax = _parse_bool(args.is_pre_tax, 0)
     variable_based = _parse_bool(args.variable_based_on_taxable_salary, 0)
     depends_on_payment_days = _parse_bool(args.depends_on_payment_days, 1)
+    is_supplemental = _parse_bool(
+        getattr(args, "is_supplemental", None), 0
+    )
 
     component_id = str(uuid.uuid4())
     now = _now_iso()
@@ -249,12 +252,13 @@ def add_salary_component(conn, args):
         "id": P(), "name": P(), "component_type": P(),
         "is_tax_applicable": P(), "is_statutory": P(), "is_pre_tax": P(),
         "variable_based_on_taxable_salary": P(), "depends_on_payment_days": P(),
+        "is_supplemental": P(),
         "gl_account_id": P(), "description": P(), "created_at": P(), "updated_at": P(),
     })
     conn.execute(ins_sql, (
         component_id, name, component_type,
         is_tax_applicable, is_statutory, is_pre_tax, variable_based,
-        depends_on_payment_days, args.gl_account_id,
+        depends_on_payment_days, is_supplemental, args.gl_account_id,
         args.description, now, now,
     ))
     conn.commit()
@@ -1653,6 +1657,34 @@ def _get_ytd_values(conn: sqlite3.Connection, employee_id: str,
     }
 
 
+def _get_ytd_supplemental(conn: sqlite3.Connection, employee_id: str,
+                          period_end: str, company_id: str) -> Decimal:
+    """Get YTD supplemental wage earnings for >$1M threshold check.
+
+    Queries salary_slip_detail for earning components where
+    the salary_component has is_supplemental = 1.
+    """
+    year_str = period_end[:4]
+    year_start = f"{year_str}-01-01"
+
+    rows = conn.execute(
+        """SELECT ssd.amount
+           FROM salary_slip_detail ssd
+           JOIN salary_slip ss ON ss.id = ssd.salary_slip_id
+           JOIN salary_component sc ON sc.id = ssd.salary_component_id
+           WHERE ss.employee_id = ?
+             AND ss.company_id = ?
+             AND ss.status = 'submitted'
+             AND ss.period_end >= ?
+             AND ss.period_end < ?
+             AND ssd.component_type = 'earning'
+             AND sc.is_supplemental = 1""",
+        (employee_id, company_id, year_start, period_end),
+    ).fetchall()
+
+    return sum((to_decimal(r["amount"]) for r in rows), Decimal("0"))
+
+
 def _find_payroll_accounts(conn: sqlite3.Connection,
                            company_id: str) -> dict:
     """Look up the GL accounts needed for payroll posting.
@@ -1700,16 +1732,17 @@ def _find_payroll_accounts(conn: sqlite3.Connection,
 
     def _acct_query(root_type, like_patterns, extra_where=None):
         """Helper to build account lookup with LIKE OR patterns."""
-        like_clauses = " OR ".join(f"LOWER(name) LIKE '{p}'" for p in like_patterns)
+        like_clauses = " OR ".join("LOWER(name) LIKE ?" for _ in like_patterns)
         extra = f"AND {extra_where}" if extra_where else ""
+        params = [company_id, root_type] + list(like_patterns)
         return conn.execute(
             f"""SELECT id FROM account
-               WHERE company_id = ? AND root_type = '{root_type}'
+               WHERE company_id = ? AND root_type = ?
                  AND is_group = 0 AND disabled = 0
                  AND ({like_clauses})
                  {extra}
                LIMIT 1""",
-            (company_id,),
+            params,
         ).fetchone()
 
     # --- Salary Expense ---
@@ -2169,6 +2202,7 @@ def generate_salary_slips(conn: sqlite3.Connection, args) -> None:
                      sc_det.name.as_("component_name"), sc_det.component_type,
                      sc_det.depends_on_payment_days, sc_det.is_tax_applicable,
                      sc_det.is_pre_tax, sc_det.gl_account_id.as_("component_gl_account_id"),
+                     sc_det.is_supplemental,
                  )
                  .where(ssd_det.salary_structure_id == P())
                  .orderby(ssd_det.sort_order)
@@ -2183,6 +2217,7 @@ def generate_salary_slips(conn: sqlite3.Connection, args) -> None:
 
         # Step 2: Calculate earnings
         gross = Decimal("0")
+        supplemental_gross = Decimal("0")  # Track supplemental wages for flat tax
         component_amounts = {}  # component_id -> amount
         earnings_details = []   # List of (component_id, component_name, amount)
 
@@ -2226,9 +2261,69 @@ def generate_salary_slips(conn: sqlite3.Connection, args) -> None:
             amt = round_currency(amt)
             component_amounts[comp_id] = amt
             gross += amt
+            # Track supplemental wages for flat tax treatment (Feature #22d)
+            if detail.get("is_supplemental"):
+                supplemental_gross += amt
             earnings_details.append((comp_id, detail["component_name"], amt))
 
         gross = round_currency(gross)
+
+        # Step 2b: Overtime integration (Feature #22b)
+        # Check if company has an overtime policy and if the employee has
+        # attendance records with overtime hours in this period
+        ot_amount = Decimal("0")
+        op_t = Table("overtime_policy")
+        op_q = Q.from_(op_t).select(op_t.star).where(op_t.company_id == P())
+        ot_policy = conn.execute(op_q.get_sql(), (company_id,)).fetchone()
+
+        if ot_policy:
+            ot_policy = row_to_dict(ot_policy)
+            weekly_threshold = to_decimal(ot_policy["weekly_threshold"])
+            ot_multiplier = to_decimal(ot_policy["ot_multiplier"])
+            daily_threshold = to_decimal(ot_policy["daily_threshold"]) if ot_policy.get("daily_threshold") else None
+
+            # Derive hourly rate from base monthly salary
+            annual_salary = base_amount * Decimal("12")
+            hourly_rate = round_currency(annual_salary / Decimal("2080"))
+
+            # Get attendance hours for this period
+            ot_att_rows = conn.execute(
+                """SELECT attendance_date, working_hours
+                   FROM attendance
+                   WHERE employee_id = ?
+                     AND attendance_date >= ?
+                     AND attendance_date <= ?
+                     AND status IN ('present', 'work_from_home', 'half_day')
+                   ORDER BY attendance_date""",
+                (employee_id, period_start, period_end),
+            ).fetchall()
+
+            total_hours = Decimal("0")
+            daily_ot_hours = Decimal("0")
+            for att in ot_att_rows:
+                att_d = row_to_dict(att)
+                hours = to_decimal(att_d.get("working_hours") or "8")
+                total_hours += hours
+                if daily_threshold and hours > daily_threshold:
+                    daily_ot_hours += hours - daily_threshold
+
+            start_dt = datetime.strptime(period_start, "%Y-%m-%d")
+            end_dt = datetime.strptime(period_end, "%Y-%m-%d")
+            total_days = (end_dt - start_dt).days + 1
+            num_weeks = max(Decimal("1"), Decimal(str(total_days)) / Decimal("7"))
+            weekly_limit = weekly_threshold * num_weeks
+            weekly_ot_hours = max(Decimal("0"), total_hours - weekly_limit)
+            ot_hours = max(daily_ot_hours, weekly_ot_hours)
+
+            if ot_hours > 0:
+                ot_amount = round_currency(ot_hours * hourly_rate * ot_multiplier)
+                gross += ot_amount
+
+                # Create a salary component for overtime
+                ot_comp_id = _get_or_create_statutory_component(
+                    conn, "Overtime Pay", "earning", is_statutory=0
+                )
+                earnings_details.append((ot_comp_id, "Overtime Pay", ot_amount))
 
         # Step 3: Pre-tax deductions (from employee record)
         pretax_401k = Decimal("0")
@@ -2243,10 +2338,34 @@ def generate_salary_slips(conn: sqlite3.Connection, args) -> None:
 
         total_pretax = pretax_401k + pretax_hsa
 
-        # Step 4: Federal income tax
+        # Step 4: Federal income tax (with supplemental wage flat-rate — Feature #22d)
         federal_tax = Decimal("0")
         filing_status = emp.get("federal_filing_status") or "single"
 
+        # Supplemental wages: apply flat 22% (37% if aggregate > $1M)
+        supplemental_federal_tax = Decimal("0")
+        regular_gross = gross - supplemental_gross
+
+        if supplemental_gross > 0:
+            # Get YTD supplemental for >$1M check
+            ytd_supp = _get_ytd_supplemental(conn, employee_id, period_end, company_id)
+            aggregate_supplemental = ytd_supp + supplemental_gross
+            if aggregate_supplemental > Decimal("1000000"):
+                # 37% on excess over $1M, 22% on rest
+                excess = aggregate_supplemental - Decimal("1000000")
+                under_1m = supplemental_gross - excess
+                if under_1m < 0:
+                    under_1m = Decimal("0")
+                    excess = supplemental_gross
+                supplemental_federal_tax = round_currency(
+                    under_1m * Decimal("0.22") + excess * Decimal("0.37")
+                )
+            else:
+                supplemental_federal_tax = round_currency(
+                    supplemental_gross * Decimal("0.22")
+                )
+
+        # Progressive brackets for regular (non-supplemental) wages
         # raw SQL — uses IS NULL in OR clause and CASE in ORDER BY
         fed_slab = conn.execute(
             """
@@ -2264,7 +2383,7 @@ def generate_salary_slips(conn: sqlite3.Connection, args) -> None:
             (period_end, filing_status, filing_status),
         ).fetchone()
 
-        if fed_slab:
+        if fed_slab and regular_gross > 0:
             fed_slab = row_to_dict(fed_slab)
             standard_deduction = to_decimal(fed_slab.get("standard_deduction", "0"))
 
@@ -2282,8 +2401,8 @@ def generate_salary_slips(conn: sqlite3.Connection, args) -> None:
             fed_rates = [row_to_dict(r) for r in fed_rates]
 
             if fed_rates:
-                # Annualize: (gross - pretax) * periods_per_year - standard_deduction
-                taxable_periodic = gross - total_pretax
+                # Annualize: (regular_gross - pretax) * periods_per_year - standard_deduction
+                taxable_periodic = regular_gross - total_pretax
                 taxable_annual = taxable_periodic * Decimal(str(periods_per_year)) - standard_deduction
                 if taxable_annual < 0:
                     taxable_annual = Decimal("0")
@@ -2291,15 +2410,13 @@ def generate_salary_slips(conn: sqlite3.Connection, args) -> None:
                 annual_tax = _calculate_progressive_tax(taxable_annual, fed_rates)
                 federal_tax = round_currency(annual_tax / Decimal(str(periods_per_year)))
 
-        # Step 5: State income tax (if employee has state filing info)
-        state_tax = Decimal("0")
-        # Note: state tax is analogous to federal but with state slab.
-        # For now, we check if a state slab exists matching the employee's
-        # state filing info. Many employees will not have state tax configured.
-        # The state_code would typically come from the employee's work location,
-        # but for simplicity we look for any active state slab matching the
-        # employee's state_filing_status.
-        # (Extensible in future for multi-state.)
+        # Combine regular + supplemental federal tax
+        federal_tax = round_currency(federal_tax + supplemental_federal_tax)
+
+        # Step 5: State income tax (multi-state via employee_state_config + state_tax_slab)
+        state_tax = _calculate_state_tax_for_employee(
+            conn, employee_id, gross, total_pretax, periods_per_year, period_end
+        )
 
         # Step 6: FICA (Social Security + Medicare)
         ss_employee = Decimal("0")
@@ -3475,6 +3592,796 @@ def generate_w2_data(conn: sqlite3.Connection, args) -> None:
     })
 
 
+# ============================================================================
+# Feature #22a: Multi-State Payroll
+# ============================================================================
+
+
+def add_state_tax_slab(conn, args):
+    """Add a state tax bracket/slab.
+
+    Required: --state-code, --bracket-start, --rate
+    Optional: --bracket-end, --filing-status (default 'single')
+    """
+    if not args.state_code:
+        err("--state-code is required")
+    if not args.bracket_start:
+        err("--bracket-start is required")
+    if not args.rate:
+        err("--rate is required")
+
+    state_code = args.state_code.strip().upper()
+    bracket_start = args.bracket_start.strip()
+    bracket_end = args.bracket_end.strip() if args.bracket_end else None
+    rate = args.rate.strip()
+    filing_status = (args.filing_status or "single").strip().lower()
+
+    if filing_status not in VALID_FILING_STATUSES:
+        err(f"Invalid filing_status '{filing_status}'. Valid: {VALID_FILING_STATUSES}")
+
+    # Validate numeric values
+    try:
+        bs = to_decimal(bracket_start)
+        if bs < 0:
+            err("bracket-start cannot be negative")
+    except (InvalidOperation, ValueError):
+        err(f"Invalid bracket-start value '{bracket_start}'")
+
+    if bracket_end:
+        try:
+            be = to_decimal(bracket_end)
+            if be <= bs:
+                err("bracket-end must be greater than bracket-start")
+        except (InvalidOperation, ValueError):
+            err(f"Invalid bracket-end value '{bracket_end}'")
+
+    try:
+        r = to_decimal(rate)
+        if r < 0 or r > 100:
+            err("rate must be between 0 and 100")
+    except (InvalidOperation, ValueError):
+        err(f"Invalid rate value '{rate}'")
+
+    now = datetime.now(timezone.utc).isoformat()
+    slab_id = str(uuid.uuid4())
+
+    ins_sql, _ = insert_row("state_tax_slab", {
+        "id": P(), "state_code": P(), "bracket_start": P(), "bracket_end": P(),
+        "rate": P(), "filing_status": P(), "created_at": P(), "updated_at": P(),
+    })
+    conn.execute(ins_sql, (slab_id, state_code, str(round_currency(bs)),
+                           str(round_currency(to_decimal(bracket_end))) if bracket_end else None,
+                           str(round_currency(r)), filing_status, now, now))
+    conn.commit()
+
+    ok({
+        "state_tax_slab_id": slab_id,
+        "state_code": state_code,
+        "bracket_start": str(round_currency(bs)),
+        "bracket_end": str(round_currency(to_decimal(bracket_end))) if bracket_end else None,
+        "rate": str(round_currency(r)),
+        "filing_status": filing_status,
+    })
+
+
+def update_employee_state_config(conn, args):
+    """Set or update an employee's work_state and residence_state.
+
+    Required: --employee-id, --work-state, --residence-state
+    """
+    if not args.employee_id:
+        err("--employee-id is required")
+    if not args.work_state:
+        err("--work-state is required")
+    if not args.residence_state:
+        err("--residence-state is required")
+
+    employee_id = args.employee_id.strip()
+    work_state = args.work_state.strip().upper()
+    residence_state = args.residence_state.strip().upper()
+
+    # Validate employee exists
+    emp_t = Table("employee")
+    emp_q = Q.from_(emp_t).select(emp_t.id).where(emp_t.id == P())
+    if not conn.execute(emp_q.get_sql(), (employee_id,)).fetchone():
+        err(f"Employee {employee_id} not found")
+
+    now = datetime.now(timezone.utc).isoformat()
+    config_id = str(uuid.uuid4())
+
+    # UPSERT: INSERT OR REPLACE on employee_id unique constraint
+    conn.execute(
+        """INSERT INTO employee_state_config
+           (id, employee_id, work_state, residence_state, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(employee_id) DO UPDATE SET
+               work_state = excluded.work_state,
+               residence_state = excluded.residence_state,
+               updated_at = excluded.updated_at""",
+        (config_id, employee_id, work_state, residence_state, now, now)
+    )
+    conn.commit()
+
+    ok({
+        "employee_id": employee_id,
+        "work_state": work_state,
+        "residence_state": residence_state,
+    })
+
+
+def _calculate_state_tax_for_employee(conn, employee_id, gross, total_pretax,
+                                       periods_per_year, period_end):
+    """Calculate state income tax for an employee based on their state config.
+
+    Looks up employee_state_config for work_state and residence_state,
+    then applies state_tax_slab brackets for each state.
+
+    Returns total state tax for this pay period (Decimal).
+    """
+    state_tax = Decimal("0")
+
+    # Find employee state config
+    esc_t = Table("employee_state_config")
+    esc_q = Q.from_(esc_t).select(esc_t.star).where(esc_t.employee_id == P())
+    esc = conn.execute(esc_q.get_sql(), (employee_id,)).fetchone()
+    if not esc:
+        return state_tax
+
+    esc = row_to_dict(esc)
+    work_state = esc["work_state"]
+    residence_state = esc["residence_state"]
+
+    # Get employee filing status (from employee record)
+    emp_t = Table("employee")
+    emp_q = Q.from_(emp_t).select(emp_t.state_filing_status).where(emp_t.id == P())
+    emp = conn.execute(emp_q.get_sql(), (employee_id,)).fetchone()
+    filing_status = emp["state_filing_status"] if emp and emp["state_filing_status"] else "single"
+
+    # Calculate taxable income (annualized)
+    taxable_periodic = gross - total_pretax
+    taxable_annual = taxable_periodic * Decimal(str(periods_per_year))
+    if taxable_annual <= 0:
+        return state_tax
+
+    # Process each unique state (work_state, and residence_state if different)
+    states_to_process = [work_state]
+    if residence_state != work_state:
+        states_to_process.append(residence_state)
+
+    for state_code in states_to_process:
+        # Get state tax slabs for this state and filing status
+        slabs = conn.execute(
+            """SELECT bracket_start, bracket_end, rate
+               FROM state_tax_slab
+               WHERE state_code = ?
+                 AND (filing_status = ? OR filing_status IS NULL)
+               ORDER BY bracket_start + 0 ASC""",
+            (state_code, filing_status),
+        ).fetchall()
+
+        if not slabs:
+            continue
+
+        slab_rates = [row_to_dict(s) for s in slabs]
+        # Convert to format expected by _calculate_progressive_tax
+        converted_rates = []
+        for s in slab_rates:
+            converted_rates.append({
+                "from_amount": s["bracket_start"],
+                "to_amount": s["bracket_end"],
+                "rate": s["rate"],
+            })
+
+        annual_state_tax = _calculate_progressive_tax(taxable_annual, converted_rates)
+        periodic_state_tax = round_currency(annual_state_tax / Decimal(str(periods_per_year)))
+        state_tax += periodic_state_tax
+
+    return state_tax
+
+
+# ============================================================================
+# Feature #22b: Overtime Calculation
+# ============================================================================
+
+
+def add_overtime_policy(conn, args):
+    """Add or update an overtime policy for a company.
+
+    Required: --company-id
+    Optional: --weekly-threshold (default '40'), --daily-threshold,
+              --ot-multiplier (default '1.5'), --double-ot-multiplier (default '2.0')
+    """
+    if not args.company_id:
+        err("--company-id is required")
+
+    company_id = args.company_id.strip()
+
+    # Validate company
+    co_t = Table("company")
+    co_q = Q.from_(co_t).select(co_t.id).where(co_t.id == P())
+    if not conn.execute(co_q.get_sql(), (company_id,)).fetchone():
+        err(f"Company {company_id} not found")
+
+    weekly_threshold = args.weekly_threshold or "40"
+    daily_threshold = args.daily_threshold if hasattr(args, "daily_threshold") and args.daily_threshold else None
+    ot_multiplier = args.ot_multiplier or "1.5"
+    double_ot_multiplier = args.double_ot_multiplier or "2.0"
+
+    # Validate numeric values
+    for val, name in [(weekly_threshold, "weekly-threshold"),
+                      (ot_multiplier, "ot-multiplier"),
+                      (double_ot_multiplier, "double-ot-multiplier")]:
+        try:
+            d = to_decimal(val)
+            if d < 0:
+                err(f"--{name} cannot be negative")
+        except (InvalidOperation, ValueError):
+            err(f"Invalid --{name} value '{val}'")
+
+    if daily_threshold:
+        try:
+            d = to_decimal(daily_threshold)
+            if d < 0:
+                err("--daily-threshold cannot be negative")
+        except (InvalidOperation, ValueError):
+            err(f"Invalid --daily-threshold value '{daily_threshold}'")
+
+    now = datetime.now(timezone.utc).isoformat()
+    policy_id = str(uuid.uuid4())
+
+    # UPSERT on company_id
+    conn.execute(
+        """INSERT INTO overtime_policy
+           (id, company_id, weekly_threshold, daily_threshold,
+            ot_multiplier, double_ot_multiplier, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(company_id) DO UPDATE SET
+               weekly_threshold = excluded.weekly_threshold,
+               daily_threshold = excluded.daily_threshold,
+               ot_multiplier = excluded.ot_multiplier,
+               double_ot_multiplier = excluded.double_ot_multiplier,
+               updated_at = excluded.updated_at""",
+        (policy_id, company_id, weekly_threshold, daily_threshold,
+         ot_multiplier, double_ot_multiplier, now, now)
+    )
+    conn.commit()
+
+    ok({
+        "company_id": company_id,
+        "weekly_threshold": weekly_threshold,
+        "daily_threshold": daily_threshold,
+        "ot_multiplier": ot_multiplier,
+        "double_ot_multiplier": double_ot_multiplier,
+    })
+
+
+def calculate_overtime(conn, args):
+    """Calculate overtime for an employee in a given period.
+
+    Required: --employee-id, --period-start, --period-end
+    Optional: --hourly-rate (if not provided, derived from salary assignment)
+
+    Returns: {regular_hours, ot_hours, ot_amount, regular_amount, total_amount}
+    """
+    if not args.employee_id:
+        err("--employee-id is required")
+    if not args.period_start:
+        err("--period-start is required")
+    if not args.period_end:
+        err("--period-end is required")
+
+    employee_id = args.employee_id.strip()
+    period_start = args.period_start.strip()
+    period_end = args.period_end.strip()
+
+    # Validate employee
+    emp_t = Table("employee")
+    emp_q = Q.from_(emp_t).select(emp_t.star).where(emp_t.id == P())
+    emp_row = conn.execute(emp_q.get_sql(), (employee_id,)).fetchone()
+    if not emp_row:
+        err(f"Employee {employee_id} not found")
+    emp = row_to_dict(emp_row)
+    company_id = emp["company_id"]
+
+    # Get overtime policy for the company
+    op_t = Table("overtime_policy")
+    op_q = Q.from_(op_t).select(op_t.star).where(op_t.company_id == P())
+    policy_row = conn.execute(op_q.get_sql(), (company_id,)).fetchone()
+
+    if not policy_row:
+        err(f"No overtime policy found for company {company_id}. "
+            "Use add-overtime-policy first.")
+
+    policy = row_to_dict(policy_row)
+    weekly_threshold = to_decimal(policy["weekly_threshold"])
+    ot_multiplier = to_decimal(policy["ot_multiplier"])
+    daily_threshold = to_decimal(policy["daily_threshold"]) if policy.get("daily_threshold") else None
+
+    # Get hourly rate
+    hourly_rate = None
+    if hasattr(args, "hourly_rate") and args.hourly_rate:
+        hourly_rate = to_decimal(args.hourly_rate)
+    else:
+        # Derive from salary assignment (annual / 2080 for full-time)
+        sa_row = conn.execute(
+            """SELECT base_amount FROM salary_assignment
+               WHERE employee_id = ?
+                 AND effective_from <= ?
+                 AND (effective_to IS NULL OR effective_to >= ?)
+               ORDER BY effective_from DESC LIMIT 1""",
+            (employee_id, period_end, period_start),
+        ).fetchone()
+        if sa_row:
+            annual_salary = to_decimal(sa_row["base_amount"]) * Decimal("12")
+            hourly_rate = round_currency(annual_salary / Decimal("2080"))
+        else:
+            err("No salary assignment found and no --hourly-rate provided")
+
+    # Query attendance records for the period
+    att_rows = conn.execute(
+        """SELECT attendance_date, working_hours
+           FROM attendance
+           WHERE employee_id = ?
+             AND attendance_date >= ?
+             AND attendance_date <= ?
+             AND status IN ('present', 'work_from_home', 'half_day')
+           ORDER BY attendance_date""",
+        (employee_id, period_start, period_end),
+    ).fetchall()
+
+    # Calculate total hours from attendance
+    total_hours = Decimal("0")
+    daily_ot_hours = Decimal("0")
+
+    for att in att_rows:
+        att_d = row_to_dict(att)
+        hours = to_decimal(att_d.get("working_hours") or "8")
+        total_hours += hours
+
+        # Daily overtime calculation (if daily_threshold is set)
+        if daily_threshold and hours > daily_threshold:
+            daily_ot_hours += hours - daily_threshold
+
+    # Weekly overtime calculation
+    # total_hours vs weekly_threshold * number_of_weeks
+    start_dt = datetime.strptime(period_start, "%Y-%m-%d")
+    end_dt = datetime.strptime(period_end, "%Y-%m-%d")
+    total_days = (end_dt - start_dt).days + 1
+    num_weeks = max(Decimal("1"), Decimal(str(total_days)) / Decimal("7"))
+    weekly_limit = weekly_threshold * num_weeks
+
+    weekly_ot_hours = max(Decimal("0"), total_hours - weekly_limit)
+
+    # Use the greater of daily OT or weekly OT (not double-counted)
+    ot_hours = max(daily_ot_hours, weekly_ot_hours)
+    regular_hours = total_hours - ot_hours
+
+    ot_amount = round_currency(ot_hours * hourly_rate * ot_multiplier)
+    regular_amount = round_currency(regular_hours * hourly_rate)
+    total_amount = round_currency(regular_amount + ot_amount)
+
+    ok({
+        "employee_id": employee_id,
+        "period_start": period_start,
+        "period_end": period_end,
+        "total_hours": str(total_hours),
+        "regular_hours": str(round_currency(regular_hours)),
+        "ot_hours": str(round_currency(ot_hours)),
+        "hourly_rate": str(hourly_rate),
+        "ot_multiplier": str(ot_multiplier),
+        "regular_amount": str(regular_amount),
+        "ot_amount": str(ot_amount),
+        "total_amount": str(total_amount),
+    })
+
+
+# ============================================================================
+# Feature #22c: Retroactive Pay
+# ============================================================================
+
+
+def calculate_retro_pay(conn, args):
+    """Calculate retroactive pay for an employee.
+
+    Compares the current salary assignment rate vs the previous rate,
+    and for each past period affected, computes the difference.
+
+    Required: --employee-id
+    Optional: --from-date, --to-date (defaults to entire history)
+
+    Returns: {employee_id, periods_affected, total_retro_amount, details}
+    """
+    if not args.employee_id:
+        err("--employee-id is required")
+
+    employee_id = args.employee_id.strip()
+
+    # Validate employee
+    emp_t = Table("employee")
+    emp_q = Q.from_(emp_t).select(emp_t.star).where(emp_t.id == P())
+    emp_row = conn.execute(emp_q.get_sql(), (employee_id,)).fetchone()
+    if not emp_row:
+        err(f"Employee {employee_id} not found")
+
+    # Get all salary assignments ordered by effective_from
+    assignments = conn.execute(
+        """SELECT * FROM salary_assignment
+           WHERE employee_id = ?
+           ORDER BY effective_from ASC""",
+        (employee_id,),
+    ).fetchall()
+    assignments = [row_to_dict(a) for a in assignments]
+
+    if len(assignments) < 2:
+        err("Need at least 2 salary assignments to calculate retroactive pay. "
+            "No previous rate to compare against.")
+
+    # Current assignment is the last one
+    current = assignments[-1]
+    previous = assignments[-2]
+
+    current_rate = to_decimal(current["base_amount"])
+    old_rate = to_decimal(previous["base_amount"])
+
+    if current_rate <= old_rate:
+        ok({
+            "employee_id": employee_id,
+            "periods_affected": 0,
+            "total_retro_amount": "0.00",
+            "details": [],
+            "message": "Current rate is not higher than previous rate. No retro pay needed.",
+        })
+        return
+
+    # Determine the period range for retroactive calculation
+    # The retro period is from the current assignment's effective_from
+    # back to the previous assignment's effective_from
+    retro_start = previous["effective_from"]
+    retro_end = current["effective_from"]
+
+    # Apply user-supplied filters if provided
+    if args.from_date:
+        if args.from_date > retro_start:
+            retro_start = args.from_date
+    if args.to_date:
+        if args.to_date < retro_end:
+            retro_end = args.to_date
+
+    # Find salary slips in the affected period for this employee
+    slips = conn.execute(
+        """SELECT id, period_start, period_end, gross_pay
+           FROM salary_slip
+           WHERE employee_id = ?
+             AND period_start >= ?
+             AND period_end <= ?
+             AND status != 'cancelled'
+           ORDER BY period_start""",
+        (employee_id, retro_start, retro_end),
+    ).fetchall()
+
+    details = []
+    total_retro = Decimal("0")
+    now = datetime.now(timezone.utc).isoformat()
+
+    rate_diff = current_rate - old_rate
+
+    if slips:
+        for slip in slips:
+            s = row_to_dict(slip)
+            # The difference per period is simply rate_diff (base monthly difference)
+            adjustment = round_currency(rate_diff)
+            total_retro += adjustment
+
+            # Record the adjustment
+            adj_id = str(uuid.uuid4())
+            conn.execute(
+                """INSERT INTO retro_pay_adjustment
+                   (id, employee_id, period_from, period_to, old_rate, new_rate,
+                    adjustment_amount, status, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
+                (adj_id, employee_id, s["period_start"], s["period_end"],
+                 str(old_rate), str(current_rate), str(adjustment), now, now)
+            )
+
+            details.append({
+                "period_from": s["period_start"],
+                "period_to": s["period_end"],
+                "old_rate": str(old_rate),
+                "new_rate": str(current_rate),
+                "adjustment_amount": str(adjustment),
+            })
+    else:
+        # No slips found, calculate based on monthly periods
+        start_dt = datetime.strptime(retro_start, "%Y-%m-%d")
+        end_dt = datetime.strptime(retro_end, "%Y-%m-%d")
+
+        current_dt = start_dt
+        while current_dt < end_dt:
+            period_from = current_dt.strftime("%Y-%m-%d")
+            # Approximate month: advance by 30 days
+            next_dt = current_dt + timedelta(days=30)
+            if next_dt > end_dt:
+                next_dt = end_dt
+            period_to = next_dt.strftime("%Y-%m-%d")
+
+            adjustment = round_currency(rate_diff)
+            total_retro += adjustment
+
+            adj_id = str(uuid.uuid4())
+            conn.execute(
+                """INSERT INTO retro_pay_adjustment
+                   (id, employee_id, period_from, period_to, old_rate, new_rate,
+                    adjustment_amount, status, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
+                (adj_id, employee_id, period_from, period_to,
+                 str(old_rate), str(current_rate), str(adjustment), now, now)
+            )
+
+            details.append({
+                "period_from": period_from,
+                "period_to": period_to,
+                "old_rate": str(old_rate),
+                "new_rate": str(current_rate),
+                "adjustment_amount": str(adjustment),
+            })
+            current_dt = next_dt
+
+    conn.commit()
+
+    ok({
+        "employee_id": employee_id,
+        "periods_affected": len(details),
+        "total_retro_amount": str(round_currency(total_retro)),
+        "details": details,
+    })
+
+
+# ============================================================================
+# Feature #22e: NACHA / ACH File Generation (Sprint 7)
+# ============================================================================
+
+
+def add_employee_bank_account(conn, args):
+    """Add an employee bank account for ACH/direct deposit.
+
+    Required: --employee-id, --bank-name, --routing-number, --account-number
+    Optional: --account-type (checking|savings, default checking)
+    """
+    if not args.employee_id:
+        err("--employee-id is required")
+    if not args.bank_name:
+        err("--bank-name is required")
+    if not args.routing_number:
+        err("--routing-number is required")
+    if not args.account_number:
+        err("--account-number is required")
+
+    # Validate employee
+    emp_t = Table("employee")
+    eq = Q.from_(emp_t).select(emp_t.id).where(emp_t.id == P())
+    if not conn.execute(eq.get_sql(), (args.employee_id,)).fetchone():
+        err(f"Employee {args.employee_id} not found")
+
+    # Validate routing number: 9 digits
+    routing = args.routing_number.strip()
+    if not routing.isdigit() or len(routing) != 9:
+        err("Routing number must be exactly 9 digits")
+
+    account_number = args.account_number.strip()
+    if not account_number.isdigit() or len(account_number) < 4 or len(account_number) > 17:
+        err("Account number must be 4-17 digits")
+
+    account_type = (args.account_type or "checking").strip().lower()
+    if account_type not in ("checking", "savings"):
+        err(f"Invalid account type '{account_type}'. Valid: checking, savings")
+
+    acct_id = str(uuid.uuid4())
+
+    sql, _ = insert_row("employee_bank_account", {
+        "id": P(), "employee_id": P(), "bank_name": P(),
+        "routing_number": P(), "account_number": P(),
+        "account_type": P(), "is_primary": P(),
+        "created_at": P(), "updated_at": P(),
+    })
+    conn.execute(sql, (
+        acct_id, args.employee_id, args.bank_name.strip(),
+        routing, account_number, account_type, 1,
+        _now_iso(), _now_iso(),
+    ))
+
+    audit(conn, "erpclaw-payroll", "add-employee-bank-account",
+          "employee_bank_account", acct_id,
+          new_values={"employee_id": args.employee_id, "bank_name": args.bank_name})
+    conn.commit()
+
+    ok({
+        "employee_bank_account_id": acct_id,
+        "employee_id": args.employee_id,
+        "bank_name": args.bank_name.strip(),
+        "account_type": account_type,
+        "message": "Employee bank account added",
+    })
+
+
+def list_employee_bank_accounts(conn, args):
+    """List employee bank accounts.
+
+    Required: --employee-id
+    """
+    if not args.employee_id:
+        err("--employee-id is required")
+
+    eba_t = Table("employee_bank_account")
+    q = (Q.from_(eba_t).select(eba_t.star)
+         .where(eba_t.employee_id == P())
+         .orderby(eba_t.created_at))
+    rows = conn.execute(q.get_sql(), (args.employee_id,)).fetchall()
+
+    # Mask account numbers for security
+    accounts = []
+    for r in rows:
+        d = row_to_dict(r)
+        acct_num = d.get("account_number", "")
+        if len(acct_num) > 4:
+            d["account_number_masked"] = "****" + acct_num[-4:]
+        else:
+            d["account_number_masked"] = "****"
+        accounts.append(d)
+
+    ok({"accounts": accounts, "count": len(accounts)})
+
+
+def generate_nacha_file(conn, args):
+    """Generate a NACHA/ACH file from a submitted payroll run.
+
+    Required: --payroll-run-id
+
+    Returns: {file_content, entry_count, total_amount}
+    """
+    if not args.payroll_run_id:
+        err("--payroll-run-id is required")
+
+    # Fetch payroll run
+    pr_t = Table("payroll_run")
+    prq = Q.from_(pr_t).select(pr_t.star).where(pr_t.id == P())
+    run = conn.execute(prq.get_sql(), (args.payroll_run_id,)).fetchone()
+    if not run:
+        err(f"Payroll run {args.payroll_run_id} not found")
+    run = row_to_dict(run)
+    if run["status"] not in ("submitted", "paid"):
+        err(f"Payroll run must be 'submitted' or 'paid', got '{run['status']}'")
+
+    company_id = run["company_id"]
+
+    # Get company info
+    co_t = Table("company")
+    co_q = Q.from_(co_t).select(co_t.star).where(co_t.id == P())
+    co_row = conn.execute(co_q.get_sql(), (company_id,)).fetchone()
+    co = row_to_dict(co_row) if co_row else {}
+    company_name = co.get("name", "COMPANY")
+
+    # Get salary slips for this run
+    ss_t = Table("salary_slip")
+    ssq = (Q.from_(ss_t).select(ss_t.star)
+           .where(ss_t.payroll_run_id == P())
+           .where(ss_t.status != ValueWrapper("cancelled")))
+    slips = conn.execute(ssq.get_sql(), (args.payroll_run_id,)).fetchall()
+    if not slips:
+        err("No salary slips found for this payroll run")
+
+    # Get employee bank accounts
+    eba_t = Table("employee_bank_account")
+    entries = []
+    total_amount = Decimal("0")
+
+    for slip in slips:
+        slip_d = row_to_dict(slip)
+        net_pay = to_decimal(slip_d["net_pay"])
+        if net_pay <= 0:
+            continue
+
+        baq = (Q.from_(eba_t).select(eba_t.star)
+               .where(eba_t.employee_id == P())
+               .where(eba_t.is_primary == 1)
+               .limit(1))
+        bank_acct = conn.execute(baq.get_sql(), (slip_d["employee_id"],)).fetchone()
+        if not bank_acct:
+            continue
+
+        ba = row_to_dict(bank_acct)
+        entries.append({
+            "employee_id": slip_d["employee_id"],
+            "routing_number": ba["routing_number"],
+            "account_number": ba["account_number"],
+            "account_type": ba["account_type"],
+            "amount": net_pay,
+        })
+        total_amount += net_pay
+
+    if not entries:
+        err("No employees with bank accounts found for this payroll run")
+
+    # Build NACHA fixed-width file
+    now = datetime.now(timezone.utc)
+    file_creation_date = now.strftime("%y%m%d")
+    file_creation_time = now.strftime("%H%M")
+    effective_date = run["period_end"].replace("-", "")[2:]  # YYMMDD
+
+    lines = []
+
+    # Record Type 1: File Header
+    origin_id = "1" + (co.get("tax_id") or "000000000").ljust(9, "0")[:9]
+    dest_id = " " + entries[0]["routing_number"]
+    file_header = (
+        "1" + "01" + dest_id.ljust(10) + origin_id.ljust(10)
+        + file_creation_date + file_creation_time + "A" + "094" + "10" + "1"
+        + "DEST BANK".ljust(23) + company_name[:23].ljust(23) + "".ljust(8)
+    )
+    lines.append(file_header)
+
+    # Record Type 5: Batch Header
+    batch_header = (
+        "5" + "200" + company_name[:16].ljust(16) + "".ljust(20)
+        + origin_id[:10].ljust(10) + "PPD" + "PAYROLL".ljust(10)
+        + "".ljust(6) + effective_date + "".ljust(3) + "1"
+        + entries[0]["routing_number"][:8] + "0000001"
+    )
+    lines.append(batch_header)
+
+    # Record Type 6: Entry Detail records
+    entry_hash = 0
+    for i, entry in enumerate(entries, start=1):
+        txn_code = "22" if entry["account_type"] == "checking" else "32"
+        amount_cents = int(entry["amount"] * 100)
+        routing = entry["routing_number"]
+        check_digit = routing[8] if len(routing) > 8 else "0"
+        rdfi = routing[:8]
+        entry_hash += int(rdfi)
+
+        detail = (
+            "6" + txn_code + rdfi + check_digit
+            + entry["account_number"][:17].ljust(17)
+            + str(amount_cents).rjust(10, "0")
+            + entry["employee_id"][:15].ljust(15)
+            + "".ljust(22) + "  " + "0"
+            + entries[0]["routing_number"][:8]
+            + str(i).rjust(7, "0")
+        )
+        lines.append(detail)
+
+    # Record Type 8: Batch Control
+    entry_hash_mod = entry_hash % 10000000000
+    total_cents = int(total_amount * 100)
+    batch_control = (
+        "8" + "200" + str(len(entries)).rjust(6, "0")
+        + str(entry_hash_mod).rjust(10, "0")
+        + str(total_cents).rjust(12, "0") + "0".rjust(12, "0")
+        + origin_id[:10].ljust(10) + "".ljust(19) + "".ljust(6)
+        + entries[0]["routing_number"][:8] + "0000001"
+    )
+    lines.append(batch_control)
+
+    # Record Type 9: File Control
+    block_count = (len(lines) + 1 + 9) // 10
+    file_control = (
+        "9" + "000001" + str(block_count).rjust(6, "0")
+        + str(len(entries)).rjust(8, "0")
+        + str(entry_hash_mod).rjust(10, "0")
+        + str(total_cents).rjust(12, "0") + "0".rjust(12, "0")
+        + "".ljust(39)
+    )
+    lines.append(file_control)
+
+    file_content = "\n".join(lines)
+
+    ok({
+        "file_content": file_content,
+        "entry_count": len(entries),
+        "total_amount": str(round_currency(total_amount)),
+        "payroll_run_id": args.payroll_run_id,
+    })
+
+
 ACTIONS = {
     # --- Part 1: Setup & Configuration (actions 1-7, 14-16, 18) ---
     "add-salary-component": add_salary_component,
@@ -3503,6 +4410,18 @@ ACTIONS = {
     "update-garnishment": update_garnishment,
     "list-garnishments": list_garnishments,
     "get-garnishment": get_garnishment,
+
+    # --- Part 4: Sprint 6 — Advanced Payroll ---
+    "add-state-tax-slab": add_state_tax_slab,
+    "update-employee-state-config": update_employee_state_config,
+    "add-overtime-policy": add_overtime_policy,
+    "calculate-overtime": calculate_overtime,
+    "calculate-retro-pay": calculate_retro_pay,
+
+    # --- Part 5: Sprint 7 — NACHA / ACH ---
+    "add-employee-bank-account": add_employee_bank_account,
+    "list-employee-bank-accounts": list_employee_bank_accounts,
+    "generate-nacha-file": generate_nacha_file,
 }
 
 
@@ -3640,6 +4559,42 @@ def main():
                         help="Garnishment effective start date")
     parser.add_argument("--end-date",
                         help="Garnishment effective end date")
+
+    # ----- Multi-State Payroll Fields (Feature #22a) -----
+    parser.add_argument("--bracket-start",
+                        help="State tax bracket lower bound (e.g., '0')")
+    parser.add_argument("--bracket-end",
+                        help="State tax bracket upper bound (e.g., '50000')")
+    parser.add_argument("--work-state",
+                        help="Employee work state code (e.g., 'CA')")
+    parser.add_argument("--residence-state",
+                        help="Employee residence state code (e.g., 'CA')")
+
+    # ----- Overtime Fields (Feature #22b) -----
+    parser.add_argument("--weekly-threshold",
+                        help="Weekly hours threshold for overtime (default: '40')")
+    parser.add_argument("--daily-threshold",
+                        help="Daily hours threshold for overtime")
+    parser.add_argument("--ot-multiplier",
+                        help="Overtime pay multiplier (default: '1.5')")
+    parser.add_argument("--double-ot-multiplier",
+                        help="Double overtime pay multiplier (default: '2.0')")
+    parser.add_argument("--hourly-rate",
+                        help="Hourly rate for overtime calculation")
+
+    # ----- Supplemental Wage Fields (Feature #22d) -----
+    parser.add_argument("--is-supplemental",
+                        help="1 = supplemental wage component, 0 = regular")
+
+    # ----- NACHA / ACH Fields (Feature #22e) -----
+    parser.add_argument("--bank-name",
+                        help="Bank name for employee bank account")
+    parser.add_argument("--routing-number",
+                        help="ABA routing number (9 digits)")
+    parser.add_argument("--account-number",
+                        help="Bank account number (4-17 digits)")
+    parser.add_argument("--account-type",
+                        help="Account type: checking or savings")
 
     # ----- Filters / Pagination -----
     parser.add_argument("--status",

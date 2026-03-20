@@ -14,7 +14,8 @@ import os
 import sqlite3
 import sys
 import uuid
-from datetime import datetime, timezone
+import calendar
+from datetime import datetime, timezone, timedelta, date as date_type
 from decimal import Decimal, InvalidOperation
 
 # Add shared lib to path
@@ -46,6 +47,24 @@ except ImportError:
 
 
 REQUIRED_TABLES = ["company", "account", "item"]
+
+VALID_FREQUENCIES = ("weekly", "monthly", "quarterly", "semi_annually", "annually")
+
+# ---------------------------------------------------------------------------
+# PyPika table references (for new features)
+# ---------------------------------------------------------------------------
+_t_blanket_order = Table("blanket_order")
+_t_blanket_order_item = Table("blanket_order_item")
+_t_purchase_order = Table("purchase_order")
+_t_purchase_order_item = Table("purchase_order_item")
+_t_purchase_invoice = Table("purchase_invoice")
+_t_purchase_invoice_item = Table("purchase_invoice_item")
+_t_recurring_bill_template = Table("recurring_bill_template")
+_t_recurring_bill_template_item = Table("recurring_bill_template_item")
+_t_sales_order = Table("sales_order")
+_t_sales_order_item = Table("sales_order_item")
+_t_item_supplier = Table("item_supplier")
+_t_company = Table("company")
 
 
 # ---------------------------------------------------------------------------
@@ -1143,6 +1162,27 @@ def submit_purchase_order(conn, args):
     if po["status"] != "draft":
         err(f"Cannot submit: PO is '{po['status']}' (must be 'draft')")
 
+    # Check min order qty warnings (warn, don't block)
+    poi_t = Table("purchase_order_item")
+    q = Q.from_(poi_t).select(poi_t.star).where(poi_t.purchase_order_id == P())
+    po_items = conn.execute(q.get_sql(), (args.purchase_order_id,)).fetchall()
+    min_qty_warnings = []
+    for poi in po_items:
+        is_t = Table("item_supplier")
+        q = (Q.from_(is_t).select(is_t.min_order_qty)
+             .where(is_t.item_id == P())
+             .where(is_t.supplier_id == P()))
+        is_row = conn.execute(q.get_sql(), (poi["item_id"], po["supplier_id"])).fetchone()
+        if is_row and is_row["min_order_qty"]:
+            min_qty = to_decimal(str(is_row["min_order_qty"]))
+            ordered_qty = to_decimal(str(poi["quantity"]))
+            if min_qty > Decimal("0") and ordered_qty < min_qty:
+                min_qty_warnings.append({
+                    "item_id": poi["item_id"],
+                    "ordered_qty": str(ordered_qty),
+                    "min_order_qty": str(min_qty),
+                })
+
     naming = get_next_name(conn, "purchase_order", company_id=po["company_id"])
 
     q = (Q.update(po_t)
@@ -1156,8 +1196,11 @@ def submit_purchase_order(conn, args):
            args.purchase_order_id,
            new_values={"naming_series": naming})
     conn.commit()
-    ok({"purchase_order_id": args.purchase_order_id,
-         "naming_series": naming, "status": "confirmed"})
+    result = {"purchase_order_id": args.purchase_order_id,
+              "naming_series": naming, "status": "confirmed"}
+    if min_qty_warnings:
+        result["warnings"] = min_qty_warnings
+    ok(result)
 
 
 # ---------------------------------------------------------------------------
@@ -1225,6 +1268,8 @@ def create_purchase_receipt(conn, args):
     po = conn.execute(q.get_sql(), (args.purchase_order_id,)).fetchone()
     if not po:
         err(f"Purchase order {args.purchase_order_id} not found")
+    if po["status"] == "closed":
+        err("Cannot create receipt: purchase order is closed")
     if po["status"] not in ("confirmed", "partially_received"):
         err(f"Cannot create receipt: PO status is '{po['status']}' "
              f"(must be 'confirmed' or 'partially_received')")
@@ -1240,6 +1285,12 @@ def create_purchase_receipt(conn, args):
          .where(poi_t.purchase_order_id == P())
          .orderby(poi_t.rowid))
     po_items = conn.execute(q.get_sql(), (args.purchase_order_id,)).fetchall()
+
+    # --- GRN Tolerance: look up company-level receipt_tolerance_pct ---
+    company_t = Table("company")
+    _co_q = Q.from_(company_t).select(company_t.receipt_tolerance_pct).where(company_t.id == P())
+    _co_row = conn.execute(_co_q.get_sql(), (po["company_id"],)).fetchone()
+    _tolerance_pct = to_decimal(_co_row["receipt_tolerance_pct"]) if _co_row else Decimal("0")
 
     total_qty = Decimal("0")
     receipt_items = []
@@ -1259,12 +1310,20 @@ def create_purchase_receipt(conn, args):
             if qty <= 0:
                 err(f"Item {i}: qty must be > 0")
 
-            # Check remaining receivable qty
+            # Check remaining receivable qty with GRN tolerance
             ordered = to_decimal(poi["quantity"])
             received = to_decimal(poi["received_qty"])
             remaining = ordered - received
-            if qty > remaining:
-                err(f"Item {i}: qty {qty} exceeds remaining receivable {remaining}")
+            max_allowed = round_currency(
+                remaining * (Decimal("1") + _tolerance_pct / Decimal("100"))
+            )
+            if qty > max_allowed:
+                if _tolerance_pct > 0:
+                    err(f"Item {i}: qty {qty} exceeds allowed receivable "
+                        f"{max_allowed} (remaining {remaining} + "
+                        f"{_tolerance_pct}% tolerance)")
+                else:
+                    err(f"Item {i}: qty {qty} exceeds remaining receivable {remaining}")
 
             rate = to_decimal(poi["rate"])
             amount = round_currency(qty * rate)
@@ -1718,6 +1777,8 @@ def create_purchase_invoice(conn, args):
         po = conn.execute(q.get_sql(), (po_id,)).fetchone()
         if not po:
             err(f"Purchase order {po_id} not found")
+        if po["status"] == "closed":
+            err("Cannot create invoice: purchase order is closed")
         supplier_id = po["supplier_id"]
         company_id = po["company_id"]
         tax_template_id = tax_template_id or po["tax_template_id"]
@@ -2048,6 +2109,113 @@ def list_purchase_invoices(conn, args):
 
 
 # ---------------------------------------------------------------------------
+# 3-Way Match Validation (PO - GRN - Invoice)
+# ---------------------------------------------------------------------------
+
+def _validate_three_way_match(conn, purchase_invoice_id, items, company_id):
+    """Validate 3-way match: PO qty >= GRN qty >= Invoice qty.
+
+    For each invoice item that has a purchase_order_item_id:
+    1. Get ordered_qty from the PO item
+    2. Get received_qty = SUM of purchase_receipt_item qty where PO item matches
+    3. Get previously_invoiced_qty = SUM of other PI item qty where PO item matches
+    4. Validate: current_invoice_qty + previously_invoiced_qty <= received_qty
+
+    Company-level policy (three_way_match_policy):
+    - 'disabled': skip all checks
+    - 'strict': invoice qty must be <= received qty
+    - 'tolerant': uses the company's receipt_tolerance_pct for a margin
+
+    Raises ValueError on validation failure.
+    """
+    # Look up company policy
+    company_t = Table("company")
+    co_q = (Q.from_(company_t)
+            .select(company_t.three_way_match_policy,
+                    company_t.receipt_tolerance_pct)
+            .where(company_t.id == P()))
+    co_row = conn.execute(co_q.get_sql(), (company_id,)).fetchone()
+
+    policy = co_row["three_way_match_policy"] if co_row else "strict"
+    tolerance_pct = to_decimal(co_row["receipt_tolerance_pct"]) if co_row else Decimal("0")
+
+    if policy == "disabled":
+        return  # Skip 3-way match entirely
+
+    for item_row in items:
+        item = row_to_dict(item_row) if not isinstance(item_row, dict) else item_row
+        po_item_id = item.get("purchase_order_item_id")
+        if not po_item_id:
+            continue  # Standalone invoice item — no PO link, skip
+
+        current_qty = to_decimal(item["quantity"])
+
+        # 1. Get ordered qty from PO item
+        poi_t = Table("purchase_order_item")
+        poi_q = Q.from_(poi_t).select(poi_t.quantity, poi_t.item_id).where(poi_t.id == P())
+        poi = conn.execute(poi_q.get_sql(), (po_item_id,)).fetchone()
+        if not poi:
+            continue  # PO item not found — skip (shouldn't happen)
+
+        ordered_qty = to_decimal(poi["quantity"])
+        item_id = poi["item_id"]
+
+        # 2. Get total received qty from all submitted purchase receipt items
+        # linked to this PO item
+        received_rows = conn.execute(
+            """
+            SELECT pri.quantity
+            FROM purchase_receipt_item pri
+            JOIN purchase_receipt pr ON pr.id = pri.purchase_receipt_id
+            WHERE pri.purchase_order_item_id = ?
+              AND pr.status = 'submitted'
+            """,
+            (po_item_id,),
+        ).fetchall()
+        received_qty = sum((to_decimal(r["quantity"]) for r in received_rows), Decimal("0"))
+
+        # 3. Get total previously invoiced qty from other submitted PIs
+        # linked to this PO item (exclude current invoice)
+        prev_invoiced_rows = conn.execute(
+            """
+            SELECT pii.quantity
+            FROM purchase_invoice_item pii
+            JOIN purchase_invoice pi ON pi.id = pii.purchase_invoice_id
+            WHERE pii.purchase_order_item_id = ?
+              AND pi.status = 'submitted'
+              AND pi.id != ?
+            """,
+            (po_item_id, purchase_invoice_id),
+        ).fetchall()
+        prev_invoiced_qty = sum((to_decimal(r["quantity"]) for r in prev_invoiced_rows), Decimal("0"))
+
+        total_invoiced = current_qty + prev_invoiced_qty
+
+        # 4. Validate based on policy
+        if policy == "tolerant" and tolerance_pct > 0:
+            max_allowed = round_currency(
+                received_qty * (Decimal("1") + tolerance_pct / Decimal("100"))
+            )
+        else:
+            # strict: no tolerance
+            max_allowed = received_qty
+
+        if total_invoiced > max_allowed:
+            # Look up item name for a clear error message
+            item_t = Table("item")
+            item_name_q = Q.from_(item_t).select(item_t.item_name).where(item_t.id == P())
+            item_name_row = conn.execute(item_name_q.get_sql(), (item_id,)).fetchone()
+            item_name = item_name_row["item_name"] if item_name_row else item_id
+
+            raise ValueError(
+                f"Invoice qty exceeds received qty for item '{item_name}'. "
+                f"Ordered: {ordered_qty}, Received: {received_qty}, "
+                f"Already invoiced: {prev_invoiced_qty}, "
+                f"Current invoice: {current_qty}"
+            )
+
+
+# ---------------------------------------------------------------------------
 # 29. submit-purchase-invoice
 # ---------------------------------------------------------------------------
 
@@ -2085,6 +2253,16 @@ def submit_purchase_invoice(conn, args):
     items = conn.execute(q.get_sql(), (args.purchase_invoice_id,)).fetchall()
     if not items:
         err("Purchase invoice has no items")
+
+    # --- 3-Way Match Validation (PO - GRN - Invoice) ---
+    # Only applies to non-return invoices linked to a PO
+    if not is_return and pi_dict.get("purchase_order_id"):
+        try:
+            _validate_three_way_match(
+                conn, args.purchase_invoice_id, items, company_id,
+            )
+        except ValueError as e:
+            err(str(e))
 
     fiscal_year = _get_fiscal_year(conn, posting_date)
     cost_center_id = _get_cost_center(conn, company_id)
@@ -2879,6 +3057,74 @@ def add_landed_cost_voucher(conn, args):
 # 34. status
 # ---------------------------------------------------------------------------
 
+def update_receipt_tolerance(conn, args):
+    """Update the GRN receipt tolerance percentage for a company.
+
+    Args:
+        --company-id: Company to update.
+        --tolerance-pct: New tolerance percentage (0 = strict, 5 = allow 5% over).
+    """
+    if not args.company_id:
+        err("--company-id is required")
+
+    pct = to_decimal(args.tolerance_pct or "0")
+    if pct < 0:
+        err("Tolerance percentage cannot be negative")
+    if pct > Decimal("100"):
+        err("Tolerance percentage cannot exceed 100%")
+
+    company_t = Table("company")
+    q = Q.from_(company_t).select(company_t.id).where(company_t.id == P())
+    co = conn.execute(q.get_sql(), (args.company_id,)).fetchone()
+    if not co:
+        err(f"Company {args.company_id} not found")
+
+    q = (Q.update(company_t)
+         .set(company_t.receipt_tolerance_pct, P())
+         .set(company_t.updated_at, LiteralValue("datetime('now')"))
+         .where(company_t.id == P()))
+    conn.execute(q.get_sql(), (str(round_currency(pct)), args.company_id))
+
+    audit(conn, "erpclaw-buying", "update-receipt-tolerance", "company",
+           args.company_id, new_values={"receipt_tolerance_pct": str(pct)})
+    conn.commit()
+    ok({"company_id": args.company_id,
+         "receipt_tolerance_pct": str(round_currency(pct))})
+
+
+def update_three_way_match_policy(conn, args):
+    """Update the 3-way match policy for a company.
+
+    Args:
+        --company-id: Company to update.
+        --policy: One of 'strict', 'tolerant', 'disabled'.
+    """
+    if not args.company_id:
+        err("--company-id is required")
+
+    policy = args.policy
+    if policy not in ("strict", "tolerant", "disabled"):
+        err(f"Invalid policy '{policy}'. Must be 'strict', 'tolerant', or 'disabled'.")
+
+    company_t = Table("company")
+    q = Q.from_(company_t).select(company_t.id).where(company_t.id == P())
+    co = conn.execute(q.get_sql(), (args.company_id,)).fetchone()
+    if not co:
+        err(f"Company {args.company_id} not found")
+
+    q = (Q.update(company_t)
+         .set(company_t.three_way_match_policy, P())
+         .set(company_t.updated_at, LiteralValue("datetime('now')"))
+         .where(company_t.id == P()))
+    conn.execute(q.get_sql(), (policy, args.company_id))
+
+    audit(conn, "erpclaw-buying", "update-three-way-match-policy", "company",
+           args.company_id, new_values={"three_way_match_policy": policy})
+    conn.commit()
+    ok({"company_id": args.company_id,
+         "three_way_match_policy": policy})
+
+
 def status_action(conn, args):
     """Buying summary for a company."""
     company_id = args.company_id
@@ -3008,6 +3254,991 @@ def import_suppliers(conn, args):
 
 
 # ---------------------------------------------------------------------------
+# close-purchase-order
+# ---------------------------------------------------------------------------
+
+def close_purchase_order(conn, args):
+    """Close a partially-received PO. Prevents further receipts/invoices but
+    preserves existing child documents."""
+    if not args.purchase_order_id:
+        err("--purchase-order-id is required")
+
+    po_t = Table("purchase_order")
+    q = Q.from_(po_t).select(po_t.star).where(po_t.id == P())
+    po = conn.execute(q.get_sql(), (args.purchase_order_id,)).fetchone()
+    if not po:
+        err(f"Purchase order {args.purchase_order_id} not found")
+    if po["status"] in ("draft", "cancelled", "closed"):
+        err(f"Cannot close: purchase order is '{po['status']}'")
+
+    close_reason = args.reason or None
+    closed_by = args.closed_by or None
+
+    q = (Q.update(po_t)
+         .set(po_t.status, ValueWrapper("closed"))
+         .set("close_reason", P())
+         .set("closed_by", P())
+         .set(po_t.updated_at, LiteralValue("datetime('now')"))
+         .where(po_t.id == P()))
+    conn.execute(q.get_sql(), (close_reason, closed_by, args.purchase_order_id))
+
+    audit(conn, "erpclaw-buying", "close-purchase-order", "purchase_order",
+          args.purchase_order_id,
+          new_values={"status": "closed", "close_reason": close_reason,
+                      "closed_by": closed_by})
+    conn.commit()
+    ok({"purchase_order_id": args.purchase_order_id, "doc_status": "closed",
+        "close_reason": close_reason, "closed_by": closed_by})
+
+
+# ---------------------------------------------------------------------------
+# Date helpers for recurring bills
+# ---------------------------------------------------------------------------
+
+def _add_months(d: date_type, months: int) -> date_type:
+    """Add months to a date, clamping to last day of month if needed."""
+    month = d.month - 1 + months
+    year = d.year + month // 12
+    month = month % 12 + 1
+    day = min(d.day, calendar.monthrange(year, month)[1])
+    return date_type(year, month, day)
+
+
+def _next_bill_date(current_date_str: str, frequency: str) -> str:
+    """Calculate next bill date based on frequency."""
+    parts = current_date_str.split("-")
+    d = date_type(int(parts[0]), int(parts[1]), int(parts[2]))
+
+    if frequency == "weekly":
+        d += timedelta(days=7)
+    elif frequency == "monthly":
+        d = _add_months(d, 1)
+    elif frequency == "quarterly":
+        d = _add_months(d, 3)
+    elif frequency == "semi_annually":
+        d = _add_months(d, 6)
+    elif frequency == "annually":
+        d = _add_months(d, 12)
+    else:
+        d = _add_months(d, 1)
+
+    return d.isoformat()
+
+
+# ---------------------------------------------------------------------------
+# add-blanket-po
+# ---------------------------------------------------------------------------
+
+def add_blanket_po(conn, args):
+    """Create a blanket purchase order (framework agreement with a supplier)."""
+    if not args.supplier_id:
+        err("--supplier-id is required")
+    if not args.items:
+        err("--items is required (JSON array)")
+    if not args.company_id:
+        err("--company-id is required")
+    if not args.valid_from:
+        err("--valid-from is required")
+    if not args.valid_to:
+        err("--valid-to is required")
+
+    # Validate supplier
+    sup_t = Table("supplier")
+    sq = (Q.from_(sup_t).select(sup_t.star)
+          .where((sup_t.id == P()) | (sup_t.name == P())))
+    supplier = conn.execute(sq.get_sql(),
+        (args.supplier_id, args.supplier_id)).fetchone()
+    if not supplier:
+        err(f"Supplier {args.supplier_id} not found")
+    if supplier["status"] != "active":
+        err(f"Supplier {supplier['name']} is {supplier['status']}")
+    supplier_id = supplier["id"]
+
+    company_t = Table("company")
+    cq = Q.from_(company_t).select(company_t.id).where(company_t.id == P())
+    if not conn.execute(cq.get_sql(), (args.company_id,)).fetchone():
+        err(f"Company {args.company_id} not found")
+
+    if args.valid_to <= args.valid_from:
+        err("--valid-to must be after --valid-from")
+
+    items = _parse_json_arg(args.items, "items")
+    if not items or not isinstance(items, list):
+        err("--items must be a non-empty JSON array")
+
+    bo_id = str(uuid.uuid4())
+    total_qty = Decimal("0")
+
+    # Insert parent blanket_order
+    bo_ins = (Q.into(_t_blanket_order)
+              .columns("id", "supplier_id", "blanket_order_type",
+                        "valid_from", "valid_to", "status", "company_id")
+              .insert(P(), P(), ValueWrapper("buying"),
+                      P(), P(), ValueWrapper("draft"), P()))
+    conn.execute(bo_ins.get_sql(),
+        (bo_id, supplier_id, args.valid_from, args.valid_to, args.company_id))
+
+    # Insert child items
+    boi_ins = (Q.into(_t_blanket_order_item)
+               .columns("id", "blanket_order_id", "item_id", "quantity",
+                         "uom", "rate", "amount")
+               .insert(P(), P(), P(), P(), P(), P(), P()))
+    boi_ins_sql = boi_ins.get_sql()
+    for i, item in enumerate(items):
+        item_id = item.get("item_id")
+        if not item_id:
+            err(f"Item {i}: item_id is required")
+        qty = to_decimal(item.get("qty", "0"))
+        if qty <= 0:
+            err(f"Item {i}: qty must be > 0")
+        rate = to_decimal(item.get("rate", "0"))
+        if rate <= 0:
+            err(f"Item {i}: rate must be > 0")
+        amount = round_currency(qty * rate)
+        total_qty += qty
+
+        conn.execute(boi_ins_sql,
+            (str(uuid.uuid4()), bo_id, item_id, str(round_currency(qty)),
+             item.get("uom"), str(round_currency(rate)), str(amount)))
+
+    # Update totals
+    uq = (Q.update(_t_blanket_order)
+          .set(_t_blanket_order.total_qty, P())
+          .where(_t_blanket_order.id == P()))
+    conn.execute(uq.get_sql(), (str(round_currency(total_qty)), bo_id))
+
+    audit(conn, "erpclaw-buying", "add-blanket-po", "blanket_order", bo_id,
+           new_values={"supplier_id": supplier_id, "total_qty": str(total_qty)})
+    conn.commit()
+    ok({"blanket_order_id": bo_id, "supplier_id": supplier_id,
+         "total_qty": str(round_currency(total_qty)),
+         "valid_from": args.valid_from, "valid_to": args.valid_to})
+
+
+# ---------------------------------------------------------------------------
+# submit-blanket-po
+# ---------------------------------------------------------------------------
+
+def submit_blanket_po(conn, args):
+    """Activate a blanket purchase order."""
+    if not args.blanket_order_id:
+        err("--blanket-order-id is required")
+
+    boq = (Q.from_(_t_blanket_order).select(_t_blanket_order.star)
+           .where(_t_blanket_order.id == P()))
+    bo = conn.execute(boq.get_sql(), (args.blanket_order_id,)).fetchone()
+    if not bo:
+        err(f"Blanket order {args.blanket_order_id} not found")
+    if bo["status"] != "draft":
+        err(f"Cannot submit: blanket order is '{bo['status']}' (must be 'draft')")
+    if bo["blanket_order_type"] != "buying":
+        err("This blanket order is not a buying type")
+
+    uq = (Q.update(_t_blanket_order)
+          .set(_t_blanket_order.status, ValueWrapper("active"))
+          .set(_t_blanket_order.updated_at, LiteralValue("datetime('now')"))
+          .where(_t_blanket_order.id == P()))
+    conn.execute(uq.get_sql(), (args.blanket_order_id,))
+
+    audit(conn, "erpclaw-buying", "submit-blanket-po", "blanket_order",
+           args.blanket_order_id, new_values={"status": "active"})
+    conn.commit()
+    ok({"blanket_order_id": args.blanket_order_id, "doc_status": "active"})
+
+
+# ---------------------------------------------------------------------------
+# get-blanket-po
+# ---------------------------------------------------------------------------
+
+def get_blanket_po(conn, args):
+    """Get a blanket purchase order with its items."""
+    if not args.blanket_order_id:
+        err("--blanket-order-id is required")
+
+    boq = (Q.from_(_t_blanket_order).select(_t_blanket_order.star)
+           .where(_t_blanket_order.id == P()))
+    bo = conn.execute(boq.get_sql(), (args.blanket_order_id,)).fetchone()
+    if not bo:
+        err(f"Blanket order {args.blanket_order_id} not found")
+
+    data = row_to_dict(bo)
+
+    # Fetch items
+    boiq = (Q.from_(_t_blanket_order_item).select(_t_blanket_order_item.star)
+            .where(_t_blanket_order_item.blanket_order_id == P()))
+    items = conn.execute(boiq.get_sql(), (args.blanket_order_id,)).fetchall()
+    data["items"] = [row_to_dict(r) for r in items]
+
+    ok(data)
+
+
+# ---------------------------------------------------------------------------
+# list-blanket-pos
+# ---------------------------------------------------------------------------
+
+def list_blanket_pos(conn, args):
+    """List blanket purchase orders."""
+    bo = _t_blanket_order.as_("bo")
+    params = []
+    crit = (bo.blanket_order_type == ValueWrapper("buying"))
+
+    if args.company_id:
+        crit = Criterion.all([crit, bo.company_id == P()])
+        params.append(args.company_id)
+    if args.supplier_id:
+        crit = Criterion.all([crit, bo.supplier_id == P()])
+        params.append(args.supplier_id)
+    if args.blanket_status:
+        crit = Criterion.all([crit, bo.status == P()])
+        params.append(args.blanket_status)
+
+    count_q = Q.from_(bo).select(fn.Count("*")).where(crit)
+    total_count = conn.execute(count_q.get_sql(), params).fetchone()[0]
+
+    limit = int(args.limit) if args.limit else 20
+    offset = int(args.offset) if args.offset else 0
+
+    list_q = (Q.from_(bo).select(bo.star)
+              .where(crit)
+              .orderby(bo.created_at, order=Order.desc)
+              .limit(P()).offset(P()))
+    rows = conn.execute(list_q.get_sql(), params + [limit, offset]).fetchall()
+
+    ok({"blanket_orders": [row_to_dict(r) for r in rows],
+         "total_count": total_count, "limit": limit, "offset": offset,
+         "has_more": offset + limit < total_count})
+
+
+# ---------------------------------------------------------------------------
+# create-po-from-blanket
+# ---------------------------------------------------------------------------
+
+def create_po_from_blanket(conn, args):
+    """Create a purchase order drawing down from an active blanket PO."""
+    if not args.blanket_order_id:
+        err("--blanket-order-id is required")
+    if not args.items:
+        err("--items is required (JSON array)")
+
+    # Validate blanket order
+    boq = (Q.from_(_t_blanket_order).select(_t_blanket_order.star)
+           .where(_t_blanket_order.id == P()))
+    bo = conn.execute(boq.get_sql(), (args.blanket_order_id,)).fetchone()
+    if not bo:
+        err(f"Blanket order {args.blanket_order_id} not found")
+    if bo["status"] != "active":
+        err(f"Cannot create PO: blanket order is '{bo['status']}' (must be 'active')")
+    if bo["blanket_order_type"] != "buying":
+        err("This blanket order is not a buying type")
+
+    # Check expiry
+    today = _today()
+    if bo["valid_to"] < today:
+        err(f"Blanket order expired on {bo['valid_to']}")
+
+    supplier_id = bo["supplier_id"]
+    company_id = bo["company_id"]
+
+    # Fetch blanket items
+    boiq = (Q.from_(_t_blanket_order_item).select(_t_blanket_order_item.star)
+            .where(_t_blanket_order_item.blanket_order_id == P()))
+    bo_items = conn.execute(boiq.get_sql(), (args.blanket_order_id,)).fetchall()
+    bo_items_map = {}
+    for bi in bo_items:
+        bid = row_to_dict(bi)
+        bo_items_map[bid["item_id"]] = bid
+
+    items = _parse_json_arg(args.items, "items")
+    if not items or not isinstance(items, list):
+        err("--items must be a non-empty JSON array")
+
+    po_id = str(uuid.uuid4())
+    posting_date = args.posting_date or today
+    total_amount = Decimal("0")
+    po_item_rows = []
+    blanket_updates = []
+
+    for i, item in enumerate(items):
+        item_id = item.get("item_id")
+        if not item_id:
+            err(f"Item {i}: item_id is required")
+        qty = to_decimal(item.get("qty", "0"))
+        if qty <= 0:
+            err(f"Item {i}: qty must be > 0")
+
+        if item_id not in bo_items_map:
+            err(f"Item {i}: item {item_id} not in blanket order")
+
+        bi = bo_items_map[item_id]
+        max_qty = to_decimal(bi["quantity"])
+        ordered = to_decimal(bi["ordered_qty"])
+        remaining = max_qty - ordered
+
+        if qty > remaining:
+            err(f"Item {i}: requested qty {qty} exceeds remaining blanket qty {remaining}")
+
+        rate = to_decimal(item.get("rate") or bi["rate"])
+        amount = round_currency(qty * rate)
+        total_amount += amount
+
+        po_item_rows.append((
+            str(uuid.uuid4()), po_id, item_id, str(round_currency(qty)),
+            item.get("uom") or bi.get("uom"), str(round_currency(rate)),
+            str(amount), "0", str(amount),
+            item.get("warehouse_id"), item.get("required_date"),
+        ))
+        blanket_updates.append((bi["id"], str(round_currency(ordered + qty))))
+
+    total_amount = round_currency(total_amount)
+    tax_amount, _ = _calculate_tax(conn, args.tax_template_id, total_amount)
+    grand_total = round_currency(total_amount + tax_amount)
+
+    # Insert PO
+    po_t = Table("purchase_order")
+    q = (Q.into(po_t)
+         .columns("id", "supplier_id", "order_date", "total_amount",
+                  "tax_amount", "grand_total", "tax_template_id", "status",
+                  "company_id")
+         .insert(P(), P(), P(), P(), P(), P(), P(), ValueWrapper("draft"), P()))
+    conn.execute(q.get_sql(),
+        (po_id, supplier_id, posting_date,
+         str(total_amount), str(round_currency(tax_amount)),
+         str(grand_total), args.tax_template_id, company_id))
+
+    # Insert PO items
+    poi_t = Table("purchase_order_item")
+    poi_q = (Q.into(poi_t)
+             .columns("id", "purchase_order_id", "item_id", "quantity", "uom",
+                      "rate", "amount", "discount_percentage", "net_amount",
+                      "warehouse_id", "required_date")
+             .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(), P(), P()))
+    poi_sql = poi_q.get_sql()
+    for row_params in po_item_rows:
+        conn.execute(poi_sql, row_params)
+
+    # Update blanket order item ordered_qty
+    boi_uq = (Q.update(_t_blanket_order_item)
+              .set(_t_blanket_order_item.ordered_qty, P())
+              .where(_t_blanket_order_item.id == P()))
+    boi_uq_sql = boi_uq.get_sql()
+    for boi_id, new_ordered in blanket_updates:
+        conn.execute(boi_uq_sql, (new_ordered, boi_id))
+
+    # Update blanket order total ordered_qty
+    ordered_sum = conn.execute(
+        """SELECT COALESCE(decimal_sum(ordered_qty), '0') as total
+           FROM blanket_order_item WHERE blanket_order_id = ?""",
+        (args.blanket_order_id,)).fetchone()["total"]
+    bo_uq = (Q.update(_t_blanket_order)
+             .set(_t_blanket_order.ordered_qty, P())
+             .set(_t_blanket_order.updated_at, LiteralValue("datetime('now')"))
+             .where(_t_blanket_order.id == P()))
+    conn.execute(bo_uq.get_sql(), (ordered_sum, args.blanket_order_id))
+
+    audit(conn, "erpclaw-buying", "create-po-from-blanket", "purchase_order", po_id,
+           new_values={"blanket_order_id": args.blanket_order_id,
+                       "grand_total": str(grand_total)})
+    conn.commit()
+    ok({"purchase_order_id": po_id,
+         "blanket_order_id": args.blanket_order_id,
+         "total_amount": str(total_amount),
+         "grand_total": str(grand_total)})
+
+
+# ---------------------------------------------------------------------------
+# create-po-from-so (Back-to-Back: SO -> PO)
+# ---------------------------------------------------------------------------
+
+def create_po_from_so(conn, args):
+    """Create purchase orders from a sales order (back-to-back).
+
+    For each SO item, find the default supplier via item_supplier table,
+    create one PO per supplier with the matching items.
+    """
+    if not args.sales_order_id:
+        err("--sales-order-id is required")
+
+    # Validate SO
+    so_t = _t_sales_order
+    soq = Q.from_(so_t).select(so_t.star).where(so_t.id == P())
+    so = conn.execute(soq.get_sql(), (args.sales_order_id,)).fetchone()
+    if not so:
+        err(f"Sales order {args.sales_order_id} not found")
+    if so["status"] not in ("draft", "confirmed"):
+        err(f"Cannot create PO: sales order is '{so['status']}' (must be 'draft' or 'confirmed')")
+
+    company_id = so["company_id"]
+
+    # Fetch SO items
+    soi_t = _t_sales_order_item
+    soiq = Q.from_(soi_t).select(soi_t.star).where(soi_t.sales_order_id == P())
+    so_items = conn.execute(soiq.get_sql(), (args.sales_order_id,)).fetchall()
+    if not so_items:
+        err("Sales order has no items")
+
+    # Group items by supplier
+    supplier_items = {}  # supplier_id -> [(so_item_dict, supplier_row)]
+    items_without_supplier = []
+
+    for soi_row in so_items:
+        soi = row_to_dict(soi_row)
+        item_id = soi["item_id"]
+
+        # Find default supplier for this item (lowest priority = highest preference)
+        isq = (Q.from_(_t_item_supplier).select(_t_item_supplier.star)
+               .where(_t_item_supplier.item_id == P())
+               .orderby(_t_item_supplier.priority)
+               .limit(1))
+        item_sup = conn.execute(isq.get_sql(), (item_id,)).fetchone()
+
+        if not item_sup:
+            items_without_supplier.append(item_id)
+            continue
+
+        sup_id = item_sup["supplier_id"]
+        if sup_id not in supplier_items:
+            supplier_items[sup_id] = []
+        supplier_items[sup_id].append(soi)
+
+    if not supplier_items:
+        err("No items have a default supplier configured. "
+            "Set up item_supplier mappings first.")
+
+    # Create one PO per supplier
+    pos_created = []
+    posting_date = args.posting_date or _today()
+
+    for sup_id, soi_list in supplier_items.items():
+        # Validate supplier is active
+        sup_t = Table("supplier")
+        sq = Q.from_(sup_t).select(sup_t.star).where(sup_t.id == P())
+        supplier = conn.execute(sq.get_sql(), (sup_id,)).fetchone()
+        if not supplier or supplier["status"] != "active":
+            continue
+
+        po_id = str(uuid.uuid4())
+        total_amount = Decimal("0")
+        po_item_rows = []
+
+        for soi in soi_list:
+            qty = to_decimal(soi["quantity"])
+            rate = to_decimal(soi["rate"])
+            amount = round_currency(qty * rate)
+            total_amount += amount
+
+            po_item_rows.append((
+                str(uuid.uuid4()), po_id, soi["item_id"],
+                str(round_currency(qty)), soi.get("uom"),
+                str(round_currency(rate)), str(amount),
+                soi.get("discount_percentage", "0"),
+                str(round_currency(amount)),
+                soi.get("warehouse_id"), None,
+            ))
+
+        total_amount = round_currency(total_amount)
+        tax_amount, _ = _calculate_tax(conn, args.tax_template_id, total_amount)
+        grand_total = round_currency(total_amount + tax_amount)
+
+        # Insert PO
+        po_t = Table("purchase_order")
+        q = (Q.into(po_t)
+             .columns("id", "supplier_id", "order_date", "total_amount",
+                      "tax_amount", "grand_total", "tax_template_id", "status",
+                      "company_id")
+             .insert(P(), P(), P(), P(), P(), P(), P(), ValueWrapper("draft"), P()))
+        conn.execute(q.get_sql(),
+            (po_id, sup_id, posting_date,
+             str(total_amount), str(round_currency(tax_amount)),
+             str(grand_total), args.tax_template_id, company_id))
+
+        # Insert PO items
+        poi_t = Table("purchase_order_item")
+        poi_q = (Q.into(poi_t)
+                 .columns("id", "purchase_order_id", "item_id", "quantity", "uom",
+                          "rate", "amount", "discount_percentage", "net_amount",
+                          "warehouse_id", "required_date")
+                 .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(), P(), P()))
+        poi_sql = poi_q.get_sql()
+        for row_params in po_item_rows:
+            conn.execute(poi_sql, row_params)
+
+        pos_created.append({
+            "purchase_order_id": po_id,
+            "supplier_id": sup_id,
+            "supplier_name": supplier["name"],
+            "grand_total": str(grand_total),
+            "items_count": len(po_item_rows),
+        })
+
+    audit(conn, "erpclaw-buying", "create-po-from-so", "sales_order",
+           args.sales_order_id,
+           new_values={"pos_created": len(pos_created)})
+    conn.commit()
+    ok({"sales_order_id": args.sales_order_id,
+         "purchase_orders_created": len(pos_created),
+         "purchase_orders": pos_created,
+         "items_without_supplier": items_without_supplier})
+
+
+# ---------------------------------------------------------------------------
+# add-recurring-bill-template
+# ---------------------------------------------------------------------------
+
+def add_recurring_bill_template(conn, args):
+    """Create a recurring bill (AP invoice) template."""
+    if not args.supplier_id:
+        err("--supplier-id is required")
+    if not args.items:
+        err("--items is required (JSON array)")
+    if not args.frequency:
+        err("--frequency is required")
+    if not args.start_date:
+        err("--start-date is required")
+    if not args.company_id:
+        err("--company-id is required")
+
+    if args.frequency not in VALID_FREQUENCIES:
+        err(f"--frequency must be one of: {', '.join(VALID_FREQUENCIES)}")
+
+    # Validate supplier
+    sup_t = Table("supplier")
+    sq = (Q.from_(sup_t).select(sup_t.id)
+          .where((sup_t.id == P()) | (sup_t.name == P()))
+          .where(sup_t.status == ValueWrapper("active")))
+    sup = conn.execute(sq.get_sql(),
+        (args.supplier_id, args.supplier_id)).fetchone()
+    if not sup:
+        err(f"Active supplier {args.supplier_id} not found")
+    supplier_id = sup["id"]
+
+    company_t = Table("company")
+    cq = Q.from_(company_t).select(company_t.id).where(company_t.id == P())
+    if not conn.execute(cq.get_sql(), (args.company_id,)).fetchone():
+        err(f"Company {args.company_id} not found")
+
+    items = _parse_json_arg(args.items, "items")
+    if not items or not isinstance(items, list):
+        err("--items must be a non-empty JSON array")
+
+    auto_submit = 1 if args.auto_submit else 0
+
+    rt_id = str(uuid.uuid4())
+
+    # Insert parent template
+    rt_ins = (Q.into(_t_recurring_bill_template)
+              .columns("id", "supplier_id", "frequency", "start_date",
+                        "end_date", "next_bill_date", "tax_template_id",
+                        "auto_submit", "status", "company_id")
+              .insert(P(), P(), P(), P(), P(), P(), P(), P(),
+                      ValueWrapper("draft"), P()))
+    conn.execute(rt_ins.get_sql(),
+        (rt_id, supplier_id, args.frequency, args.start_date,
+         args.end_date, args.start_date, args.tax_template_id,
+         auto_submit, args.company_id))
+
+    # Insert child items
+    rti_ins = (Q.into(_t_recurring_bill_template_item)
+               .columns("id", "template_id", "item_id", "quantity", "uom",
+                         "rate", "amount")
+               .insert(P(), P(), P(), P(), P(), P(), P()))
+    rti_ins_sql = rti_ins.get_sql()
+    for i, item in enumerate(items):
+        item_id = item.get("item_id")
+        if not item_id:
+            err(f"Item {i}: item_id is required")
+        qty = to_decimal(item.get("qty", "0"))
+        rate = to_decimal(item.get("rate", "0"))
+        amount = round_currency(qty * rate)
+
+        conn.execute(rti_ins_sql,
+            (str(uuid.uuid4()), rt_id, item_id, str(round_currency(qty)),
+             item.get("uom"), str(round_currency(rate)), str(amount)))
+
+    audit(conn, "erpclaw-buying", "add-recurring-bill-template",
+           "recurring_bill_template", rt_id,
+           new_values={"supplier_id": supplier_id, "frequency": args.frequency})
+    conn.commit()
+    ok({"template_id": rt_id, "frequency": args.frequency,
+         "start_date": args.start_date, "next_bill_date": args.start_date})
+
+
+# ---------------------------------------------------------------------------
+# list-recurring-bill-templates
+# ---------------------------------------------------------------------------
+
+def list_recurring_bill_templates(conn, args):
+    """List recurring bill templates."""
+    rt = _t_recurring_bill_template.as_("rt")
+    params = []
+    crit = None
+
+    if args.company_id:
+        crit = (rt.company_id == P())
+        params.append(args.company_id)
+    if args.supplier_id:
+        cond = rt.supplier_id == P()
+        crit = Criterion.all([crit, cond]) if crit else cond
+        params.append(args.supplier_id)
+    if args.template_status:
+        cond = rt.status == P()
+        crit = Criterion.all([crit, cond]) if crit else cond
+        params.append(args.template_status)
+
+    count_q = Q.from_(rt).select(fn.Count("*"))
+    if crit:
+        count_q = count_q.where(crit)
+    count_row = conn.execute(count_q.get_sql(), params).fetchone()
+    total_count = count_row[0]
+
+    limit = int(args.limit) if args.limit else 20
+    offset = int(args.offset) if args.offset else 0
+
+    list_q = (Q.from_(rt).select(rt.star)
+              .orderby(rt.next_bill_date)
+              .limit(P()).offset(P()))
+    if crit:
+        list_q = list_q.where(crit)
+    rows = conn.execute(list_q.get_sql(), params + [limit, offset]).fetchall()
+
+    ok({"recurring_bill_templates": [row_to_dict(r) for r in rows],
+         "total_count": total_count, "limit": limit, "offset": offset,
+         "has_more": offset + limit < total_count})
+
+
+# ---------------------------------------------------------------------------
+# generate-recurring-bills
+# ---------------------------------------------------------------------------
+
+def generate_recurring_bills(conn, args):
+    """Cron: auto-generate purchase invoices from due bill templates."""
+    if not args.company_id:
+        err("--company-id is required")
+
+    as_of_date = args.as_of_date or _today()
+
+    # raw SQL — OR with IS NULL comparison
+    templates = conn.execute(
+        """SELECT * FROM recurring_bill_template
+           WHERE status = 'active'
+             AND next_bill_date <= ?
+             AND company_id = ?
+             AND (end_date IS NULL OR end_date >= ?)""",
+        (as_of_date, args.company_id, as_of_date),
+    ).fetchall()
+
+    bills_generated = []
+    templates_completed = 0
+    errors = []
+
+    for tmpl in templates:
+        tmpl_dict = row_to_dict(tmpl)
+        template_id = tmpl_dict["id"]
+        supplier_id = tmpl_dict["supplier_id"]
+        company_id = tmpl_dict["company_id"]
+        next_date = tmpl_dict["next_bill_date"]
+        frequency = tmpl_dict["frequency"]
+        auto_submit = tmpl_dict.get("auto_submit", 0)
+
+        try:
+            # Fetch template items
+            tiq = (Q.from_(_t_recurring_bill_template_item)
+                   .select(_t_recurring_bill_template_item.star)
+                   .where(_t_recurring_bill_template_item.template_id == P()))
+            tmpl_items = conn.execute(tiq.get_sql(), (template_id,)).fetchall()
+            if not tmpl_items:
+                errors.append({"template_id": template_id,
+                               "error": "Template has no items"})
+                continue
+
+            # Build invoice items
+            total_amount = Decimal("0")
+            pi_items_data = []
+            for ti in tmpl_items:
+                ti_dict = row_to_dict(ti)
+                qty = to_decimal(ti_dict["quantity"])
+                rate = to_decimal(ti_dict["rate"])
+                net = round_currency(qty * rate)
+                total_amount += net
+                pi_items_data.append({
+                    "item_id": ti_dict["item_id"],
+                    "qty": str(round_currency(qty)),
+                    "uom": ti_dict.get("uom"),
+                    "rate": str(round_currency(rate)),
+                    "amount": str(net),
+                })
+
+            total_amount = round_currency(total_amount)
+            tax_amount, _ = _calculate_tax(conn, tmpl_dict.get("tax_template_id"), total_amount)
+            grand_total = round_currency(total_amount + tax_amount)
+
+            # Calculate due date (30 days from posting)
+            parts = next_date.split("-")
+            d = date_type(int(parts[0]), int(parts[1]), int(parts[2]))
+            due_date = (d + timedelta(days=30)).isoformat()
+
+            pi_id = str(uuid.uuid4())
+
+            # Create purchase invoice
+            pi_t = Table("purchase_invoice")
+            pi_ins = (Q.into(pi_t)
+                       .columns("id", "supplier_id", "posting_date", "due_date",
+                                 "total_amount", "tax_amount", "grand_total",
+                                 "outstanding_amount", "tax_template_id",
+                                 "status", "update_stock", "company_id")
+                       .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(),
+                               ValueWrapper("draft"), 0, P()))
+            conn.execute(pi_ins.get_sql(),
+                (pi_id, supplier_id, next_date, due_date,
+                 str(total_amount), str(tax_amount), str(grand_total),
+                 str(grand_total), tmpl_dict.get("tax_template_id"),
+                 company_id))
+
+            pii_t = Table("purchase_invoice_item")
+            pii_ins = (Q.into(pii_t)
+                        .columns("id", "purchase_invoice_id", "item_id", "quantity",
+                                  "uom", "rate", "amount")
+                        .insert(P(), P(), P(), P(), P(), P(), P()))
+            pii_ins_sql = pii_ins.get_sql()
+            for row in pi_items_data:
+                conn.execute(pii_ins_sql,
+                    (str(uuid.uuid4()), pi_id, row["item_id"], row["qty"],
+                     row["uom"], row["rate"], row["amount"]))
+
+            status = "draft"
+            naming = None
+
+            # Auto-submit if configured
+            if auto_submit:
+                naming = get_next_name(conn, "purchase_invoice", company_id=company_id)
+
+                # GL posting for auto-submitted invoices
+                payable_account = _get_payable_account(conn, company_id)
+                expense_account = _get_expense_account(conn, company_id)
+
+                if payable_account and expense_account:
+                    fiscal_year = _get_fiscal_year(conn, next_date)
+                    cost_center_id = _get_cost_center(conn, company_id)
+
+                    gl_entries = [
+                        {
+                            "account_id": expense_account,
+                            "debit": str(round_currency(total_amount)),
+                            "credit": "0",
+                            "cost_center_id": cost_center_id,
+                            "fiscal_year": fiscal_year,
+                        },
+                        {
+                            "account_id": payable_account,
+                            "debit": "0",
+                            "credit": str(round_currency(grand_total)),
+                            "party_type": "supplier",
+                            "party_id": supplier_id,
+                            "fiscal_year": fiscal_year,
+                        },
+                    ]
+
+                    try:
+                        insert_gl_entries(
+                            conn, gl_entries,
+                            voucher_type="purchase_invoice",
+                            voucher_id=pi_id,
+                            posting_date=next_date,
+                            company_id=company_id,
+                            remarks=f"Recurring Bill from template {template_id}",
+                        )
+                    except ValueError as e:
+                        sys.stderr.write(f"[erpclaw-buying] {e}\n")
+                        errors.append({"template_id": template_id,
+                                       "error": "GL posting failed"})
+                        conn.rollback()
+                        continue
+
+                uq_pi = (Q.update(pi_t)
+                         .set("status", ValueWrapper("submitted"))
+                         .set("naming_series", P())
+                         .set("updated_at", LiteralValue("datetime('now')"))
+                         .where(pi_t.id == P()))
+                conn.execute(uq_pi.get_sql(), (naming, pi_id))
+                status = "submitted"
+
+            # Update template dates
+            new_next = _next_bill_date(next_date, frequency)
+            uq_rt = (Q.update(_t_recurring_bill_template)
+                     .set("last_bill_date", P())
+                     .set("next_bill_date", P())
+                     .set("updated_at", LiteralValue("datetime('now')"))
+                     .where(_t_recurring_bill_template.id == P()))
+            conn.execute(uq_rt.get_sql(), (next_date, new_next, template_id))
+
+            # Check if template is completed
+            if tmpl_dict.get("end_date") and new_next > tmpl_dict["end_date"]:
+                uq_comp = (Q.update(_t_recurring_bill_template)
+                           .set("status", ValueWrapper("completed"))
+                           .set("updated_at", LiteralValue("datetime('now')"))
+                           .where(_t_recurring_bill_template.id == P()))
+                conn.execute(uq_comp.get_sql(), (template_id,))
+                templates_completed += 1
+
+            bills_generated.append({
+                "template_id": template_id,
+                "invoice_id": pi_id,
+                "naming_series": naming,
+                "supplier_id": supplier_id,
+                "amount": str(grand_total),
+                "status": status,
+            })
+
+        except Exception as e:
+            errors.append({"template_id": template_id,
+                           "error": str(e)})
+            continue
+
+    conn.commit()
+    ok({"bills_generated": len(bills_generated),
+         "templates_processed": len(templates),
+         "templates_completed": templates_completed,
+         "bills": bills_generated,
+         "errors": errors})
+
+
+# ---------------------------------------------------------------------------
+# Buying account helpers (for recurring bills auto-submit)
+# ---------------------------------------------------------------------------
+
+def _get_payable_account(conn, company_id: str) -> str | None:
+    """Return the default payable account for a company."""
+    company_t = Table("company")
+    q = (Q.from_(company_t)
+         .select(company_t.default_payable_account_id)
+         .where(company_t.id == P()))
+    company = conn.execute(q.get_sql(), (company_id,)).fetchone()
+    if company and company["default_payable_account_id"]:
+        return company["default_payable_account_id"]
+    acct_t = Table("account")
+    q2 = (Q.from_(acct_t)
+          .select(acct_t.id)
+          .where(acct_t.account_type == ValueWrapper("payable"))
+          .where(acct_t.company_id == P())
+          .where(acct_t.is_group == 0)
+          .limit(1))
+    acct = conn.execute(q2.get_sql(), (company_id,)).fetchone()
+    return acct["id"] if acct else None
+
+
+def _get_expense_account(conn, company_id: str) -> str | None:
+    """Return the default expense account for a company."""
+    company_t = Table("company")
+    q = (Q.from_(company_t)
+         .select(company_t.default_expense_account_id)
+         .where(company_t.id == P()))
+    company = conn.execute(q.get_sql(), (company_id,)).fetchone()
+    if company and company["default_expense_account_id"]:
+        return company["default_expense_account_id"]
+    acct_t = Table("account")
+    q2 = (Q.from_(acct_t)
+          .select(acct_t.id)
+          .where(acct_t.root_type == ValueWrapper("expense"))
+          .where(acct_t.company_id == P())
+          .where(acct_t.is_group == 0)
+          .limit(1))
+    acct = conn.execute(q2.get_sql(), (company_id,)).fetchone()
+    return acct["id"] if acct else None
+
+
+# ---------------------------------------------------------------------------
+# Feature #19: Multi-UOM on PO (Sprint 7)
+# ---------------------------------------------------------------------------
+
+
+def set_item_purchase_uom(conn, args):
+    """Set default purchase UOM and conversion factor for an item.
+
+    Required: --item-id, --purchase-uom, --conversion-factor
+    Creates/updates a uom_conversion record for the item.
+    """
+    if not args.item_id:
+        err("--item-id is required")
+    if not args.purchase_uom:
+        err("--purchase-uom is required")
+    if not args.conversion_factor:
+        err("--conversion-factor is required")
+
+    # Validate item
+    item_t = Table("item")
+    iq = Q.from_(item_t).select(item_t.star).where(item_t.id == P())
+    item = conn.execute(iq.get_sql(), (args.item_id,)).fetchone()
+    if not item:
+        err(f"Item {args.item_id} not found")
+    item_d = row_to_dict(item)
+    stock_uom = item_d.get("stock_uom", "Each")
+
+    conversion_factor = to_decimal(args.conversion_factor)
+    if conversion_factor <= 0:
+        err("--conversion-factor must be > 0")
+
+    purchase_uom = args.purchase_uom.strip()
+
+    # Check if UOM conversion already exists for this item
+    uc_t = Table("uom_conversion")
+    existing_q = (Q.from_(uc_t).select(uc_t.id)
+                  .where(uc_t.item_id == P())
+                  .where(uc_t.from_uom == P())
+                  .where(uc_t.to_uom == P()))
+
+    # Look up UOM IDs (from_uom = purchase_uom, to_uom = stock_uom)
+    uom_t = Table("uom")
+    pq = Q.from_(uom_t).select(uom_t.id).where(uom_t.name == P())
+    purchase_uom_row = conn.execute(pq.get_sql(), (purchase_uom,)).fetchone()
+    stock_uom_row = conn.execute(pq.get_sql(), (stock_uom,)).fetchone()
+
+    # If UOMs don't exist as IDs in the uom table, use the name strings directly
+    purchase_uom_id = purchase_uom_row["id"] if purchase_uom_row else purchase_uom
+    stock_uom_id = stock_uom_row["id"] if stock_uom_row else stock_uom
+
+    existing = conn.execute(existing_q.get_sql(),
+                            (args.item_id, purchase_uom_id, stock_uom_id)).fetchone()
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+    if existing:
+        # Update existing conversion
+        conn.execute(
+            "UPDATE uom_conversion SET conversion_factor = ? WHERE id = ?",
+            (str(round_currency(conversion_factor)), existing["id"])
+        )
+        conv_id = existing["id"]
+        action_taken = "updated"
+    else:
+        # Create new conversion
+        conv_id = str(uuid.uuid4())
+        conn.execute(
+            """INSERT INTO uom_conversion (id, from_uom, to_uom, conversion_factor,
+               item_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (conv_id, purchase_uom_id, stock_uom_id,
+             str(round_currency(conversion_factor)), args.item_id, now)
+        )
+        action_taken = "created"
+
+    audit(conn, "erpclaw-buying", "set-item-purchase-uom",
+          "uom_conversion", conv_id,
+          new_values={"item_id": args.item_id,
+                      "purchase_uom": purchase_uom,
+                      "conversion_factor": str(conversion_factor)})
+    conn.commit()
+
+    ok({
+        "uom_conversion_id": conv_id,
+        "item_id": args.item_id,
+        "purchase_uom": purchase_uom,
+        "stock_uom": stock_uom,
+        "conversion_factor": str(round_currency(conversion_factor)),
+        "action": action_taken,
+        "message": f"Purchase UOM {action_taken} for item",
+    })
+
+
+# ---------------------------------------------------------------------------
 # Action dispatch
 # ---------------------------------------------------------------------------
 
@@ -3031,6 +4262,7 @@ ACTIONS = {
     "list-purchase-orders": list_purchase_orders,
     "submit-purchase-order": submit_purchase_order,
     "cancel-purchase-order": cancel_purchase_order,
+    "close-purchase-order": close_purchase_order,
     "create-purchase-receipt": create_purchase_receipt,
     "get-purchase-receipt": get_purchase_receipt,
     "list-purchase-receipts": list_purchase_receipts,
@@ -3046,6 +4278,21 @@ ACTIONS = {
     "update-invoice-outstanding": update_invoice_outstanding,
     "add-landed-cost-voucher": add_landed_cost_voucher,
     "import-suppliers": import_suppliers,
+    "update-receipt-tolerance": update_receipt_tolerance,
+    "update-three-way-match-policy": update_three_way_match_policy,
+    "add-blanket-po": add_blanket_po,
+    "submit-blanket-po": submit_blanket_po,
+    "get-blanket-po": get_blanket_po,
+    "list-blanket-pos": list_blanket_pos,
+    "create-po-from-blanket": create_po_from_blanket,
+    "create-po-from-so": create_po_from_so,
+    "add-recurring-bill-template": add_recurring_bill_template,
+    "list-recurring-bill-templates": list_recurring_bill_templates,
+    "generate-recurring-bills": generate_recurring_bills,
+
+    # --- Sprint 7: Multi-UOM ---
+    "set-item-purchase-uom": set_item_purchase_uom,
+
     "status": status_action,
 }
 
@@ -3093,15 +4340,43 @@ def main():
     parser.add_argument("--due-date")
     parser.add_argument("--pi-status", dest="pi_status")
 
-    # Debit note
+    # Debit note / close fields
     parser.add_argument("--against-invoice-id")
     parser.add_argument("--reason")
+    parser.add_argument("--closed-by")
 
     # Cross-skill
     parser.add_argument("--amount")
 
     # Landed cost
     parser.add_argument("--charges")  # JSON
+
+    # GRN tolerance & 3-way match policy
+    parser.add_argument("--tolerance-pct")
+    parser.add_argument("--policy")
+
+    # Blanket order fields
+    parser.add_argument("--blanket-order-id")
+    parser.add_argument("--valid-from")
+    parser.add_argument("--valid-to")
+    parser.add_argument("--blanket-status", dest="blanket_status")
+
+    # Back-to-back
+    parser.add_argument("--sales-order-id")
+
+    # Recurring bill template fields
+    parser.add_argument("--template-id")
+    parser.add_argument("--frequency")
+    parser.add_argument("--start-date")
+    parser.add_argument("--end-date")
+    parser.add_argument("--as-of-date")
+    parser.add_argument("--auto-submit", dest="auto_submit", action="store_true", default=False)
+    parser.add_argument("--template-status", dest="template_status")
+
+    # Multi-UOM (Feature #19)
+    parser.add_argument("--item-id")
+    parser.add_argument("--purchase-uom")
+    parser.add_argument("--conversion-factor")
 
     # Common
     parser.add_argument("--items")  # JSON

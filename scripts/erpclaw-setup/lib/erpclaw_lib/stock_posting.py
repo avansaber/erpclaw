@@ -13,9 +13,13 @@ Key functions:
 
 Valuation methods:
 - moving_average: New rate = (old_value + incoming_value) / (old_qty + incoming_qty)
-- fifo: Not yet implemented (Phase 2+); falls back to moving_average
+- fifo: First-In First-Out. Each incoming creates a layer in stock_fifo_layer;
+        each outgoing consumes layers oldest-first by (posting_date, created_at).
 
 NEVER commit inside these functions — the caller owns the transaction.
+
+NOTE: This file is in SAFETY_EXCLUDED_FILES for DGM, but it is modified by
+the developer directly. All FIFO logic is clearly commented.
 """
 import uuid
 import sqlite3
@@ -23,6 +27,214 @@ from decimal import Decimal
 from typing import Optional
 
 from erpclaw_lib.decimal_utils import to_decimal, round_currency
+
+
+# ---------------------------------------------------------------------------
+# FIFO Layer Management
+# ---------------------------------------------------------------------------
+
+def _get_item_valuation_method(conn: sqlite3.Connection, item_id: str) -> str:
+    """Return the valuation method for an item ('moving_average' or 'fifo').
+
+    Falls back to 'moving_average' if item not found or column missing.
+    """
+    try:
+        row = conn.execute(
+            "SELECT valuation_method FROM item WHERE id = ?", (item_id,)
+        ).fetchone()
+        if row and row["valuation_method"]:
+            return row["valuation_method"]
+    except (KeyError, sqlite3.OperationalError):
+        pass
+    return "moving_average"
+
+
+def _insert_fifo_layer(
+    conn: sqlite3.Connection,
+    item_id: str,
+    warehouse_id: str,
+    posting_date: str,
+    qty: Decimal,
+    rate: Decimal,
+    voucher_type: str,
+    voucher_id: str,
+) -> str:
+    """Insert a new FIFO layer for an incoming stock transaction.
+
+    Each purchase receipt, stock entry (receive), or other incoming movement
+    creates a layer. The remaining_qty starts equal to qty and is decremented
+    as outgoing transactions consume from this layer.
+
+    Returns the layer ID.
+    """
+    layer_id = str(uuid.uuid4())
+    conn.execute(
+        """
+        INSERT INTO stock_fifo_layer (
+            id, item_id, warehouse_id, posting_date,
+            qty, rate, remaining_qty,
+            source_voucher_type, source_voucher_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        """,
+        (
+            layer_id, item_id, warehouse_id, posting_date,
+            str(round_currency(qty)),
+            str(round_currency(rate)),
+            str(round_currency(qty)),
+            voucher_type, voucher_id,
+        ),
+    )
+    return layer_id
+
+
+def _consume_fifo_layers(
+    conn: sqlite3.Connection,
+    item_id: str,
+    warehouse_id: str,
+    qty_to_consume: Decimal,
+) -> tuple[Decimal, list[dict]]:
+    """Consume FIFO layers oldest-first for an outgoing stock transaction.
+
+    Deducts from remaining_qty of existing layers, starting with the oldest
+    (ORDER BY posting_date ASC, created_at ASC).
+
+    Args:
+        conn: SQLite connection (within a transaction).
+        item_id: The item being issued.
+        warehouse_id: The warehouse being issued from.
+        qty_to_consume: Positive quantity to consume.
+
+    Returns:
+        (weighted_average_rate, consumed_layers) where consumed_layers is a
+        list of {"layer_id", "qty_consumed", "rate"} dicts.
+
+    Raises:
+        ValueError if there are insufficient FIFO layers to fulfil the request.
+    """
+    layers = conn.execute(
+        """
+        SELECT id, qty, rate, remaining_qty
+        FROM stock_fifo_layer
+        WHERE item_id = ? AND warehouse_id = ?
+          AND CAST(remaining_qty AS REAL) > 0
+        ORDER BY posting_date ASC, created_at ASC
+        """,
+        (item_id, warehouse_id),
+    ).fetchall()
+
+    remaining = qty_to_consume
+    total_value = Decimal("0")
+    consumed = []
+
+    for layer in layers:
+        if remaining <= 0:
+            break
+
+        layer_remaining = to_decimal(layer["remaining_qty"])
+        layer_rate = to_decimal(layer["rate"])
+
+        consume_from_this = min(remaining, layer_remaining)
+        total_value += round_currency(consume_from_this * layer_rate)
+        remaining -= consume_from_this
+
+        new_remaining = layer_remaining - consume_from_this
+        conn.execute(
+            "UPDATE stock_fifo_layer SET remaining_qty = ? WHERE id = ?",
+            (str(round_currency(new_remaining)), layer["id"]),
+        )
+
+        consumed.append({
+            "layer_id": layer["id"],
+            "qty_consumed": consume_from_this,
+            "rate": layer_rate,
+        })
+
+    if remaining > Decimal("0.0001"):
+        # Allow tiny rounding remainder (< 0.01 of a unit) to avoid
+        # false failures from floating-point edge cases.
+        raise ValueError(
+            f"Insufficient FIFO layers for item {item_id} in warehouse "
+            f"{warehouse_id}. Needed {qty_to_consume}, "
+            f"unfulfilled: {remaining}"
+        )
+
+    if qty_to_consume > 0:
+        weighted_rate = round_currency(total_value / qty_to_consume)
+    else:
+        weighted_rate = Decimal("0")
+
+    return weighted_rate, consumed
+
+
+def _reverse_fifo_layers(
+    conn: sqlite3.Connection,
+    voucher_type: str,
+    voucher_id: str,
+) -> None:
+    """Reverse FIFO layers created by a voucher (for cancellation).
+
+    For incoming vouchers: sets remaining_qty to 0 on layers created by voucher.
+    This is called during reverse_sle_entries for FIFO items.
+    """
+    conn.execute(
+        """
+        UPDATE stock_fifo_layer
+        SET remaining_qty = '0'
+        WHERE source_voucher_type = ? AND source_voucher_id = ?
+        """,
+        (voucher_type, voucher_id),
+    )
+
+
+def get_fifo_valuation_rate(
+    conn: sqlite3.Connection,
+    item_id: str,
+    warehouse_id: str,
+    qty: Decimal,
+) -> Decimal:
+    """Calculate the FIFO valuation rate for consuming a given qty.
+
+    This is a READ-ONLY query — it does not modify layers. Used for
+    previewing the cost of an outgoing transaction before committing.
+
+    Args:
+        conn: SQLite connection.
+        item_id: Item to query.
+        warehouse_id: Warehouse to query.
+        qty: Positive quantity to price.
+
+    Returns:
+        Weighted average rate from the oldest layers that would be consumed.
+    """
+    if qty <= 0:
+        return Decimal("0")
+
+    layers = conn.execute(
+        """
+        SELECT rate, remaining_qty
+        FROM stock_fifo_layer
+        WHERE item_id = ? AND warehouse_id = ?
+          AND CAST(remaining_qty AS REAL) > 0
+        ORDER BY posting_date ASC, created_at ASC
+        """,
+        (item_id, warehouse_id),
+    ).fetchall()
+
+    remaining = qty
+    total_value = Decimal("0")
+
+    for layer in layers:
+        if remaining <= 0:
+            break
+        layer_remaining = to_decimal(layer["remaining_qty"])
+        layer_rate = to_decimal(layer["rate"])
+        consume = min(remaining, layer_remaining)
+        total_value += round_currency(consume * layer_rate)
+        remaining -= consume
+
+    if qty > 0:
+        return round_currency(total_value / qty)
+    return Decimal("0")
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +379,8 @@ def insert_sle_entries(
     1. Idempotency check — reject if SLE already exist for this voucher
     2. Run validation
     3. For each entry: compute running balance, valuation rate, insert SLE
+       - If item.valuation_method == 'fifo': use FIFO layer logic
+       - Otherwise: use moving average (default)
 
     Returns:
         List of generated SLE IDs.
@@ -199,36 +413,29 @@ def insert_sle_entries(
         actual_qty = to_decimal(entry.get("actual_qty", "0"))
         incoming_rate = to_decimal(entry.get("incoming_rate", "0"))
 
+        # Determine valuation method for this item
+        valuation_method = _get_item_valuation_method(conn, item_id)
+
         # Get current balance for this item/warehouse
         current = get_stock_balance(conn, item_id, warehouse_id)
         current_qty = to_decimal(current["qty"])
         current_value = to_decimal(current["stock_value"])
 
-        # Compute valuation rate and new balance
-        if actual_qty > 0:
-            # Incoming: use provided rate or fall back to item standard_rate
-            if incoming_rate <= 0:
-                item_row = conn.execute(
-                    "SELECT standard_rate FROM item WHERE id = ?", (item_id,)
-                ).fetchone()
-                incoming_rate = to_decimal(item_row["standard_rate"]) if item_row else Decimal("0")
-            incoming_value = round_currency(actual_qty * incoming_rate)
-            new_qty = current_qty + actual_qty
-            new_value = current_value + incoming_value
-            if new_qty > 0:
-                valuation_rate = round_currency(new_value / new_qty)
-            else:
-                valuation_rate = incoming_rate
+        # --- Branch: FIFO vs Moving Average ---
+        if valuation_method == "fifo":
+            valuation_rate, incoming_rate, new_qty, new_value = _compute_fifo_sle(
+                conn, item_id, warehouse_id, posting_date,
+                actual_qty, incoming_rate,
+                current_qty, current_value,
+                voucher_type, voucher_id,
+            )
         else:
-            # Outgoing: use current valuation rate
-            if current_qty > 0:
-                valuation_rate = round_currency(current_value / current_qty)
-            else:
-                valuation_rate = Decimal("0")
-            outgoing_value = round_currency(abs(actual_qty) * valuation_rate)
-            new_qty = current_qty + actual_qty  # actual_qty is negative
-            new_value = current_value - outgoing_value
-            incoming_rate = Decimal("0")  # Not an incoming entry
+            # Moving average (original logic)
+            valuation_rate, incoming_rate, new_qty, new_value = _compute_moving_avg_sle(
+                conn, item_id,
+                actual_qty, incoming_rate,
+                current_qty, current_value,
+            )
 
         new_stock_value = round_currency(new_value)
         stock_value_diff = round_currency(new_stock_value - current_value)
@@ -267,6 +474,112 @@ def insert_sle_entries(
     return generated_ids
 
 
+def _compute_moving_avg_sle(
+    conn: sqlite3.Connection,
+    item_id: str,
+    actual_qty: Decimal,
+    incoming_rate: Decimal,
+    current_qty: Decimal,
+    current_value: Decimal,
+) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+    """Compute valuation using moving average method.
+
+    Returns: (valuation_rate, incoming_rate, new_qty, new_value)
+    """
+    if actual_qty > 0:
+        # Incoming: use provided rate or fall back to item standard_rate
+        if incoming_rate <= 0:
+            item_row = conn.execute(
+                "SELECT standard_rate FROM item WHERE id = ?", (item_id,)
+            ).fetchone()
+            incoming_rate = to_decimal(item_row["standard_rate"]) if item_row else Decimal("0")
+        incoming_value = round_currency(actual_qty * incoming_rate)
+        new_qty = current_qty + actual_qty
+        new_value = current_value + incoming_value
+        if new_qty > 0:
+            valuation_rate = round_currency(new_value / new_qty)
+        else:
+            valuation_rate = incoming_rate
+    else:
+        # Outgoing: use current valuation rate
+        if current_qty > 0:
+            valuation_rate = round_currency(current_value / current_qty)
+        else:
+            valuation_rate = Decimal("0")
+        outgoing_value = round_currency(abs(actual_qty) * valuation_rate)
+        new_qty = current_qty + actual_qty  # actual_qty is negative
+        new_value = current_value - outgoing_value
+        incoming_rate = Decimal("0")  # Not an incoming entry
+
+    return valuation_rate, incoming_rate, new_qty, new_value
+
+
+def _compute_fifo_sle(
+    conn: sqlite3.Connection,
+    item_id: str,
+    warehouse_id: str,
+    posting_date: str,
+    actual_qty: Decimal,
+    incoming_rate: Decimal,
+    current_qty: Decimal,
+    current_value: Decimal,
+    voucher_type: str,
+    voucher_id: str,
+) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+    """Compute valuation using FIFO method.
+
+    For incoming: creates a new FIFO layer and computes weighted average across
+    all remaining layers for the SLE valuation_rate.
+
+    For outgoing: consumes oldest layers first. The valuation_rate on the SLE
+    reflects the weighted average cost of the consumed layers (i.e., the true
+    FIFO cost of goods issued).
+
+    Returns: (valuation_rate, incoming_rate, new_qty, new_value)
+    """
+    if actual_qty > 0:
+        # --- FIFO INCOMING ---
+        # Use provided rate or fall back to item standard_rate
+        if incoming_rate <= 0:
+            item_row = conn.execute(
+                "SELECT standard_rate FROM item WHERE id = ?", (item_id,)
+            ).fetchone()
+            incoming_rate = to_decimal(item_row["standard_rate"]) if item_row else Decimal("0")
+
+        # Create a new FIFO layer for this incoming stock
+        _insert_fifo_layer(
+            conn, item_id, warehouse_id, posting_date,
+            actual_qty, incoming_rate, voucher_type, voucher_id,
+        )
+
+        incoming_value = round_currency(actual_qty * incoming_rate)
+        new_qty = current_qty + actual_qty
+        new_value = current_value + incoming_value
+
+        # SLE valuation_rate = total value / total qty (weighted average of all layers)
+        if new_qty > 0:
+            valuation_rate = round_currency(new_value / new_qty)
+        else:
+            valuation_rate = incoming_rate
+
+    else:
+        # --- FIFO OUTGOING ---
+        # Consume layers oldest-first; get the weighted cost of consumed layers
+        abs_qty = abs(actual_qty)
+        fifo_rate, _consumed = _consume_fifo_layers(
+            conn, item_id, warehouse_id, abs_qty,
+        )
+
+        # The valuation_rate on the SLE = FIFO cost of goods issued
+        valuation_rate = fifo_rate
+        outgoing_value = round_currency(abs_qty * fifo_rate)
+        new_qty = current_qty + actual_qty  # actual_qty is negative
+        new_value = current_value - outgoing_value
+        incoming_rate = Decimal("0")  # Not an incoming entry
+
+    return valuation_rate, incoming_rate, new_qty, new_value
+
+
 # ---------------------------------------------------------------------------
 # Reverse SLE Entries
 # ---------------------------------------------------------------------------
@@ -282,6 +595,9 @@ def reverse_sle_entries(
     Finds all SLE rows for the voucher where is_cancelled=0.
     Creates mirror entries with negated actual_qty.
     Sets is_cancelled=1 on originals.
+
+    For FIFO items with incoming vouchers, also zeros out the FIFO layers
+    created by this voucher.
 
     Does NOT commit — caller manages transaction.
 
@@ -301,6 +617,11 @@ def reverse_sle_entries(
         raise ValueError(
             f"No active SLE entries found for voucher ({voucher_type}, {voucher_id})"
         )
+
+    # Reverse FIFO layers created by this voucher (for incoming cancellations).
+    # This is safe to call even for moving_average items — it's a no-op if no
+    # layers exist for this voucher.
+    _reverse_fifo_layers(conn, voucher_type, voucher_id)
 
     reversal_ids = []
 

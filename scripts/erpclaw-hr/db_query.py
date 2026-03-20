@@ -2985,6 +2985,592 @@ def status_action(conn, args):
 
 
 # ---------------------------------------------------------------------------
+# Shift Management (Sprint 6, Feature #20)
+# ---------------------------------------------------------------------------
+
+
+def add_shift_type(conn, args):
+    """Create a new shift type.
+
+    Required: --name, --start-time, --end-time, --company-id
+    Optional: --status (default 'active')
+    """
+    if not args.name:
+        err("--name is required")
+    if not args.start_time:
+        err("--start-time is required")
+    if not args.end_time:
+        err("--end-time is required")
+    if not args.company_id:
+        err("--company-id is required")
+
+    name = args.name.strip()
+    start_time = args.start_time.strip()
+    end_time = args.end_time.strip()
+    company_id = args.company_id.strip()
+    status = (args.status or "active").strip().lower()
+
+    if status not in ("active", "inactive"):
+        err(f"Invalid status '{status}'. Valid: active, inactive")
+
+    # Validate time format (HH:MM or HH:MM:SS)
+    import re
+    time_re = re.compile(r'^\d{2}:\d{2}(:\d{2})?$')
+    if not time_re.match(start_time):
+        err(f"Invalid start_time '{start_time}'. Use HH:MM or HH:MM:SS format")
+    if not time_re.match(end_time):
+        err(f"Invalid end_time '{end_time}'. Use HH:MM or HH:MM:SS format")
+
+    # Check company exists
+    co_t = Table("company")
+    co_q = Q.from_(co_t).select(co_t.id).where(co_t.id == P())
+    if not conn.execute(co_q.get_sql(), (company_id,)).fetchone():
+        err(f"Company {company_id} not found")
+
+    # Check unique name
+    st_t = Table("shift_type")
+    uniq_q = Q.from_(st_t).select(st_t.id).where(st_t.name == P())
+    if conn.execute(uniq_q.get_sql(), (name,)).fetchone():
+        err(f"Shift type '{name}' already exists")
+
+    now = datetime.now(timezone.utc).isoformat()
+    shift_id = str(uuid.uuid4())
+
+    ins_sql, _ = insert_row("shift_type", {
+        "id": P(), "name": P(), "start_time": P(), "end_time": P(),
+        "company_id": P(), "status": P(), "created_at": P(), "updated_at": P(),
+    })
+    conn.execute(ins_sql, (shift_id, name, start_time, end_time,
+                           company_id, status, now, now))
+    conn.commit()
+
+    ok({
+        "shift_type_id": shift_id,
+        "name": name,
+        "start_time": start_time,
+        "end_time": end_time,
+        "company_id": company_id,
+        "shift_status": status,
+    })
+
+
+def list_shift_types(conn, args):
+    """List shift types, optionally filtered by company_id and status.
+
+    Optional: --company-id, --status, --limit, --offset
+    """
+    st_t = Table("shift_type")
+    q = Q.from_(st_t).select(st_t.star).orderby(st_t.name)
+    params = []
+
+    if args.company_id:
+        q = q.where(st_t.company_id == P())
+        params.append(args.company_id)
+
+    if args.status:
+        q = q.where(st_t.status == P())
+        params.append(args.status.strip().lower())
+
+    limit = int(args.limit or 20)
+    offset = int(args.offset or 0)
+    q = q.limit(limit).offset(offset)
+
+    rows = conn.execute(q.get_sql(), params).fetchall()
+    ok({
+        "shift_types": [row_to_dict(r) for r in rows],
+        "count": len(rows),
+    })
+
+
+def update_shift_type(conn, args):
+    """Update a shift type.
+
+    Required: --shift-type-id
+    Optional: --name, --start-time, --end-time, --status
+    """
+    if not args.shift_type_id:
+        err("--shift-type-id is required")
+
+    shift_type_id = args.shift_type_id.strip()
+
+    st_t = Table("shift_type")
+    q = Q.from_(st_t).select(st_t.star).where(st_t.id == P())
+    existing = conn.execute(q.get_sql(), (shift_type_id,)).fetchone()
+    if not existing:
+        err(f"Shift type {shift_type_id} not found")
+
+    updates = {}
+    if args.name:
+        # Check uniqueness of new name
+        uniq_q = Q.from_(st_t).select(st_t.id).where(
+            (st_t.name == P()) & (st_t.id != P())
+        )
+        if conn.execute(uniq_q.get_sql(), (args.name.strip(), shift_type_id)).fetchone():
+            err(f"Shift type '{args.name.strip()}' already exists")
+        updates["name"] = args.name.strip()
+
+    if args.start_time:
+        import re
+        if not re.match(r'^\d{2}:\d{2}(:\d{2})?$', args.start_time.strip()):
+            err(f"Invalid start_time format. Use HH:MM or HH:MM:SS")
+        updates["start_time"] = args.start_time.strip()
+
+    if args.end_time:
+        import re
+        if not re.match(r'^\d{2}:\d{2}(:\d{2})?$', args.end_time.strip()):
+            err(f"Invalid end_time format. Use HH:MM or HH:MM:SS")
+        updates["end_time"] = args.end_time.strip()
+
+    if args.status:
+        status = args.status.strip().lower()
+        if status not in ("active", "inactive"):
+            err(f"Invalid status '{status}'. Valid: active, inactive")
+        updates["status"] = status
+
+    if not updates:
+        err("No fields to update. Provide at least one of: --name, --start-time, --end-time, --status")
+
+    now = datetime.now(timezone.utc).isoformat()
+    updates["updated_at"] = now
+
+    set_clauses = ", ".join(f"{k} = ?" for k in updates)
+    params = list(updates.values()) + [shift_type_id]
+    conn.execute(f"UPDATE shift_type SET {set_clauses} WHERE id = ?", params)
+    conn.commit()
+
+    # Re-fetch
+    updated = conn.execute(q.get_sql(), (shift_type_id,)).fetchone()
+    result = row_to_dict(updated)
+    # Rename 'status' to 'shift_status' to avoid collision with ok() wrapper
+    if "status" in result:
+        result["shift_status"] = result.pop("status")
+    ok(result)
+
+
+def assign_shift(conn, args):
+    """Assign a shift type to an employee.
+
+    Required: --employee-id, --shift-type-id, --start-date
+    Optional: --end-date, --status (default 'active')
+    """
+    if not args.employee_id:
+        err("--employee-id is required")
+    if not args.shift_type_id:
+        err("--shift-type-id is required")
+    if not args.start_date:
+        err("--start-date is required")
+
+    employee_id = args.employee_id.strip()
+    shift_type_id = args.shift_type_id.strip()
+    start_date = args.start_date.strip()
+    end_date = args.end_date.strip() if args.end_date else None
+    status = (args.status or "active").strip().lower()
+
+    if status not in ("active", "inactive"):
+        err(f"Invalid status '{status}'. Valid: active, inactive")
+
+    # Validate employee exists
+    emp_t = Table("employee")
+    emp_q = Q.from_(emp_t).select(emp_t.id).where(emp_t.id == P())
+    if not conn.execute(emp_q.get_sql(), (employee_id,)).fetchone():
+        err(f"Employee {employee_id} not found")
+
+    # Validate shift type exists
+    st_t = Table("shift_type")
+    st_q = Q.from_(st_t).select(st_t.id).where(st_t.id == P())
+    if not conn.execute(st_q.get_sql(), (shift_type_id,)).fetchone():
+        err(f"Shift type {shift_type_id} not found")
+
+    # Validate dates
+    _validate_date = lambda d, n: None  # date format already enforced by arg parsing
+    try:
+        datetime.strptime(start_date, "%Y-%m-%d")
+    except ValueError:
+        err(f"Invalid start_date '{start_date}'. Use YYYY-MM-DD format")
+
+    if end_date:
+        try:
+            datetime.strptime(end_date, "%Y-%m-%d")
+        except ValueError:
+            err(f"Invalid end_date '{end_date}'. Use YYYY-MM-DD format")
+        if end_date < start_date:
+            err("end_date cannot be before start_date")
+
+    now = datetime.now(timezone.utc).isoformat()
+    assignment_id = str(uuid.uuid4())
+
+    ins_sql, _ = insert_row("shift_assignment", {
+        "id": P(), "employee_id": P(), "shift_type_id": P(),
+        "start_date": P(), "end_date": P(), "status": P(),
+        "created_at": P(), "updated_at": P(),
+    })
+    conn.execute(ins_sql, (assignment_id, employee_id, shift_type_id,
+                           start_date, end_date, status, now, now))
+    conn.commit()
+
+    ok({
+        "shift_assignment_id": assignment_id,
+        "employee_id": employee_id,
+        "shift_type_id": shift_type_id,
+        "start_date": start_date,
+        "end_date": end_date,
+        "assignment_status": status,
+    })
+
+
+def list_shift_assignments(conn, args):
+    """List shift assignments, optionally filtered.
+
+    Optional: --employee-id, --shift-type-id, --status, --company-id, --limit, --offset
+    """
+    sa_t = Table("shift_assignment").as_("sa")
+    st_t = Table("shift_type").as_("st")
+    emp_t = Table("employee").as_("e")
+
+    q = (Q.from_(sa_t)
+         .join(st_t).on(st_t.id == sa_t.shift_type_id)
+         .join(emp_t).on(emp_t.id == sa_t.employee_id)
+         .select(sa_t.star,
+                 st_t.name.as_("shift_name"),
+                 emp_t.full_name.as_("employee_name"))
+         .orderby(sa_t.start_date, order=Order.desc))
+    params = []
+
+    if args.employee_id:
+        q = q.where(sa_t.employee_id == P())
+        params.append(args.employee_id)
+
+    if args.shift_type_id:
+        q = q.where(sa_t.shift_type_id == P())
+        params.append(args.shift_type_id)
+
+    if args.status:
+        q = q.where(sa_t.status == P())
+        params.append(args.status.strip().lower())
+
+    if args.company_id:
+        q = q.where(emp_t.company_id == P())
+        params.append(args.company_id)
+
+    limit = int(args.limit or 20)
+    offset = int(args.offset or 0)
+    q = q.limit(limit).offset(offset)
+
+    rows = conn.execute(q.get_sql(), params).fetchall()
+    ok({
+        "shift_assignments": [row_to_dict(r) for r in rows],
+        "count": len(rows),
+    })
+
+
+# ---------------------------------------------------------------------------
+# Feature #22f: Attendance Regularization (Sprint 7)
+# ---------------------------------------------------------------------------
+
+VALID_REGULARIZATION_ACTIONS = ("half_day", "deduct_leave", "warn")
+
+
+def add_regularization_rule(conn, args):
+    """Add an attendance regularization rule for a company.
+
+    Required: --company-id, --late-threshold-minutes, --regularization-action
+    """
+    if not args.company_id:
+        err("--company-id is required")
+    if not args.late_threshold_minutes:
+        err("--late-threshold-minutes is required")
+    if not args.regularization_action:
+        err("--regularization-action is required")
+
+    co_t = Table("company")
+    cq = Q.from_(co_t).select(co_t.id).where(co_t.id == P())
+    if not conn.execute(cq.get_sql(), (args.company_id,)).fetchone():
+        err(f"Company {args.company_id} not found")
+
+    try:
+        threshold = int(args.late_threshold_minutes)
+    except (ValueError, TypeError):
+        err("--late-threshold-minutes must be an integer")
+    if threshold <= 0:
+        err("--late-threshold-minutes must be > 0")
+
+    action = args.regularization_action.strip().lower()
+    if action not in VALID_REGULARIZATION_ACTIONS:
+        err(f"Invalid action '{action}'. Valid: {VALID_REGULARIZATION_ACTIONS}")
+
+    rule_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+
+    sql, _ = insert_row("attendance_regularization_rule", {
+        "id": P(), "company_id": P(), "late_threshold_minutes": P(),
+        "action": P(), "created_at": P(), "updated_at": P(),
+    })
+    conn.execute(sql, (rule_id, args.company_id, threshold, action, now, now))
+
+    audit(conn, "erpclaw-hr", "add-regularization-rule",
+          "attendance_regularization_rule", rule_id,
+          new_values={"company_id": args.company_id,
+                      "late_threshold_minutes": threshold, "action": action})
+    conn.commit()
+
+    ok({
+        "rule_id": rule_id,
+        "company_id": args.company_id,
+        "late_threshold_minutes": threshold,
+        "action": action,
+        "message": "Attendance regularization rule added",
+    })
+
+
+def apply_attendance_regularization(conn, args):
+    """Apply attendance regularization rules for a company on a date range.
+
+    Required: --company-id
+    Optional: --from-date, --to-date
+    """
+    if not args.company_id:
+        err("--company-id is required")
+
+    arr_t = Table("attendance_regularization_rule")
+    rq = (Q.from_(arr_t).select(arr_t.star)
+          .where(arr_t.company_id == P())
+          .orderby(arr_t.late_threshold_minutes))
+    rules = conn.execute(rq.get_sql(), (args.company_id,)).fetchall()
+    if not rules:
+        err(f"No regularization rules found for company {args.company_id}")
+    rules = [row_to_dict(r) for r in rules]
+
+    at = Table("attendance")
+    emp_t = Table("employee")
+    q = (Q.from_(at)
+         .join(emp_t).on(emp_t.id == at.employee_id)
+         .select(at.star)
+         .where(emp_t.company_id == P())
+         .where(at.late_entry == 1))
+    params = [args.company_id]
+
+    if args.from_date:
+        q = q.where(at.attendance_date >= P())
+        params.append(args.from_date)
+    if args.to_date:
+        q = q.where(at.attendance_date <= P())
+        params.append(args.to_date)
+
+    records = conn.execute(q.get_sql(), params).fetchall()
+    updated = 0
+    warnings = []
+
+    for rec in records:
+        rec_d = row_to_dict(rec)
+        check_in = rec_d.get("check_in_time")
+        if not check_in:
+            continue
+
+        for rule in rules:
+            threshold = rule["late_threshold_minutes"]
+            action_type = rule["action"]
+
+            try:
+                parts = check_in.split(":")
+                check_hour = int(parts[0])
+                check_min = int(parts[1]) if len(parts) > 1 else 0
+                late_minutes = (check_hour - 9) * 60 + check_min
+                if late_minutes < 0:
+                    late_minutes = 0
+            except (ValueError, IndexError):
+                late_minutes = threshold + 1
+
+            if late_minutes >= threshold:
+                if action_type == "half_day":
+                    conn.execute(
+                        "UPDATE attendance SET status = 'half_day' WHERE id = ?",
+                        (rec_d["id"],)
+                    )
+                    updated += 1
+                elif action_type == "warn":
+                    warnings.append({
+                        "attendance_id": rec_d["id"],
+                        "employee_id": rec_d["employee_id"],
+                        "date": rec_d["attendance_date"],
+                        "late_minutes": late_minutes,
+                    })
+                elif action_type == "deduct_leave":
+                    warnings.append({
+                        "attendance_id": rec_d["id"],
+                        "employee_id": rec_d["employee_id"],
+                        "date": rec_d["attendance_date"],
+                        "late_minutes": late_minutes,
+                        "action": "deduct_leave",
+                    })
+                break
+
+    conn.commit()
+    ok({
+        "records_processed": len(records),
+        "records_updated": updated,
+        "warnings": warnings,
+        "warning_count": len(warnings),
+    })
+
+
+# ---------------------------------------------------------------------------
+# Feature #21: Employee Documents (Sprint 7)
+# ---------------------------------------------------------------------------
+
+VALID_DOCUMENT_TYPES = (
+    "passport", "visa", "drivers_license", "i9", "w4",
+    "offer_letter", "contract", "certificate", "other",
+)
+VALID_DOCUMENT_STATUSES = ("active", "expired", "archived")
+
+
+def add_employee_document(conn, args):
+    """Add an employee document record.
+
+    Required: --employee-id, --document-type, --document-name
+    Optional: --expiry-date, --notes
+    """
+    if not args.employee_id:
+        err("--employee-id is required")
+    if not args.document_type:
+        err("--document-type is required")
+    if not args.document_name:
+        err("--document-name is required")
+
+    emp = _validate_employee_exists(conn, args.employee_id)
+
+    doc_type = args.document_type.strip().lower()
+    if doc_type not in VALID_DOCUMENT_TYPES:
+        err(f"Invalid document type '{doc_type}'. Valid: {VALID_DOCUMENT_TYPES}")
+
+    expiry_date = None
+    if args.expiry_date:
+        try:
+            date.fromisoformat(args.expiry_date)
+            expiry_date = args.expiry_date
+        except (ValueError, TypeError):
+            err(f"Invalid expiry date format: {args.expiry_date}. Use YYYY-MM-DD")
+
+    doc_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+
+    sql, _ = insert_row("employee_document", {
+        "id": P(), "employee_id": P(), "document_type": P(),
+        "document_name": P(), "expiry_date": P(), "notes": P(),
+        "status": P(), "created_at": P(), "updated_at": P(),
+    })
+    conn.execute(sql, (
+        doc_id, args.employee_id, doc_type,
+        args.document_name.strip(), expiry_date,
+        args.notes, "active", now, now,
+    ))
+
+    audit(conn, "erpclaw-hr", "add-employee-document",
+          "employee_document", doc_id,
+          new_values={"employee_id": args.employee_id,
+                      "document_type": doc_type,
+                      "document_name": args.document_name})
+    conn.commit()
+
+    ok({
+        "employee_document_id": doc_id,
+        "employee_id": args.employee_id,
+        "employee_name": emp["full_name"],
+        "document_type": doc_type,
+        "document_name": args.document_name.strip(),
+        "expiry_date": expiry_date,
+        "message": "Employee document added",
+    })
+
+
+def list_employee_documents(conn, args):
+    """List employee documents.
+
+    Required: --employee-id
+    Optional: --document-type, --status
+    """
+    if not args.employee_id:
+        err("--employee-id is required")
+
+    ed_t = Table("employee_document")
+    q = (Q.from_(ed_t).select(ed_t.star)
+         .where(ed_t.employee_id == P()))
+    params = [args.employee_id]
+
+    if args.document_type:
+        q = q.where(ed_t.document_type == P())
+        params.append(args.document_type.strip().lower())
+
+    if args.status:
+        q = q.where(ed_t.status == P())
+        params.append(args.status.strip().lower())
+
+    q = q.orderby(ed_t.created_at)
+    rows = conn.execute(q.get_sql(), params).fetchall()
+
+    ok({"documents": [row_to_dict(r) for r in rows], "count": len(rows)})
+
+
+def get_employee_document(conn, args):
+    """Get a specific employee document.
+
+    Required: --document-id
+    """
+    if not args.document_id:
+        err("--document-id is required")
+
+    ed_t = Table("employee_document")
+    q = Q.from_(ed_t).select(ed_t.star).where(ed_t.id == P())
+    row = conn.execute(q.get_sql(), (args.document_id,)).fetchone()
+    if not row:
+        err(f"Employee document {args.document_id} not found")
+
+    ok(row_to_dict(row))
+
+
+def check_expiring_documents(conn, args):
+    """Check for employee documents expiring within N days.
+
+    Optional: --company-id, --days (default 30)
+    """
+    days = int(args.days or 30)
+    today = date.today()
+    cutoff = (today + timedelta(days=days)).isoformat()
+
+    ed_t = Table("employee_document")
+    emp_t = Table("employee")
+    q = (Q.from_(ed_t)
+         .join(emp_t).on(emp_t.id == ed_t.employee_id)
+         .select(ed_t.star, emp_t.full_name.as_("employee_name"),
+                 emp_t.company_id)
+         .where(ed_t.expiry_date.isnotnull())
+         .where(ed_t.expiry_date <= P())
+         .where(ed_t.status == ValueWrapper("active")))
+    params = [cutoff]
+
+    if args.company_id:
+        q = q.where(emp_t.company_id == P())
+        params.append(args.company_id)
+
+    q = q.orderby(ed_t.expiry_date)
+    rows = conn.execute(q.get_sql(), params).fetchall()
+
+    results = []
+    for r in rows:
+        d = row_to_dict(r)
+        exp_date = date.fromisoformat(d["expiry_date"])
+        d["days_until_expiry"] = (exp_date - today).days
+        d["is_expired"] = exp_date < today
+        results.append(d)
+
+    ok({
+        "expiring_documents": results,
+        "count": len(results),
+        "days_window": days,
+    })
+
+
+# ---------------------------------------------------------------------------
 # ACTIONS dispatch table
 # ---------------------------------------------------------------------------
 
@@ -3016,6 +3602,22 @@ ACTIONS = {
     "update-expense-claim-status": update_expense_claim_status,
     "list-expense-claims": list_expense_claims,
     "record-lifecycle-event": record_lifecycle_event,
+    "add-shift-type": add_shift_type,
+    "list-shift-types": list_shift_types,
+    "update-shift-type": update_shift_type,
+    "assign-shift": assign_shift,
+    "list-shift-assignments": list_shift_assignments,
+
+    # --- Sprint 7: Attendance Regularization ---
+    "add-regularization-rule": add_regularization_rule,
+    "apply-attendance-regularization": apply_attendance_regularization,
+
+    # --- Sprint 7: Employee Documents ---
+    "add-employee-document": add_employee_document,
+    "list-employee-documents": list_employee_documents,
+    "get-employee-document": get_employee_document,
+    "check-expiring-documents": check_expiring_documents,
+
     "status": status_action,
 }
 
@@ -3044,6 +3646,11 @@ def main():
     parser.add_argument("--salary-structure-id")
     parser.add_argument("--leave-policy-id")
     parser.add_argument("--shift-id")
+    parser.add_argument("--shift-type-id")
+    parser.add_argument("--start-date")
+    parser.add_argument("--end-date")
+    parser.add_argument("--start-time")
+    parser.add_argument("--end-time")
     parser.add_argument("--attendance-device-id")
     parser.add_argument("--cost-center-id")
 
@@ -3118,6 +3725,18 @@ def main():
     parser.add_argument("--details")
     parser.add_argument("--old-values")
     parser.add_argument("--new-values")
+
+    # Attendance regularization fields (Feature #22f)
+    parser.add_argument("--late-threshold-minutes")
+    parser.add_argument("--regularization-action")
+
+    # Employee document fields (Feature #21)
+    parser.add_argument("--document-id")
+    parser.add_argument("--document-type")
+    parser.add_argument("--document-name")
+    parser.add_argument("--expiry-date")
+    parser.add_argument("--notes")
+    parser.add_argument("--days")
 
     # Filters
     parser.add_argument("--status")
