@@ -33,7 +33,7 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# Knowledge Base — 22 common ERP business rules
+# Knowledge Base — 42 ERP business rules (22 core + 20 vertical)
 # ---------------------------------------------------------------------------
 
 KNOWLEDGE_BASE = {
@@ -305,6 +305,375 @@ KNOWLEDGE_BASE = {
         ),
         "related_patterns": [],
     },
+    # --- Healthcare vertical rules ---
+    "insurance_payer_registry": {
+        "summary": (
+            "Each insurance payer has a unique EDI Payer ID (5-digit, assigned by "
+            "CMS/clearinghouse). Payers have separate claims vs correspondence addresses. "
+            "Each payer has timely filing limits (30-365 days). ERA enrollment status must "
+            "be tracked. Fee schedules are payer-specific with contracted rates per CPT."
+        ),
+        "source": "CMS / HIPAA X12 EDI standards",
+        "implementation_hints": (
+            "Create payer table with edi_payer_id (5-digit TEXT), name, claims_address, "
+            "correspondence_address, timely_filing_days, era_enrolled (BOOLEAN), "
+            "era_enrollment_date. Fee schedule child table: payer_id, cpt_code, "
+            "contracted_rate (TEXT/Decimal), effective_date, expiry_date."
+        ),
+        "related_patterns": [],
+    },
+    "insurance_eligibility_verification": {
+        "summary": (
+            "Verify coverage before every patient visit. Record copay, deductible "
+            "(amount + met), coinsurance %, out-of-pocket max, plan dates, in-network "
+            "status, prior auth requirements. Eligibility is a point-in-time snapshot, "
+            "not a permanent state."
+        ),
+        "source": "HIPAA X12 270/271 Eligibility Transaction",
+        "implementation_hints": (
+            "Create eligibility_check table: patient_id, payer_id, check_date, "
+            "copay (TEXT/Decimal), deductible_total, deductible_met, coinsurance_pct, "
+            "oop_max, plan_start, plan_end, in_network (BOOLEAN), prior_auth_required "
+            "(BOOLEAN), verified_by, verification_method (phone/portal/EDI)."
+        ),
+        "related_patterns": [],
+    },
+    "claim_scrubbing_pre_submission": {
+        "summary": (
+            "Validate before submission: NPI format (10-digit Luhn check), at least one "
+            "ICD-10 diagnosis, each CPT has diagnosis pointer, valid CMS modifier codes, "
+            "no duplicate claims (same patient + payer + date + CPT), timely filing check "
+            "against payer limit."
+        ),
+        "source": "CMS-1500 / UB-04 claim standards, HIPAA X12 837",
+        "implementation_hints": (
+            "Pre-submit validation function checks: (1) NPI Luhn-10, (2) len(diagnoses) >= 1, "
+            "(3) each line has dx_pointer into claim diagnoses, (4) modifier in CMS modifier "
+            "table, (5) no existing claim with same patient+payer+dos+cpt, (6) service_date "
+            "+ payer.timely_filing_days >= today. Return list of errors; block if any."
+        ),
+        "related_patterns": [],
+    },
+    "era_835_electronic_remittance": {
+        "summary": (
+            "ERA/835 is an EDI format for electronic payment explanation. Contains "
+            "check/EFT number, payer, claim-level detail (billed/allowed/paid/adjusted "
+            "amounts), CAS adjustment codes (CO/PR/OA/PI groups), CARC reason codes, "
+            "RARC remark codes. Auto-posting matches ERA claims to submitted claims by "
+            "claim number."
+        ),
+        "source": "HIPAA X12 835 Health Care Claim Payment/Advice",
+        "implementation_hints": (
+            "Parse 835 EDI file into era_header (check_number, payer_id, payment_amount, "
+            "payment_date) and era_line (claim_number, billed_amount, allowed_amount, "
+            "paid_amount, patient_responsibility). CAS segments become era_adjustment "
+            "rows (group_code CO/PR/OA/PI, reason_code CARC, remark_code RARC, amount). "
+            "Auto-post: match era_line.claim_number to claim.id, apply payment."
+        ),
+        "related_patterns": [],
+    },
+    "denial_management_workflow": {
+        "summary": (
+            "Denials categorized by CAS group codes: CO (Contractual Obligation), "
+            "PR (Patient Responsibility), OA (Other Adjustment), PI (Payer Initiated). "
+            "Each denial has a CARC code (reason) and optional RARC (remark). Appeals "
+            "must be filed within payer-specific deadline (30-365 days). Track appeal "
+            "submission, reference number, outcome (overturned/upheld/partial)."
+        ),
+        "source": "X12 CAS segment / WPC CARC-RARC code sets",
+        "implementation_hints": (
+            "Create denial table: claim_id, cas_group (CO/PR/OA/PI), carc_code, "
+            "rarc_code, denied_amount, denial_date. Appeal child table: denial_id, "
+            "appeal_date, appeal_deadline, reference_number, supporting_docs, "
+            "outcome (overturned/upheld/partial), outcome_date, recovered_amount."
+        ),
+        "related_patterns": [],
+    },
+    "hipaa_phi_access_audit": {
+        "summary": (
+            "45 C.F.R. 164.312(b) requires audit controls recording who accessed PHI, "
+            "when, from where, what action (view/edit/print/export/delete), which "
+            "patient's data, and what data category. Break-the-glass access must log "
+            "access reason. Audit logs must be retained minimum 6 years."
+        ),
+        "source": "HIPAA Security Rule, 45 C.F.R. 164.312(b)",
+        "implementation_hints": (
+            "Create phi_access_log table: id, user_id, patient_id, access_timestamp, "
+            "action (view/edit/print/export/delete), data_category, ip_address, "
+            "is_break_glass (BOOLEAN), break_glass_reason, session_id. "
+            "Immutable — no UPDATE/DELETE allowed. Retention: 6+ years. "
+            "Index on patient_id + access_timestamp for audit queries."
+        ),
+        "related_patterns": [],
+    },
+    "good_faith_estimate_no_surprises_act": {
+        "summary": (
+            "No Surprises Act (2022) requires Good Faith Estimates for uninsured/self-pay "
+            "patients. Must provide itemized estimate of expected charges for scheduled "
+            "services within 1 business day of scheduling (3 days for services 3+ days out). "
+            "Includes all expected items/services, CPT codes, diagnosis codes, expected "
+            "charges, facility fees, provider information."
+        ),
+        "source": "No Surprises Act, Pub.L. 116-260 (2022)",
+        "implementation_hints": (
+            "Create good_faith_estimate table: id, patient_id, appointment_id, "
+            "estimate_date, total_estimated_charge, provider_npi, facility_name. "
+            "Child table gfe_line: gfe_id, cpt_code, description, expected_charge, "
+            "diagnosis_code, facility_fee. Must be generated within 1 business day "
+            "of scheduling. Track delivery method and patient acknowledgment."
+        ),
+        "related_patterns": [],
+    },
+    "mips_quality_measures": {
+        "summary": (
+            "CMS Merit-based Incentive Payment System. 4 categories: Quality (45%), "
+            "Promoting Interoperability (25%), Improvement Activities (15%), Cost (15%). "
+            "Non-reporting = up to -9% Medicare payment adjustment. Top 10 measures "
+            "include: preventive care (screening), chronic disease management (diabetes "
+            "HbA1c, hypertension BP), tobacco screening, BMI screening, depression screening."
+        ),
+        "source": "CMS MIPS (42 C.F.R. Part 414)",
+        "implementation_hints": (
+            "Create mips_measure table: measure_id, title, category (quality/pi/ia/cost), "
+            "description, numerator_criteria, denominator_criteria. "
+            "mips_patient_measure: patient_id, measure_id, reporting_period, "
+            "denominator_eligible (BOOLEAN), numerator_met (BOOLEAN), exclusion_reason. "
+            "Calculate performance rate = numerator_met / denominator_eligible per measure."
+        ),
+        "related_patterns": [],
+    },
+    # --- Education vertical rules ---
+    "parent_portal_ferpa": {
+        "summary": (
+            "FERPA (20 U.S.C. \u00a7 1232g) grants parents right to inspect all education "
+            "records of children under 18. Schools must authenticate parent identity before "
+            "granting access. Directory information may be disclosed without consent. "
+            "Discipline details may be redacted per state law. Access transfers to student "
+            "at age 18 or postsecondary enrollment. All access must be logged for FERPA "
+            "audit trail."
+        ),
+        "source": "FERPA, 20 U.S.C. \u00a7 1232g / 34 C.F.R. Part 99",
+        "implementation_hints": (
+            "Create parent_portal_access table: parent_id, student_id, relationship, "
+            "verified (BOOLEAN), verification_date, access_level (full/directory_only). "
+            "ferpa_access_log: parent_id, student_id, record_type, access_timestamp, "
+            "action. Check student age >= 18 to revoke parent access. "
+            "Directory info opt-out flag on student record."
+        ),
+        "related_patterns": [],
+    },
+    "nslp_school_lunch_program": {
+        "summary": (
+            "USDA National School Lunch Program: 3 eligibility tiers (free: \u2264130% FPL, "
+            "reduced: 131-185% FPL, paid: >185% FPL). Direct certification via SNAP/TANF. "
+            "Daily meal counts required by category. Federal reimbursement rates (2025-26): "
+            "free lunch ~$4.36, reduced ~$3.96, paid ~$0.53. Monthly USDA claim submission "
+            "required. Schools must track allergens and dietary restrictions."
+        ),
+        "source": "USDA NSLP (42 U.S.C. \u00a7 1751 et seq.)",
+        "implementation_hints": (
+            "Create meal_eligibility table: student_id, tier (free/reduced/paid), "
+            "determination_method (application/direct_cert), effective_date, expiry_date. "
+            "daily_meal_count: school_id, date, free_count, reduced_count, paid_count. "
+            "student_allergen: student_id, allergen, dietary_restriction. "
+            "Monthly claim = sum(daily counts * reimbursement rates per tier)."
+        ),
+        "related_patterns": [],
+    },
+    "school_transportation_management": {
+        "summary": (
+            "Second largest K-12 expense after salaries. Routes must be planned "
+            "considering: student addresses, school bell times, bus capacity, maximum "
+            "ride time, special needs students, parent pickup zones. NTSB safety "
+            "requirements for school buses. States regulate maximum ride times "
+            "(typically 45-60 minutes)."
+        ),
+        "source": "NTSB school bus safety / state DOE transportation regs",
+        "implementation_hints": (
+            "Create bus_route table: id, route_number, school_id, driver_id, bus_id, "
+            "start_time, estimated_duration, max_capacity. bus_stop: route_id, "
+            "stop_order, address, lat, lng, estimated_arrival. student_route: "
+            "student_id, route_id, stop_id, special_needs (BOOLEAN), "
+            "special_needs_notes. Track actual vs planned times for compliance."
+        ),
+        "related_patterns": [],
+    },
+    # --- Construction vertical rules ---
+    "davis_bacon_prevailing_wage": {
+        "summary": (
+            "Davis-Bacon Act (40 U.S.C. \u00a7\u00a7 3141-3148) applies to federal contracts "
+            ">$2,000. Contractors must pay locally prevailing wages per trade classification. "
+            "Wage determinations issued by DOL (number format: ST-YYYY-NNNN). WH-347 "
+            "certified payroll form required weekly. Overtime at 1.5x basic hourly (fringe "
+            "stays flat). Fringe can be paid as cash or to bona fide plan. Apprentice rates "
+            "based on registered apprenticeship program ratios."
+        ),
+        "source": "Davis-Bacon Act, 40 U.S.C. \u00a7\u00a7 3141-3148",
+        "implementation_hints": (
+            "Create wage_determination table: wd_number (ST-YYYY-NNNN), county, state, "
+            "construction_type, effective_date. wage_rate child: wd_id, trade_classification, "
+            "basic_hourly (TEXT/Decimal), fringe_hourly (TEXT/Decimal). On payroll, look up "
+            "project.wd_number, match employee trade, enforce minimum rate. "
+            "Apprentice ratio from apprenticeship_program table."
+        ),
+        "related_patterns": [],
+    },
+    "certified_payroll_wh_347": {
+        "summary": (
+            "WH-347 Payroll form fields: contractor name, address, payroll number, week "
+            "ending date, project name, contract number. Per-employee row: name, last 4 SSN, "
+            "work classification, hours per day (Mon-Sun), total hours, rate of pay "
+            "(basic + fringe), gross amount earned, itemized deductions, net wages paid. "
+            "Page 2: Statement of Compliance signed under penalty of perjury."
+        ),
+        "source": "DOL WH-347 form / Davis-Bacon Act",
+        "implementation_hints": (
+            "Create certified_payroll table: id, project_id, contractor_id, payroll_number, "
+            "week_ending, status (draft/signed/submitted). certified_payroll_line: "
+            "payroll_id, employee_id, last4_ssn, classification, hours_mon through hours_sun, "
+            "total_hours, basic_rate, fringe_rate, gross_earned, deductions_json, "
+            "net_wages. Generate WH-347 PDF with compliance statement."
+        ),
+        "related_patterns": [],
+    },
+    "construction_equipment_scheduling": {
+        "summary": (
+            "Equipment assigned to projects with daily/hourly rates. Mobilization cost "
+            "(transport to site) and demobilization cost (return). Track utilization rate "
+            "(hours used / hours available). Prevent double-booking across projects. "
+            "Equipment categories: cranes, excavators, loaders, concrete equipment, "
+            "scaffolding, generators."
+        ),
+        "source": "Standard construction equipment management",
+        "implementation_hints": (
+            "Create equipment table: id, name, category, daily_rate, hourly_rate, "
+            "mobilization_cost, status (available/assigned/maintenance). "
+            "equipment_assignment: equipment_id, project_id, start_date, end_date, "
+            "mob_cost, demob_cost. Check for overlapping assignments before booking. "
+            "equipment_usage_log: assignment_id, date, hours_used. "
+            "Utilization = sum(hours_used) / total_available_hours."
+        ),
+        "related_patterns": [],
+    },
+    # --- Property Management vertical rules ---
+    "property_trust_accounting": {
+        "summary": (
+            "Most US states require separate trust/escrow accounts for tenant security "
+            "deposits. Funds cannot be commingled with operating funds. Interest earned "
+            "may belong to tenant (varies by state). Monthly reconciliation legally "
+            "mandated in most states. Upon move-out: itemized deduction statement within "
+            "state-specific deadline (14-60 days). Improper handling = 2-3x damages in "
+            "many jurisdictions."
+        ),
+        "source": "State landlord-tenant statutes (varies by state)",
+        "implementation_hints": (
+            "Create trust_account table: id, bank_name, account_number, account_type "
+            "(security_deposit/escrow), property_id. trust_ledger: trust_account_id, "
+            "tenant_id, lease_id, transaction_type (deposit/refund/deduction/interest), "
+            "amount, date, description. Monthly reconciliation: bank balance = "
+            "sum(trust_ledger). Move-out: generate itemized deduction statement "
+            "within state deadline. NEVER comingle with operating GL."
+        ),
+        "related_patterns": [],
+    },
+    "rubs_utility_billing": {
+        "summary": (
+            "Ratio Utility Billing System allocates shared utility costs to tenants. "
+            "Common allocation bases: square footage, occupancy count, equal split, or "
+            "actual sub-metered usage. Common utilities: water, sewer, trash, gas, "
+            "electric. Owner typically marks up 3-10% for administrative costs. Billing "
+            "must be transparent with allocation methodology disclosed to tenants."
+        ),
+        "source": "Standard property management practice / state utility billing regs",
+        "implementation_hints": (
+            "Create utility_bill table: id, property_id, utility_type, billing_period, "
+            "total_amount, admin_markup_pct. rubs_allocation: utility_bill_id, unit_id, "
+            "tenant_id, allocation_base (sqft/occupancy/equal/metered), base_value, "
+            "allocated_amount, markup_amount, total_charge. Sum of allocated_amount "
+            "must equal utility_bill.total_amount. Generate tenant charge lines."
+        ),
+        "related_patterns": [],
+    },
+    # --- Retail vertical rules ---
+    "multi_location_retail_inventory": {
+        "summary": (
+            "Each store/warehouse maintains independent stock levels. Inter-store "
+            "transfers create stock_entry of type 'transfer'. Reorder points are "
+            "per-item per-location. Central distribution center replenishes stores. "
+            "Real-time inventory sync across POS, e-commerce, and warehouse. Shrinkage "
+            "tracked by location and cause (theft, damage, spoilage, administrative error)."
+        ),
+        "source": "Standard multi-location retail inventory management",
+        "implementation_hints": (
+            "Extend item_warehouse with location_id (store/warehouse). Reorder_point "
+            "table: item_id, location_id, reorder_level, reorder_qty. stock_entry "
+            "type='transfer' moves between locations (source_location, target_location). "
+            "shrinkage_log: item_id, location_id, qty, cause (theft/damage/spoilage/admin), "
+            "date, reported_by. POS/ecom sync via inventory_sync_log."
+        ),
+        "related_patterns": [],
+    },
+    "ecommerce_omnichannel_sync": {
+        "summary": (
+            "Product catalog sync: push items (name, description, price, images, SKU) to "
+            "channels (Shopify, WooCommerce, Amazon). Inventory sync: push available "
+            "quantity per location. Order import: pull orders from channels into ERP as "
+            "sales orders. Fulfillment: mark shipped with tracking number, sync back to "
+            "channel. Price consistency across channels unless channel-specific pricing "
+            "configured."
+        ),
+        "source": "Standard omnichannel retail practice",
+        "implementation_hints": (
+            "Create sales_channel table: id, name, platform (shopify/woocommerce/amazon), "
+            "api_key, api_url, sync_enabled. channel_listing: item_id, channel_id, "
+            "remote_id, listed_price, channel_specific_price, sync_status. "
+            "channel_order: channel_id, remote_order_id, sales_order_id, import_date. "
+            "Sync engine: push catalog/inventory changes, pull orders on schedule."
+        ),
+        "related_patterns": [],
+    },
+    # --- Legal vertical rules ---
+    "ledes_1998b_format": {
+        "summary": (
+            "LEDES 1998B is pipe-delimited. Header: LEDES1998B[]. Each line ends with []. "
+            "Invoice header fields: INVOICE_DATE|INVOICE_NUMBER|CLIENT_ID|"
+            "LAW_FIRM_MATTER_ID|INVOICE_TOTAL|BILLING_START_DATE|BILLING_END_DATE|"
+            "LAW_FIRM_ID|LAW_FIRM_NAME|CLIENT_MATTER_ID[]. Line items: "
+            "LINE_ITEM_NUMBER|EXP/FEE/INV_ADJ_TYPE|LINE_ITEM_NUMBER_OF_UNITS|"
+            "LINE_ITEM_UNIT_COST|LINE_ITEM_TOTAL|LINE_ITEM_DATE|LINE_ITEM_TASK_CODE|"
+            "LINE_ITEM_EXPENSE_CODE|LINE_ITEM_ACTIVITY_CODE|TIMEKEEPER_ID|"
+            "LINE_ITEM_DESCRIPTION[]. Dates: YYYYMMDD. Amounts: no currency symbol, "
+            "2 decimals."
+        ),
+        "source": "LEDES Oversight Committee / LEDES.org",
+        "implementation_hints": (
+            "Generate pipe-delimited text file. First line: LEDES1998B[]. "
+            "Header line with invoice-level fields ending with []. "
+            "One line per fee/expense item ending with []. "
+            "Parse incoming LEDES: split on |, strip [], validate field counts. "
+            "Map UTBMS task/activity/expense codes to internal categories."
+        ),
+        "related_patterns": [],
+    },
+    "iolta_trust_accounting": {
+        "summary": (
+            "Interest on Lawyers Trust Accounts: client funds held in trust must be in "
+            "IOLTA accounts. Funds cannot be commingled with firm operating funds. Every "
+            "deposit and disbursement must be traceable to a specific client/matter. "
+            "Three-way reconciliation: bank statement vs trust ledger vs client ledger. "
+            "Interest earned on pooled accounts goes to state bar foundation."
+        ),
+        "source": "ABA Model Rule 1.15 / State bar IOLTA rules",
+        "implementation_hints": (
+            "Create iolta_account table: id, bank_name, account_number, bar_state. "
+            "iolta_ledger: iolta_account_id, client_id, matter_id, transaction_type "
+            "(deposit/disbursement/transfer), amount, date, description, check_number. "
+            "Three-way recon: (1) bank balance, (2) sum(iolta_ledger), (3) sum per "
+            "client_id. All three must agree. Interest auto-allocated to bar foundation. "
+            "NEVER comingle with firm operating accounts."
+        ),
+        "related_patterns": [],
+    },
 }
 
 # Canonical name aliases — maps search terms to KNOWLEDGE_BASE keys
@@ -380,6 +749,85 @@ _ALIASES = {
     "bank reconciliation": "bank_reconciliation",
     "bank recon": "bank_reconciliation",
     "reconciliation": "bank_reconciliation",
+    # --- Healthcare aliases ---
+    "payer": "insurance_payer_registry",
+    "payer registry": "insurance_payer_registry",
+    "insurance payer": "insurance_payer_registry",
+    "edi payer": "insurance_payer_registry",
+    "eligibility": "insurance_eligibility_verification",
+    "eligibility verification": "insurance_eligibility_verification",
+    "insurance eligibility": "insurance_eligibility_verification",
+    "scrub": "claim_scrubbing_pre_submission",
+    "claim scrubbing": "claim_scrubbing_pre_submission",
+    "claim scrub": "claim_scrubbing_pre_submission",
+    "era": "era_835_electronic_remittance",
+    "835": "era_835_electronic_remittance",
+    "electronic remittance": "era_835_electronic_remittance",
+    "era 835": "era_835_electronic_remittance",
+    "denial": "denial_management_workflow",
+    "denial management": "denial_management_workflow",
+    "claim denial": "denial_management_workflow",
+    "phi": "hipaa_phi_access_audit",
+    "hipaa audit": "hipaa_phi_access_audit",
+    "phi access": "hipaa_phi_access_audit",
+    "hipaa": "hipaa_phi_access_audit",
+    "good faith": "good_faith_estimate_no_surprises_act",
+    "no surprises": "good_faith_estimate_no_surprises_act",
+    "good faith estimate": "good_faith_estimate_no_surprises_act",
+    "no surprises act": "good_faith_estimate_no_surprises_act",
+    "mips": "mips_quality_measures",
+    "quality measure": "mips_quality_measures",
+    "quality measures": "mips_quality_measures",
+    "merit based incentive": "mips_quality_measures",
+    # --- Education aliases ---
+    "parent portal": "parent_portal_ferpa",
+    "ferpa": "parent_portal_ferpa",
+    "parent access": "parent_portal_ferpa",
+    "education records": "parent_portal_ferpa",
+    "school lunch": "nslp_school_lunch_program",
+    "nslp": "nslp_school_lunch_program",
+    "cafeteria": "nslp_school_lunch_program",
+    "free lunch": "nslp_school_lunch_program",
+    "meal program": "nslp_school_lunch_program",
+    "bus": "school_transportation_management",
+    "transportation": "school_transportation_management",
+    "school bus": "school_transportation_management",
+    "bus route": "school_transportation_management",
+    # --- Construction aliases ---
+    "davis-bacon": "davis_bacon_prevailing_wage",
+    "davis bacon": "davis_bacon_prevailing_wage",
+    "prevailing wage": "davis_bacon_prevailing_wage",
+    "wh-347": "certified_payroll_wh_347",
+    "wh 347": "certified_payroll_wh_347",
+    "certified payroll": "certified_payroll_wh_347",
+    "equipment scheduling": "construction_equipment_scheduling",
+    "equipment booking": "construction_equipment_scheduling",
+    "construction equipment": "construction_equipment_scheduling",
+    # --- Property Management aliases ---
+    "trust account": "property_trust_accounting",
+    "security deposit": "property_trust_accounting",
+    "escrow account": "property_trust_accounting",
+    "tenant deposit": "property_trust_accounting",
+    "rubs": "rubs_utility_billing",
+    "utility billing": "rubs_utility_billing",
+    "utility allocation": "rubs_utility_billing",
+    # --- Retail aliases ---
+    "multi-location": "multi_location_retail_inventory",
+    "multi location": "multi_location_retail_inventory",
+    "store inventory": "multi_location_retail_inventory",
+    "multi store": "multi_location_retail_inventory",
+    "omnichannel": "ecommerce_omnichannel_sync",
+    "shopify": "ecommerce_omnichannel_sync",
+    "ecommerce sync": "ecommerce_omnichannel_sync",
+    "channel sync": "ecommerce_omnichannel_sync",
+    # --- Legal aliases ---
+    "ledes": "ledes_1998b_format",
+    "ledes 1998b": "ledes_1998b_format",
+    "e-billing": "ledes_1998b_format",
+    "legal billing format": "ledes_1998b_format",
+    "iolta": "iolta_trust_accounting",
+    "lawyer trust": "iolta_trust_accounting",
+    "client trust account": "iolta_trust_accounting",
 }
 
 

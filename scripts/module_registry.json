@@ -1,5 +1,5 @@
 {
-  "version": "3.0.0",
+  "version": "3.3.0",
   "generated": "2026-03-09",
   "modules": {
     "erpclaw": {
@@ -1031,6 +1031,26 @@
         "commercial-leases"
       ],
       "subdir": "propertyclaw-commercial"
+    },
+    "erpclaw-integrations-stripe": {
+      "display_name": "ERPClaw Stripe Integration",
+      "description": "Deep native Stripe integration: transaction sync, auto-reconciliation, GL posting, revenue reports",
+      "category": "expansion",
+      "github": "avansaber/erpclaw-addons",
+      "subdir": "erpclaw-integrations-stripe",
+      "version": "1.0.0",
+      "requires": [
+        "erpclaw"
+      ],
+      "has_init_db": true,
+      "action_count": 62,
+      "tags": [
+        "stripe",
+        "payments",
+        "reconciliation",
+        "gateway",
+        "subscriptions"
+      ]
     }
   }
 }

@@ -315,12 +315,13 @@ class TestExpectedFeaturesStructure:
     """Validate the EXPECTED_FEATURES data structure."""
 
     def test_all_domains_covered(self):
-        """Every domain in EXPECTED_FEATURES is one of the 6 required domains."""
-        required_domains = {"selling", "buying", "inventory", "manufacturing", "hr", "payroll"}
+        """Every domain in EXPECTED_FEATURES includes the 6 core + 6 vertical domains."""
+        core_domains = {"selling", "buying", "inventory", "manufacturing", "hr", "payroll"}
+        vertical_domains = {"healthclaw", "educlaw", "constructclaw", "propertyclaw", "retailclaw", "legalclaw"}
+        required_domains = core_domains | vertical_domains
         actual_domains = set(EXPECTED_FEATURES.keys())
-        assert required_domains == actual_domains, (
-            f"Missing domains: {required_domains - actual_domains}, "
-            f"Extra domains: {actual_domains - required_domains}"
+        assert required_domains <= actual_domains, (
+            f"Missing domains: {required_domains - actual_domains}"
         )
 
     def test_every_feature_has_required_fields(self):
@@ -718,11 +719,11 @@ class TestRealSrcIntegration:
         not os.path.isdir(os.path.join(SRC_ROOT, "erpclaw")),
         reason="Real src/ directory not available",
     )
-    def test_real_selling_missing_blanket_so(self):
-        """Real codebase: selling should be missing blanket SO."""
-        missing = check_feature_completeness(SRC_ROOT, domain="selling")
-        missing_names = [f["feature"] for f in missing]
-        assert "blanket_so" in missing_names
+    def test_real_selling_has_blanket_so(self):
+        """Real codebase: selling should have blanket SO (implemented in Sprint 4)."""
+        score = get_domain_score(SRC_ROOT, "selling")
+        present_names = [f["name"] for f in score["present_features"]]
+        assert "blanket_so" in present_names
 
     @pytest.mark.skipif(
         not os.path.isdir(os.path.join(SRC_ROOT, "erpclaw")),
@@ -738,11 +739,11 @@ class TestRealSrcIntegration:
         not os.path.isdir(os.path.join(SRC_ROOT, "erpclaw")),
         reason="Real src/ directory not available",
     )
-    def test_real_payroll_missing_overtime(self):
-        """Real codebase: payroll should be missing overtime."""
-        missing = check_feature_completeness(SRC_ROOT, domain="payroll")
-        missing_names = [f["feature"] for f in missing]
-        assert "overtime_calculation" in missing_names
+    def test_real_payroll_has_overtime(self):
+        """Real codebase: payroll should have overtime (implemented in Sprint 6)."""
+        score = get_domain_score(SRC_ROOT, "payroll")
+        present_names = [f["name"] for f in score["present_features"]]
+        assert "overtime_calculation" in present_names
 
     @pytest.mark.skipif(
         not os.path.isdir(os.path.join(SRC_ROOT, "erpclaw")),

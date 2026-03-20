@@ -62,12 +62,12 @@ class TestKnowledgeBase:
         "bank_reconciliation",
     ]
 
-    def test_knowledge_base_has_all_22_features(self):
-        """All 22 specified business rules exist in the knowledge base."""
+    def test_knowledge_base_has_core_features(self):
+        """All 22 core business rules exist in the knowledge base (verticals add more)."""
         for key in self.EXPECTED_KEYS:
             assert key in KNOWLEDGE_BASE, f"Missing knowledge base entry: {key}"
-        assert len(KNOWLEDGE_BASE) == 22, (
-            f"Expected 22 entries, got {len(KNOWLEDGE_BASE)}"
+        assert len(KNOWLEDGE_BASE) >= 22, (
+            f"Expected at least 22 entries, got {len(KNOWLEDGE_BASE)}"
         )
 
     def test_all_entries_have_required_fields(self):
@@ -269,9 +269,9 @@ class TestGetImplementationGuide:
 
 class TestListKnowledgeBase:
     def test_returns_all_entries(self):
-        """List returns all 22 entries."""
+        """List returns all entries (22 core + 20 vertical = 42+)."""
         entries = list_knowledge_base()
-        assert len(entries) == 22
+        assert len(entries) >= 42
 
     def test_entries_have_required_fields(self):
         """Each entry has key, summary, source."""

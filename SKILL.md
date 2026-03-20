@@ -1,6 +1,6 @@
 ---
 name: erpclaw
-version: 3.2.0
+version: 3.3.0
 description: >
   AI-native ERP system with self-extending OS. Full accounting, invoicing, inventory, purchasing,
   tax, billing, HR, payroll, advanced accounting (ASC 606/842, intercompany, consolidation),
