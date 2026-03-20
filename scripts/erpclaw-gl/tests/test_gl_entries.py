@@ -104,8 +104,8 @@ class TestPostGLEntries:
         ).fetchall()
         assert len(rows) == 0
 
-    def test_zero_amount_entry_fails(self, conn, gl_setup):
-        """Zero debit AND zero credit should fail (no-op check, BUG-003 related)."""
+    def test_zero_amount_entry_skipped(self, conn, gl_setup):
+        """Zero debit AND zero credit entries are skipped (BUG-003: no GL rows created)."""
         entries = _entries(gl_setup,
             ("cash", "0", "0"),
             ("revenue", "0", "0"),
@@ -116,7 +116,12 @@ class TestPostGLEntries:
             company_id=gl_setup["company_id"],
             entries=entries,
         ))
-        assert is_error(result)
+        # Zero-amount entries are silently skipped — 0 entries created, no error
+        assert result.get("entries_created", 0) == 0
+        rows = conn.execute(
+            "SELECT * FROM gl_entry WHERE voucher_id='JE-ZERO'"
+        ).fetchall()
+        assert len(rows) == 0
 
     def test_with_party(self, conn, gl_setup):
         """Post GL entries with party (customer) information."""

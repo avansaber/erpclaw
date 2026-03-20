@@ -25,8 +25,9 @@ jobs:
           total=0
           for test_dir in scripts/*/tests; do
             module=$(basename $(dirname "$test_dir"))
-            # Skip non-test directories
+            # Skip non-test directories and modules needing full monorepo
             [ "$module" = "erpclaw-setup" ] && test_dir="scripts/erpclaw-setup/tests"
+            [ "$module" = "erpclaw-os" ] && { echo "  $module: skipped (needs monorepo src/)"; continue; }
             [ ! -d "$test_dir" ] && continue
 
             echo "=== Testing $module ==="
