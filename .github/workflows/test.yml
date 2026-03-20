@@ -14,7 +14,7 @@ jobs:
         with:
           python-version: '3.10'
       - name: Install pytest
-        run: pip install pytest pypika
+        run: pip install pytest pypika pyyaml
       - name: Setup erpclaw_lib
         run: |
           mkdir -p ~/.openclaw/erpclaw/lib
