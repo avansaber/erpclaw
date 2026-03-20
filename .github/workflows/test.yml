@@ -14,14 +14,37 @@ jobs:
         with:
           python-version: '3.10'
       - name: Install pytest
-        run: pip install pytest
+        run: pip install pytest pypika
       - name: Setup erpclaw_lib
         run: |
           mkdir -p ~/.openclaw/erpclaw/lib
           cp -r scripts/erpclaw-setup/lib/erpclaw_lib ~/.openclaw/erpclaw/lib/
-      - name: Run unit tests
+      - name: Run unit tests per module
         run: |
-          python -m pytest scripts/ -q --tb=short \
-            --ignore=scripts/erpclaw-setup/lib \
-            --ignore=scripts/erpclaw-os/tests/test_existing_modules.py \
-            || { ec=$?; [ $ec -eq 5 ] && echo "No tests collected — skipping" && exit 0; exit $ec; }
+          failed=0
+          total=0
+          for test_dir in scripts/*/tests; do
+            module=$(basename $(dirname "$test_dir"))
+            # Skip non-test directories
+            [ "$module" = "erpclaw-setup" ] && test_dir="scripts/erpclaw-setup/tests"
+            [ ! -d "$test_dir" ] && continue
+
+            echo "=== Testing $module ==="
+            if python -m pytest "$test_dir" -q --tb=short \
+              --rootdir="$(dirname "$test_dir")" \
+              --ignore=scripts/erpclaw-os/tests/test_existing_modules.py \
+              2>&1; then
+              echo "  $module: PASS"
+            else
+              ec=$?
+              if [ $ec -eq 5 ]; then
+                echo "  $module: no tests collected — skipping"
+              else
+                echo "  $module: FAIL (exit $ec)"
+                failed=1
+              fi
+            fi
+            total=$((total + 1))
+          done
+          echo "=== $total modules tested ==="
+          exit $failed
