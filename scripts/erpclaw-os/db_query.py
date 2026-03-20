@@ -71,12 +71,20 @@ from dgm_engine import (
     handle_dgm_list_variants,
     handle_dgm_select_best,
 )
-from gap_detector import handle_detect_gaps, handle_suggest_modules
+from gap_detector import (
+    handle_detect_gaps,
+    handle_suggest_modules,
+    handle_detect_schema_divergence,
+    handle_detect_stubs,
+)
 from heartbeat_analysis import (
     handle_heartbeat_analyze,
     handle_heartbeat_report,
     handle_heartbeat_suggest,
 )
+from in_module_generator import handle_add_feature_to_module
+from research_engine import handle_research_rule, handle_get_implementation_guide
+from feature_matrix import handle_check_feature_completeness, handle_list_feature_matrix
 
 
 # ---------------------------------------------------------------------------
@@ -294,10 +302,17 @@ def main():
         "dgm-list-variants",
         "dgm-select-best",
         "detect-gaps",
+        "detect-schema-divergence",
+        "detect-stubs",
         "suggest-modules",
         "heartbeat-analyze",
         "heartbeat-report",
         "heartbeat-suggest",
+        "add-feature-to-module",
+        "check-feature-completeness",
+        "list-feature-matrix",
+        "research-business-rule",
+        "get-implementation-guide",
     ])
     parser.add_argument("--module-path", help="Path to the module directory to validate")
     parser.add_argument("--validation-type", default="static",
@@ -379,6 +394,17 @@ def main():
     # gap-detector flags
     parser.add_argument("--registry-path", dest="registry_path",
                         help="Path to module_registry.json (for detect-gaps, suggest-modules)")
+    # add-feature-to-module flags
+    parser.add_argument("--feature-spec-json", dest="feature_spec_json",
+                        help="JSON string with feature specification (for add-feature-to-module)")
+    # feature-matrix flags
+    parser.add_argument("--domain",
+                        help="Domain name for feature matrix or research engine (e.g., selling, buying, inventory)")
+    # research-engine flags
+    parser.add_argument("--topic",
+                        help="Business rule topic to research (for research-business-rule)")
+    parser.add_argument("--feature-name", dest="feature_name",
+                        help="Feature name for implementation guide (for get-implementation-guide)")
 
     args, unknown = parser.parse_known_args()
     check_unknown_args(parser, unknown)
@@ -536,6 +562,20 @@ def main():
         else:
             ok(result)
 
+    elif action == "detect-schema-divergence":
+        result = handle_detect_schema_divergence(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "detect-stubs":
+        result = handle_detect_stubs(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
     elif action == "suggest-modules":
         result = handle_suggest_modules(args)
         if "error" in result:
@@ -559,6 +599,51 @@ def main():
 
     elif action == "heartbeat-suggest":
         result = handle_heartbeat_suggest(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "add-feature-to-module":
+        if not args.module_path:
+            err("--module-path is required for add-feature-to-module")
+        if not args.action_name:
+            err("--action-name is required for add-feature-to-module")
+        result = handle_add_feature_to_module(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "check-feature-completeness":
+        if not args.src_root:
+            err("--src-root is required for check-feature-completeness")
+        result = handle_check_feature_completeness(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "list-feature-matrix":
+        result = handle_list_feature_matrix(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "research-business-rule":
+        if not args.topic:
+            err("--topic is required for research-business-rule")
+        result = handle_research_rule(args)
+        if "error" in result:
+            err(result["error"])
+        else:
+            ok(result)
+
+    elif action == "get-implementation-guide":
+        if not args.feature_name:
+            err("--feature-name is required for get-implementation-guide")
+        result = handle_get_implementation_guide(args)
         if "error" in result:
             err(result["error"])
         else:

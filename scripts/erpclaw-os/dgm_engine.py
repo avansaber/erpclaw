@@ -60,6 +60,11 @@ SAFETY_EXCLUDED_FILES = frozenset({
     "dgm_engine.py",
     "adversarial_audit.py",
     "compliance_weather.py",
+    "schema_migrator.py",       # Can DROP tables — must not be auto-mutated
+    "tier_classifier.py",       # Changing tier = bypassing safety gates
+    "improvement_log.py",       # Manipulating approval status = audit bypass
+    "deploy_pipeline.py",       # Auto-deploy logic — mutation could skip gates
+    "in_module_generator.py",   # Generator must not self-modify
 })
 
 # Actions that map to excluded files — resolved by checking the source file
@@ -68,6 +73,11 @@ SAFETY_EXCLUDED_MODULES = frozenset({
     "stock_posting",
     "tax_calculation",
     "cross_skill",
+    "schema_migrator",
+    "tier_classifier",
+    "improvement_log",
+    "deploy_pipeline",
+    "in_module_generator",
 })
 
 VALID_MUTATION_TYPES = (

@@ -490,8 +490,10 @@ ACTION_MAP = {
     "dgm-list-variants": "erpclaw-os",
     "dgm-select-best": "erpclaw-os",
 
-    # === ERPClaw OS — Phase 3e: Gap Detection + Module Suggestions (2 actions) ===
+    # === ERPClaw OS — Phase 3e: Gap Detection + Module Suggestions (4 actions) ===
     "detect-gaps": "erpclaw-os",
+    "detect-schema-divergence": "erpclaw-os",
+    "detect-stubs": "erpclaw-os",
     "suggest-modules": "erpclaw-os",
 
     # === ERPClaw OS — Phase 3d: Heartbeat Analysis Engine (3 actions) ===

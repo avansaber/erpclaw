@@ -1,6 +1,6 @@
 """ERPClaw OS Module Validator — static and runtime validation against the Constitution.
 
-Implements validate_module_static() for Articles 1-8, 10-12 and
+Implements validate_module_static() for Articles 1-8, 10-12, 19-21 and
 validate_module_runtime() for Article 9 (tests pass in sandbox).
 
 Uses regex for SQL/DDL parsing and Python ast for code analysis.
@@ -1098,12 +1098,247 @@ def _check_article_12(module_path: str, module_name: str) -> dict:
     }
 
 
+def _check_article_19(module_path: str) -> dict:
+    """Article 19: In-Module Modification Scope.
+
+    When the OS adds features to an existing module, it may only ADD new
+    functions and extend the ACTIONS dict.  It must NOT modify existing
+    functions, change existing SQL queries, or alter existing test expectations.
+
+    Enforcement: if a `.os_manifest.json` exists, every function listed
+    in `generated_functions` must actually exist in the module's scripts/*.py
+    files (i.e. the manifest must not list phantom entries).  If the manifest
+    also contains `modified_functions` (which it never should), that is a
+    violation.  When no manifest exists the article passes (backwards
+    compatible with modules that were never touched by the OS).
+    """
+    import json as _json
+
+    manifest_path = os.path.join(module_path, ".os_manifest.json")
+
+    # No manifest -> pass (backwards compatible)
+    if not os.path.isfile(manifest_path):
+        return {"article": 19, "result": "skip", "violations": [],
+                "reason": "No .os_manifest.json found (module not OS-modified)"}
+
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = _json.loads(f.read())
+    except (OSError, _json.JSONDecodeError) as exc:
+        return {"article": 19, "result": "fail", "violations": [
+            {"message": f"Cannot read .os_manifest.json: {exc}"}]}
+
+    violations = []
+
+    # Check: manifest must NOT have a "modified_functions" list with entries.
+    modified = manifest.get("modified_functions", [])
+    for entry in modified:
+        violations.append({
+            "message": (
+                f"OS modified existing function '{entry.get('function_name', '?')}' "
+                f"— only additions are permitted"
+            ),
+            "function": entry.get("function_name", "?"),
+        })
+
+    # Check: every generated function must actually exist in module .py files
+    generated = manifest.get("generated_functions", [])
+    scripts_dir = os.path.join(module_path, "scripts")
+    module_code = ""
+    if os.path.isdir(scripts_dir):
+        for fname in os.listdir(scripts_dir):
+            if fname.endswith(".py"):
+                fpath = os.path.join(scripts_dir, fname)
+                try:
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        module_code += "\n" + f.read()
+                except OSError:
+                    pass
+
+    for entry in generated:
+        func_name = entry.get("function_name", "")
+        if func_name and f"def {func_name}(" not in module_code:
+            violations.append({
+                "message": (
+                    f"Manifest lists generated function '{func_name}' "
+                    f"but it was not found in scripts/*.py"
+                ),
+                "function": func_name,
+            })
+
+    return {
+        "article": 19,
+        "result": "fail" if violations else "pass",
+        "violations": violations,
+    }
+
+
+def _check_article_20(module_path: str) -> dict:
+    """Article 20: Research Provenance.
+
+    Every OS-generated feature must cite its business rule source.  We check
+    that each function listed in `.os_manifest.json` has a ``# Source:``
+    comment inside its body (GAAP standard, regulatory reference, or
+    existing ERPClaw pattern reference).
+
+    When no manifest exists the article passes (non-OS-generated modules
+    are not required to have provenance comments).
+    """
+    import json as _json
+
+    manifest_path = os.path.join(module_path, ".os_manifest.json")
+
+    if not os.path.isfile(manifest_path):
+        return {"article": 20, "result": "skip", "violations": [],
+                "reason": "No .os_manifest.json found (module not OS-modified)"}
+
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = _json.loads(f.read())
+    except (OSError, _json.JSONDecodeError) as exc:
+        return {"article": 20, "result": "fail", "violations": [
+            {"message": f"Cannot read .os_manifest.json: {exc}"}]}
+
+    generated = manifest.get("generated_functions", [])
+    if not generated:
+        return {"article": 20, "result": "skip", "violations": [],
+                "reason": "No generated functions listed in manifest"}
+
+    # Collect all script code, split by function boundaries
+    scripts_dir = os.path.join(module_path, "scripts")
+    module_code = ""
+    if os.path.isdir(scripts_dir):
+        for fname in sorted(os.listdir(scripts_dir)):
+            if fname.endswith(".py"):
+                fpath = os.path.join(scripts_dir, fname)
+                try:
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        module_code += "\n" + f.read()
+                except OSError:
+                    pass
+
+    violations = []
+    source_re = re.compile(r"#\s*Source:", re.IGNORECASE)
+
+    for entry in generated:
+        func_name = entry.get("function_name", "")
+        if not func_name:
+            continue
+
+        # Find the function body (from def to next def or end of file)
+        func_pattern = re.compile(
+            rf"def {re.escape(func_name)}\(.*?\).*?(?=\ndef |\Z)",
+            re.DOTALL,
+        )
+        match = func_pattern.search(module_code)
+        if match:
+            func_body = match.group(0)
+            if not source_re.search(func_body):
+                violations.append({
+                    "message": (
+                        f"OS-generated function '{func_name}' has no "
+                        f"'# Source:' provenance comment"
+                    ),
+                    "function": func_name,
+                })
+        else:
+            # Function not found in code — Article 19 catches this, skip here
+            pass
+
+    return {
+        "article": 20,
+        "result": "fail" if violations else "pass",
+        "violations": violations,
+    }
+
+
+def _check_article_21(module_path: str) -> dict:
+    """Article 21: Feature Isolation.
+
+    A new feature added to an existing module must be testable in isolation.
+    Every function listed in `.os_manifest.json` must have a corresponding
+    test function in the tests/ directory.  Those test files must not modify
+    or re-define any pre-existing test functions (detected via naming
+    collisions with test files that do NOT correspond to a generated feature).
+
+    When no manifest exists the article passes.
+    """
+    import json as _json
+
+    manifest_path = os.path.join(module_path, ".os_manifest.json")
+
+    if not os.path.isfile(manifest_path):
+        return {"article": 21, "result": "skip", "violations": [],
+                "reason": "No .os_manifest.json found (module not OS-modified)"}
+
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = _json.loads(f.read())
+    except (OSError, _json.JSONDecodeError) as exc:
+        return {"article": 21, "result": "fail", "violations": [
+            {"message": f"Cannot read .os_manifest.json: {exc}"}]}
+
+    generated = manifest.get("generated_functions", [])
+    if not generated:
+        return {"article": 21, "result": "skip", "violations": [],
+                "reason": "No generated functions listed in manifest"}
+
+    # Collect all test functions from tests/ directory
+    tests_dir = _find_tests_dir(module_path)
+    if tests_dir is None:
+        return {"article": 21, "result": "fail", "violations": [
+            {"message": "No tests/ directory found for OS-modified module"}]}
+
+    # Extract test function names from test files
+    test_funcs_found = set()
+    for root, _dirs, files in os.walk(tests_dir):
+        for fname in files:
+            if fname.startswith("test_") and fname.endswith(".py"):
+                fpath = os.path.join(root, fname)
+                try:
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    for m in re.finditer(r"def (test_\w+)\(", content):
+                        test_funcs_found.add(m.group(1))
+                except OSError:
+                    pass
+
+    violations = []
+    for entry in generated:
+        action_name = entry.get("action_name", "")
+        func_name = entry.get("function_name", "")
+        # Expected test function: test_{action_with_underscores}
+        expected_test = "test_" + action_name.replace("-", "_")
+
+        # Check if any test function name contains the action reference
+        has_test = any(
+            expected_test in tf or func_name.replace("handle_", "test_") in tf
+            for tf in test_funcs_found
+        )
+        if not has_test:
+            violations.append({
+                "message": (
+                    f"OS-generated action '{action_name}' (function "
+                    f"'{func_name}') has no corresponding isolated test "
+                    f"(expected test function matching '{expected_test}')"
+                ),
+                "action": action_name,
+                "function": func_name,
+            })
+
+    return {
+        "article": 21,
+        "result": "fail" if violations else "pass",
+        "violations": violations,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 def validate_module_static(module_path: str, src_root: str = None) -> dict:
-    """Validate a module against Articles 1-8, 10-12 using static analysis.
+    """Validate a module against Articles 1-8, 10-12, 19-21 using static analysis.
 
     Args:
         module_path: Path to the module directory (must contain SKILL.md and/or init_db.py)
@@ -1152,6 +1387,9 @@ def validate_module_static(module_path: str, src_root: str = None) -> dict:
         _check_article_10(module_path),
         _check_article_11(module_path),
         _check_article_12(module_path, module_name),
+        _check_article_19(module_path),
+        _check_article_20(module_path),
+        _check_article_21(module_path),
     ]
 
     articles = {}

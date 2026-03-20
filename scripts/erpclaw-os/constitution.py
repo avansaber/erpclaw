@@ -1,9 +1,9 @@
-"""ERPClaw OS Constitution — 18 articles defining module compliance rules.
+"""ERPClaw OS Constitution — 21 articles defining module compliance rules.
 
-Each article specifies a rule that modules must follow. Articles 1-8 and 10-12
-are checked by static analysis (validate_module_static). Article 9 is checked
-by running tests in a sandbox (validate_module_runtime). Articles 13-18 are
-enforced at runtime by database triggers and library APIs.
+Each article specifies a rule that modules must follow. Articles 1-8, 10-12,
+and 19-21 are checked by static analysis (validate_module_static). Article 9
+is checked by running tests in a sandbox (validate_module_runtime). Articles
+13-18 are enforced at runtime by database triggers and library APIs.
 """
 
 ARTICLES: list[dict] = [
@@ -212,11 +212,51 @@ ARTICLES: list[dict] = [
         "severity": "critical",
         "bypass_policy": "tier3",
     },
+    {
+        "number": 19,
+        "name": "In-Module Modification Scope",
+        "description": (
+            "When adding features to existing modules, the OS may only ADD "
+            "new functions and extend the ACTIONS dict. It may NOT modify "
+            "existing functions, change existing SQL queries, or alter "
+            "existing test expectations. Enforced by checking "
+            ".os_manifest.json after any in-module generation."
+        ),
+        "enforcement": "static",
+        "severity": "critical",
+        "bypass_policy": "never",
+    },
+    {
+        "number": 20,
+        "name": "Research Provenance",
+        "description": (
+            "Every OS-generated feature must cite the business rule source "
+            "(GAAP standard, regulatory reference, or existing ERPClaw "
+            "pattern). No code generated from 'common sense' alone. The "
+            "improvement_log entry must include a source field."
+        ),
+        "enforcement": "static",
+        "severity": "warning",
+        "bypass_policy": "tier2",
+    },
+    {
+        "number": 21,
+        "name": "Feature Isolation",
+        "description": (
+            "A new feature added to an existing module must be testable "
+            "in isolation. It must not require modifications to existing "
+            "tests to pass. Verified by running only the new test "
+            "functions and confirming they pass independently."
+        ),
+        "enforcement": "static",
+        "severity": "critical",
+        "bypass_policy": "never",
+    },
 ]
 
 
 def get_static_articles() -> list[dict]:
-    """Return only articles enforced by static analysis (1-8, 10-12)."""
+    """Return only articles enforced by static analysis (1-8, 10-12, 19-21)."""
     return [a for a in ARTICLES if a["enforcement"] == "static"]
 
 

@@ -2,16 +2,20 @@
 """ERPClaw OS — Gap Detection + Module Suggestions (Phase 3, Deliverable 3e)
 
 Analyzes action_call_log and company configuration to detect missing
-functionality and suggest relevant modules. Three detection methods:
+functionality and suggest relevant modules. Six detection methods:
 
   1. Error pattern analysis — actions that consistently fail with "Unknown action"
   2. Workflow gap analysis — action pairs with long gaps suggesting manual intervention
   3. Industry gap analysis — cross-reference company industry with module_registry.json
+  4. Schema-code divergence — tables defined in init_schema.py/init_db.py with zero/minimal code references
+  5. Stub detection — "Not yet implemented", "TODO", "FIXME", "placeholder" patterns in production code
+  6. Feature completeness — compare domain actions against industry-standard feature matrix
 
 All detected gaps are logged to erpclaw_improvement_log via improvement_log.py.
 """
 import json
 import os
+import re
 import sqlite3
 import sys
 import uuid
@@ -30,6 +34,9 @@ if SCRIPT_DIR not in sys.path:
 
 from improvement_log import handle_log_improvement
 from industry_configs import INDUSTRY_CONFIGS
+from schema_diff import _CREATE_TABLE_RE
+from dgm_engine import SAFETY_EXCLUDED_FILES
+from feature_matrix import check_feature_completeness
 
 # Module registry lives next to the root db_query.py
 REGISTRY_PATH = os.path.join(
@@ -258,6 +265,198 @@ def _detect_industry_gaps(conn, registry):
 
 
 # ---------------------------------------------------------------------------
+# Detection method 4: Schema-code divergence
+# ---------------------------------------------------------------------------
+
+# Minimum reference threshold — tables with fewer than this many references
+# in db_query.py files are flagged as "minimal_code".
+_MINIMAL_CODE_THRESHOLD = 3
+
+
+def detect_schema_code_divergence(src_root: str) -> list[dict]:
+    """Method 4: Find tables defined in init_schema.py/init_db.py with zero or minimal code references.
+
+    Walks all init_schema.py and init_db.py files under src_root, extracts
+    CREATE TABLE names, then counts references to each table name across all
+    db_query.py files.  Tables with 0 references are "no_code"; tables with
+    fewer than _MINIMAL_CODE_THRESHOLD references are "minimal_code".
+
+    Returns list of:
+    {
+        "table_name": "blanket_order",
+        "defined_in": "init_schema.py:1017",
+        "action_references": 0,
+        "status": "no_code",  # or "minimal_code" if <3 references
+        "recommendation": "Generate CRUD actions for blanket_order"
+    }
+    """
+    if not os.path.isdir(src_root):
+        return []
+
+    # Step 1: Collect all CREATE TABLE declarations with file + line number
+    # {table_name: "relative_path:line_no"}
+    table_defs: dict[str, str] = {}
+
+    for dirpath, dirnames, filenames in os.walk(src_root):
+        # Skip test/fixture directories
+        dirnames[:] = [d for d in dirnames if d not in ("__pycache__", ".git", "tests", "fixtures")]
+        for fname in filenames:
+            if fname in ("init_schema.py", "init_db.py"):
+                fpath = os.path.join(dirpath, fname)
+                try:
+                    with open(fpath, "r") as f:
+                        content = f.read()
+                except (OSError, UnicodeDecodeError):
+                    continue
+                for m in _CREATE_TABLE_RE.finditer(content):
+                    tname = m.group(1)
+                    # Calculate line number from byte offset
+                    line_no = content[:m.start()].count("\n") + 1
+                    rel_path = os.path.relpath(fpath, src_root)
+                    table_defs[tname] = f"{rel_path}:{line_no}"
+
+    if not table_defs:
+        return []
+
+    # Step 2: Collect all db_query.py file contents (excluding tests)
+    query_texts: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(src_root):
+        dirnames[:] = [d for d in dirnames if d not in ("__pycache__", ".git", "tests", "fixtures")]
+        for fname in filenames:
+            if fname == "db_query.py":
+                fpath = os.path.join(dirpath, fname)
+                try:
+                    with open(fpath, "r") as f:
+                        query_texts.append(f.read())
+                except (OSError, UnicodeDecodeError):
+                    continue
+
+    combined_query_text = "\n".join(query_texts)
+
+    # Step 3: Count references for each table in db_query.py files
+    gaps = []
+    for tname, defined_in in sorted(table_defs.items()):
+        # Use word-boundary regex to avoid partial matches
+        # e.g., "company" should not match "company_id"
+        pattern = re.compile(r'(?<!\w)' + re.escape(tname) + r'(?!\w)')
+        ref_count = len(pattern.findall(combined_query_text))
+
+        if ref_count == 0:
+            gaps.append({
+                "gap_type": "schema_code_divergence",
+                "table_name": tname,
+                "defined_in": defined_in,
+                "action_references": 0,
+                "status": "no_code",
+                "severity": "high",
+                "description": (
+                    f"Table '{tname}' (defined in {defined_in}) has zero "
+                    f"references in any db_query.py — no actions use it."
+                ),
+                "recommendation": f"Generate CRUD actions for {tname}",
+                "suggested_action": f"Generate CRUD actions for {tname}",
+            })
+        elif ref_count < _MINIMAL_CODE_THRESHOLD:
+            gaps.append({
+                "gap_type": "schema_code_divergence",
+                "table_name": tname,
+                "defined_in": defined_in,
+                "action_references": ref_count,
+                "status": "minimal_code",
+                "severity": "medium",
+                "description": (
+                    f"Table '{tname}' (defined in {defined_in}) has only "
+                    f"{ref_count} reference(s) in db_query.py files — likely incomplete."
+                ),
+                "recommendation": f"Review and expand actions for {tname}",
+                "suggested_action": f"Review and expand actions for {tname}",
+            })
+
+    # Sort: no_code first (high severity), then minimal_code (medium)
+    severity_order = {"high": 0, "medium": 1}
+    gaps.sort(key=lambda g: (severity_order.get(g["severity"], 2), g["table_name"]))
+    return gaps
+
+
+# ---------------------------------------------------------------------------
+# Detection method 5: Stub detection
+# ---------------------------------------------------------------------------
+
+# Patterns that indicate stub / unfinished code
+_STUB_PATTERNS = re.compile(
+    r"Not yet implemented|TODO[:\s]|FIXME[:\s]|placeholder|(?<!\w)stub(?!\w)|Phase 2\+|Extensible in future",
+    re.IGNORECASE,
+)
+
+# Directories to skip during stub scanning
+_SKIP_DIRS = frozenset({"__pycache__", ".git", "tests", "node_modules", "fixtures"})
+
+
+def detect_stubs(src_root: str) -> list[dict]:
+    """Method 5: Find 'Not yet implemented', 'TODO', 'FIXME', 'placeholder' stubs in production code.
+
+    Walks all .py files under src_root (excluding tests/, __pycache__, .git),
+    scans each line for stub patterns, and classifies each match based on
+    whether the file is in dgm_engine.SAFETY_EXCLUDED_FILES.
+
+    Returns list of:
+    {
+        "file": "stock_posting.py",
+        "file_path": "erpclaw/scripts/erpclaw-setup/lib/erpclaw_lib/stock_posting.py",
+        "line": 16,
+        "text": "fifo: Not yet implemented (Phase 2+); falls back to moving_average",
+        "is_safety_excluded": True,
+        "classification": "human_required"  # or "os_addressable"
+    }
+    """
+    if not os.path.isdir(src_root):
+        return []
+
+    stubs = []
+    for dirpath, dirnames, filenames in os.walk(src_root):
+        # Prune excluded directories
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+
+        for fname in filenames:
+            if not fname.endswith(".py"):
+                continue
+            fpath = os.path.join(dirpath, fname)
+            try:
+                with open(fpath, "r") as f:
+                    lines = f.readlines()
+            except (OSError, UnicodeDecodeError):
+                continue
+
+            for line_no, line in enumerate(lines, start=1):
+                m = _STUB_PATTERNS.search(line)
+                if m:
+                    is_safety = fname in SAFETY_EXCLUDED_FILES
+                    stubs.append({
+                        "gap_type": "stub",
+                        "file": fname,
+                        "file_path": os.path.relpath(fpath, src_root),
+                        "line": line_no,
+                        "text": line.strip(),
+                        "is_safety_excluded": is_safety,
+                        "classification": "human_required" if is_safety else "os_addressable",
+                        "severity": "medium" if is_safety else "low",
+                        "description": (
+                            f"Stub in {fname}:{line_no} — {line.strip()}"
+                        ),
+                        "suggested_action": (
+                            f"Human review required for {fname}:{line_no}"
+                            if is_safety
+                            else f"OS can address stub in {fname}:{line_no}"
+                        ),
+                    })
+
+    # Sort: human_required first, then os_addressable, then by file+line
+    class_order = {"human_required": 0, "os_addressable": 1}
+    stubs.sort(key=lambda s: (class_order.get(s["classification"], 2), s["file"], s["line"]))
+    return stubs
+
+
+# ---------------------------------------------------------------------------
 # Log gaps to improvement_log
 # ---------------------------------------------------------------------------
 
@@ -285,16 +484,20 @@ def _log_gaps_to_improvement_log(gaps, db_path=None):
 def handle_detect_gaps(args):
     """Analyze action_call_log for patterns indicating missing functionality.
 
-    Uses three detection methods:
+    Uses six detection methods:
       1. Error pattern analysis (actions failing consistently)
       2. Workflow gap analysis (long gaps between action pairs)
       3. Industry gap analysis (standard modules not installed)
+      4. Schema-code divergence (tables with zero/minimal code references)
+      5. Stub detection (TODO / Not yet implemented markers in production code)
+      6. Feature completeness (compare domain actions against industry-standard matrix)
 
     Returns list of gaps with gap_type, description, severity, suggested_action.
     All gaps are logged to erpclaw_improvement_log.
     """
     db_path = getattr(args, "db_path", None)
     registry_path = getattr(args, "registry_path", None)
+    src_root = getattr(args, "src_root", None)
 
     registry = _load_registry(registry_path)
 
@@ -316,6 +519,41 @@ def handle_detect_gaps(args):
     finally:
         conn.close()
 
+    # Method 4: Schema-code divergence (file-based, no DB needed)
+    schema_gaps = []
+    if src_root and os.path.isdir(src_root):
+        schema_gaps = detect_schema_code_divergence(src_root)
+        all_gaps.extend(schema_gaps)
+
+    # Method 5: Stub detection (file-based, no DB needed)
+    stub_gaps = []
+    if src_root and os.path.isdir(src_root):
+        stub_gaps = detect_stubs(src_root)
+        all_gaps.extend(stub_gaps)
+
+    # Method 6: Feature completeness (file-based, no DB needed)
+    feature_gaps = []
+    if src_root and os.path.isdir(src_root):
+        raw_gaps = check_feature_completeness(src_root)
+        for fg in raw_gaps:
+            feature_gaps.append({
+                "gap_type": "feature_completeness",
+                "domain": fg["domain"],
+                "feature": fg["feature"],
+                "priority": fg["priority"],
+                "severity": "high" if fg["severity"] == "must-have" else "medium",
+                "description": (
+                    f"Feature '{fg['feature']}' is missing from {fg['domain']} domain. "
+                    f"{fg['description']} (Priority: {fg['priority']}, Standard: {fg['standard']})"
+                ),
+                "suggested_action": (
+                    f"Implement {fg['feature']} in {fg['domain']}: "
+                    f"expected actions {fg['expected_actions']}"
+                ),
+                "expected_actions": fg["expected_actions"],
+            })
+        all_gaps.extend(feature_gaps)
+
     # Log all gaps to improvement_log
     if all_gaps:
         _log_gaps_to_improvement_log(all_gaps, db_path=db_path)
@@ -327,8 +565,63 @@ def handle_detect_gaps(args):
             "error_pattern": len(error_gaps),
             "workflow_gap": len(workflow_gaps),
             "industry_gap": len(industry_gaps),
+            "schema_code_divergence": len(schema_gaps),
+            "stub": len(stub_gaps),
+            "feature_completeness": len(feature_gaps),
         },
         "gaps": all_gaps,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Action: detect-schema-divergence
+# ---------------------------------------------------------------------------
+
+def handle_detect_schema_divergence(args):
+    """Detect tables defined in schema files with zero or minimal code references.
+
+    Requires --src-root pointing to the project src/ directory.
+    """
+    src_root = getattr(args, "src_root", None)
+    if not src_root or not os.path.isdir(src_root):
+        return {"error": "Missing or invalid --src-root path"}
+
+    gaps = detect_schema_code_divergence(src_root)
+    no_code = [g for g in gaps if g["status"] == "no_code"]
+    minimal = [g for g in gaps if g["status"] == "minimal_code"]
+
+    return {
+        "result": "ok",
+        "total": len(gaps),
+        "no_code_count": len(no_code),
+        "minimal_code_count": len(minimal),
+        "gaps": gaps,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Action: detect-stubs
+# ---------------------------------------------------------------------------
+
+def handle_detect_stubs(args):
+    """Detect TODO / Not yet implemented / placeholder stubs in production code.
+
+    Requires --src-root pointing to the project src/ directory.
+    """
+    src_root = getattr(args, "src_root", None)
+    if not src_root or not os.path.isdir(src_root):
+        return {"error": "Missing or invalid --src-root path"}
+
+    stubs = detect_stubs(src_root)
+    human = [s for s in stubs if s["classification"] == "human_required"]
+    os_addr = [s for s in stubs if s["classification"] == "os_addressable"]
+
+    return {
+        "result": "ok",
+        "total": len(stubs),
+        "human_required_count": len(human),
+        "os_addressable_count": len(os_addr),
+        "stubs": stubs,
     }
 
 
