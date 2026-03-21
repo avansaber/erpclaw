@@ -17,6 +17,8 @@ import re
 import shutil
 import subprocess
 import sys
+import time
+import urllib.request
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -33,6 +35,9 @@ from erpclaw_lib.response import ok, err, rows_to_list, row_to_dict
 MODULES_DIR = os.path.expanduser("~/.openclaw/erpclaw/modules")
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REGISTRY_PATH = os.path.join(SCRIPT_DIR, "module_registry.json")
+REMOTE_REGISTRY_URL = "https://raw.githubusercontent.com/avansaber/erpclaw/main/scripts/module_registry.json"
+LOCAL_CACHE_PATH = os.path.expanduser("~/.openclaw/erpclaw/registry_cache.json")
+CACHE_TTL_SECONDS = 86400  # 24 hours
 
 
 def _now_iso():
@@ -40,15 +45,63 @@ def _now_iso():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _load_registry():
-    """Load the module catalog from module_registry.json."""
-    if not os.path.isfile(REGISTRY_PATH):
-        err(f"Module registry not found at {REGISTRY_PATH}")
+def _load_registry(force_refresh=False):
+    """Load module registry with remote fetch + local cache fallback.
+
+    Resolution order:
+    1. Local cache (if fresh and not force_refresh)
+    2. Remote fetch from GitHub (updates cache)
+    3. Bundled copy (SCRIPT_DIR/module_registry.json)
+    4. Stale cache (any age)
+    """
+    bundled_path = os.path.join(SCRIPT_DIR, "module_registry.json")
+
+    # 1. Check local cache
+    if not force_refresh and os.path.isfile(LOCAL_CACHE_PATH):
+        try:
+            age = time.time() - os.path.getmtime(LOCAL_CACHE_PATH)
+            if age < CACHE_TTL_SECONDS:
+                with open(LOCAL_CACHE_PATH) as f:
+                    data = json.load(f)
+                    if "modules" in data:
+                        return data
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # 2. Try remote fetch
     try:
-        with open(REGISTRY_PATH, "r") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError) as e:
-        err(f"Failed to read module registry: {e}")
+        req = urllib.request.Request(REMOTE_REGISTRY_URL, headers={"User-Agent": "erpclaw"})
+        resp = urllib.request.urlopen(req, timeout=10)
+        raw = resp.read().decode("utf-8")
+        data = json.loads(raw)
+        if "modules" in data:
+            # Update cache
+            cache_dir = os.path.dirname(LOCAL_CACHE_PATH)
+            if cache_dir:
+                os.makedirs(cache_dir, exist_ok=True)
+            with open(LOCAL_CACHE_PATH, "w") as f:
+                json.dump(data, f, indent=2)
+            return data
+    except Exception:
+        pass  # Offline or error — fall through
+
+    # 3. Fall back to bundled copy
+    if os.path.isfile(bundled_path):
+        try:
+            with open(bundled_path) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # 4. Fall back to stale cache
+    if os.path.isfile(LOCAL_CACHE_PATH):
+        try:
+            with open(LOCAL_CACHE_PATH) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    return {"version": "0.0.0", "modules": {}}
 
 
 def _registry_to_dict(registry):
@@ -895,7 +948,8 @@ def list_modules(args):
 
 def available_modules(args):
     """Browse the module catalog, cross-referenced with install status."""
-    registry = _load_registry()
+    refresh = getattr(args, "refresh", False)
+    registry = _load_registry(force_refresh=refresh)
     conn = get_connection()
     installed = _get_installed_modules(conn)
 
@@ -1022,7 +1076,8 @@ def search_modules(args):
     if not search_query:
         err("--search is required")
 
-    registry = _load_registry()
+    refresh = getattr(args, "refresh", False)
+    registry = _load_registry(force_refresh=refresh)
     query_lower = search_query.lower()
     query_terms = query_lower.split()
 
@@ -1217,6 +1272,10 @@ def main():
     parser.add_argument(
         "--search",
         help="Search query (for search-modules, available-modules)"
+    )
+    parser.add_argument(
+        "--refresh", action="store_true", default=False,
+        help="Force fresh fetch of module registry from GitHub (for available-modules, search-modules)"
     )
 
     args = parser.parse_args()

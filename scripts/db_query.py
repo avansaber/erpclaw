@@ -693,6 +693,7 @@ def _suggest_module_for_action(action):
         "canada-": "erpclaw-region-ca",
         "uk-": "erpclaw-region-uk",
         "eu-": "erpclaw-region-eu",
+        "stripe-": "erpclaw-integrations-stripe",
     }
     for prefix, module in PREFIX_MAP.items():
         if action.startswith(prefix):

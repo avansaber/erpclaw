@@ -271,6 +271,43 @@ def handle_list_industries(args):
 
 
 # ---------------------------------------------------------------------------
+# Action Registry (used for SKILL.md completeness checks)
+# ---------------------------------------------------------------------------
+
+ACTIONS = {
+    "validate-module": None,
+    "list-articles": None,
+    "build-table-registry": None,
+    "generate-module": None,
+    "configure-module": None,
+    "list-industries": None,
+    "classify-operation": None,
+    "schema-plan": None,
+    "schema-apply": None,
+    "schema-rollback": None,
+    "schema-drift": None,
+    "deploy-module": None,
+    "deploy-audit-log": None,
+    "install-suite": None,
+    "run-audit": None,
+    "compliance-weather-status": None,
+    "log-improvement": None,
+    "list-improvements": None,
+    "review-improvement": None,
+    "semantic-check": None,
+    "semantic-rules-list": None,
+    "dgm-run-variant": None,
+    "dgm-list-variants": None,
+    "dgm-select-best": None,
+    "detect-gaps": None,
+    "suggest-modules": None,
+    "heartbeat-analyze": None,
+    "heartbeat-report": None,
+    "heartbeat-suggest": None,
+}
+
+
+# ---------------------------------------------------------------------------
 # Router
 # ---------------------------------------------------------------------------
 
