@@ -1051,6 +1051,34 @@
         "gateway",
         "subscriptions"
       ]
+    },
+    "erpclaw-integrations-shopify": {
+      "display_name": "ERPClaw Shopify Integration",
+      "description": "Deep native Shopify integration: order sync, payout reconciliation, GL posting, COGS tracking, gift card deferred revenue",
+      "category": "expansion",
+      "github": "avansaber/erpclaw-addons",
+      "subdir": "erpclaw-integrations-shopify",
+      "version": "1.0.0",
+      "requires": [
+        "erpclaw"
+      ],
+      "has_init_db": true,
+      "action_count": 58,
+      "tags": [
+        "shopify",
+        "e-commerce",
+        "reconciliation",
+        "payout",
+        "orders",
+        "inventory"
+      ],
+      "keywords": [
+        "shopify",
+        "e-commerce",
+        "online store",
+        "payout reconciliation",
+        "shopify payments"
+      ]
     }
   }
 }

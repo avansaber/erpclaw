@@ -694,6 +694,7 @@ def _suggest_module_for_action(action):
         "uk-": "erpclaw-region-uk",
         "eu-": "erpclaw-region-eu",
         "stripe-": "erpclaw-integrations-stripe",
+        "shopify-": "erpclaw-integrations-shopify",
     }
     for prefix, module in PREFIX_MAP.items():
         if action.startswith(prefix):

@@ -56,6 +56,7 @@ _PREFIX_OVERRIDES: dict[str, list[str]] = {
                      "shop_floor_", "tool", "engineering_change_", "process_recipe", "recipe_ingredient"],
     "erpclaw-integrations": ["erpclaw_", "integration_", "connv2_", "plaid_", "stripe_", "s3_"],
     "erpclaw-integrations-stripe": ["stripe_"],
+    "erpclaw-integrations-shopify": ["shopify_"],
     "erpclaw-alerts": ["erpclaw_", "alert_", "notification_"],
     "erpclaw-approvals": ["erpclaw_", "approval_"],
     "erpclaw-compliance": ["erpclaw_", "compliance_", "audit_", "risk_", "control_", "policy"],
