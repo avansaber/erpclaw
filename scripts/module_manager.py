@@ -610,9 +610,14 @@ def _install_module_inner(args, conn, modules_by_name, depth=0):
     tables_created = 0
     if os.path.isfile(init_db_path):
         try:
+            # Set PYTHONPATH so init_db.py can find erpclaw_lib
+            env = os.environ.copy()
+            lib_path = os.path.expanduser("~/.openclaw/erpclaw/lib")
+            env["PYTHONPATH"] = lib_path + os.pathsep + env.get("PYTHONPATH", "")
             result = subprocess.run(
                 [sys.executable, init_db_path],
-                capture_output=True, text=True, timeout=60
+                capture_output=True, text=True, timeout=60,
+                env=env,
             )
             if result.returncode != 0:
                 _mark_failed(conn, module_name, f"init_db.py failed: {result.stderr.strip()}")
