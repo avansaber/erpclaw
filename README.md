@@ -65,45 +65,17 @@ Available modules:
 
 ## Architecture
 
-```
-OpenClaw Bot → erpclaw/scripts/db_query.py --action {action} --args
-                         │
-                         ├── erpclaw-setup     → Company, COA, fiscal year, database init
-                         ├── erpclaw-gl        → Chart of accounts, journal entries
-                         ├── erpclaw-selling   → Customers, sales orders, invoices
-                         ├── erpclaw-buying    → Suppliers, purchase orders
-                         ├── erpclaw-inventory → Items, warehouses, stock
-                         ├── erpclaw-billing   → Recurring invoices, subscriptions
-                         ├── erpclaw-tax       → Tax templates, calculations
-                         ├── erpclaw-payments  → Payment entries, reconciliation
-                         ├── erpclaw-journals  → Manual journal entries
-                         ├── erpclaw-reports   → Financial statements
-                         ├── erpclaw-hr        → Employees, leave, attendance
-                         ├── erpclaw-payroll   → Salary, tax withholding, W-2
-                         └── erpclaw-accounting-adv → ASC 606/842, intercompany
-                         │
-                         ▼
-              SQLite (local database)
-              WAL mode, FK enforcement, parameterized queries
-```
+ERPClaw organizes functionality into 14 domains — setup, general ledger, selling, buying, inventory, billing, tax, payments, journals, reports, HR, payroll, advanced accounting, and integrations. All domains share one local database with full referential integrity.
 
 ### Data Integrity
 
-- All financial amounts stored as TEXT (Python `Decimal`) — never float
-- IDs are UUID4 (TEXT)
-- GL entries are immutable — cancellation creates reverse entries
-- All cross-table writes in single SQLite transactions
-- 12-step GL validation on every posting
+- Tamper-proof financial records — cancellations create auditable reverse entries
+- Multi-step financial validation on every transaction
+- Atomic writes ensure data consistency across all operations
 
 ## Database
 
-Single SQLite database at `~/.openclaw/erpclaw/data.sqlite`:
-
-- **688 tables** across all modules (188 core)
-- WAL mode for concurrent reads
-- Foreign key enforcement ON
-- `PRAGMA busy_timeout = 5000`
-- Shared library at `~/.openclaw/erpclaw/lib/erpclaw_lib/`
+Single local database with hundreds of tables across all modules. Built for data integrity — foreign key enforcement, concurrent read support, and a shared library for consistent behavior across all modules.
 
 ## Module Registry
 
@@ -144,38 +116,21 @@ WebClaw reads ERPClaw's SKILL.md and automatically generates forms, data tables,
 
 ## ERPClaw OS -- Self-Extending ERP
 
-ERPClaw OS is a self-extending ERP platform where AI agents generate, test, and deploy new industry modules autonomously.
+ERPClaw OS is a self-extending ERP platform where AI generates, validates, and deploys new industry modules autonomously.
 
-### The Constitution
+### Financial Integrity Rules
 
-18 machine-readable financial laws govern every generated module. These laws cover naming conventions, data types, GL immutability, transaction atomicity, and audit trail requirements. A module that violates any article is automatically rejected -- no human review needed for mechanical compliance.
-
-### 80/15/5 Theory
-
-ERP module development breaks down as:
-- **80% mechanical** -- schema creation, CRUD actions, naming conventions, audit logging
-- **15% pattern-matching** -- GL posting patterns, cross-skill integration, report templates
-- **5% human judgment** -- business logic edge cases, domain expertise, UX decisions
-
-ERPClaw OS automates the 80% and assists with the 15%, leaving humans to focus on the 5% that matters.
-
-### Current Status
-
-- **Phase 1 (Smart Templates)** -- complete. Industry-specific templates generate full module scaffolding from a single configuration.
-- **Phase 2 (Bounded Autonomy)** -- complete. AI agents generate, validate, and test modules within constitutional bounds.
-- **Phase 3 (Adult)** -- complete. Semantic correctness engine, self-improvement log, DGM variant engine, heartbeat analysis, gap detection. 13 new actions, 5 new tables.
-- **7,627+ tests passing** across L0 constitutional, L1 unit, L2 contract, and L3 smoke layers.
-- **3 proof-of-concept modules generated**: groomingclaw, tattooclaw, storageclaw -- 144/144 tests passed, all constitutional articles satisfied.
+Built-in financial integrity rules automatically enforce accounting standards on every generated module. Modules that violate any rule are automatically rejected -- no human review needed for compliance.
 
 ### How It Works
 
-1. Define an industry configuration (name, entities, workflows, GL accounts)
-2. ERPClaw OS generates the full module: schema, actions, SKILL.md, tests
-3. The Constitution validator checks all 18 articles
-4. Regression gate runs the full test suite
-5. Deploy audit verifies production readiness
+AI generates complete modules from business descriptions, validated before deployment. Describe your industry, and ERPClaw OS produces a fully functional module with database schema, business actions, documentation, and tests -- all passing automated validation before going live.
 
-Generated modules are indistinguishable from hand-written ones -- same architecture, same conventions, same test coverage.
+### Current Status
+
+- **Three evolution phases complete** -- Learns from business descriptions, validates against integrity rules, continuously improves.
+- **Thousands of automated tests** across multiple validation layers.
+- **Proof-of-concept modules generated and validated** -- indistinguishable from hand-written modules in architecture and test coverage.
 
 ## Links
 
