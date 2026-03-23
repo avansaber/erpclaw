@@ -1,17 +1,17 @@
 ---
 name: erpclaw
-version: 3.3.0
+version: 3.4.1
 description: >
-  AI-native ERP system with self-extending OS. Full accounting, invoicing, inventory, purchasing,
+  AI-native ERP system. Full accounting, invoicing, inventory, purchasing,
   tax, billing, HR, payroll, advanced accounting (ASC 606/842, intercompany, consolidation),
-  and financial reporting. 467 actions across 14 domains, 43 expansion modules.
-  Constitutional guardrails, adversarial audit, schema migration. Double-entry GL, immutable audit trail, US GAAP.
+  and financial reporting. 467 actions across 14 domains, 43 optional expansion modules (user-approved install from GitHub).
+  Double-entry GL, immutable audit trail, US GAAP compliant.
 author: AvanSaber
 homepage: https://github.com/avansaber/erpclaw
 source: https://github.com/avansaber/erpclaw
 user-invocable: true
-tags: [erp, accounting, invoicing, inventory, purchasing, tax, billing, payments, gl, reports, sales, buying, setup, hr, payroll, employees, leave, attendance, salary, revenue-recognition, lease-accounting, intercompany, consolidation, stripe, payment-gateway]
-metadata: {"openclaw":{"type":"executable","install":{"post":"python3 scripts/erpclaw-setup/db_query.py --action initialize-database"},"requires":{"bins":["python3","git"],"env":[],"optionalEnv":["ERPCLAW_DB_PATH"]},"os":["darwin","linux"]}}
+tags: [erp, accounting, invoicing, inventory, purchasing, tax, billing, payments, gl, reports, sales, buying, setup, hr, payroll, employees, leave, attendance, salary, revenue-recognition, lease-accounting, intercompany, consolidation]
+metadata: {"openclaw":{"type":"executable","install":{"post":"python3 scripts/erpclaw-setup/db_query.py --action initialize-database"},"requires":{"bins":["python3","git"],"env":[],"optionalEnv":["ERPCLAW_DB_PATH","STRIPE_API_KEY","TELEGRAM_BOT_TOKEN","SHOPIFY_ACCESS_TOKEN","OPENEXCHANGERATES_APP_ID"]},"os":["darwin","linux"]}}
 cron:
   - expression: "0 1 * * *"
     timezone: "America/Chicago"
@@ -38,15 +38,15 @@ payments, tax, financial reports, customers, sales, suppliers, purchasing, inven
 HR (employees, leave, attendance, expenses), US payroll (FICA, W-2, garnishments), advanced accounting
 (ASC 606/842, intercompany, consolidation), and 43 industry modules. Single local SQLite DB, double-entry GL, immutable audit trail.
 
-**Security:** Local-first (`~/.openclaw/erpclaw/data.sqlite`). Parameterized queries. RBAC (PBKDF2). Immutable GL. Network only for `fetch-exchange-rates` (public API) and `install-module` (GitHub `avansaber/*`).
+**Security:** Local-first (`~/.openclaw/erpclaw/data.sqlite`). Parameterized queries. RBAC (PBKDF2). Immutable GL. Network only for `fetch-exchange-rates` (public API) and `install-module` (GitHub `avansaber/*`, requires user approval). No credentials stored in code — integration API keys provided via environment variables (STRIPE_API_KEY, TELEGRAM_BOT_TOKEN, etc.) or prompted at runtime and stored in the local DB only.
 
 ### Skill Activation Triggers
 
-Activate when user mentions: ERP, accounting, invoice, sales order, purchase order, customer, supplier, inventory, payment, GL, trial balance, P&L, balance sheet, tax, billing, modules, install module, onboard, CRM, manufacturing, healthcare, education, retail, employee, HR, payroll, salary, leave, attendance, expense claim, W-2, garnishment, Stripe, payment gateway, integration, connect, sync.
+Activate when user mentions: ERP, accounting, invoice, sales order, purchase order, customer, supplier, inventory, payment, GL, trial balance, P&L, balance sheet, tax, billing, modules, install module, onboard, CRM, manufacturing, healthcare, education, retail, employee, HR, payroll, salary, leave, attendance, expense claim, W-2, garnishment, integration.
 
 ### Auto-Detection
 
-When a user describes their business: detect type (e.g., "dental practice" -> dental), confirm with user, call `setup-company --industry <type>`, then `list-all-actions`. Industry values: retail, restaurant, healthcare, dental, veterinary, construction, manufacturing, legal, agriculture, hospitality, property, school, university, nonprofit, automotive, therapy, home-health, consulting, distribution, saas, stripe. When a user asks about a service or integration not currently installed, search the module registry for matching modules and suggest installation.
+When a user describes their business: detect type (e.g., "dental practice" -> dental), **ask user to confirm** before proceeding, then call `setup-company --industry <type>`. Industry values: retail, restaurant, healthcare, dental, veterinary, construction, manufacturing, legal, agriculture, hospitality, property, school, university, nonprofit, automotive, therapy, home-health, consulting, distribution, saas. When a user asks about a service or integration not currently installed, search the module registry and **suggest** installation (never auto-install without user approval).
 
 ### Setup
 ```
@@ -199,21 +199,21 @@ python3 {baseDir}/scripts/db_query.py --action setup-chart-of-accounts --company
 | `generate-w2-data` / `generate-nacha-file` / `add-garnishment` / `update-garnishment` / `get-garnishment` / `list-garnishments` | W-2, NACHA, garnishments |
 | `get-amendment-history` | Amendment tracking |
 
-### Module Management & OS (41)
+### Module Management & Quality (41)
 | Action | Description |
 |--------|-------------|
-| `install-module` / `remove-module` / `update-modules` / `list-modules` / `available-modules` / `search-modules` / `module-status` | Module catalog |
+| `install-module` / `remove-module` / `update-modules` / `list-modules` / `available-modules` / `search-modules` / `module-status` | Module catalog (install/remove require user approval) |
 | `rebuild-action-cache` / `list-all-actions` / `list-profiles` / `onboard` / `list-industries` | Actions & profiles |
-| `validate-module` / `generate-module` / `configure-module` / `deploy-module` | OS: Module lifecycle |
-| `build-table-registry` / `list-articles` / `install-suite` / `classify-operation` / `run-audit` / `compliance-weather-status` | OS: Constitution & audit |
-| `schema-plan` / `schema-apply` / `schema-rollback` / `schema-drift` / `deploy-audit-log` | OS: Schema migration |
-| `semantic-check` / `semantic-rules-list` | OS: Semantic correctness |
-| `log-improvement` / `list-improvements` / `review-improvement` | OS: Self-improvement |
-| `dgm-run-variant` / `dgm-list-variants` / `dgm-select-best` | OS: DGM variant engine |
-| `heartbeat-analyze` / `heartbeat-report` / `heartbeat-suggest` / `detect-gaps` / `suggest-modules` | OS: Gap detection |
-| `regenerate-skill-md` | OS: Regenerate SKILL.md |
+| `validate-module` / `generate-module` / `configure-module` / `deploy-module` | Module lifecycle (all require user approval) |
+| `build-table-registry` / `list-articles` / `install-suite` / `classify-operation` / `run-audit` / `compliance-weather-status` | Validation & audit |
+| `schema-plan` / `schema-apply` / `schema-rollback` / `schema-drift` / `deploy-audit-log` | Schema migration (apply/rollback require user approval) |
+| `semantic-check` / `semantic-rules-list` | Semantic correctness |
+| `log-improvement` / `list-improvements` / `review-improvement` | Improvement suggestions (advisory only) |
+| `dgm-run-variant` / `dgm-list-variants` / `dgm-select-best` | Variant analysis (advisory only, never auto-deployed) |
+| `heartbeat-analyze` / `heartbeat-report` / `heartbeat-suggest` / `detect-gaps` / `suggest-modules` | Gap detection (suggestions only) |
+| `regenerate-skill-md` | Regenerate SKILL.md |
 
-**Confirm before running:** `setup-company`, `onboard`, `install-module`, `remove-module`, `update-modules`, `submit-*`, `cancel-*`, `approve-*`, `reject-*`, `run-elimination`, `run-consolidation`, `restore-database`, `close-fiscal-year`, `initialize-database --force`.
+**Always confirm with user before running:** `setup-company`, `onboard`, `install-module`, `remove-module`, `update-modules`, `generate-module`, `deploy-module`, `schema-apply`, `schema-rollback`, `submit-*`, `cancel-*`, `approve-*`, `reject-*`, `run-elimination`, `run-consolidation`, `restore-database`, `close-fiscal-year`, `initialize-database --force`.
 
 ## Technical Details (Tier 3)
-Router: `scripts/db_query.py` -> 14 core domains + erpclaw-os. Modules from GitHub to `~/.openclaw/erpclaw/modules/`. Single SQLite DB (WAL). 188 core tables (688 with modules). Money=TEXT(Decimal), IDs=TEXT(UUID4), GL immutable. Python 3.10+.
+Router: `scripts/db_query.py` -> 14 core domains. Optional modules installed from GitHub (`avansaber/*`) to `~/.openclaw/erpclaw/modules/` (user-approved only). Single SQLite DB (WAL). 188 core tables (688 with modules). Money=TEXT(Decimal), IDs=TEXT(UUID4), GL immutable. Python 3.10+. All network activity limited to: (1) `fetch-exchange-rates` — public exchange rate API, (2) `install-module` — git clone from `github.com/avansaber/*` only, requires user approval.
