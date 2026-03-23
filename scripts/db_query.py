@@ -381,7 +381,7 @@ ACTION_MAP = {
     "get-prepaid-balance": "erpclaw-billing",
     "billing-status": "erpclaw-billing",
 
-    # === Advanced Accounting — Revenue Recognition / ASC 606 (14 actions) ===
+    # === Advanced Accounting — Revenue Recognition / ASC 606 (17 actions) ===
     "add-revenue-contract": "erpclaw-accounting-adv",
     "update-revenue-contract": "erpclaw-accounting-adv",
     "get-revenue-contract": "erpclaw-accounting-adv",
@@ -389,11 +389,14 @@ ACTION_MAP = {
     "add-performance-obligation": "erpclaw-accounting-adv",
     "list-performance-obligations": "erpclaw-accounting-adv",
     "satisfy-performance-obligation": "erpclaw-accounting-adv",
+    "update-performance-obligation": "erpclaw-accounting-adv",
     "add-variable-consideration": "erpclaw-accounting-adv",
     "list-variable-considerations": "erpclaw-accounting-adv",
     "modify-contract": "erpclaw-accounting-adv",
     "calculate-revenue-schedule": "erpclaw-accounting-adv",
     "generate-revenue-entries": "erpclaw-accounting-adv",
+    "update-schedule-amounts": "erpclaw-accounting-adv",
+    "recognize-schedule-entry": "erpclaw-accounting-adv",
     "revenue-waterfall-report": "erpclaw-accounting-adv",
     "revenue-recognition-summary": "erpclaw-accounting-adv",
 

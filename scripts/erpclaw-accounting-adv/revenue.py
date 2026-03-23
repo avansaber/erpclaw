@@ -614,6 +614,109 @@ def revenue_recognition_summary(conn, args):
     })
 
 
+# ===========================================================================
+# 15. update-performance-obligation
+# ===========================================================================
+def update_performance_obligation(conn, args):
+    """Update a performance obligation's pricing or method fields."""
+    ob_id = getattr(args, "id", None)
+    if not ob_id:
+        err("--id is required")
+    row = conn.execute("SELECT * FROM advacct_performance_obligation WHERE id = ?", (ob_id,)).fetchone()
+    if not row:
+        err(f"Performance obligation {ob_id} not found")
+
+    data, changed = {}, []
+    for arg_name, col_name in {
+        "standalone_price": "standalone_price",
+        "allocated_price": "allocated_price",
+        "name": "name",
+        "recognition_method": "recognition_method",
+        "recognition_basis": "recognition_basis",
+    }.items():
+        val = getattr(args, arg_name, None)
+        if val is not None:
+            data[col_name] = val
+            changed.append(col_name)
+
+    if not data:
+        err("No fields to update")
+
+    data["updated_at"] = _now_iso()
+    sql, params = dynamic_update("advacct_performance_obligation", data, where={"id": ob_id})
+    conn.execute(sql, params)
+    audit(conn, SKILL, "update-performance-obligation", "advacct_performance_obligation", ob_id,
+          new_values={"updated_fields": changed})
+    conn.commit()
+    ok({"id": ob_id, "updated_fields": changed})
+
+
+# ===========================================================================
+# 16. update-schedule-amounts
+# ===========================================================================
+def update_schedule_amounts(conn, args):
+    """Update the amount on all unrecognized schedule entries for an obligation.
+
+    Used for contract modifications (upgrade/downgrade) where only future
+    (unrecognized) periods should reflect the new amount.
+    """
+    ob_id = getattr(args, "obligation_id", None)
+    if not ob_id:
+        err("--obligation-id is required")
+    row = conn.execute("SELECT id FROM advacct_performance_obligation WHERE id = ?", (ob_id,)).fetchone()
+    if not row:
+        err(f"Performance obligation {ob_id} not found")
+
+    new_amount = getattr(args, "amount", None)
+    if not new_amount:
+        err("--amount is required")
+    try:
+        Decimal(new_amount)
+    except Exception:
+        err(f"Invalid amount: {new_amount}")
+
+    conn.execute(
+        "UPDATE advacct_revenue_schedule SET amount = ? WHERE obligation_id = ? AND recognized = 0",
+        (new_amount, ob_id)
+    )
+    updated = conn.execute("SELECT changes()").fetchone()[0]
+
+    audit(conn, SKILL, "update-schedule-amounts", "advacct_revenue_schedule", ob_id,
+          new_values={"new_amount": new_amount, "entries_updated": updated})
+    conn.commit()
+    ok({"obligation_id": ob_id, "new_amount": new_amount, "entries_updated": updated})
+
+
+# ===========================================================================
+# 17. recognize-schedule-entry
+# ===========================================================================
+def recognize_schedule_entry(conn, args):
+    """Mark a single revenue schedule entry as recognized by its ID.
+
+    Used for period-by-period recognition (e.g., from Stripe ASC 606 bridge)
+    where only specific entries should be marked, not all at once.
+    """
+    entry_id = getattr(args, "id", None)
+    if not entry_id:
+        err("--id is required")
+    row = conn.execute("SELECT * FROM advacct_revenue_schedule WHERE id = ?", (entry_id,)).fetchone()
+    if not row:
+        err(f"Revenue schedule entry {entry_id} not found")
+
+    data = row_to_dict(row)
+    if data["recognized"] == 1:
+        err(f"Revenue schedule entry {entry_id} is already recognized")
+
+    conn.execute(
+        "UPDATE advacct_revenue_schedule SET recognized = 1 WHERE id = ?",
+        (entry_id,)
+    )
+    audit(conn, SKILL, "recognize-schedule-entry", "advacct_revenue_schedule", entry_id,
+          new_values={"recognized": 1})
+    conn.commit()
+    ok({"id": entry_id, "recognized": 1, "amount": data["amount"]})
+
+
 # ---------------------------------------------------------------------------
 # Action registry
 # ---------------------------------------------------------------------------
@@ -625,11 +728,14 @@ ACTIONS = {
     "add-performance-obligation": add_performance_obligation,
     "list-performance-obligations": list_performance_obligations,
     "satisfy-performance-obligation": satisfy_performance_obligation,
+    "update-performance-obligation": update_performance_obligation,
     "add-variable-consideration": add_variable_consideration,
     "list-variable-considerations": list_variable_considerations,
     "modify-contract": modify_contract,
     "calculate-revenue-schedule": calculate_revenue_schedule,
     "generate-revenue-entries": generate_revenue_entries,
+    "update-schedule-amounts": update_schedule_amounts,
+    "recognize-schedule-entry": recognize_schedule_entry,
     "revenue-waterfall-report": revenue_waterfall_report,
     "revenue-recognition-summary": revenue_recognition_summary,
 }

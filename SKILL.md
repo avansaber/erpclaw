@@ -169,6 +169,7 @@ python3 {baseDir}/scripts/db_query.py --action setup-chart-of-accounts --company
 | `add-performance-obligation` / `list-performance-obligations` / `satisfy-performance-obligation` | ASC 606 |
 | `add-variable-consideration` / `list-variable-considerations` / `modify-contract` | Variable consideration |
 | `calculate-revenue-schedule` / `generate-revenue-entries` / `revenue-waterfall-report` / `revenue-recognition-summary` | Revenue recognition |
+| `recognize-schedule-entry` / `update-performance-obligation` / `update-schedule-amounts` | Revenue schedule management |
 | `add-lease` / `update-lease` / `get-lease` / `list-leases` / `classify-lease` | ASC 842 leases |
 | `calculate-rou-asset` / `calculate-lease-liability` / `generate-amortization-schedule` / `record-lease-payment` | Lease calculations |
 | `lease-maturity-report` / `lease-disclosure-report` / `lease-summary` | Lease reports |
