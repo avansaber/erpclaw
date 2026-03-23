@@ -5,7 +5,7 @@ End-to-end deployment orchestrator. Full flow:
   1. Validate module (constitution check)
   2. Sandbox test execution
   3. Tier classification
-  4. Decision: auto-deploy (T0-1), queue for human (T2), reject (T3)
+  4. Decision: auto-deploy (T0-1), queue for human (T2), suggestion only (T2.5), reject (T3)
   5. Record audit trail
 
 Produces deployment report (JSON) with all step results.
@@ -28,8 +28,9 @@ from deploy_audit import record_deployment, ensure_deploy_audit_table
 from regression_gate import run_regression
 
 # Tier thresholds for deployment decisions
-TIER_AUTO_DEPLOY = 1    # Tier 0-1: auto-deploy
-TIER_HUMAN_REVIEW = 2   # Tier 2: queue for human approval
+TIER_AUTO_DEPLOY = 1     # Tier 0-1: auto-deploy
+TIER_HUMAN_REVIEW = 2    # Tier 2: queue for human approval
+TIER_SUGGESTION_ONLY = 25  # Tier 2.5: advisory suggestion, never deployed
 TIER_REJECT = 3          # Tier 3: reject (human-only modification)
 
 
@@ -149,6 +150,9 @@ def run_pipeline(module_path, db_path=None, src_root=None, skip_sandbox=False):
     elif tier == TIER_HUMAN_REVIEW:
         pipeline_result = "queued"
         reasoning = f"Tier {tier} — queued for human review (module lifecycle operation)"
+    elif tier == TIER_SUGGESTION_ONLY:
+        pipeline_result = "suggestion"
+        reasoning = f"Tier 2.5 — logged as advisory suggestion only. NEVER auto-deployed. Human must manually review and apply."
     else:
         pipeline_result = "rejected"
         reasoning = f"Tier {tier} — rejected (human-only operation, requires manual intervention)"

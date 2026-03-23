@@ -10,7 +10,8 @@ CRITICAL SAFETY RULES:
 - NEVER touches constitution/validation/sandbox/invariant-checker files
 - NEVER modifies itself (dgm_engine.py)
 - NEVER touches Tier 3 classified actions
-- NEVER auto-deploys — always queues for human review via improvement_log
+- NEVER auto-deploys — all DGM output is Tier 2.5 (advisory suggestion only)
+- All proposals logged to improvement_log for human review
 """
 import difflib
 import json
@@ -41,7 +42,7 @@ from variant_manager import (
     cleanup_old_variants,
     get_variant_diff,
 )
-from tier_classifier import classify_action, TIER_3
+from tier_classifier import classify_action, TIER_2_5, TIER_3
 
 
 # ---------------------------------------------------------------------------

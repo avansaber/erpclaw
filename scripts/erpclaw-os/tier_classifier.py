@@ -2,10 +2,11 @@
 """ERPClaw OS — Tier Classification System
 
 Classifies every operation into a risk tier for deployment autonomy:
-  Tier 0: Fully autonomous (read-only, draft creation)
-  Tier 1: Guardrailed autonomous (GL-writing submits, cancellations)
-  Tier 2: Human-approved (schema changes, module generation, configuration)
-  Tier 3: Human-only (core file modifications, DROP TABLE, GL pipeline changes)
+  Tier 0:   Fully autonomous (read-only, draft creation)
+  Tier 1:   Guardrailed autonomous (GL-writing submits, cancellations)
+  Tier 2:   Human-approved (schema changes, module generation, configuration)
+  Tier 2.5: AI suggestion only (DGM variants, gap suggestions — NEVER deployed, advisory only)
+  Tier 3:   Human-only (core file modifications, DROP TABLE, GL pipeline changes)
 
 Classification is deployment-time, not runtime. Used by the auto-deploy
 pipeline (2c) to decide whether a module deploys automatically or queues
@@ -28,15 +29,19 @@ if SCRIPT_DIR not in sys.path:
 # Tier definitions
 # ---------------------------------------------------------------------------
 
-TIER_0 = 0  # Read-only: list-*, get-*, search-*, available-*, status queries
-TIER_1 = 1  # Validated writes: add-*, update-*, submit-*, cancel-*, delete-*, create-*, approve-*
-TIER_2 = 2  # Schema/module changes: generate-module, configure-module, install-*, schema-*
-TIER_3 = 3  # Core modifications: DROP TABLE, GL pipeline changes, constitution edits
+# NOTE: TIER_2_5 is stored as 25 (not between 2 and 3 numerically).
+# Always use equality checks (== TIER_2_5), never range comparisons (tier > TIER_2).
+TIER_0 = 0    # Read-only: list-*, get-*, search-*, available-*, status queries
+TIER_1 = 1    # Validated writes: add-*, update-*, submit-*, cancel-*, delete-*, create-*, approve-*
+TIER_2 = 2    # Schema/module changes: generate-module, configure-module, install-*, schema-*
+TIER_2_5 = 25 # AI code suggestions: DGM variants, gap suggestions — never auto-deployed, advisory only
+TIER_3 = 3    # Core modifications: DROP TABLE, GL pipeline changes, constitution edits
 
 TIER_NAMES = {
     TIER_0: "fully_autonomous",
     TIER_1: "guardrailed_autonomous",
     TIER_2: "human_approved",
+    TIER_2_5: "ai_suggestion_only",
     TIER_3: "human_only",
 }
 
@@ -44,6 +49,7 @@ TIER_DESCRIPTIONS = {
     TIER_0: "Read-only operations. No data modification. Auto-deploy without review.",
     TIER_1: "Write operations with GL validation. Auto-deploy with audit trail.",
     TIER_2: "Schema changes, module generation, configuration. Requires human approval.",
+    TIER_2_5: "AI code suggestions. Generates diff + tests as pull-request-style proposal. NEVER auto-deployed — human must manually apply.",
     TIER_3: "Core modifications, DROP TABLE, GL pipeline changes. Human-only, never auto-deploy.",
 }
 
@@ -56,6 +62,16 @@ TIER_DESCRIPTIONS = {
 EXACT_ACTION_TIER = {
     # Tier 3: Core-modifying operations
     "regenerate-skill-md": TIER_2,  # Rewrites SKILL.md but doesn't touch core logic
+
+    # Tier 2.5: AI code suggestions (advisory only, never auto-deployed)
+    "dgm-run-variant": TIER_2_5,
+    "dgm-select-best": TIER_2_5,
+    "dgm-list-variants": TIER_0,     # Read-only listing
+    "detect-gaps": TIER_2_5,
+    "detect-schema-divergence": TIER_2_5,
+    "detect-stubs": TIER_2_5,
+    "heartbeat-suggest": TIER_2_5,
+    "suggest-modules": TIER_2_5,
 
     # Tier 2: Module lifecycle
     "generate-module": TIER_2,
@@ -237,21 +253,22 @@ def classify_all_actions(action_map):
             unclassified: list (should be empty)
     """
     classifications = []
-    tier_counts = {0: 0, 1: 0, 2: 0, 3: 0}
+    tier_counts = {0: 0, 1: 0, 2: 0, 25: 0, 3: 0}
 
     for action_name, module_name in sorted(action_map.items()):
         result = classify_action(action_name, module_name)
         classifications.append(result)
-        tier_counts[result["tier"]] += 1
+        tier_counts[result["tier"]] = tier_counts.get(result["tier"], 0) + 1
 
     return {
         "classifications": classifications,
         "total": len(classifications),
         "summary": {
-            "tier_0_read_only": tier_counts[0],
-            "tier_1_guardrailed": tier_counts[1],
-            "tier_2_human_approved": tier_counts[2],
-            "tier_3_human_only": tier_counts[3],
+            "tier_0_read_only": tier_counts.get(0, 0),
+            "tier_1_guardrailed": tier_counts.get(1, 0),
+            "tier_2_human_approved": tier_counts.get(2, 0),
+            "tier_2_5_ai_suggestion": tier_counts.get(25, 0),
+            "tier_3_human_only": tier_counts.get(3, 0),
         },
         "unclassified": [],  # All actions get classified (default to Tier 1)
     }
@@ -272,8 +289,8 @@ def classify_with_override(action_name, module_name, tier_override, override_by,
     Returns:
         dict with classification including override info
     """
-    if tier_override not in (0, 1, 2, 3):
-        return {"error": f"Invalid tier: {tier_override}. Must be 0, 1, 2, or 3."}
+    if tier_override not in (0, 1, 2, 25, 3):
+        return {"error": f"Invalid tier: {tier_override}. Must be 0, 1, 2, 25 (2.5), or 3."}
 
     # Get auto-classification first
     auto_result = classify_action(action_name, module_name)
@@ -359,7 +376,7 @@ def ensure_tier_table(db_path):
         CREATE TABLE IF NOT EXISTS erpclaw_tier_classification (
             action_name     TEXT PRIMARY KEY,
             module_name     TEXT NOT NULL,
-            tier            INTEGER NOT NULL CHECK(tier IN (0, 1, 2, 3)),
+            tier            INTEGER NOT NULL CHECK(tier IN (0, 1, 2, 25, 3)),
             reasoning       TEXT,
             classified_at   TEXT DEFAULT ({ddl_now()}),
             override_by     TEXT,
@@ -412,7 +429,7 @@ def handle_classify_operation(args):
     --action-name: specific action to classify
     --module-name: module that owns the action (optional)
     --classify-all: classify all actions in ACTION_MAP
-    --override-tier: human override tier (0-3)
+    --override-tier: human override tier (0, 1, 2, 25 for Tier 2.5, or 3)
     --override-by: who is overriding
     --override-reason: why
     """
