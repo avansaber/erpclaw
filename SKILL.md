@@ -11,7 +11,7 @@ homepage: https://github.com/avansaber/erpclaw
 source: https://github.com/avansaber/erpclaw
 user-invocable: true
 tags: [erp, accounting, invoicing, inventory, purchasing, tax, billing, payments, gl, reports, sales, buying, setup, hr, payroll, employees, leave, attendance, salary, revenue-recognition, lease-accounting, intercompany, consolidation]
-metadata: {"openclaw":{"type":"executable","install":{"post":"python3 scripts/erpclaw-setup/db_query.py --action initialize-database"},"requires":{"bins":["python3","git"],"env":[],"optionalEnv":["ERPCLAW_DB_PATH","STRIPE_API_KEY","TELEGRAM_BOT_TOKEN","SHOPIFY_ACCESS_TOKEN","OPENEXCHANGERATES_APP_ID"]},"os":["darwin","linux"]}}
+metadata: {"openclaw":{"type":"executable","install":{"post":"python3 scripts/erpclaw-setup/db_query.py --action initialize-database"},"requires":{"bins":["python3","git"],"env":[],"optionalEnv":["ERPCLAW_DB_PATH"]},"os":["darwin","linux"]}}
 cron:
   - expression: "0 1 * * *"
     timezone: "America/Chicago"
@@ -38,7 +38,7 @@ payments, tax, financial reports, customers, sales, suppliers, purchasing, inven
 HR (employees, leave, attendance, expenses), US payroll (FICA, W-2, garnishments), advanced accounting
 (ASC 606/842, intercompany, consolidation), and 43 industry modules. Single local SQLite DB, double-entry GL, immutable audit trail.
 
-**Security:** Local-first (`~/.openclaw/erpclaw/data.sqlite`). Parameterized queries. RBAC (PBKDF2). Immutable GL. Network only for `fetch-exchange-rates` (public API) and `install-module` (GitHub `avansaber/*`, requires user approval). No credentials stored in code — integration API keys provided via environment variables (STRIPE_API_KEY, TELEGRAM_BOT_TOKEN, etc.) or prompted at runtime and stored in the local DB only.
+**Security:** Local-first (`~/.openclaw/erpclaw/data.sqlite`). Parameterized queries. RBAC (PBKDF2). Immutable GL. Network only for `fetch-exchange-rates` (public API) and `install-module` (GitHub `avansaber/*`, requires user approval). Integration API keys (Stripe, Shopify, etc.) are passed via `--api-key` flags and stored in the local DB only — no credentials in code or environment variables.
 
 ### Skill Activation Triggers
 
