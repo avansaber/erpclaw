@@ -15,6 +15,7 @@ import json
 import os
 import sqlite3
 import sys
+import time
 from uuid import uuid4
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -626,19 +627,31 @@ MODULE_ACTIONS = {
     "list-modules", "available-modules", "module-status",
     "search-modules", "rebuild-action-cache", "list-all-actions",
     "regenerate-skill-md",
+    "update-foundation", "rollback-foundation",
 }
+
+# Actions that touch foundation install state; sync hook MUST skip these
+# to avoid re-entering update during their own execution.
+SYNC_RECURSION_GUARD = frozenset({
+    "update-foundation", "rollback-foundation",
+    "install-module", "remove-module", "update-modules",
+    "schema-apply", "schema-rollback",
+})
 
 ONBOARDING_ACTIONS = {
     "list-profiles", "onboard",
 }
 
 
-# Actions that materially change financial state. Require --user-confirmed flag
-# (or ERPCLAW_USER_CONFIRMED=1 env). Foundation router gates these before dispatch
-# so cron / agent / CLI invocations all hit the same gate.
+# High-impact actions that require explicit per-invocation confirmation.
+# Foundation router gates these before dispatch via --user-confirmed flag.
+# Categories: financial mutations, RBAC + credential lifecycle, restores,
+# schema migrations, payroll, module install/remove. Read-only actions
+# (list-*, get-*, reports) are NOT gated.
 DANGEROUS_ACTIONS = frozenset({
     # GL + fiscal-period mutations
     "post-gl-entries", "reverse-gl-entries", "close-fiscal-year", "reopen-fiscal-year",
+    "freeze-account", "unfreeze-account",
     # Journal lifecycle
     "submit-journal-entry", "cancel-journal-entry", "delete-journal-entry",
     "delete-recurring-template",
@@ -672,8 +685,15 @@ DANGEROUS_ACTIONS = frozenset({
     "generate-w2-data", "generate-nacha-file",
     # Setup destructive
     "restore-database",
-    # Module lifecycle (already always-confirm in SKILL.md)
+    # RBAC + identity changes
+    "set-password", "add-role", "assign-role", "revoke-role", "seed-permissions",
+    "update-user",
+    # Credential management
+    "set-credential", "delete-credential", "migrate-credentials",
+    "import-master-key-from-backup",
+    # Module lifecycle
     "install-module", "remove-module", "update-modules",
+    "update-foundation", "rollback-foundation",
     # Schema migrations
     "schema-apply", "schema-rollback",
     # Initialize-database --force
@@ -692,12 +712,10 @@ def _is_user_confirmed() -> bool:
 
 
 def _gate_dangerous_action(action: str) -> None:
-    """Block dispatch of dangerous actions without --user-confirmed.
+    """Block dispatch of high-impact actions without --user-confirmed.
 
-    Scanner-aligned: financial mutations require a structured confirmation
-    signal at every invocation path. The gate runs in the foundation router
-    BEFORE dispatch so CLI, cron, agent, and addon-driven invocations all
-    pass through the same check.
+    The gate runs in the foundation router BEFORE dispatch so CLI, cron,
+    agent, and addon-driven invocations all pass through the same check.
     """
     if action not in DANGEROUS_ACTIONS:
         return
@@ -711,7 +729,7 @@ def _gate_dangerous_action(action: str) -> None:
         "error": "user_confirmation_required",
         "action": action,
         "message": (
-            f"Action '{action}' materially changes financial or system state. "
+            f"Action '{action}' is a high-impact action. "
             f"Re-invoke with --user-confirmed to proceed."
         ),
     }))
@@ -724,6 +742,72 @@ def find_action():
         if arg == "--action" and i + 1 < len(sys.argv):
             return sys.argv[i + 1]
     return None
+
+
+def _maybe_check_drift_reminder(action):
+    """Surface a one-line reminder if the installed foundation version differs
+    from the published manifest.
+
+    Read-only; never modifies files. The user invokes `update-foundation
+    --user-confirmed` explicitly to reconcile. At most one reminder per
+    24-hour window per install. Best-effort: silent on any failure; never
+    blocks dispatch.
+    """
+    if action in SYNC_RECURSION_GUARD:
+        return
+    if "--no-reconcile-check" in sys.argv:
+        return
+    skip_marker = os.path.expanduser("~/.openclaw/erpclaw/.skip_reconcile")
+    if os.path.isfile(skip_marker):
+        return
+    # Skip when running from a git-tracked source tree (developer checkout)
+    install_root = os.path.dirname(BASE_DIR)
+    p = os.path.abspath(install_root)
+    while True:
+        if os.path.isdir(os.path.join(p, ".git")):
+            return
+        parent = os.path.dirname(p)
+        if parent == p:
+            break
+        p = parent
+
+    last_check = os.path.expanduser("~/.openclaw/erpclaw/.last_drift_check")
+    try:
+        if os.path.isfile(last_check):
+            if time.time() - os.path.getmtime(last_check) < 86400:
+                return
+    except OSError:
+        return
+
+    try:
+        cache = os.path.expanduser("~/.openclaw/erpclaw/registry_cache.json")
+        if not os.path.isfile(cache):
+            return
+        with open(cache) as f:
+            data = json.load(f)
+        published = data.get("modules", {}).get("erpclaw", {}).get("version")
+        local = None
+        skill_md = os.path.join(install_root, "SKILL.md")
+        if os.path.isfile(skill_md):
+            with open(skill_md) as f:
+                for line in f:
+                    if line.startswith("version:"):
+                        local = line.split(":", 1)[1].strip()
+                        break
+        if published and local and published != local:
+            print(
+                f"erpclaw: published manifest is at {published}, installed foundation is {local}. "
+                f"Run 'erpclaw update-foundation --user-confirmed' to reconcile.",
+                file=sys.stderr,
+            )
+        try:
+            os.makedirs(os.path.dirname(last_check), exist_ok=True)
+            with open(last_check, "w") as f:
+                f.write("")
+        except OSError:
+            pass
+    except Exception:
+        pass
 
 
 def _strip_router_flags(args: list[str]) -> list[str]:
@@ -872,6 +956,11 @@ def main():
 
     # Gate dangerous actions BEFORE any dispatch path
     _gate_dangerous_action(action)
+
+    # Surface a drift reminder if installed version differs from manifest.
+    # Read-only; never modifies files. The user invokes update-foundation
+    # explicitly to apply.
+    _maybe_check_drift_reminder(action)
 
     # Tier 0: Module management actions → module_manager.py
     if action in MODULE_ACTIONS:

@@ -1,6 +1,6 @@
 ---
 name: erpclaw
-version: 4.1.3
+version: 4.1.5
 description: >
   AI-native ERP system. Full accounting, invoicing, inventory, purchasing,
   tax, billing, HR, payroll, advanced accounting (ASC 606/842, intercompany, consolidation),
@@ -37,7 +37,7 @@ python3 {baseDir}/scripts/db_query.py --action setup-chart-of-accounts --company
 
 ## Runtime gate
 
-Write actions that materially change financial state require the `--user-confirmed` flag on every invocation. The foundation router checks the flag before any dispatch and rejects unflagged calls with a structured JSON error. Read-only actions (verbs `list`, `get`, reports) run without the flag.
+High-impact actions require the `--user-confirmed` flag on every invocation. The foundation router checks the flag before any dispatch and rejects unflagged calls with a structured JSON error. Read-only actions (verbs `list`, `get`, reports) run without the flag.
 
 ## All 475 Actions
 
@@ -185,7 +185,7 @@ Write actions that materially change financial state require the `--user-confirm
 | `generate-w2-data` / `generate-nacha-file` / `add-garnishment` / `update-garnishment` / `get-garnishment` / `list-garnishments` | W-2, NACHA, garnishments |
 | `get-amendment-history` | Amendment tracking |
 
-### Module Management & Schema (17)
+### Module Management & Schema (19)
 | Action | Description |
 |--------|-------------|
 | `install-module` / `remove-module` / `update-modules` / `list-modules` / `available-modules` / `search-modules` / `module-status` | Module catalog (install/remove require user approval) |
@@ -193,6 +193,9 @@ Write actions that materially change financial state require the `--user-confirm
 | `validate-module` / `list-articles` / `build-table-registry` | Constitution + module discovery (read-only) |
 | `schema-plan` / `schema-apply` / `schema-rollback` / `schema-drift` | Schema migration (apply/rollback require user approval) |
 | `regenerate-skill-md` | Regenerate SKILL.md |
+| `update-foundation` / `rollback-foundation` | Reconcile installed foundation files with the published manifest; both require user approval |
+
+> **Foundation reconciliation.** Two user-invoked actions keep an installed foundation aligned with the published manifest in `module_registry.json`. `update-foundation --user-confirmed` compares each installed file's SHA256 against the manifest, and for any drift, replaces the file from the published source after re-verifying the declared hash; a pre-flight verifies all replacements before any rename, so a hash failure leaves the install unchanged. Each replaced file is preserved as `.bak` for one cycle, and `rollback-foundation --user-confirmed` reverts that cycle. A periodic convenience check, suppressed by the marker file `~/.openclaw/erpclaw/.skip_reconcile` or the per-invocation flag `--no-reconcile-check`, may surface a reminder when version drift is present; the user runs `update-foundation` to apply. The router never modifies installed code without an explicit gated invocation.
 
 > **Module authoring + DGM evolution (developer tooling):** module generation, in-module feature injection, sandboxed test execution, deploy pipeline, DGM variants, gap detection, heartbeat analysis, semantic checks, and the OS-engine status command live in the optional `erpclaw-os-engine` addon (~30 actions, all `os-` prefixed). The addon is GitHub-only and not installed by default. Install via `module_manager.py --action install-module --module-name erpclaw-os-engine`. Foundation does not run module-generation or auto-deploy code paths.
 

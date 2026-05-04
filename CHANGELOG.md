@@ -2,6 +2,47 @@
 
 All notable changes to the ERPClaw foundation skill.
 
+## [4.1.5] — 2026-05-04
+
+Foundation manifest reconciliation. Bundles the v4.1.4 runtime gate extension with a mechanism that lets installed foundation files track the published `module_registry.json` manifest without a re-install from ClawHub. Intended as the last forced ClawHub publish for routine fixes; future security and feature work flows GitHub-only and lands on installed clients via this mechanism.
+
+### Added
+- Foundation actions `update-foundation` and `rollback-foundation` (gated, require `--user-confirmed`). The first compares each installed file against the manifest's `files_sha256` map, and for drifting files re-fetches from the published source and re-verifies the declared SHA256 before atomic replacement. A pre-flight verifies all replacements before any rename, so a hash failure leaves the install unchanged. Replaced files are preserved as `.bak` for one cycle.
+- A non-blocking convenience check in the foundation router that surfaces a reminder on stderr when manifest-version drift is present, no more than once per 24-hour window per install. The check does not modify files; the user invokes `update-foundation` to apply. Suppressed by the marker `~/.openclaw/erpclaw/.skip_reconcile` or the per-invocation flag `--no-reconcile-check`. Recursion-guarded for foundation-touching actions (`update-foundation`, `rollback-foundation`, `install-module`, `remove-module`, `update-modules`, `schema-apply`, `schema-rollback`).
+- `fcntl.flock` on `~/.openclaw/erpclaw/.sync.lock` serializes reconciliation so the one-cycle `.bak` is never corrupted by concurrent invocation.
+- A safety guard refuses reconciliation when running inside a git-tracked source tree (developer checkout); the mechanism targets ClawHub-installed deployments only.
+
+### Changed
+- Foundation action count: 475 → 477 (added the two reconciliation actions).
+- `_strip_router_flags` continues to strip `--user-confirmed` before forwarding to domain scripts; the foundation router gate is the single source of truth for confirmation.
+
+### Trust model
+
+The reconciliation actions fetch from the published source over HTTPS and verify each file against the SHA256 declared in `module_registry.json#modules.erpclaw.files_sha256`. The registry itself is fetched over HTTPS without a separate signing channel today; sigstore-signed registries are planned for v4.2.0. Until then, an attacker who compromises the publishing account could induce installed clients to fetch malicious code on the next user-invoked `update-foundation`. The hash check defends against transit / CDN compromise. Air-gapped installs should place the opt-out marker.
+
+### Notes
+- Long-running processes (MCP servers, daemons) hold `db_query.py` and `module_manager.py` in memory once imported. After reconciliation replaces those files on disk, the running process keeps the old behavior until restart. CLI invocations pick up new code on the next launch.
+
+### Plan + audit
+- `apps/CLAWHUB_FIX_v415_PLAN_2026-05-04.md`
+- `apps/CLAWHUB_FIX_v415_AUDIT_2026-05-04.md` (4 BLOCK + 5 SHOULD adopted; 4 SHOULD deferred to v4.1.6/v4.2.0)
+
+## [4.1.4] — 2026-05-04
+
+Closes the v4.1.3 OpenClaw Tool Misuse Concern by extending the runtime gate to administrative actions beyond financial postings.
+
+### Changed
+- `DANGEROUS_ACTIONS` frozenset extended with 11 entries spanning RBAC + identity changes (`add-role`, `assign-role`, `revoke-role`, `seed-permissions`, `update-user`, `set-password`), credential lifecycle (`set-credential`, `delete-credential`, `migrate-credentials`, `import-master-key-from-backup`), and account-state (`unfreeze-account`). All require `--user-confirmed` on every invocation.
+- Foundation SKILL.md `## Runtime gate` paragraph reworded to describe high-impact actions broadly without enumerating action names. Catalog and frozenset are the source of truth.
+- Gate-rejection error message generalized: now says "is a high-impact action" instead of "materially changes financial or system state".
+
+### Fixed
+- Stale comment in `db_query.py` referenced a removed environment-variable bypass; cleaned up.
+
+### Plan + audit
+- `apps/CLAWHUB_FIX_v414_PLAN_2026-05-04.md`
+- `apps/CLAWHUB_FIX_v414_AUDIT_2026-05-04.md`
+
 ## [4.1.3] — 2026-05-04
 
 Cross-machine backup restore + Tier A regression fix-ups discovered during v4.1.x test-plan execution.
