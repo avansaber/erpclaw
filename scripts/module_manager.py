@@ -52,6 +52,19 @@ REMOTE_REGISTRY_URL = "https://raw.githubusercontent.com/avansaber/erpclaw/main/
 LOCAL_CACHE_PATH = os.path.expanduser("~/.openclaw/erpclaw/registry_cache.json")
 CACHE_TTL_SECONDS = 86400  # 24 hours
 
+# Foundation source synchronization
+FOUNDATION_INSTALL_ROOT = os.path.dirname(SCRIPT_DIR)  # parent of scripts/
+GITHUB_RAW_BASE = "https://raw.githubusercontent.com/avansaber/erpclaw/main"
+SYNC_LOCK_PATH = os.path.expanduser("~/.openclaw/erpclaw/.sync.lock")
+LAST_SYNC_MARKER = os.path.expanduser("~/.openclaw/erpclaw/.last_sync")
+NO_AUTOSYNC_MARKER = os.path.expanduser("~/.openclaw/erpclaw/.no_autosync")
+SYNC_LOG_PATH = os.path.expanduser("~/.openclaw/erpclaw/logs/sync.log")
+
+# Skip filters (must match install_module's full-tree verification block)
+SYNC_SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", "node_modules", "dist", "build"}
+SYNC_SKIP_SUFFIXES = (".pyc", ".pyo", ".bak", ".tmp", ".DS_Store")
+SYNC_SKIP_RELPATHS_FOUNDATION = {"scripts/module_registry.json"}
+
 
 def _now_iso():
     """Return current UTC time as ISO 8601 string."""
@@ -1344,6 +1357,328 @@ def regenerate_skill_md_action(args):
 # Action dispatch and CLI
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Foundation source synchronization
+# ---------------------------------------------------------------------------
+
+def _sync_log(msg):
+    """Append timestamped line to sync log; never raise."""
+    try:
+        os.makedirs(os.path.dirname(SYNC_LOG_PATH), exist_ok=True)
+        with open(SYNC_LOG_PATH, "a") as f:
+            f.write(f"[{_now_iso()}] {msg}\n")
+    except Exception:
+        pass
+
+
+def _acquire_sync_lock():
+    """Open and flock the sync lock file. Returns file handle or None on contention."""
+    import fcntl
+    try:
+        os.makedirs(os.path.dirname(SYNC_LOCK_PATH), exist_ok=True)
+        fh = open(SYNC_LOCK_PATH, "w")
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fh
+    except (BlockingIOError, OSError):
+        try:
+            fh.close()
+        except Exception:
+            pass
+        return None
+
+
+def _release_sync_lock(fh):
+    """Release lock acquired via _acquire_sync_lock."""
+    if fh is None:
+        return
+    import fcntl
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    except Exception:
+        pass
+    try:
+        fh.close()
+    except Exception:
+        pass
+
+
+def _walk_foundation_tree():
+    """Yield install-relative paths in the foundation tree, applying skip filters.
+
+    Mirrors the filter set used by install_module's full-tree verification, so
+    drift detection and verification agree on which files are in scope.
+    """
+    for root, dirs, files in os.walk(FOUNDATION_INSTALL_ROOT):
+        dirs[:] = [d for d in dirs if d not in SYNC_SKIP_DIRS]
+        for fname in files:
+            if any(fname.endswith(s) for s in SYNC_SKIP_SUFFIXES):
+                continue
+            rel = os.path.relpath(os.path.join(root, fname), FOUNDATION_INSTALL_ROOT)
+            if rel in SYNC_SKIP_RELPATHS_FOUNDATION:
+                continue
+            yield rel
+
+
+def _hash_file(path):
+    """Return hex SHA256 of file contents, or None if unreadable."""
+    try:
+        with open(path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        return None
+
+
+def _compute_foundation_drift(manifest):
+    """Compare local install tree to manifest. Returns dict with drift sets.
+
+    {
+        "modified": [relpath, ...],   # exists locally + manifest, hash differs
+        "missing":  [relpath, ...],   # in manifest, not on disk
+        "orphaned": [relpath, ...],   # on disk, not in manifest
+    }
+    """
+    expected = set(manifest.keys())
+    delivered = set(_walk_foundation_tree())
+
+    missing = sorted(expected - delivered)
+    orphaned = sorted(delivered - expected)
+
+    modified = []
+    for rel in sorted(expected & delivered):
+        local_hash = _hash_file(os.path.join(FOUNDATION_INSTALL_ROOT, rel))
+        if local_hash is None or local_hash != manifest[rel]:
+            modified.append(rel)
+
+    return {"modified": modified, "missing": missing, "orphaned": orphaned}
+
+
+def _fetch_remote_file(rel_path, expected_hash):
+    """Fetch a single file from GitHub raw and verify SHA256.
+
+    Returns bytes on success, raises on hash mismatch or fetch failure.
+    Honors ERPCLAW_GITHUB_RAW_BASE for test-mode redirection to a local mirror.
+    """
+    base = os.environ.get("ERPCLAW_GITHUB_RAW_BASE", GITHUB_RAW_BASE)
+    url = f"{base}/{rel_path}"
+    req = urllib.request.Request(url, headers={"User-Agent": "erpclaw"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = resp.read()
+    actual = hashlib.sha256(data).hexdigest()
+    if actual != expected_hash:
+        raise ValueError(
+            f"hash mismatch for {rel_path}: expected {expected_hash[:12]}, "
+            f"got {actual[:12]}"
+        )
+    return data
+
+
+def _atomic_write(target_path, data):
+    """Write data to target_path atomically. Preserves prior content as .bak."""
+    target_dir = os.path.dirname(target_path) or "."
+    os.makedirs(target_dir, exist_ok=True)
+    tmp = target_path + ".new"
+    bak = target_path + ".bak"
+    with open(tmp, "wb") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    if os.path.isfile(target_path):
+        try:
+            shutil.copy2(target_path, bak)
+        except OSError:
+            pass
+    os.replace(tmp, target_path)
+
+
+def _is_dev_source_tree(path):
+    """True if path or any ancestor is a git working tree.
+
+    Auto-sync MUST never overwrite a git-tracked source tree, because the
+    drift between local edits and the published manifest is the developer's
+    in-progress work — exactly what a developer wants preserved, not
+    "reconciled." End-user installs (via ClawHub) do not have a .git
+    ancestor, so production installs sync normally.
+    """
+    p = os.path.abspath(path)
+    while True:
+        if os.path.isdir(os.path.join(p, ".git")):
+            return True
+        parent = os.path.dirname(p)
+        if parent == p:
+            return False
+        p = parent
+
+
+def update_foundation_action(args):
+    """Synchronize installed foundation files with the registry manifest.
+
+    Idempotent. No-op when local hashes match. Per-file atomic replace with
+    one-cycle .bak preserved for rollback. Pre-flight downloads + verifies
+    all drifting files before any rename, so a failure mid-fetch leaves the
+    install untouched.
+
+    Confirmation gate is enforced at the foundation router; this function
+    assumes a trusted entry point.
+    """
+    if _is_dev_source_tree(FOUNDATION_INSTALL_ROOT):
+        err(
+            "Refusing to sync a git-tracked source tree. "
+            "Auto-sync targets ClawHub-installed deployments, not development checkouts."
+        )
+
+    if not os.access(FOUNDATION_INSTALL_ROOT, os.W_OK):
+        err(
+            f"Foundation install path is not writable: {FOUNDATION_INSTALL_ROOT}. "
+            f"Run with sufficient permissions or relocate install."
+        )
+
+    lock = _acquire_sync_lock()
+    if lock is None:
+        err("Another foundation sync is in progress; try again shortly.")
+
+    try:
+        registry = _load_registry(force_refresh=getattr(args, "force", False))
+        modules_by_name = _registry_to_dict(registry)
+        foundation = modules_by_name.get("erpclaw")
+        if not foundation or "files_sha256" not in foundation:
+            err("Registry has no erpclaw foundation manifest; refusing to sync.")
+        manifest = foundation["files_sha256"]
+
+        drift = _compute_foundation_drift(manifest)
+        to_replace = drift["modified"] + drift["missing"]
+        to_delete = drift["orphaned"]
+
+        if not to_replace and not to_delete:
+            try:
+                with open(LAST_SYNC_MARKER, "w") as f:
+                    f.write(_now_iso())
+            except OSError:
+                pass
+            print(json.dumps({
+                "status": "ok",
+                "version": foundation.get("version"),
+                "in_sync": True,
+                "modified": [], "missing": [], "orphaned": [],
+            }))
+            return
+
+        if getattr(args, "dry_run", False):
+            print(json.dumps({
+                "status": "ok",
+                "version": foundation.get("version"),
+                "in_sync": False,
+                "would_replace": to_replace,
+                "would_delete": to_delete,
+            }))
+            return
+
+        # Pre-flight: download + verify all replacements before any rename
+        staged = {}
+        for rel in to_replace:
+            try:
+                staged[rel] = _fetch_remote_file(rel, manifest[rel])
+            except Exception as e:
+                _sync_log(f"fetch failed for {rel}: {e}")
+                err(
+                    f"Pre-flight fetch failed for {rel}; install untouched. "
+                    f"Reason: {e}"
+                )
+
+        # Apply: atomic per-file replace
+        replaced = []
+        for rel, data in staged.items():
+            target = os.path.join(FOUNDATION_INSTALL_ROOT, rel)
+            try:
+                _atomic_write(target, data)
+                replaced.append(rel)
+            except OSError as e:
+                _sync_log(f"replace failed for {rel}: {e}")
+
+        # Apply: delete orphans (files removed from manifest)
+        deleted = []
+        for rel in to_delete:
+            target = os.path.join(FOUNDATION_INSTALL_ROOT, rel)
+            try:
+                if os.path.isfile(target):
+                    bak = target + ".bak"
+                    try:
+                        shutil.copy2(target, bak)
+                    except OSError:
+                        pass
+                    os.remove(target)
+                    deleted.append(rel)
+            except OSError as e:
+                _sync_log(f"delete failed for {rel}: {e}")
+
+        try:
+            with open(LAST_SYNC_MARKER, "w") as f:
+                f.write(_now_iso())
+        except OSError:
+            pass
+
+        _sync_log(
+            f"sync complete: replaced={len(replaced)} deleted={len(deleted)} "
+            f"version={foundation.get('version')}"
+        )
+
+        print(json.dumps({
+            "status": "ok",
+            "version": foundation.get("version"),
+            "in_sync": True,
+            "replaced": replaced,
+            "deleted": deleted,
+        }))
+    finally:
+        _release_sync_lock(lock)
+
+
+def rollback_foundation_action(args):
+    """Restore .bak copies preserved by the most recent update-foundation run.
+
+    One-cycle rollback: each .bak holds the file's pre-sync state. Running
+    rollback twice in a row is idempotent for files with no .bak.
+
+    Confirmation gate is enforced at the foundation router; this function
+    assumes a trusted entry point.
+    """
+    lock = _acquire_sync_lock()
+    if lock is None:
+        err("Another foundation sync is in progress; try again shortly.")
+
+    try:
+        restored = []
+        skipped = []
+        for root, dirs, files in os.walk(FOUNDATION_INSTALL_ROOT):
+            dirs[:] = [d for d in dirs if d not in SYNC_SKIP_DIRS]
+            for fname in files:
+                if not fname.endswith(".bak"):
+                    continue
+                bak_path = os.path.join(root, fname)
+                target_path = bak_path[:-4]  # strip .bak
+                try:
+                    shutil.copy2(bak_path, target_path)
+                    os.remove(bak_path)
+                    restored.append(os.path.relpath(target_path, FOUNDATION_INSTALL_ROOT))
+                except OSError as e:
+                    skipped.append({
+                        "path": os.path.relpath(bak_path, FOUNDATION_INSTALL_ROOT),
+                        "reason": str(e),
+                    })
+
+        _sync_log(f"rollback complete: restored={len(restored)} skipped={len(skipped)}")
+        print(json.dumps({
+            "status": "ok",
+            "restored": restored,
+            "skipped": skipped,
+        }))
+    finally:
+        _release_sync_lock(lock)
+
+
+# ---------------------------------------------------------------------------
+# Action dispatch
+# ---------------------------------------------------------------------------
+
 ACTIONS = {
     "install-module": install_module,
     "remove-module": remove_module,
@@ -1355,6 +1690,8 @@ ACTIONS = {
     "rebuild-action-cache": rebuild_action_cache,
     "list-all-actions": list_all_actions,
     "regenerate-skill-md": regenerate_skill_md_action,
+    "update-foundation": lambda args: update_foundation_action(args),
+    "rollback-foundation": lambda args: rollback_foundation_action(args),
 }
 
 
@@ -1383,8 +1720,20 @@ def main():
         "--refresh", action="store_true", default=False,
         help="Force fresh fetch of module registry from GitHub (for available-modules, search-modules)"
     )
+    parser.add_argument(
+        "--force", action="store_true", default=False,
+        help="Force foundation sync regardless of cache freshness"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", default=False,
+        help="Report drift without making changes"
+    )
+    parser.add_argument(
+        "--user-confirmed", action="store_true", default=False,
+        help="Per-invocation confirmation flag for high-impact actions"
+    )
 
-    args = parser.parse_args()
+    args, _unknown = parser.parse_known_args()
     action_fn = ACTIONS.get(args.action)
     if not action_fn:
         err(f"Unknown action: {args.action}")

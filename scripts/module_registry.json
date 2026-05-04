@@ -1,5 +1,5 @@
 {
-  "version": "4.1.3",
+  "version": "4.1.5",
   "generated": "2026-04-27",
   "modules": {
     "erpclaw": {
@@ -7,10 +7,10 @@
       "description": "Complete ERP foundation: accounting, inventory, selling, buying, billing, payments, tax, journals, GL, HR, payroll, reports, and setup. 475 actions across 14 domains.",
       "category": "core",
       "github": "avansaber/erpclaw",
-      "version": "4.1.3",
+      "version": "4.1.5",
       "requires": [],
       "has_init_db": true,
-      "action_count": 475,
+      "action_count": 477,
       "tags": [
         "erp",
         "accounting",
@@ -32,13 +32,13 @@
       ],
       "files_sha256": {
         ".github/workflows/test.yml": "094021628714ee2d403045159c7772b64b502f7afdd42db982558af27f6f8bc2",
-        "CHANGELOG.md": "c0c15ee2ef318ae0c4b0255904e5ad0eaa576b0ae9bab587fc839233b5303c0c",
+        "CHANGELOG.md": "083e08da7ab95cf0053d6502e897c5fa987b7046529dd7452eb4b542129983d5",
         "LICENSE.txt": "b84dde49057a6d8a69d28c22e9854d86a9aee01e09a2d7498d0aebf20cd8f538",
         "README.md": "8e662b3fdee0514f98287672752a567f63a5e5d505a62213d53e73dd8107b5c7",
-        "SKILL.md": "5a22342671714d320edf4f3d6db5430d182b69ec0ef0e14f4c7d2ac60a893b6e",
+        "SKILL.md": "b1ead3ca4fe65f14da46c5ae19dcaf1a32d266de1a621d26be4a2c49aae6ea69",
         "UI.yaml": "7c7062cdbc7877a3daa5b22dc6b4e296ce0b1dad7cdf615fd0ddcf0f278b581c",
         "bin/erpclaw": "4661daa0f964cc4878401a433782dc509741d9d9b9a4ef1e511eae8e84897eea",
-        "scripts/db_query.py": "8de153c94f775787054c9577a285d7fe95cf76ec18959ec9a626fca16d18bd66",
+        "scripts/db_query.py": "8d5825b4799204cebe0b28c3957fa1709e02b64e3c65191bf9b21c413bdfda46",
         "scripts/erpclaw-accounting-adv/consolidation.py": "724f2e78bd8818f21375b18d23e519762bcd399733b0771c70daaa27a67df846",
         "scripts/erpclaw-accounting-adv/db_query.py": "a29e60351ef2b18671a9f196281ce4bd4b7dd9909cd6cb4f95d88a190fe2ec50",
         "scripts/erpclaw-accounting-adv/init_db.py": "a6961a01ea0f4eca62cb1ec3c0b780c51058b616fe72b115c8aeed6002bb4925",
@@ -161,7 +161,7 @@
         "scripts/erpclaw-setup/assets/us_gaap.json": "8f894ae401adeedafe2840213553b9aed2df0b00409619fe96440f6460862670",
         "scripts/erpclaw-setup/db_query.py": "f340e0abb0ac41d218c226e5889cd4940841d6d6fc6f19327e6cba0fecb62294",
         "scripts/erpclaw-setup/init_schema.py": "71abf885dd87a659dd855b5b9cdf5cb97939f1fa24284d0b97c21b5c6bd938b6",
-        "scripts/erpclaw-setup/lib/erpclaw_lib/__init__.py": "5b132f87e1e7b8fe2f259aec990ba5ff6f342f181e5247d31f88ede4312e2af6",
+        "scripts/erpclaw-setup/lib/erpclaw_lib/__init__.py": "d61c1c86edf0f6ec7725a85a71aebf5f7e7650c6e7582adbb4c101abf60eca80",
         "scripts/erpclaw-setup/lib/erpclaw_lib/args.py": "2c8da57e7c7307ae19fc011fc44e06915e431dd5a24f18e45f2a3e877b5294eb",
         "scripts/erpclaw-setup/lib/erpclaw_lib/audit.py": "1991438ca7c3b6acb62919f27b7467815825928909ed4f4961ac66b677685ad6",
         "scripts/erpclaw-setup/lib/erpclaw_lib/credentials.py": "ab5daed77c095df791ab0ecc21536d34a60c6e6bf26e16760a69336be8d2d577",
@@ -209,7 +209,7 @@
         "scripts/erpclaw-tax/db_query.py": "e0d8fc062dcb1b842db97ed93e5f1f133db62bb8c7b8436ae038edca56e915b6",
         "scripts/erpclaw-tax/tests/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "scripts/install_bin.py": "b1cf400544d5600228be8550da25980ca011743f16da5b81b12b8276aa5cbbab",
-        "scripts/module_manager.py": "77cfc6ada75f2471470524e03f0d10ecb518353aea8522ff31cc6dd05fe476fc",
+        "scripts/module_manager.py": "0cbff90963481a131196761700747176cd6e34b6e2e013c7a663e3b3ff4f825d",
         "scripts/onboarding.py": "cb4f9ff4c44f74865b5f18cffa62a37304f38a75ce68b133703045353e8a724f",
         "scripts/tests/test_shim.py": "dadd7b6cca4aca742d7651c9443521e54ec4c3eba6e47c237756cdfdc96eb455",
         "scripts/uninstall_bin.py": "012b5aad68ee6b49a9ed7242c7970d5b4e38d359cd3f6ed1af87eb5ada82a26e"
