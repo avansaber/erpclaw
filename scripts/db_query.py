@@ -760,16 +760,19 @@ def _maybe_check_drift_reminder(action):
     skip_marker = os.path.expanduser("~/.openclaw/erpclaw/.skip_reconcile")
     if os.path.isfile(skip_marker):
         return
-    # Skip when running from a git-tracked source tree (developer checkout)
+    # Skip when SKILL.md is tracked by an enclosing git repo (developer checkout)
     install_root = os.path.dirname(BASE_DIR)
-    p = os.path.abspath(install_root)
-    while True:
-        if os.path.isdir(os.path.join(p, ".git")):
-            return
-        parent = os.path.dirname(p)
-        if parent == p:
-            break
-        p = parent
+    skill_md = os.path.join(install_root, "SKILL.md")
+    if os.path.isfile(skill_md):
+        try:
+            import subprocess as _sp
+            r = _sp.run(["git", "-C", install_root, "ls-files",
+                         "--error-unmatch", "SKILL.md"],
+                        capture_output=True, timeout=5)
+            if r.returncode == 0:
+                return
+        except (Exception,):
+            pass
 
     last_check = os.path.expanduser("~/.openclaw/erpclaw/.last_drift_check")
     try:

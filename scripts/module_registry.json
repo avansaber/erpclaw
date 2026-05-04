@@ -38,7 +38,7 @@
         "SKILL.md": "b1ead3ca4fe65f14da46c5ae19dcaf1a32d266de1a621d26be4a2c49aae6ea69",
         "UI.yaml": "7c7062cdbc7877a3daa5b22dc6b4e296ce0b1dad7cdf615fd0ddcf0f278b581c",
         "bin/erpclaw": "4661daa0f964cc4878401a433782dc509741d9d9b9a4ef1e511eae8e84897eea",
-        "scripts/db_query.py": "8d5825b4799204cebe0b28c3957fa1709e02b64e3c65191bf9b21c413bdfda46",
+        "scripts/db_query.py": "7ac46b21e65ec5d81a5b885ec697d42dc4d19b2c334d88ef3249081df9afcb5d",
         "scripts/erpclaw-accounting-adv/consolidation.py": "724f2e78bd8818f21375b18d23e519762bcd399733b0771c70daaa27a67df846",
         "scripts/erpclaw-accounting-adv/db_query.py": "a29e60351ef2b18671a9f196281ce4bd4b7dd9909cd6cb4f95d88a190fe2ec50",
         "scripts/erpclaw-accounting-adv/init_db.py": "a6961a01ea0f4eca62cb1ec3c0b780c51058b616fe72b115c8aeed6002bb4925",
@@ -209,7 +209,7 @@
         "scripts/erpclaw-tax/db_query.py": "e0d8fc062dcb1b842db97ed93e5f1f133db62bb8c7b8436ae038edca56e915b6",
         "scripts/erpclaw-tax/tests/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "scripts/install_bin.py": "b1cf400544d5600228be8550da25980ca011743f16da5b81b12b8276aa5cbbab",
-        "scripts/module_manager.py": "0cbff90963481a131196761700747176cd6e34b6e2e013c7a663e3b3ff4f825d",
+        "scripts/module_manager.py": "e797b38965989c8d4d3b63e947baeb758b98e677ef6f811052c971a5c59f245f",
         "scripts/onboarding.py": "cb4f9ff4c44f74865b5f18cffa62a37304f38a75ce68b133703045353e8a724f",
         "scripts/tests/test_shim.py": "dadd7b6cca4aca742d7651c9443521e54ec4c3eba6e47c237756cdfdc96eb455",
         "scripts/uninstall_bin.py": "012b5aad68ee6b49a9ed7242c7970d5b4e38d359cd3f6ed1af87eb5ada82a26e"
