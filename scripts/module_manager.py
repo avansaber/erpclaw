@@ -11,6 +11,7 @@ Output: JSON to stdout, exit 0 on success, exit 1 on error.
 """
 import argparse
 import ast
+import hashlib
 import json
 import os
 import re
@@ -602,6 +603,28 @@ def _install_module_inner(args, conn, modules_by_name, depth=0):
         except FileNotFoundError:
             _mark_failed(conn, module_name, "git not found in PATH")
             err("git is not installed or not in PATH")
+
+    # Verify SHA256 integrity if registry has it
+    expected_sha = module_info.get("sha256_skill_md")
+    if expected_sha:
+        skill_md_path = os.path.join(install_path, "SKILL.md")
+        if not os.path.isfile(skill_md_path):
+            shutil.rmtree(install_path, ignore_errors=True)
+            _mark_failed(conn, module_name, "SKILL.md missing in fetched module")
+            err(f"Module {module_name} fetched but SKILL.md missing")
+        with open(skill_md_path, "rb") as f:
+            actual_sha = hashlib.sha256(f.read()).hexdigest()
+        if actual_sha != expected_sha:
+            shutil.rmtree(install_path, ignore_errors=True)
+            _mark_failed(
+                conn, module_name,
+                f"SHA256 mismatch: expected {expected_sha[:12]}..., got {actual_sha[:12]}..."
+            )
+            err(
+                f"Integrity check failed for {module_name}: SHA256 of SKILL.md "
+                f"does not match registry. Expected {expected_sha[:12]}..., got {actual_sha[:12]}...; "
+                f"refusing to install."
+            )
 
     # Read module.json if it exists
     module_json_path = os.path.join(install_path, "module.json")

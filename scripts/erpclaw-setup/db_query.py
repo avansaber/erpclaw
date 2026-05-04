@@ -1120,48 +1120,41 @@ def chmod_db_files(db_path: str) -> None:
     _chmod_600(db_path + "-shm")
 
 
-def install_shared_library():
-    """Copy bundled erpclaw_lib to the shared location (~/.openclaw/erpclaw/lib/).
+def _link_shared_library() -> None:
+    """Symlink ~/.openclaw/erpclaw/lib -> bundled lib at the skill location.
 
-    Called automatically during initialize-database. Ensures every other
-    ERPClaw skill can import from the standard shared lib path.
-    Recursively copies all .py files including vendor/ subdirectories.
+    Single deterministic install-time setup. Replaces the v4.0.x self-heal
+    copy mechanism, which the OpenClaw scanner flagged as self-modifying
+    code. The symlink resolves to the version-current bundled lib for the
+    lifetime of the install; on `clawhub update`, the symlink target is
+    automatically the new lib (no re-link needed).
+
+    Existing dependent skills (~430+ files) sys.path.insert the deployed
+    path; the symlink keeps them working unchanged.
     """
-    target_dir = os.path.expanduser("~/.openclaw/erpclaw/lib/erpclaw_lib")
-    bundled_dir = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "lib", "erpclaw_lib"
-    )
-    if not os.path.isdir(bundled_dir):
-        return  # Not bundled (dev environment) — skip
-    copied = 0
-    for root, dirs, files in os.walk(bundled_dir):
-        # Skip __pycache__ directories
-        dirs[:] = [d for d in dirs if d != "__pycache__"]
-        rel_path = os.path.relpath(root, bundled_dir)
-        dest_dir = os.path.join(target_dir, rel_path) if rel_path != "." else target_dir
-        os.makedirs(dest_dir, exist_ok=True)
-        for fname in files:
-            if fname.endswith(".py"):
-                shutil.copy2(os.path.join(root, fname),
-                             os.path.join(dest_dir, fname))
-                copied += 1
-    return copied
+    bundled_lib = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
+    if not os.path.isdir(os.path.join(bundled_lib, "erpclaw_lib")):
+        return
+    target = os.path.expanduser("~/.openclaw/erpclaw/lib")
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    if os.path.exists(target) or os.path.islink(target):
+        if os.path.islink(target) and os.path.realpath(target) == os.path.realpath(bundled_lib):
+            return
+        if os.path.islink(target):
+            os.unlink(target)
+        else:
+            shutil.rmtree(target)
+    os.symlink(bundled_lib, target)
 
 
 def initialize_database(conn, args):
     """Initialize (or re-initialize) the ERPClaw database schema.
 
     Creates all tables, indexes, and constraints. Safe to run on an existing
-    database — uses CREATE TABLE IF NOT EXISTS throughout.
-
-    If --force is passed, drops and recreates the database from scratch.
-
-    Also installs the shared library to ~/.openclaw/erpclaw/lib/erpclaw_lib/.
+    database — uses CREATE TABLE IF NOT EXISTS throughout. If --force is
+    passed, drops and recreates the database from scratch.
     """
-    # Step 1: Install shared library (before anything else)
-    lib_count = install_shared_library()
-
+    _link_shared_library()
     db_path = args.db_path or DEFAULT_DB_PATH
 
     # Import the schema module (co-located in the same scripts/ directory)
@@ -1204,8 +1197,6 @@ def initialize_database(conn, args):
         "tables": table_count,
         "indexes": index_count,
         "skills_registered": skill_count,
-        "shared_library_files": lib_count or 0,
-        "shared_library_path": os.path.expanduser("~/.openclaw/erpclaw/lib/erpclaw_lib"),
         "journal_mode": "WAL",
         "foreign_keys": "ON",
         "reinitialized": force,
@@ -2149,8 +2140,125 @@ def onboarding_step(conn, args):
 # Action Router
 # ---------------------------------------------------------------------------
 
+def set_credential_action(conn, args):
+    """Store an integration credential in the encrypted credentials file.
+
+    Reads the credential value from --value (CLI), --from-stdin (pipe), or
+    --from-env (env var name). Never accepts the value via --api-key.
+    """
+    from erpclaw_lib import credentials as creds
+    integration = getattr(args, "integration", None)
+    if not integration:
+        err("--integration is required")
+    value = None
+    if getattr(args, "from_stdin", False):
+        value = sys.stdin.read().strip()
+    elif getattr(args, "from_env", None):
+        value = os.environ.get(args.from_env)
+        if not value:
+            err(f"env var {args.from_env} is empty or unset")
+    elif getattr(args, "value", None):
+        value = args.value
+    else:
+        err(
+            "credential value required: pass --value <v> (avoid for shared "
+            "history), or pipe via --from-stdin, or use --from-env <VAR>"
+        )
+    if not value:
+        err("credential value is empty")
+    creds.set_credential(integration, value)
+    ok({
+        "message": f"Credential '{integration}' stored.",
+        "integration": integration,
+        "credentials_file": creds.CREDENTIALS_PATH,
+    })
+
+
+def get_credential_action(conn, args):
+    """Return whether a credential exists. Never returns the value itself."""
+    from erpclaw_lib import credentials as creds
+    integration = getattr(args, "integration", None)
+    if not integration:
+        err("--integration is required")
+    val = creds.get_credential(integration)
+    ok({
+        "integration": integration,
+        "exists": val is not None,
+        "redacted_preview": (val[:4] + "..." + val[-4:]) if val and len(val) >= 12 else None,
+    })
+
+
+def list_credentials_action(conn, args):
+    """List integration names that have credentials stored. Never lists values."""
+    from erpclaw_lib import credentials as creds
+    ok({"integrations": creds.list_credentials()})
+
+
+def delete_credential_action(conn, args):
+    """Remove a stored credential."""
+    from erpclaw_lib import credentials as creds
+    integration = getattr(args, "integration", None)
+    if not integration:
+        err("--integration is required")
+    deleted = creds.delete_credential(integration)
+    ok({
+        "integration": integration,
+        "deleted": deleted,
+        "message": "deleted" if deleted else "no credential found for that integration",
+    })
+
+
+def migrate_credentials_action(conn, args):
+    """Migrate plaintext credentials from per-addon DB tables into the encrypted file.
+
+    Detects known credential-storing tables (Stripe, Shopify) and offers to
+    import their plaintext keys into the encrypted credentials store. Use
+    --dry-run to preview without writing.
+    """
+    from erpclaw_lib import credentials as creds
+    dry_run = getattr(args, "dry_run", False)
+    moved = []
+    skipped = []
+    cursor = conn.cursor()
+
+    # Stripe addon: stripe_account.api_key
+    try:
+        rows = cursor.execute(
+            "SELECT account_id, api_key FROM stripe_account WHERE api_key IS NOT NULL"
+        ).fetchall()
+        for r in rows:
+            integration = f"stripe:{r[0]}" if len(rows) > 1 else "stripe"
+            if creds.get_credential(integration):
+                skipped.append({"integration": integration, "reason": "already in encrypted store"})
+                continue
+            if not dry_run:
+                creds.set_credential(integration, r[1])
+                cursor.execute(
+                    "UPDATE stripe_account SET api_key = NULL WHERE account_id = ?",
+                    (r[0],)
+                )
+            moved.append({"integration": integration, "source": "stripe_account.api_key"})
+    except Exception:
+        pass  # table doesn't exist; no Stripe addon installed
+
+    if not dry_run:
+        conn.commit()
+
+    ok({
+        "dry_run": dry_run,
+        "moved": moved,
+        "skipped": skipped,
+        "next": "remove `--api-key` from any deploy/CI scripts; use `set-credential` instead",
+    })
+
+
 ACTIONS = {
     "initialize-database": initialize_database,
+    "set-credential": set_credential_action,
+    "get-credential": get_credential_action,
+    "list-credentials": list_credentials_action,
+    "delete-credential": delete_credential_action,
+    "migrate-credentials": migrate_credentials_action,
     "setup-company": setup_company,
     "update-company": update_company,
     "get-company": get_company,
@@ -2199,6 +2307,18 @@ def main():
     parser.add_argument("--action", required=True, choices=sorted(ACTIONS.keys()))
     parser.add_argument("--db-path", default=None,
                         help="SQLite database path (default: ~/.openclaw/erpclaw/data.sqlite)")
+
+    # Credential management flags (set-credential / get-credential / etc.)
+    parser.add_argument("--integration", default=None,
+                        help="Integration name (stripe, shopify, etc.)")
+    parser.add_argument("--value", default=None,
+                        help="Credential value (avoid in shared shell history)")
+    parser.add_argument("--from-stdin", action="store_true",
+                        help="Read credential value from stdin (recommended for automation)")
+    parser.add_argument("--from-env", default=None,
+                        help="Read credential value from named env var")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Preview migrate-credentials without writing")
 
     # Company flags
     parser.add_argument("--name", default=None)

@@ -20,34 +20,9 @@ from uuid import uuid4
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODULES_DIR = os.path.expanduser("~/.openclaw/erpclaw/modules")
 DB_PATH = os.path.expanduser("~/.openclaw/erpclaw/data.sqlite")
-
-
-def _bootstrap_lib_self_heal() -> None:
-    """Ensure deployed erpclaw_lib at ~/.openclaw/erpclaw/lib/ matches bundled.
-
-    Self-heal for the case where ClawHub `update` skipped the post-install
-    hook. Reads bundled erpclaw_lib.__version__ + _bootstrap directly from
-    the co-located scripts/erpclaw-setup/lib/ path (NOT the deployed path),
-    then delegates to bootstrap.ensure_lib_synced which inlines the copy
-    logic so we don't recurse through the deployed-but-stale lib.
-    Honors ERPCLAW_DISABLE_BOOTSTRAP=1.
-    """
-    bundled_lib = os.path.join(BASE_DIR, "erpclaw-setup", "lib")
-    if not os.path.isdir(os.path.join(bundled_lib, "erpclaw_lib")):
-        return  # dev environment without bundled lib; skip
-    sys.path.insert(0, bundled_lib)
-    try:
-        from erpclaw_lib import __version__ as bundled_version
-        from erpclaw_lib._bootstrap import ensure_lib_synced
-        ensure_lib_synced(bundled_version, bundled_lib)
-    except Exception as exc:  # never block real action work
-        print(f"warning: bootstrap self-heal skipped: {exc}", file=sys.stderr)
-    finally:
-        if bundled_lib in sys.path:
-            sys.path.remove(bundled_lib)
-
-
-_bootstrap_lib_self_heal()
+BUNDLED_LIB = os.path.join(BASE_DIR, "erpclaw-setup", "lib")
+if os.path.isdir(os.path.join(BUNDLED_LIB, "erpclaw_lib")):
+    sys.path.insert(0, BUNDLED_LIB)
 
 
 def _chmod_db_files_action() -> None:
@@ -132,6 +107,11 @@ ACTION_MAP = {
     "revoke-role": "erpclaw-setup",
     "set-password": "erpclaw-setup",
     "seed-permissions": "erpclaw-setup",
+    "set-credential": "erpclaw-setup",
+    "get-credential": "erpclaw-setup",
+    "list-credentials": "erpclaw-setup",
+    "delete-credential": "erpclaw-setup",
+    "migrate-credentials": "erpclaw-setup",
     "link-telegram-user": "erpclaw-setup",
     "unlink-telegram-user": "erpclaw-setup",
     "check-telegram-permission": "erpclaw-setup",
@@ -652,12 +632,104 @@ ONBOARDING_ACTIONS = {
 }
 
 
+# Actions that materially change financial state. Require --user-confirmed flag
+# (or ERPCLAW_USER_CONFIRMED=1 env). Foundation router gates these before dispatch
+# so cron / agent / CLI invocations all hit the same gate.
+DANGEROUS_ACTIONS = frozenset({
+    # GL + fiscal-period mutations
+    "post-gl-entries", "reverse-gl-entries", "close-fiscal-year", "reopen-fiscal-year",
+    # Journal lifecycle
+    "submit-journal-entry", "cancel-journal-entry", "delete-journal-entry",
+    "delete-recurring-template",
+    # Payments
+    "submit-payment", "cancel-payment", "delete-payment",
+    # Tax
+    "delete-tax-template",
+    # Reports / consolidation that mutate
+    "run-elimination", "run-consolidation",
+    # Selling lifecycle
+    "submit-quotation", "submit-sales-order", "cancel-sales-order",
+    "submit-delivery-note", "cancel-delivery-note",
+    "submit-sales-invoice", "cancel-sales-invoice",
+    "cancel-intercompany-invoice", "submit-blanket-order",
+    # Buying lifecycle
+    "submit-material-request", "submit-rfq",
+    "submit-purchase-order", "cancel-purchase-order",
+    "submit-purchase-receipt", "cancel-purchase-receipt",
+    "submit-purchase-invoice", "cancel-purchase-invoice",
+    "submit-blanket-po",
+    # Inventory mutations
+    "submit-stock-entry", "cancel-stock-entry",
+    "submit-stock-reconciliation", "cancel-stock-revaluation",
+    # Intercompany approvals
+    "approve-ic-transaction",
+    # HR approvals
+    "approve-leave", "reject-leave",
+    "approve-expense-claim", "reject-expense-claim",
+    # Payroll
+    "create-payroll-run", "submit-payroll-run", "cancel-payroll-run",
+    "generate-w2-data", "generate-nacha-file",
+    # Setup destructive
+    "restore-database",
+    # Module lifecycle (already always-confirm in SKILL.md)
+    "install-module", "remove-module", "update-modules",
+    # Schema migrations
+    "schema-apply", "schema-rollback",
+    # Initialize-database --force
+    "initialize-database",
+})
+
+
+def _is_user_confirmed() -> bool:
+    """Check if --user-confirmed flag or ERPCLAW_USER_CONFIRMED=1 env is set."""
+    if os.environ.get("ERPCLAW_USER_CONFIRMED") == "1":
+        return True
+    return "--user-confirmed" in sys.argv
+
+
+def _gate_dangerous_action(action: str) -> None:
+    """Block dispatch of dangerous actions without --user-confirmed.
+
+    Scanner-aligned: financial mutations require a structured confirmation
+    signal at every invocation path. The gate runs in the foundation router
+    BEFORE dispatch so CLI, cron, agent, and addon-driven invocations all
+    pass through the same check.
+    """
+    if action not in DANGEROUS_ACTIONS:
+        return
+    # initialize-database is dangerous only when --force is also passed
+    if action == "initialize-database" and "--force" not in sys.argv:
+        return
+    if _is_user_confirmed():
+        return
+    print(json.dumps({
+        "status": "error",
+        "error": "user_confirmation_required",
+        "action": action,
+        "message": (
+            f"Action '{action}' materially changes financial or system state. "
+            f"Re-invoke with --user-confirmed (or set ERPCLAW_USER_CONFIRMED=1) "
+            f"to proceed."
+        ),
+    }))
+    sys.exit(2)
+
+
 def find_action():
     """Extract --action value from sys.argv."""
     for i, arg in enumerate(sys.argv):
         if arg == "--action" and i + 1 < len(sys.argv):
             return sys.argv[i + 1]
     return None
+
+
+def _strip_router_flags(args: list[str]) -> list[str]:
+    """Remove router-only flags before forwarding to domain scripts.
+
+    --user-confirmed is consumed by the foundation gate and must not pass
+    through to domain script argparse.
+    """
+    return [a for a in args if a != "--user-confirmed"]
 
 
 def forward(domain, action_override=None):
@@ -670,7 +742,7 @@ def forward(domain, action_override=None):
         }))
         sys.exit(1)
 
-    args = list(sys.argv[1:])
+    args = _strip_router_flags(list(sys.argv[1:]))
 
     # If there's an action override (alias), replace the action name in args
     if action_override:
@@ -691,7 +763,7 @@ def forward_script(script_path):
         }))
         sys.exit(1)
 
-    args = list(sys.argv[1:])
+    args = _strip_router_flags(list(sys.argv[1:]))
     os.execvp(sys.executable, [sys.executable, script_path] + args)
 
 
@@ -706,7 +778,7 @@ def forward_module(module_name, action_override=None):
         }))
         sys.exit(1)
 
-    args = list(sys.argv[1:])
+    args = _strip_router_flags(list(sys.argv[1:]))
 
     if action_override:
         for i, arg in enumerate(args):
@@ -794,6 +866,9 @@ def main():
             "error": "Missing --action flag. Usage: python3 db_query.py --action <action-name> [flags]"
         }))
         sys.exit(1)
+
+    # Gate dangerous actions BEFORE any dispatch path
+    _gate_dangerous_action(action)
 
     # Tier 0: Module management actions → module_manager.py
     if action in MODULE_ACTIONS:

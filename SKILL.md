@@ -1,6 +1,6 @@
 ---
 name: erpclaw
-version: 4.0.2
+version: 4.1.0
 description: >
   AI-native ERP system. Full accounting, invoicing, inventory, purchasing,
   tax, billing, HR, payroll, advanced accounting (ASC 606/842, intercompany, consolidation),
@@ -16,32 +16,9 @@ metadata: {"openclaw":{"type":"executable","install":{"post":"python3 scripts/er
 
 # erpclaw
 
-**Full-Stack ERP Controller** for ERPClaw. Handles company setup, chart of accounts, journal entries,
-payments, tax, financial reports, customers, sales, suppliers, purchasing, inventory, billing,
-HR (employees, leave, attendance, expenses), US payroll (FICA, W-2, garnishments), advanced accounting
-(ASC 606/842, intercompany, consolidation), and 43 industry modules. Single local SQLite DB, double-entry GL, immutable audit trail.
+**Full-Stack ERP Controller** for ERPClaw. Company setup, chart of accounts, journal entries, payments, tax, financial reports, customers, sales, suppliers, purchasing, inventory, billing, HR, US payroll, advanced accounting (ASC 606/842, intercompany, consolidation), and 43 optional industry modules. Local-first SQLite, double-entry GL, immutable audit trail.
 
-**Security:** Local-first (`~/.openclaw/erpclaw/data.sqlite`). Parameterized queries. RBAC (PBKDF2). Immutable GL. Network only for `fetch-exchange-rates` (public API) and `install-module` (GitHub `avansaber/*`, requires user approval). Integration API keys (Stripe, Shopify, etc.) are passed via `--api-key` flags and stored in the local DB only — no credentials in code or environment variables.
-
-### Credential handling
-
-API keys for integrations are accepted via `--api-key` flags and persisted to the local DB. Recommended practices: (1) use Stripe restricted keys / Shopify scoped tokens with the minimum permissions needed; (2) rotate keys quarterly; (3) the database file is created mode 600 by `initialize-database` and re-asserted on every action invocation; (4) avoid passing keys via shell when shell history is shared. Future versions will support OS keychain backends.
-
-### Data protection
-
-The local SQLite database stores all ERP data including HR, payroll, and integration credentials. Protect it: (1) the `~/.openclaw/erpclaw/data.sqlite` file (and its WAL/SHM siblings) is created mode 600 by `initialize-database`; (2) keep backups out of cloud sync folders unless encrypted; (3) test imports and CSV uploads against a separate database before applying to production data. Restoring from a backup is supported via `restore-database`.
-
-### Module installation safety
-
-Module installs are restricted to `github.com/avansaber/*` repos at the registry-pinned version. The registry (`module_registry.json`) is fetched from the same GitHub org. Each install requires explicit user approval. Review the source repository before approving an install, and prefer pinned releases over `main` for production financial data.
-
-### Optional scheduling
-
-Foundation does not register any background jobs. Actions like `process-recurring`, `generate-recurring-invoices`, `check-reorder`, and `check-overdue` are run on demand by the user. To run any of them on a schedule, register a job with the OpenClaw runtime cron CLI (`openclaw cron add --name <id> --cron "<expr>" --message "Using erpclaw, run the <action> action."`). Schedules registered this way are listed by `openclaw cron list` and removed with `openclaw cron rm`.
-
-### Library self-heal
-
-The foundation self-heals its shared library at `~/.openclaw/erpclaw/lib/erpclaw_lib/` on version mismatch. If the deployed lib is older than the bundled lib (e.g., after a `clawhub update`), the next foundation action triggers an automatic re-sync. Each re-sync is logged to `~/.openclaw/erpclaw/logs/bootstrap.log`. To disable the self-heal in security-sensitive deployments, set the env var `ERPCLAW_DISABLE_BOOTSTRAP=1`.
+**Security:** Local-first (`~/.openclaw/erpclaw/data.sqlite`, mode 600). Parameterized queries. RBAC (PBKDF2). Immutable GL. Sensitive fields are encrypted at the column level (AES-256-GCM). Credentials managed via OS keychain (`set-credential` action). Network access limited to `fetch-exchange-rates` (public API) and user-approved `install-module` from `github.com/avansaber/*` (sha256-pinned).
 
 ### Skill Activation Triggers
 

@@ -1,16 +1,16 @@
 {
-  "version": "4.0.2",
+  "version": "4.1.0",
   "generated": "2026-04-27",
   "modules": {
     "erpclaw": {
       "display_name": "ERPClaw Core",
-      "description": "Complete ERP foundation: accounting, inventory, selling, buying, billing, payments, tax, journals, GL, HR, payroll, reports, and setup. 466 actions across 15 domains.",
+      "description": "Complete ERP foundation: accounting, inventory, selling, buying, billing, payments, tax, journals, GL, HR, payroll, reports, and setup. 467 actions across 14 domains.",
       "category": "core",
       "github": "avansaber/erpclaw",
-      "version": "3.5.0",
+      "version": "4.1.0",
       "requires": [],
-      "has_init_db": false,
-      "action_count": 438,
+      "has_init_db": true,
+      "action_count": 467,
       "tags": [
         "erp",
         "accounting",
@@ -29,7 +29,8 @@
         "company",
         "user",
         "rbac"
-      ]
+      ],
+      "sha256_skill_md": "bdaa248b2a496b8275c253f7b425770559444ca3ba8cc5ac59f3ebf989f85b8b"
     },
     "erpclaw-growth": {
       "display_name": "ERPClaw Growth",
@@ -61,7 +62,8 @@
         "email-campaigns",
         "web-tracking"
       ],
-      "subdir": "erpclaw-growth"
+      "subdir": "erpclaw-growth",
+      "sha256_skill_md": "916157630d48ad0f0c6179a289a20830ed62943bae7f07137bdceb0c43187f0d"
     },
     "erpclaw-ops": {
       "display_name": "ERPClaw Operations",
@@ -94,7 +96,8 @@
         "sla",
         "warranty"
       ],
-      "subdir": "erpclaw-ops"
+      "subdir": "erpclaw-ops",
+      "sha256_skill_md": "b4cb6ff49cad7e3031e2900f8d8101174ad5b6b831d3ed8a805d8ba02084e80b"
     },
     "erpclaw-integrations": {
       "display_name": "ERPClaw Integrations",
@@ -133,7 +136,8 @@
         "entity-map",
         "etl"
       ],
-      "subdir": "erpclaw-integrations"
+      "subdir": "erpclaw-integrations",
+      "sha256_skill_md": "06668897b9ac59cf9f7d888753798fdb3111aab45c7bebf101f8034eba5fd56f"
     },
     "erpclaw-alerts": {
       "display_name": "ERPClaw Alerts",
@@ -155,7 +159,8 @@
         "rules",
         "thresholds"
       ],
-      "subdir": "erpclaw-alerts"
+      "subdir": "erpclaw-alerts",
+      "sha256_skill_md": "ec092c9d32eb1a5e6f3347b33a28532fe7692f6410dd359ee96d812a812f684e"
     },
     "erpclaw-approvals": {
       "display_name": "ERPClaw Approvals",
@@ -176,7 +181,8 @@
         "audit-trail",
         "multi-level"
       ],
-      "subdir": "erpclaw-approvals"
+      "subdir": "erpclaw-approvals",
+      "sha256_skill_md": "b129ba57a1934431ce202f2f9241478743177193e094c336b333f289f19421ca"
     },
     "erpclaw-compliance": {
       "display_name": "ERPClaw Compliance",
@@ -203,7 +209,8 @@
         "gdpr",
         "hipaa"
       ],
-      "subdir": "erpclaw-compliance"
+      "subdir": "erpclaw-compliance",
+      "sha256_skill_md": "ade4b3fc8ce7d724741914ae38cd637dd09002a182c4017df97661b6b45cf5c6"
     },
     "erpclaw-documents": {
       "display_name": "ERPClaw Documents",
@@ -227,7 +234,8 @@
         "metadata",
         "dms"
       ],
-      "subdir": "erpclaw-documents"
+      "subdir": "erpclaw-documents",
+      "sha256_skill_md": "2f9bec020556afa6e942eaf8cd8b76d18e9e9a00dd83a4ea9fa4d86d51bafea6"
     },
     "erpclaw-esign": {
       "display_name": "ERPClaw E-Sign",
@@ -248,7 +256,8 @@
         "ceremonies",
         "audit-trail"
       ],
-      "subdir": "erpclaw-esign"
+      "subdir": "erpclaw-esign",
+      "sha256_skill_md": "92b40066997507f0e031a2299caad09aafc6ae17ad2e9b6dddb6cac7a0a731f5"
     },
     "erpclaw-fleet": {
       "display_name": "ERPClaw Fleet",
@@ -270,7 +279,8 @@
         "maintenance",
         "compliance"
       ],
-      "subdir": "erpclaw-fleet"
+      "subdir": "erpclaw-fleet",
+      "sha256_skill_md": "85d0b380fa652915e18caffce8aef2ab0d27e72bbdce22b51043bdc5ada12ab2"
     },
     "erpclaw-loans": {
       "display_name": "ERPClaw Loans",
@@ -292,7 +302,8 @@
         "interest",
         "collateral"
       ],
-      "subdir": "erpclaw-loans"
+      "subdir": "erpclaw-loans",
+      "sha256_skill_md": "1b2e9538c5732ecea5e0de72c6e573e7d18094e4c256d43f8f369b10b7b67a63"
     },
     "erpclaw-logistics": {
       "display_name": "ERPClaw Logistics",
@@ -315,7 +326,8 @@
         "delivery",
         "supply-chain"
       ],
-      "subdir": "erpclaw-logistics"
+      "subdir": "erpclaw-logistics",
+      "sha256_skill_md": "0154c54541d74407cced7a4f122d3dee6aedce46835db339f04f455438bb6c8c"
     },
     "erpclaw-maintenance": {
       "display_name": "ERPClaw Maintenance",
@@ -338,7 +350,8 @@
         "downtime",
         "cmms"
       ],
-      "subdir": "erpclaw-maintenance"
+      "subdir": "erpclaw-maintenance",
+      "sha256_skill_md": "d9dbbf28399579d29b21b59f3930cdfd1c8a1a81bfd96397c1e4f62cad8b11cf"
     },
     "erpclaw-planning": {
       "display_name": "ERPClaw Planning",
@@ -359,7 +372,8 @@
         "scenarios",
         "financial-planning"
       ],
-      "subdir": "erpclaw-planning"
+      "subdir": "erpclaw-planning",
+      "sha256_skill_md": "f2719e8f5bf4c9b7a6f59b224be086077b7bc158d2f65fd275f169916d9b73ca"
     },
     "erpclaw-pos": {
       "display_name": "ERPClaw POS",
@@ -382,7 +396,8 @@
         "returns",
         "reconciliation"
       ],
-      "subdir": "erpclaw-pos"
+      "subdir": "erpclaw-pos",
+      "sha256_skill_md": "b72875fda09993df32ee7621ea6251ab2d95acfc904e03ba2e7a22f1935b7449"
     },
     "erpclaw-selfservice": {
       "display_name": "ERPClaw Self-Service",
@@ -403,7 +418,8 @@
         "help-desk",
         "knowledge-base"
       ],
-      "subdir": "erpclaw-selfservice"
+      "subdir": "erpclaw-selfservice",
+      "sha256_skill_md": "558cc0edfeba1f3d830329f8a79e7f8f5b891a8145b96c8daa2bd16c045521a0"
     },
     "erpclaw-treasury": {
       "display_name": "ERPClaw Treasury",
@@ -425,7 +441,8 @@
         "transfers",
         "liquidity"
       ],
-      "subdir": "erpclaw-treasury"
+      "subdir": "erpclaw-treasury",
+      "sha256_skill_md": "3af4c6a42d9fcb220b6ea02a65470086de7006ae0d5f5b8e027ad9edd427b27c"
     },
     "erpclaw-region-ca": {
       "display_name": "ERPClaw Region: Canada",
@@ -449,7 +466,8 @@
         "provincial-tax",
         "bilingual"
       ],
-      "subdir": "erpclaw-region-ca"
+      "subdir": "erpclaw-region-ca",
+      "sha256_skill_md": "f49dd98a6f6d61fd82d9ad646814f9f85b0b22a4d25f71e84c905123055f6e5a"
     },
     "erpclaw-region-eu": {
       "display_name": "ERPClaw Region: EU",
@@ -472,7 +490,8 @@
         "e-invoicing",
         "euro"
       ],
-      "subdir": "erpclaw-region-eu"
+      "subdir": "erpclaw-region-eu",
+      "sha256_skill_md": "733c5403249eee54351616e167158ea2b4f6ce62a79df6724fae7d37cc0c4bc0"
     },
     "erpclaw-region-in": {
       "display_name": "ERPClaw Region: India",
@@ -497,7 +516,8 @@
         "pf",
         "esi"
       ],
-      "subdir": "erpclaw-region-in"
+      "subdir": "erpclaw-region-in",
+      "sha256_skill_md": "889779c5509d77073c5bb0544d7ac067f72886a8e0dba1cb7e58570462a2dab0"
     },
     "erpclaw-region-uk": {
       "display_name": "ERPClaw Region: UK",
@@ -521,7 +541,8 @@
         "customs",
         "hmrc"
       ],
-      "subdir": "erpclaw-region-uk"
+      "subdir": "erpclaw-region-uk",
+      "sha256_skill_md": "9caa6bab56c05dc3ea4d19791220dd0fc8f1daf0688629b40407cd9b09c6d784"
     },
     "healthclaw": {
       "display_name": "HealthClaw",
@@ -549,7 +570,8 @@
         "ehr",
         "emr"
       ],
-      "subdir": "healthclaw"
+      "subdir": "healthclaw",
+      "sha256_skill_md": "cea112321032681ce008db02ecdb0277f96a5c954da72cdd0723edf98cc36e4c"
     },
     "educlaw": {
       "display_name": "EduClaw",
@@ -576,7 +598,8 @@
         "courses",
         "transcripts"
       ],
-      "subdir": "educlaw"
+      "subdir": "educlaw",
+      "sha256_skill_md": "a15d81cc4e4f30a416425585776d16bd018b48b1df3d5865e73d717de5f69848"
     },
     "propertyclaw": {
       "display_name": "PropertyClaw",
@@ -599,7 +622,8 @@
         "rent",
         "accounting"
       ],
-      "subdir": "propertyclaw"
+      "subdir": "propertyclaw",
+      "sha256_skill_md": "9bc40f2d6cd05db8ce3a93995987e8326745b4d7b19ee96b8dccd155c3fea45a"
     },
     "agricultureclaw": {
       "display_name": "AgricultureClaw",
@@ -621,7 +645,8 @@
         "harvest",
         "equipment",
         "irrigation"
-      ]
+      ],
+      "sha256_skill_md": "4d052f8d2d9f11087360ff0e7c7924208be7a6d1c741861dd3be3a59396b98d1"
     },
     "automotiveclaw": {
       "display_name": "AutomotiveClaw",
@@ -643,7 +668,8 @@
         "warranty",
         "inventory",
         "sales"
-      ]
+      ],
+      "sha256_skill_md": "de150225355849dbea6befb239f65d9028d15b23e6f5c14ccefca1101e29c90c"
     },
     "constructclaw": {
       "display_name": "ConstructClaw",
@@ -667,7 +693,8 @@
         "submittals",
         "change-orders",
         "safety"
-      ]
+      ],
+      "sha256_skill_md": "f8025ef190387104fffe6b8e6e514bd6f2b32718470c8283d13c38c6a9c0e018"
     },
     "foodclaw": {
       "display_name": "FoodClaw",
@@ -690,7 +717,8 @@
         "kitchen",
         "food-safety",
         "inventory"
-      ]
+      ],
+      "sha256_skill_md": "b46bb00b49d13d7c0149baba3e9d6cc3822e19c40d418cd1439df5a1ffc75223"
     },
     "hospitalityclaw": {
       "display_name": "HospitalityClaw",
@@ -713,7 +741,8 @@
         "front-desk",
         "revenue-management",
         "f-and-b"
-      ]
+      ],
+      "sha256_skill_md": "0a94e27420086ed42ab53c85d085759b20c9042d8655d4d474f9ba11d87bcdd3"
     },
     "legalclaw": {
       "display_name": "LegalClaw",
@@ -737,7 +766,8 @@
         "court-dates",
         "conflicts",
         "trust-accounting"
-      ]
+      ],
+      "sha256_skill_md": "db728e31194f1ce41289164bb59caf216b6a8c7836b0612eaa19f5968e69f5c0"
     },
     "nonprofitclaw": {
       "display_name": "NonprofitClaw",
@@ -760,7 +790,8 @@
         "volunteers",
         "events",
         "fund-accounting"
-      ]
+      ],
+      "sha256_skill_md": "0f1351822b80037f1e0732e09d8f7e07aa85074668f71efa46a0fef3a6f13ce3"
     },
     "retailclaw": {
       "display_name": "RetailClaw",
@@ -783,7 +814,8 @@
         "pos",
         "multi-channel",
         "e-commerce"
-      ]
+      ],
+      "sha256_skill_md": "9678b4b8de8bf24bbd299e607e8a03e4cd89f5ed26043386fe5168d59be67e67"
     },
     "healthclaw-dental": {
       "display_name": "HealthClaw Dental",
@@ -805,7 +837,8 @@
         "procedures",
         "cdt-codes"
       ],
-      "subdir": "healthclaw-dental"
+      "subdir": "healthclaw-dental",
+      "sha256_skill_md": "7421728f88252928c3a9cb76e5129cc975fcdda71f7ff913b28569ff208c9c74"
     },
     "healthclaw-vet": {
       "display_name": "HealthClaw Veterinary",
@@ -826,7 +859,8 @@
         "vaccinations",
         "vet-procedures"
       ],
-      "subdir": "healthclaw-vet"
+      "subdir": "healthclaw-vet",
+      "sha256_skill_md": "1983d60a820818956eb4eb3a4c1eea37df3705293c08e8544e05825a398193ae"
     },
     "healthclaw-mental": {
       "display_name": "HealthClaw Mental Health",
@@ -848,7 +882,8 @@
         "progress-tracking",
         "hipaa"
       ],
-      "subdir": "healthclaw-mental"
+      "subdir": "healthclaw-mental",
+      "sha256_skill_md": "161dd7655c3abeb31ea1fa11cf82d264acd680a7a3ab57bfd9565e581cd6089a"
     },
     "healthclaw-homehealth": {
       "display_name": "HealthClaw Home Health",
@@ -869,7 +904,8 @@
         "aide-scheduling",
         "remote-monitoring"
       ],
-      "subdir": "healthclaw-homehealth"
+      "subdir": "healthclaw-homehealth",
+      "sha256_skill_md": "6c4962144d92efcd898ee5af923758ca07f168e59865526d1f0890ca3e63e0c1"
     },
     "educlaw-finaid": {
       "display_name": "EduClaw Financial Aid",
@@ -893,7 +929,8 @@
         "sap",
         "aid-packages"
       ],
-      "subdir": "educlaw-finaid"
+      "subdir": "educlaw-finaid",
+      "sha256_skill_md": "635b1f293fcae7a3127e4c66ee19b08cba67669857048c4e1e638389c1155601"
     },
     "educlaw-k12": {
       "display_name": "EduClaw K-12",
@@ -917,7 +954,8 @@
         "idea",
         "coppa"
       ],
-      "subdir": "educlaw-k12"
+      "subdir": "educlaw-k12",
+      "sha256_skill_md": "edaba60c72632d80d14fbcd9d11233f85934b6894337176ae1840c573db64ff3"
     },
     "educlaw-scheduling": {
       "display_name": "EduClaw Scheduling",
@@ -939,7 +977,8 @@
         "conflict-detection",
         "course-scheduling"
       ],
-      "subdir": "educlaw-scheduling"
+      "subdir": "educlaw-scheduling",
+      "sha256_skill_md": "ae49b91a131c13afe6ed0c4fd889c828d5faa732c5157c7b1d2849ca82df973f"
     },
     "educlaw-lms": {
       "display_name": "EduClaw LMS",
@@ -962,7 +1001,8 @@
         "discussions",
         "content"
       ],
-      "subdir": "educlaw-lms"
+      "subdir": "educlaw-lms",
+      "sha256_skill_md": "cb21ce847113073d1d9ffcae3d3a3f4027632fd6e23af18fd460d2a7bb3af35a"
     },
     "educlaw-statereport": {
       "display_name": "EduClaw State Reporting",
@@ -986,7 +1026,8 @@
         "assessment-data",
         "compliance"
       ],
-      "subdir": "educlaw-statereport"
+      "subdir": "educlaw-statereport",
+      "sha256_skill_md": "34077748fbf876d1918f30e97b09fe10e4c2454fc311c362467cb93894d3f396"
     },
     "educlaw-highered": {
       "display_name": "EduClaw Higher Education",
@@ -1009,7 +1050,8 @@
         "faculty",
         "accreditation"
       ],
-      "subdir": "educlaw-highered"
+      "subdir": "educlaw-highered",
+      "sha256_skill_md": "0305c45a92737dd605f384ce897297998f5ae3ec001dfe6b65766eb5a4453b69"
     },
     "propertyclaw-commercial": {
       "display_name": "PropertyClaw Commercial",
@@ -1030,7 +1072,8 @@
         "lease-abstracts",
         "commercial-leases"
       ],
-      "subdir": "propertyclaw-commercial"
+      "subdir": "propertyclaw-commercial",
+      "sha256_skill_md": "c44ba0c661a571fecf5387e93ab1d386ba19319d113b0d42b9f727e5e8a8775c"
     },
     "erpclaw-integrations-stripe": {
       "display_name": "ERPClaw Stripe Integration",
@@ -1050,7 +1093,8 @@
         "reconciliation",
         "gateway",
         "subscriptions"
-      ]
+      ],
+      "sha256_skill_md": "e991da2458358f450803249b5408f8c1a84245a2bfcbe12979d23ed71aa6121d"
     },
     "erpclaw-integrations-shopify": {
       "display_name": "ERPClaw Shopify Integration",
@@ -1083,7 +1127,8 @@
         "shopify payments",
         "shopify app store",
         "oauth pairing"
-      ]
+      ],
+      "sha256_skill_md": "e7e7e0afb0754af0949757208ac43ef0ded98503a5dc06427bdf5bfc3929d05e"
     },
     "groomingclaw": {
       "display_name": "Pet Grooming",
@@ -1104,7 +1149,8 @@
         "veterinary"
       ],
       "status": "preview",
-      "status_note": "Skeleton only. Plan + post-simulation revisions at apps/THREE_VERTICALS_PLAN_2026-04-27.md. Deferred 2026-04-28; no kickoff in 2026 unless inbound demand surfaces."
+      "status_note": "Skeleton only. Plan + post-simulation revisions at apps/THREE_VERTICALS_PLAN_2026-04-27.md. Deferred 2026-04-28; no kickoff in 2026 unless inbound demand surfaces.",
+      "sha256_skill_md": "62e3250de19d69fd3ec1a8f6ea55af0b092dc7fbc818889fe2cf8412233ff698"
     },
     "storageclaw": {
       "display_name": "Self-Storage",
@@ -1125,7 +1171,8 @@
         "facility"
       ],
       "status": "preview",
-      "status_note": "Skeleton only. Plan + post-simulation revisions at apps/THREE_VERTICALS_PLAN_2026-04-27.md. Deferred 2026-04-28; no kickoff in 2026 unless inbound demand surfaces."
+      "status_note": "Skeleton only. Plan + post-simulation revisions at apps/THREE_VERTICALS_PLAN_2026-04-27.md. Deferred 2026-04-28; no kickoff in 2026 unless inbound demand surfaces.",
+      "sha256_skill_md": "bfda5538bbe3e2f98481d00e3580ae6abc2447bfd524c6f8c35b4044a84fd214"
     },
     "tattooclaw": {
       "display_name": "Tattoo Parlor",
@@ -1146,7 +1193,8 @@
         "body art"
       ],
       "status": "preview",
-      "status_note": "Skeleton only. Plan + post-simulation revisions at apps/THREE_VERTICALS_PLAN_2026-04-27.md. Deferred 2026-04-28; no kickoff in 2026 unless inbound demand surfaces."
+      "status_note": "Skeleton only. Plan + post-simulation revisions at apps/THREE_VERTICALS_PLAN_2026-04-27.md. Deferred 2026-04-28; no kickoff in 2026 unless inbound demand surfaces.",
+      "sha256_skill_md": "ba1461bb6aaaa69c54d590ce49d885e4dc968aafaaa9f8ddd79f97d1d3059ffa"
     },
     "erpclaw-os-engine": {
       "action_count": 31,
@@ -1174,7 +1222,8 @@
         "gap-detection",
         "semantic-check"
       ],
-      "version": "1.0.0"
+      "version": "1.0.0",
+      "sha256_skill_md": "5cef08c0ab2446c95e1fee6fb6617247d13d9314f00843290926880c773c05ed"
     }
   },
   "total_actions": 3135

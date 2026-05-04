@@ -3574,10 +3574,13 @@ def generate_w2_data(conn: sqlite3.Connection, args) -> None:
         if box12:
             boxes["12"] = box12
 
+        # Decrypt SSN if encrypted at rest; pass-through for legacy plaintext rows
+        from erpclaw_lib.encrypted_columns import decrypt_for_column
+        ssn_pt = decrypt_for_column(emp.get("ssn"), "employee", "ssn")
         w2_entry = {
             "employee_id": employee_id,
             "employee_name": emp["full_name"],
-            "ssn_last_four": emp["ssn"][-4:] if emp.get("ssn") else "XXXX",
+            "ssn_last_four": ssn_pt[-4:] if ssn_pt else "XXXX",
             "filing_status": emp.get("federal_filing_status", "single"),
             "boxes": boxes,
         }
@@ -4177,6 +4180,12 @@ def add_employee_bank_account(conn, args):
 
     acct_id = str(uuid.uuid4())
 
+    # Encrypt sensitive columns at rest (routing_number, account_number).
+    # Validation already happened on the plaintext above.
+    from erpclaw_lib.encrypted_columns import encrypt_for_column
+    routing_ct = encrypt_for_column(routing, "employee_bank_account", "routing_number")
+    account_ct = encrypt_for_column(account_number, "employee_bank_account", "account_number")
+
     sql, _ = insert_row("employee_bank_account", {
         "id": P(), "employee_id": P(), "bank_name": P(),
         "routing_number": P(), "account_number": P(),
@@ -4185,7 +4194,7 @@ def add_employee_bank_account(conn, args):
     })
     conn.execute(sql, (
         acct_id, args.employee_id, args.bank_name.strip(),
-        routing, account_number, account_type, 1,
+        routing_ct, account_ct, account_type, 1,
         _now_iso(), _now_iso(),
     ))
 
@@ -4217,15 +4226,18 @@ def list_employee_bank_accounts(conn, args):
          .orderby(eba_t.created_at))
     rows = conn.execute(q.get_sql(), (args.employee_id,)).fetchall()
 
-    # Mask account numbers for security
+    # Decrypt encrypted columns + mask for display.
+    from erpclaw_lib.encrypted_columns import decrypt_for_column
     accounts = []
     for r in rows:
         d = row_to_dict(r)
-        acct_num = d.get("account_number", "")
-        if len(acct_num) > 4:
-            d["account_number_masked"] = "****" + acct_num[-4:]
-        else:
-            d["account_number_masked"] = "****"
+        acct_num = decrypt_for_column(d.get("account_number", ""),
+                                       "employee_bank_account", "account_number") or ""
+        # Strip the raw encrypted value from the response — never return it
+        d["account_number"] = ("****" + acct_num[-4:]) if len(acct_num) > 4 else "****"
+        d["account_number_masked"] = d["account_number"]
+        d["routing_number"] = decrypt_for_column(d.get("routing_number", ""),
+                                                  "employee_bank_account", "routing_number")
         accounts.append(d)
 
     ok({"accounts": accounts, "count": len(accounts)})
@@ -4289,10 +4301,14 @@ def generate_nacha_file(conn, args):
             continue
 
         ba = row_to_dict(bank_acct)
+        # Decrypt encrypted columns for NACHA file generation
+        from erpclaw_lib.encrypted_columns import decrypt_for_column
         entries.append({
             "employee_id": slip_d["employee_id"],
-            "routing_number": ba["routing_number"],
-            "account_number": ba["account_number"],
+            "routing_number": decrypt_for_column(
+                ba["routing_number"], "employee_bank_account", "routing_number"),
+            "account_number": decrypt_for_column(
+                ba["account_number"], "employee_bank_account", "account_number"),
             "account_type": ba["account_type"],
             "amount": net_pay,
         })
