@@ -1491,22 +1491,25 @@ def _atomic_write(target_path, data):
 
 
 def _is_dev_source_tree(path):
-    """True if path or any ancestor is a git working tree.
+    """True if SKILL.md inside path is tracked by an enclosing git repo.
 
-    Auto-sync MUST never overwrite a git-tracked source tree, because the
-    drift between local edits and the published manifest is the developer's
-    in-progress work — exactly what a developer wants preserved, not
-    "reconciled." End-user installs (via ClawHub) do not have a .git
-    ancestor, so production installs sync normally.
+    Reconciliation must never overwrite a developer's git-tracked checkout
+    of the foundation source. End-user installs (via ClawHub) live outside
+    any git working tree that tracks foundation files; OpenClaw's own
+    workspace.git, if present at an ancestor, doesn't track erpclaw files
+    so this check accepts production installs correctly.
     """
-    p = os.path.abspath(path)
-    while True:
-        if os.path.isdir(os.path.join(p, ".git")):
-            return True
-        parent = os.path.dirname(p)
-        if parent == p:
-            return False
-        p = parent
+    skill_md = os.path.join(path, "SKILL.md")
+    if not os.path.isfile(skill_md):
+        return False
+    try:
+        result = subprocess.run(
+            ["git", "-C", path, "ls-files", "--error-unmatch", "SKILL.md"],
+            capture_output=True, timeout=5,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return False
 
 
 def update_foundation_action(args):
@@ -1537,7 +1540,9 @@ def update_foundation_action(args):
         err("Another foundation sync is in progress; try again shortly.")
 
     try:
-        registry = _load_registry(force_refresh=getattr(args, "force", False))
+        # Always fetch fresh registry for reconciliation; the cache may be
+        # stale and lack the files_sha256 manifest.
+        registry = _load_registry(force_refresh=True)
         modules_by_name = _registry_to_dict(registry)
         foundation = modules_by_name.get("erpclaw")
         if not foundation or "files_sha256" not in foundation:
