@@ -96,7 +96,9 @@ ACTION_MAP = {
     "check-installation": "erpclaw-meta",
     "install-guide": "erpclaw-meta",
     "seed-demo-data": "erpclaw-meta",
-    "setup-web-dashboard": "erpclaw-meta",
+    # setup-web-dashboard moved to erpclaw-os-engine addon as os-setup-web-dashboard
+    # (2026-05-04 split per CLAWHUB_FIX_C_PLAN; bare name now returns missing-addon error)
+    "setup-web-dashboard": "erpclaw-meta",  # routes to erpclaw-meta which returns helpful error
 
     # === General Ledger (28 actions) ===
     "setup-chart-of-accounts": "erpclaw-gl",
@@ -512,48 +514,49 @@ ACTION_MAP = {
     "list-employee-bank-accounts": "erpclaw-payroll",
     "generate-nacha-file": "erpclaw-payroll",
 
-    # === ERPClaw OS — Phase 1+2: Validation, Generation, Deploy, Audit (16 actions) ===
+    # === ERPClaw OS — runtime actions kept in foundation (after 2026-05-04 split) ===
+    # validate-module, list-articles, build-table-registry, schema-* stay live.
     "validate-module": "erpclaw-os",
     "list-articles": "erpclaw-os",
     "build-table-registry": "erpclaw-os",
-    "generate-module": "erpclaw-os",
-    "configure-module": "erpclaw-os",
-    "list-industries": "erpclaw-os",
-    "classify-operation": "erpclaw-os",
     "schema-plan": "erpclaw-os",
     "schema-apply": "erpclaw-os",
     "schema-rollback": "erpclaw-os",
     "schema-drift": "erpclaw-os",
+
+    # === ERPClaw OS — moved to erpclaw-os-engine addon (renamed with os- prefix) ===
+    # These bare names route to foundation's erpclaw-os/db_query.py which
+    # returns a structured missing-addon error JSON with the new os-prefixed
+    # name + install command. New callers should use the os- prefixed name.
+    "generate-module": "erpclaw-os",
+    "configure-module": "erpclaw-os",
+    "list-industries": "erpclaw-os",
+    "classify-operation": "erpclaw-os",
     "deploy-module": "erpclaw-os",
     "deploy-audit-log": "erpclaw-os",
     "install-suite": "erpclaw-os",
     "run-audit": "erpclaw-os",
     "compliance-weather-status": "erpclaw-os",
-
-    # === ERPClaw OS — Phase 3a: Semantic Correctness Engine (2 actions) ===
     "semantic-check": "erpclaw-os",
     "semantic-rules-list": "erpclaw-os",
-
-    # === ERPClaw OS — Phase 3b: Self-Improvement Log (3 actions) ===
     "log-improvement": "erpclaw-os",
     "list-improvements": "erpclaw-os",
     "review-improvement": "erpclaw-os",
-
-    # === ERPClaw OS — Phase 3c: DGM Variant Engine (3 actions) ===
     "dgm-run-variant": "erpclaw-os",
     "dgm-list-variants": "erpclaw-os",
     "dgm-select-best": "erpclaw-os",
-
-    # === ERPClaw OS — Phase 3e: Gap Detection + Module Suggestions (4 actions) ===
     "detect-gaps": "erpclaw-os",
     "detect-schema-divergence": "erpclaw-os",
     "detect-stubs": "erpclaw-os",
     "suggest-modules": "erpclaw-os",
-
-    # === ERPClaw OS — Phase 3d: Heartbeat Analysis Engine (3 actions) ===
     "heartbeat-analyze": "erpclaw-os",
     "heartbeat-report": "erpclaw-os",
     "heartbeat-suggest": "erpclaw-os",
+    "add-feature-to-module": "erpclaw-os",
+    "check-feature-completeness": "erpclaw-os",
+    "list-feature-matrix": "erpclaw-os",
+    "research-business-rule": "erpclaw-os",
+    "get-implementation-guide": "erpclaw-os",
 }
 
 # Aliases: actions that need to be forwarded with a different --action name
@@ -698,6 +701,7 @@ def _suggest_module_for_action(action):
         "eu-": "erpclaw-region-eu",
         "stripe-": "erpclaw-integrations-stripe",
         "shopify-": "erpclaw-integrations-shopify",
+        "os-": "erpclaw-os-engine",
     }
     for prefix, module in PREFIX_MAP.items():
         if action.startswith(prefix):

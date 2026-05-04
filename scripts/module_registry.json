@@ -1,5 +1,5 @@
 {
-  "version": "3.5.0",
+  "version": "4.0.0",
   "generated": "2026-04-27",
   "modules": {
     "erpclaw": {
@@ -10,7 +10,7 @@
       "version": "3.5.0",
       "requires": [],
       "has_init_db": false,
-      "action_count": 466,
+      "action_count": 438,
       "tags": [
         "erp",
         "accounting",
@@ -1147,7 +1147,35 @@
       ],
       "status": "preview",
       "status_note": "Skeleton only. Plan + post-simulation revisions at apps/THREE_VERTICALS_PLAN_2026-04-27.md. Deferred 2026-04-28; no kickoff in 2026 unless inbound demand surfaces."
+    },
+    "erpclaw-os-engine": {
+      "action_count": 31,
+      "category": "expansion",
+      "description": "ERPClaw OS Engine -- the optional self-improvement layer. Module generation from natural language, in-module feature injection, sandboxed execution, deploy pipeline, DGM evolution, gap detection, semantic checks, compliance weather, heartbeat analysis, web dashboard provisioning. Dev-time / power-user tooling.",
+      "display_name": "ERPClaw OS Engine",
+      "github": "avansaber/erpclaw-addons",
+      "has_init_db": false,
+      "requires": [
+        "erpclaw"
+      ],
+      "subdir": "erpclaw-os-engine",
+      "tags": [
+        "erpclaw",
+        "ai-native",
+        "os",
+        "self-improving",
+        "module-generation",
+        "code-generation",
+        "sandbox",
+        "dgm",
+        "deploy",
+        "compliance",
+        "heartbeat",
+        "gap-detection",
+        "semantic-check"
+      ],
+      "version": "1.0.0"
     }
   },
-  "total_actions": 3132
+  "total_actions": 3135
 }
