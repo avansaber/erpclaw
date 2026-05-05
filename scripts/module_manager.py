@@ -1645,7 +1645,15 @@ def _fetch_remote_file(rel_path, expected_hash):
 
 
 def _atomic_write(target_path, data):
-    """Write data to target_path atomically. Preserves prior content as .bak."""
+    """Write data to target_path atomically.
+
+    Preserves:
+      * Prior content as .bak (one cycle, used by rollback-foundation).
+      * File mode of the existing target (so executable bits on shipped
+        scripts like bin/erpclaw survive reconciliation; without this
+        the atomic replace would write the new file at the umask default
+        mode and silently break invocations like `bin/erpclaw --version`).
+    """
     target_dir = os.path.dirname(target_path) or "."
     os.makedirs(target_dir, exist_ok=True)
     tmp = target_path + ".new"
@@ -1655,6 +1663,10 @@ def _atomic_write(target_path, data):
         f.flush()
         os.fsync(f.fileno())
     if os.path.isfile(target_path):
+        try:
+            shutil.copymode(target_path, tmp)
+        except OSError:
+            pass
         try:
             shutil.copy2(target_path, bak)
         except OSError:

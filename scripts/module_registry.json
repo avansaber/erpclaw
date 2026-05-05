@@ -686,7 +686,7 @@
         "scripts/erpclaw-tax/db_query.py": "e0d8fc062dcb1b842db97ed93e5f1f133db62bb8c7b8436ae038edca56e915b6",
         "scripts/erpclaw-tax/tests/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "scripts/install_bin.py": "b1cf400544d5600228be8550da25980ca011743f16da5b81b12b8276aa5cbbab",
-        "scripts/module_manager.py": "665d9eb022f1e1387e74d484df3f64df08e0f584fc0e0cfcbfb44a7d7cc39470",
+        "scripts/module_manager.py": "31453c10aa23a361db32fadfce872d69190d293505abdfff8d36f698df51cd76",
         "scripts/onboarding.py": "cb4f9ff4c44f74865b5f18cffa62a37304f38a75ce68b133703045353e8a724f",
         "scripts/tests/test_shim.py": "dadd7b6cca4aca742d7651c9443521e54ec4c3eba6e47c237756cdfdc96eb455",
         "scripts/uninstall_bin.py": "012b5aad68ee6b49a9ed7242c7970d5b4e38d359cd3f6ed1af87eb5ada82a26e"
@@ -2345,8 +2345,8 @@
       "version": "1.0.0"
     }
   },
-  "registry_version": 7,
-  "signed_at": "2026-05-05T12:48:58Z",
+  "registry_version": 8,
+  "signed_at": "2026-05-05T13:21:31Z",
   "total_actions": 3135,
   "version": "4.1.6"
 }
