@@ -8,8 +8,8 @@
       "display_name": "AgricultureClaw",
       "files_sha256": {
         ".github/workflows/test.yml": "2bb05d786d15320d1a807a1e6c620f36cfbfeb60e19e25314cbfbf19241eb8dd",
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
-        "README.md": "6fcfd8954cb43267579cde256804c63b14cd494ab8154e93135c8607622020e3",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
+        "README.md": "7ca54c2af655e1ef989b0395b38e505fde66befd71c3d313f50539c7b6307b48",
         "SKILL.md": "4d052f8d2d9f11087360ff0e7c7924208be7a6d1c741861dd3be3a59396b98d1",
         "UI.yaml": "a36322eab3fc5c60a990a42c6dff6a4d4b4352dac574e54b12600a969aec9fa3",
         "init_db.py": "f2301cd09c68355d9466e1a2cc31fde8cd46ec4097528df07c75beb3939a99bc",
@@ -53,8 +53,8 @@
       "display_name": "AutomotiveClaw",
       "files_sha256": {
         ".github/workflows/test.yml": "2bb05d786d15320d1a807a1e6c620f36cfbfeb60e19e25314cbfbf19241eb8dd",
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
-        "README.md": "ffc35fa0f946376389ddf9bbafe849d24c513f21656d49b55a6dbede9e7d1050",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
+        "README.md": "6a23d182e9425323630d00fedd9774a4cdcf0692714358b384f1bd3e7ff665e4",
         "SKILL.md": "de150225355849dbea6befb239f65d9028d15b23e6f5c14ccefca1101e29c90c",
         "UI.yaml": "0f7a0b8db87e3d1e85e846d5cc1c4f935c27fd139e18c284d9112487326f206b",
         "init_db.py": "862e97c3c6a2a8ccc3736592589df459a4e394dd286ce3d4aecc58baef3d5b92",
@@ -99,8 +99,8 @@
       "display_name": "ConstructClaw",
       "files_sha256": {
         ".github/workflows/test.yml": "2bb05d786d15320d1a807a1e6c620f36cfbfeb60e19e25314cbfbf19241eb8dd",
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
-        "README.md": "8bcf691c76367f178966edaa79041ddfc1b3bc22ceef6c0d224788c03437d649",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
+        "README.md": "205b19593408605ad850000141b4d062a68d35dc4e97076648004a0bec21e39c",
         "SKILL.md": "f8025ef190387104fffe6b8e6e514bd6f2b32718470c8283d13c38c6a9c0e018",
         "UI.yaml": "06cb5947662a6acf848c3164030620fcb1989cb94ebea32debe47d34c11f12cc",
         "init_db.py": "33339ddee4adb925631bb4a738660a818797ccba8aa1592fba39748e36184e74",
@@ -305,7 +305,7 @@
       "description": "K-12 school management: grade levels, sections, behavior tracking, parent communication, school calendar, and IDEA/COPPA compliance. 77 actions.",
       "display_name": "EduClaw K-12",
       "files_sha256": {
-        "LICENSE.txt": "ffc1bf8ee6e1d0edf2550331423fba3d8d024755343fd7b607ce50cc803e6273",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "edaba60c72632d80d14fbcd9d11233f85934b6894337176ae1840c573db64ff3",
         "UI.yaml": "c1606cf1d336ff844181111c7aa3ac432a4ee8912b0f0b0da70db27b837853f7",
         "init_db.py": "98f5827ddd4b1e92c70bbf2735faf1bcd25302c989f9e551a48aa24092dc1466",
@@ -458,7 +458,7 @@
       "description": "State and federal education reporting: Ed-Fi, CEDS, enrollment reports, attendance reports, assessment data, and compliance filing. 99 actions.",
       "display_name": "EduClaw State Reporting",
       "files_sha256": {
-        "LICENSE.txt": "1218f434aa47afb439e953bc2a4392ee29cc14b3e2e2d7de47cbb68d2e5998ee",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "34077748fbf876d1918f30e97b09fe10e4c2454fc311c362467cb93894d3f396",
         "UI.yaml": "7dbff39aacfeaecc8cd26482b1cc5f0ae9ff0394a344f3e4819f20a602d0fc9c",
         "init_db.py": "95d00e24098bd0d03a04009f37868a3c2993442021e87fe7a5c826f3dfed243f",
@@ -508,10 +508,10 @@
       "display_name": "ERPClaw Core",
       "files_sha256": {
         ".github/workflows/test.yml": "094021628714ee2d403045159c7772b64b502f7afdd42db982558af27f6f8bc2",
-        "CHANGELOG.md": "0f0e4d89f09d7d1e7a78e3844bb16d72b6041e67e0e82fd708dcf2d8057e5649",
-        "LICENSE.txt": "b84dde49057a6d8a69d28c22e9854d86a9aee01e09a2d7498d0aebf20cd8f538",
-        "README.md": "8e662b3fdee0514f98287672752a567f63a5e5d505a62213d53e73dd8107b5c7",
-        "SKILL.md": "f92f4b9aae492cb78d57afaf54be4afc286dbd8fc6f91d263d3003822f93dc40",
+        "CHANGELOG.md": "ae1c6093408e44e9b1c0195331d224cb499f200279c02cba4b1fbc744663e473",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
+        "README.md": "9e5ecfc46238a799b58da13fca15c9e7ced3f9048da4c42e253e5345ef354bdf",
+        "SKILL.md": "6e3bba40630db78f4fe629be30700e55eea3896967137fc0d52ca5526f716324",
         "UI.yaml": "7c7062cdbc7877a3daa5b22dc6b4e296ce0b1dad7cdf615fd0ddcf0f278b581c",
         "bin/erpclaw": "a12d6e49943854124a3d233e191039b592856e9150ebb6c284d99b85992c6baa",
         "scripts/db_query.py": "101a31e61a1106cd88371bcda41ad289b9bad50349b78fd1bb178d9347faa4ae",
@@ -713,7 +713,7 @@
         "user",
         "rbac"
       ],
-      "version": "4.1.6"
+      "version": "4.2.0"
     },
     "erpclaw-alerts": {
       "action_count": 14,
@@ -721,7 +721,7 @@
       "description": "Alert rules, notifications, escalation policies, and delivery channels for ERPClaw event monitoring. 14 actions.",
       "display_name": "ERPClaw Alerts",
       "files_sha256": {
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "ec092c9d32eb1a5e6f3347b33a28532fe7692f6410dd359ee96d812a812f684e",
         "UI.yaml": "22d6cfd73e9e448ab59f22219aac25f926e341e51086b44abad257868ddf19d1",
         "init_db.py": "312d9164674e3d1d21e42c0c448af33307966a7f5202f78b003bbb59fe0200f2",
@@ -754,7 +754,7 @@
       "description": "Multi-level approval workflows, delegation, and audit trails for document routing. 13 actions.",
       "display_name": "ERPClaw Approvals",
       "files_sha256": {
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "b129ba57a1934431ce202f2f9241478743177193e094c336b333f289f19421ca",
         "UI.yaml": "3d3e57c57bb1ed907d721417fdd9fa9efdd9ba388d81688b2288ce78a390c921",
         "init_db.py": "e6d6e45a75dd4d323b57a05fcdf560336922ba3e21d1d257c506e9456473757d",
@@ -786,7 +786,7 @@
       "description": "Regulatory compliance management: frameworks, controls, assessments, findings, remediation, evidence collection, and audit scheduling. 38 actions.",
       "display_name": "ERPClaw Compliance",
       "files_sha256": {
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "ade4b3fc8ce7d724741914ae38cd637dd09002a182c4017df97661b6b45cf5c6",
         "UI.yaml": "ddd1a2997987f671b91c9d1d1eddca41d5b5c5ba2f66a77e6651b666fc484734",
         "init_db.py": "7db469d9de9a1920bf31f27fd60dfcda270a752aabdfc555367920145c2105cf",
@@ -827,7 +827,7 @@
       "description": "Document management system: folders, file metadata, versions, tags, sharing, and search. 25 actions.",
       "display_name": "ERPClaw Documents",
       "files_sha256": {
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "2f9bec020556afa6e942eaf8cd8b76d18e9e9a00dd83a4ea9fa4d86d51bafea6",
         "UI.yaml": "2359bfc5dbba9c08c728e5ce6b3523f71253be6bd60a97d991a34cfa35be9202",
         "init_db.py": "79a88c90a573bafc8bb35e24396093300025f0d0ef8948cc6762f5ecfd7915b4",
@@ -863,7 +863,7 @@
       "description": "Electronic signature workflows: signature requests, templates, signing ceremonies, and audit trails. 13 actions.",
       "display_name": "ERPClaw E-Sign",
       "files_sha256": {
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "92b40066997507f0e031a2299caad09aafc6ae17ad2e9b6dddb6cac7a0a731f5",
         "UI.yaml": "504f8c757b8fc2b59fd9e8b9c98f9f61282ad0612947594274cc4d61fa0f412c",
         "init_db.py": "05791f37b04e87e5eb4f963b13c3e7bea59abc1e91c4001c6a5924dc9aa5135a",
@@ -895,7 +895,7 @@
       "description": "Fleet and vehicle management: vehicles, drivers, trips, fuel logs, maintenance schedules, and compliance. 15 actions.",
       "display_name": "ERPClaw Fleet",
       "files_sha256": {
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "85d0b380fa652915e18caffce8aef2ab0d27e72bbdce22b51043bdc5ada12ab2",
         "UI.yaml": "673ffe0bf6e041e08de22dfdbd0792d5400e34e5bca00234b85190d3bda52483",
         "init_db.py": "88da5626f636c17761fbec3a7628b4fadf68988e6f2a9e2b8b70e8d2c6793298",
@@ -928,7 +928,7 @@
       "description": "CRM, analytics, AI engine, and advanced CRM capabilities. Leads, opportunities, campaigns, KPIs, anomaly detection, forecasting, and scoring. 110 actions across 4 domains.",
       "display_name": "ERPClaw Growth",
       "files_sha256": {
-        "LICENSE.txt": "b84dde49057a6d8a69d28c22e9854d86a9aee01e09a2d7498d0aebf20cd8f538",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "916157630d48ad0f0c6179a289a20830ed62943bae7f07137bdceb0c43187f0d",
         "UI.yaml": "3b556d439a056d38e5e1aa5e28ff0331fd0e945141108f254dd137c2863b0521",
         "init_db.py": "3c300aa2372debac4ab5d68319c64297703abb3cd27298756568c688525d5282",
@@ -990,7 +990,7 @@
       "display_name": "ERPClaw Integrations",
       "files_sha256": {
         ".gitignore": "f3547390db33fbdbbf022157831004f2475b3f43f57fa07c02366dce2c155914",
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "06668897b9ac59cf9f7d888753798fdb3111aab45c7bebf101f8034eba5fd56f",
         "UI.yaml": "641cf7e97c5241af430257bbe141c42ad8179bdc5f761dc373d1b596411ae3e0",
         "init_db.py": "d32374ac1fca076da5fcdfb6917e7c81c56b0cdf747d7831e640497d7b23d090",
@@ -1178,7 +1178,7 @@
       "description": "Loan management: loan types, applications, disbursements, repayment schedules, and GL integration. 25 actions.",
       "display_name": "ERPClaw Loans",
       "files_sha256": {
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "1b2e9538c5732ecea5e0de72c6e573e7d18094e4c256d43f8f369b10b7b67a63",
         "UI.yaml": "6684da0428bf1d9b61be69a0c7446745f271d16846d94abf24f21fd508b84791",
         "init_db.py": "be8da5796671dddbacf59943f8782467b45ab585d2a2dc96ab760b7029ac6e76",
@@ -1213,7 +1213,7 @@
       "description": "Supply chain logistics: shipments, carriers, tracking, routes, freight charges, and delivery scheduling. 34 actions.",
       "display_name": "ERPClaw Logistics",
       "files_sha256": {
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "0154c54541d74407cced7a4f122d3dee6aedce46835db339f04f455438bb6c8c",
         "UI.yaml": "429175b38e80f58ae699a09c10179d5cbc85dbc5f1d28efee160367730d16c23",
         "init_db.py": "800ebad2ee732d3ab7d52dc3cb0971faa4c2c2e42e4748f4f63213709b905bab",
@@ -1252,7 +1252,7 @@
       "description": "Preventive and corrective maintenance management: work orders, schedules, spare parts, equipment registry, and downtime tracking. 39 actions.",
       "display_name": "ERPClaw Maintenance",
       "files_sha256": {
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "d9dbbf28399579d29b21b59f3930cdfd1c8a1a81bfd96397c1e4f62cad8b11cf",
         "UI.yaml": "873c9a59a50f3b4d093081b556f69fcaae0e268bc11bb02be7d49fde45162dab",
         "init_db.py": "1b48ec10f8f7043fc305c2f0747ebecc9154e60281e9bbd62c8e2b8d4131d752",
@@ -1290,7 +1290,7 @@
       "description": "Manufacturing, advanced manufacturing, projects, assets, quality, and support. BOMs, work orders, MRP, routing, tasks, timesheets, depreciation, inspections, SLAs. 126 actions across 6 domains.",
       "display_name": "ERPClaw Operations",
       "files_sha256": {
-        "LICENSE.txt": "b84dde49057a6d8a69d28c22e9854d86a9aee01e09a2d7498d0aebf20cd8f538",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "b4cb6ff49cad7e3031e2900f8d8101174ad5b6b831d3ed8a805d8ba02084e80b",
         "UI.yaml": "c647e0084740573c8e38662aa6f939ae5f94f026d7e3f86857ac558a6ee82955",
         "init_db.py": "954ccffb17eabecf21d076d2846226d3e01a26e5876a3ad99ba7845faca35499",
@@ -1360,9 +1360,9 @@
       "description": "ERPClaw OS Engine -- the optional self-improvement layer. Module generation from natural language, in-module feature injection, sandboxed execution, deploy pipeline, DGM evolution, gap detection, semantic checks, compliance weather, heartbeat analysis, web dashboard provisioning. Dev-time / power-user tooling.",
       "display_name": "ERPClaw OS Engine",
       "files_sha256": {
-        "LICENSE.txt": "b84dde49057a6d8a69d28c22e9854d86a9aee01e09a2d7498d0aebf20cd8f538",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "README.md": "62c2a2ca571366270d6d6a3a0881bba3b12a153ec625fb0eec92fbb9744b321b",
-        "SKILL.md": "5cef08c0ab2446c95e1fee6fb6617247d13d9314f00843290926880c773c05ed",
+        "SKILL.md": "df447e0493a00d08f08279c072cac2f360d96c87a55da149d1ac1957aee91eb5",
         "scripts/adversarial_audit.py": "b30e78f9f9ed43e06a4373ea76d090578819a0bb16ce265440401bfa56f442e3",
         "scripts/compliance_weather.py": "26f05307cfd49b0aabed10e0b9cb87f6169136fc8732650cb8b82a8941825456",
         "scripts/configure_module.py": "cf452ec65aae4dfac53b06d2d46a452a3c7c15bd500777acbd29b5d9c5ef312e",
@@ -1449,7 +1449,7 @@
       "description": "Financial planning and budgeting: budgets, forecasts, variance analysis, scenarios, and multi-year planning. 30 actions.",
       "display_name": "ERPClaw Planning",
       "files_sha256": {
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "f2719e8f5bf4c9b7a6f59b224be086077b7bc158d2f65fd275f169916d9b73ca",
         "UI.yaml": "1ab59fe913a97ce292f4115c3852875c120891a14c4b8b397c0ceae399587313",
         "init_db.py": "5437cbd0f12440979fab42e0fbecc6a168c20feec47ba05714a5ee9f69869937",
@@ -1483,7 +1483,7 @@
       "description": "Point of sale: registers, shifts, transactions, cash management, returns, and end-of-day reconciliation. 34 actions.",
       "display_name": "ERPClaw POS",
       "files_sha256": {
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "b72875fda09993df32ee7621ea6251ab2d95acfc904e03ba2e7a22f1935b7449",
         "UI.yaml": "36cb30cdd3a97cb183f7bb35ef1899cd5469c2ef2cc16300210a5a1be8a99e2d",
         "init_db.py": "6561f3628dc1c6728649e46663c43a329b4f9e2d8ca36da0235e95f177bee5ba",
@@ -1520,7 +1520,7 @@
       "description": "Canadian regulatory compliance: GST/HST/PST, T4 slips, ROE, CRA reporting, provincial tax rules, and bilingual support. 30 actions.",
       "display_name": "ERPClaw Region: Canada",
       "files_sha256": {
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "f49dd98a6f6d61fd82d9ad646814f9f85b0b22a4d25f71e84c905123055f6e5a",
         "UI.yaml": "127210f0f57bbe7f4608fcd606f15c23adc8bd36dc23c8f22ba6b9fd602ae98f",
         "assets/ca_coa_aspe.json": "b96c8f1640043ede13a49a2275a0d8ff277a34f10c49483c33abb1f9034fb203",
@@ -1561,7 +1561,7 @@
       "description": "European Union compliance: VAT/MOSS, Intrastat, SEPA payments, GDPR, e-invoicing, and multi-currency Euro support. 26 actions.",
       "display_name": "ERPClaw Region: EU",
       "files_sha256": {
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "733c5403249eee54351616e167158ea2b4f6ce62a79df6724fae7d37cc0c4bc0",
         "UI.yaml": "01a243020a8989b4f236d8e7afd4511f34620c696247cc5ac2d7276d815d90b6",
         "assets/eu_coa_template.json": "4afc22aa628c34081358e03e6a609a3afa371483f76dcc33c8b8fc484101e50d",
@@ -1600,7 +1600,7 @@
       "description": "Indian regulatory compliance: GST (CGST/SGST/IGST), TDS/TCS, e-way bills, PF/ESI, and statutory reporting. 30 actions.",
       "display_name": "ERPClaw Region: India",
       "files_sha256": {
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "889779c5509d77073c5bb0544d7ac067f72886a8e0dba1cb7e58570462a2dab0",
         "UI.yaml": "9499816edf6b101607dbea30305e0120927ac7f34e1f4679a70bd4783d2f505f",
         "assets/gst_hsn_codes.json": "ee59242a100164d67d5fff17ca981536f850ab410be161d3f1dd272a577a1bf7",
@@ -1641,7 +1641,7 @@
       "description": "UK regulatory compliance: Making Tax Digital, PAYE/NI, Corporation Tax, Companies House filing, and Brexit customs. 28 actions.",
       "display_name": "ERPClaw Region: UK",
       "files_sha256": {
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "9caa6bab56c05dc3ea4d19791220dd0fc8f1daf0688629b40407cd9b09c6d784",
         "UI.yaml": "e4ce641b39298fe52eeb4beea30479af0431b796fc1f25c64d09de9ac1caf099",
         "assets/uk_coa_frs102.json": "ced25d7cf75baaf648eec7656006e0b35032397a36a49e484b016ab1ef1f1b5c",
@@ -1682,7 +1682,7 @@
       "description": "Employee and customer self-service portal: profile management, leave requests, expense submissions, help desk, and knowledge base. 25 actions.",
       "display_name": "ERPClaw Self-Service",
       "files_sha256": {
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "558cc0edfeba1f3d830329f8a79e7f8f5b891a8145b96c8daa2bd16c045521a0",
         "UI.yaml": "608d1739d36a333e9b62ada8025e9f07a15b82ee77cfb0a40a87f5efd192d90a",
         "init_db.py": "d02820851a5fae405f8bf41268d89e21becd6cd0299ae6fab7c0f9669608bd96",
@@ -1717,7 +1717,7 @@
       "description": "Treasury and cash management: bank accounts, cash positions, cash flow forecasting, investments, and inter-company transfers. 35 actions.",
       "display_name": "ERPClaw Treasury",
       "files_sha256": {
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "3af4c6a42d9fcb220b6ea02a65470086de7006ae0d5f5b8e027ad9edd427b27c",
         "UI.yaml": "a3aabf3c72549b66e0acf375b50ebfc49219c49ed7152b90f3eb9490fe24576b",
         "init_db.py": "8fba169c3faa75647fbd05927e80b278946e4e3966129e6ad067a648a89b63f0",
@@ -1753,8 +1753,8 @@
       "display_name": "FoodClaw",
       "files_sha256": {
         ".github/workflows/test.yml": "2bb05d786d15320d1a807a1e6c620f36cfbfeb60e19e25314cbfbf19241eb8dd",
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
-        "README.md": "8f2d5f391299be91220e9dc656acfb5287fc940026e73fc9e10e7d5bd0dc5ef1",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
+        "README.md": "919b3bcadbea826ef092739448019572ec06d6bee585462bd9e75950d2fc7616",
         "SKILL.md": "b46bb00b49d13d7c0149baba3e9d6cc3822e19c40d418cd1439df5a1ffc75223",
         "UI.yaml": "ab3bbceb7c9f47b2dc6b3b643b23a8475b00246ebca0075b07b32db6f63e8b32",
         "init_db.py": "f76c623bd928fb5ef401ceae697fa356286c1319fc2fb9587761989adcf2461f",
@@ -1798,7 +1798,7 @@
       "description": "Pet grooming business management: appointments, clients, pets, services, and billing.",
       "display_name": "Pet Grooming",
       "files_sha256": {
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "62e3250de19d69fd3ec1a8f6ea55af0b092dc7fbc818889fe2cf8412233ff698",
         "init_db.py": "135d966116ba2c17b2feca12b7438fa8b787ea5349492fbf7a42d56ea696b98d",
         "scripts/db_query.py": "4bd85d77dc838d729868eef0ab47705236bb6154eec01972d56d4a476d9348b5",
@@ -1829,7 +1829,7 @@
       "description": "Healthcare practice management: patients, providers, appointments, clinical notes, prescriptions, lab orders, billing/claims, insurance verification, and compliance (HIPAA). 231 actions across 8 domains.",
       "display_name": "HealthClaw",
       "files_sha256": {
-        "LICENSE.txt": "b84dde49057a6d8a69d28c22e9854d86a9aee01e09a2d7498d0aebf20cd8f538",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "cea112321032681ce008db02ecdb0277f96a5c954da72cdd0723edf98cc36e4c",
         "UI.yaml": "a4ee53ee92e82e54952c331ddb0ce5326c8e43095dfdb639d566a3196851da17",
         "init_db.py": "940ad74d9befc25dd8d647a13c12fedc73659bf763d54e6abdecbb82d811a4ca",
@@ -1891,7 +1891,7 @@
       "description": "Dental practice management: dental charts, treatment plans, procedures, and dental-specific billing codes. 12 actions.",
       "display_name": "HealthClaw Dental",
       "files_sha256": {
-        "LICENSE.txt": "b84dde49057a6d8a69d28c22e9854d86a9aee01e09a2d7498d0aebf20cd8f538",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "7421728f88252928c3a9cb76e5129cc975fcdda71f7ff913b28569ff208c9c74",
         "UI.yaml": "d1b0c9726d3753f9bbecb78a0a51d35fdac5a31e8f98a4981896da6b9820645f",
         "init_db.py": "2f1802dfafd0559eb5249cae618c05738dea8e11dfd5447e17901847fc59300c",
@@ -1924,7 +1924,7 @@
       "description": "Home health care management: home visits, care plans, aide scheduling, and remote patient monitoring. 12 actions.",
       "display_name": "HealthClaw Home Health",
       "files_sha256": {
-        "LICENSE.txt": "b84dde49057a6d8a69d28c22e9854d86a9aee01e09a2d7498d0aebf20cd8f538",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "6c4962144d92efcd898ee5af923758ca07f168e59865526d1f0890ca3e63e0c1",
         "UI.yaml": "0d683f9711fe53638f6941a36be0f63b8f3587a586c427fabf82bb74bb5ecb4c",
         "init_db.py": "2ec69abf7af6ce0538e2c7ca11592c57c74344051ab6a173d4f4eb255db156a9",
@@ -1956,7 +1956,7 @@
       "description": "Mental health practice management: therapy sessions, treatment plans, assessments, and progress tracking with HIPAA compliance. 14 actions.",
       "display_name": "HealthClaw Mental Health",
       "files_sha256": {
-        "LICENSE.txt": "b84dde49057a6d8a69d28c22e9854d86a9aee01e09a2d7498d0aebf20cd8f538",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "161dd7655c3abeb31ea1fa11cf82d264acd680a7a3ab57bfd9565e581cd6089a",
         "UI.yaml": "9c8bf9894768970bd3fe17260332d0b73cf49f055132b98bcdca396ac014310a",
         "init_db.py": "70a30d3a394d4443b440cf1835d36f8cc69911ea046c0cd722b91c867e4c14c1",
@@ -1989,7 +1989,7 @@
       "description": "Veterinary practice management: animal patients, species profiles, vaccinations, and veterinary-specific procedures. 12 actions.",
       "display_name": "HealthClaw Veterinary",
       "files_sha256": {
-        "LICENSE.txt": "b84dde49057a6d8a69d28c22e9854d86a9aee01e09a2d7498d0aebf20cd8f538",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "1983d60a820818956eb4eb3a4c1eea37df3705293c08e8544e05825a398193ae",
         "UI.yaml": "e35619b9569998bb0082e645cc60a5be09f393cc0497c3a36f2e49a3976a8854",
         "init_db.py": "7aec3d932c89d6e1872514e0866c87572efd2d21762784de19a863172b9a8d2b",
@@ -2022,8 +2022,8 @@
       "display_name": "HospitalityClaw",
       "files_sha256": {
         ".github/workflows/test.yml": "2bb05d786d15320d1a807a1e6c620f36cfbfeb60e19e25314cbfbf19241eb8dd",
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
-        "README.md": "c6abfb36938431c03810606ab8783bdd4ee6f80bdbfec5afab44ee297c71b028",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
+        "README.md": "409831207f0d55dfe32db1b3c8d73db0752fc3028823841c7d3204e8f24be38d",
         "SKILL.md": "0a94e27420086ed42ab53c85d085759b20c9042d8655d4d474f9ba11d87bcdd3",
         "UI.yaml": "2ef45de479e26bd08ee7ad99a70975dd31fbf9ab26287ceab4d139b4b0b3e986",
         "init_db.py": "8e471dad6f0ab09badda8c2eb2091bbe098e2650263b44b32e6caef4788a3312",
@@ -2068,8 +2068,8 @@
       "display_name": "LegalClaw",
       "files_sha256": {
         ".github/workflows/test.yml": "2ceb59967d6b4ecc2950321d26eaa41d22b8d62a19ed0118807ad7d556d6b601",
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
-        "README.md": "8ab82aa4ca821aeba2c4f186ff038a027f38ea69a3633bcb387a059206b8bba1",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
+        "README.md": "176636859d688804da6dd9dd6451845765cb880d3a4607e92e43ba159adeb6ce",
         "SKILL.md": "db728e31194f1ce41289164bb59caf216b6a8c7836b0612eaa19f5968e69f5c0",
         "UI.yaml": "94ac51ccd236e0928e6afca9b5b5f3c4719d7f8211a60bc9e66826216ff7340f",
         "init_db.py": "12a67306087fb38ef1716e8b418d1ec725d675daf23836f1f99171932270ec31",
@@ -2118,8 +2118,8 @@
       "display_name": "NonprofitClaw",
       "files_sha256": {
         ".github/workflows/test.yml": "2bb05d786d15320d1a807a1e6c620f36cfbfeb60e19e25314cbfbf19241eb8dd",
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
-        "README.md": "1f8b99647afe865af30dc867e7d61b92bf58c01b26b49d6ad0f16a0f2fed3599",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
+        "README.md": "dfe364fe4a09c25181800c3e47dbebe5777bf744596d75a4f5ed6b05405b4016",
         "SKILL.md": "0f1351822b80037f1e0732e09d8f7e07aa85074668f71efa46a0fef3a6f13ce3",
         "UI.yaml": "da66197a36800c487c850cdddcc3308e268e7db5f89960c35af04a4d5e65430f",
         "init_db.py": "48d43494cf9c836ab1ba4bb53604853d8d08460e56891022a4e6b0fe19875ae1",
@@ -2162,7 +2162,7 @@
       "description": "Property management: properties, units, leases, tenants, maintenance requests, and property accounting. 103 actions across 5 domains.",
       "display_name": "PropertyClaw",
       "files_sha256": {
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "9bc40f2d6cd05db8ce3a93995987e8326745b4d7b19ee96b8dccd155c3fea45a",
         "UI.yaml": "586e10cdcf81047ab52a641d17f811d2f79bc437a8e324ce6596c74118f520be",
         "init_db.py": "eae948c48859dc989e7c56141a227d6611fc8001eaab0418c85f285103dd837e",
@@ -2204,7 +2204,7 @@
       "description": "Commercial property management: commercial leases, CAM charges, tenant improvements, lease abstracts, and commercial property accounting. 31 actions.",
       "display_name": "PropertyClaw Commercial",
       "files_sha256": {
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "c44ba0c661a571fecf5387e93ab1d386ba19319d113b0d42b9f727e5e8a8775c",
         "UI.yaml": "5e3e2465afbd62a33abce11fc08d4175d5369a201fcce9a7cba12f0b54f656f5",
         "init_db.py": "1aada631bb2cdc549172caf40ba5aea8a66a79f99702123fc12bc8f31d4d3eae",
@@ -2240,8 +2240,8 @@
       "display_name": "RetailClaw",
       "files_sha256": {
         ".github/workflows/test.yml": "2bb05d786d15320d1a807a1e6c620f36cfbfeb60e19e25314cbfbf19241eb8dd",
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
-        "README.md": "4b4037a68d85546888c53432da0828d428e90dc8d1344f8da74a505fd433fa79",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
+        "README.md": "ee4c28529de06f416374dfb83d9a27fa70312051ea3e93cf1ec9954bcca25de1",
         "SKILL.md": "9678b4b8de8bf24bbd299e607e8a03e4cd89f5ed26043386fe5168d59be67e67",
         "UI.yaml": "137b8186036526f51f1092e6e86c40878cd3aa5c2ea748463b0fe55705d873c6",
         "init_db.py": "950ea99d695dd1f4d2383230856a16b398611900bc70e2218cbb7c9983d88093",
@@ -2287,7 +2287,7 @@
       "description": "Self-storage facility management: units, tenants, leases, access, and billing.",
       "display_name": "Self-Storage",
       "files_sha256": {
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "bfda5538bbe3e2f98481d00e3580ae6abc2447bfd524c6f8c35b4044a84fd214",
         "init_db.py": "72bf67dfa6dcc66d754a54763ea8bfc379fdc5ca41066d3ebaf9b726139b5ff0",
         "scripts/db_query.py": "966cd87b1fed0eeeac4cbcdb99cf5acaed354e037607be2931e26ab92e469a14",
@@ -2318,7 +2318,7 @@
       "description": "Tattoo parlor management: artists, appointments, designs, consent forms, and billing.",
       "display_name": "Tattoo Parlor",
       "files_sha256": {
-        "LICENSE.txt": "6f6bb192fb5854c274ca1bd5f3705ad6d4577099d2db95f46c90d0657ffb830d",
+        "LICENSE.txt": "193d4e628ee0f887663a013d4645edcb1fc895a8942447dfeb96bdc911f67a61",
         "SKILL.md": "ba1461bb6aaaa69c54d590ce49d885e4dc968aafaaa9f8ddd79f97d1d3059ffa",
         "init_db.py": "660ed636a4d56f6b60d513627c3e3ac91ad64da7b5a5c9afc540fd724a48c826",
         "scripts/db_query.py": "ca5b7168a451f9d3d62359cb2457faefed3f50bf8da33bde8240141e0807582d",
@@ -2345,8 +2345,8 @@
       "version": "1.0.0"
     }
   },
-  "registry_version": 8,
-  "signed_at": "2026-05-05T13:21:31Z",
+  "registry_version": 12,
+  "signed_at": "2026-05-05T23:27:21Z",
   "total_actions": 3135,
-  "version": "4.1.6"
+  "version": "4.2.0"
 }

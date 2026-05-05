@@ -184,6 +184,6 @@ A separate addon, [`erpclaw-os-engine`](https://github.com/avansaber/erpclaw-add
 
 ## License
 
-MIT License — Copyright (c) 2026 AvanSaber
+GNU General Public License v3 — Copyright (c) 2026 AvanSaber
 
 See [LICENSE.txt](LICENSE.txt) for details.

@@ -2,6 +2,31 @@
 
 All notable changes to the ERPClaw foundation skill.
 
+## [4.2.0] — 2026-05-05
+
+License change. ERPClaw moves from MIT to GNU General Public License v3, retroactively, across the entire codebase (foundation + 48 modules + addons + integrations + website + tooling). Existing copies that were downloaded under MIT retain their MIT rights for that downloaded copy per US copyright law on implied license; new clones, forks, and downloads receive GPL v3 terms. No code, schema, or behavior changes ship with this release; the version bump is solely the license inflection point. Patent (filed under USPTO provisional) is unchanged and continues to apply.
+
+### Changed
+- `LICENSE.txt` at every level (48 files) replaced with the canonical GPL v3 text from FSF, prefixed by a short notice and license history.
+- `package.json` `license` field in JS sub-projects updated from `"MIT"` to `"GPL-3.0-only"`.
+- README, STATUS, ARCHITECTURE, ROADMAP, PROJECT_RULES, CLAUDE.md, and module READMEs across `source/` updated to describe ERPClaw as GPL v3 with a license-history line for v4.1.x and earlier.
+- Marketing prose on `erpclaw.ai` updated to say "open source" generically, with explicit "GPL v3" only on license-specific pages.
+- Comparison pages drop "MIT vs. GPL" wedge framing; positioning shifts to architecture (AI-native vs. AI-decorated).
+- `erpforge/scripts/security_audit.py` `check_licence` now accepts either GPL v3 or MIT (the latter retained as legacy-compatible for v4.1.x).
+- `erpforge/scripts/publish.py` and `internal/publish/publish_manager.py` `LICENSE_TEMPLATE` re-templated with a short GPL v3 notice + license-history line.
+- `apps/COMPETITOR_FEATURE_GAP_2026-05-02.md` Section 9 (Open Source Sourcing) rewritten: GPL v3 is now license-compatible with ERPNext, Odoo Community, and other GPL/LGPL upstreams for direct inclusion; AGPL v3 is the new forbidden inbound boundary.
+
+### Strategic
+- License re-anchor was driven by long-term enterprise positioning (Linux/Ubuntu/Red Hat playbook): copyleft prevents proprietary fork-and-close by Microsoft / Salesforce / Oracle, while GPL v3 Section 11 patent grant + defensive termination preserves enterprise adoption optics. Trade-off accepted: SaaS resellers must contribute back; some hyperscaler co-selling motions become harder. Net: better foundation for paid-services + commercial-license dual-track at scale.
+
+### Trust root + signing
+- Registry signing key unchanged. Fingerprint remains `d471:335b:0e4d:75ce`.
+- Manifests regenerated and re-signed (registry_version 8 → 9) to capture the new LICENSE.txt hash for every signed module.
+
+### Notes
+- ClawHub re-publish for the foundation skill is deliberately deferred to the next functional release (will be bundled with the next code-change version, not done as a license-only republish). Tracking note in `internal/internal_backlog.md`.
+- Plan + lawyer-level analysis: `apps/LICENSE_DECISION_2026-05-05.md`.
+
 ## [4.1.6] — 2026-05-04
 
 Adds an ed25519 signature on the foundation registry. Reconciliation verifies the signature against an embedded public key before trusting any file hash, refuses tampered or downgraded registries, and refuses unsigned registries entirely. Closes the v4.1.5 supply-chain finding by giving the integrity check a cryptographic trust root rather than a hash-only one.
