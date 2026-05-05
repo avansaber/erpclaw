@@ -1663,25 +1663,57 @@ def _atomic_write(target_path, data):
 
 
 def _is_dev_source_tree(path):
-    """True if SKILL.md inside path is tracked by an enclosing git repo.
+    """True if `path` is a developer's git checkout, not a clawhub-installed skill.
 
-    Reconciliation must never overwrite a developer's git-tracked checkout
-    of the foundation source. End-user installs (via ClawHub) live outside
-    any git working tree that tracks foundation files; OpenClaw's own
-    workspace.git, if present at an ancestor, doesn't track erpclaw files
-    so this check accepts production installs correctly.
+    Reconciliation must never overwrite a developer's source checkout of the
+    foundation. We can't simply test "is SKILL.md tracked by some git repo"
+    because clawhub-installed skills ARE git clones (clawhub install does a
+    git clone of avansaber/erpclaw); their SKILL.md is always tracked.
+
+    Distinguishing signal: the git remote URL.
+      - ClawHub install: single `origin` pointing at github.com/avansaber/erpclaw
+      - Dev checkout: remote points at the private monorepo, a fork, or has
+        no remote, or has multiple remotes that include a non-avansaber one.
+
+    A path is "dev tree" only when SKILL.md is tracked AND the remote set is
+    NOT exclusively the canonical avansaber/erpclaw upstream. That keeps
+    clawhub deployments safe to reconcile while still refusing to stomp on
+    any developer's working copy.
     """
     skill_md = os.path.join(path, "SKILL.md")
     if not os.path.isfile(skill_md):
         return False
     try:
-        result = subprocess.run(
+        tracked = subprocess.run(
             ["git", "-C", path, "ls-files", "--error-unmatch", "SKILL.md"],
             capture_output=True, timeout=5,
         )
-        return result.returncode == 0
+        if tracked.returncode != 0:
+            return False
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return False
+    # SKILL.md is tracked. Inspect remotes to decide dev vs prod.
+    try:
+        remotes = subprocess.run(
+            ["git", "-C", path, "remote", "-v"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return True  # tracked but git inspection failed; be conservative
+    if remotes.returncode != 0:
+        return True
+    urls = set()
+    for line in remotes.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 2:
+            urls.add(parts[1])
+    if not urls:
+        return True  # tracked locally but no remote at all
+    canonical_markers = ("avansaber/erpclaw.git", "avansaber/erpclaw")
+    is_canonical_only = all(
+        any(marker in u for marker in canonical_markers) for u in urls
+    )
+    return not is_canonical_only
 
 
 def update_foundation_action(args):
