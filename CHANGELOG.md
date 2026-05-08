@@ -12,9 +12,9 @@ License change. ERPClaw moves from MIT to GNU General Public License v3, retroac
 - README, STATUS, ARCHITECTURE, ROADMAP, PROJECT_RULES, CLAUDE.md, and module READMEs across `source/` updated to describe ERPClaw as GPL v3 with a license-history line for v4.1.x and earlier.
 - Marketing prose on `erpclaw.ai` updated to say "open source" generically, with explicit "GPL v3" only on license-specific pages.
 - Comparison pages drop "MIT vs. GPL" wedge framing; positioning shifts to architecture (AI-native vs. AI-decorated).
-- `erpforge/scripts/security_audit.py` `check_licence` now accepts either GPL v3 or MIT (the latter retained as legacy-compatible for v4.1.x).
-- `erpforge/scripts/publish.py` and `internal/publish/publish_manager.py` `LICENSE_TEMPLATE` re-templated with a short GPL v3 notice + license-history line.
-- `apps/COMPETITOR_FEATURE_GAP_2026-05-02.md` Section 9 (Open Source Sourcing) rewritten: GPL v3 is now license-compatible with ERPNext, Odoo Community, and other GPL/LGPL upstreams for direct inclusion; AGPL v3 is the new forbidden inbound boundary.
+- `release/scripts/security_audit.py` `check_licence` now accepts either GPL v3 or MIT (the latter retained as legacy-compatible for v4.1.x).
+- `release/scripts/publish.py` and `internal/publish/publish_manager.py` `LICENSE_TEMPLATE` re-templated with a short GPL v3 notice + license-history line.
+- `internal/strategy/COMPETITOR_FEATURE_GAP_2026-05-02.md` Section 9 (Open Source Sourcing) rewritten: GPL v3 is now license-compatible with ERPNext, Odoo Community, and other GPL/LGPL upstreams for direct inclusion; AGPL v3 is the new forbidden inbound boundary.
 
 ### Strategic
 - License re-anchor was driven by long-term enterprise positioning (Linux/Ubuntu/Red Hat playbook): copyleft prevents proprietary fork-and-close by Microsoft / Salesforce / Oracle, while GPL v3 Section 11 patent grant + defensive termination preserves enterprise adoption optics. Trade-off accepted: SaaS resellers must contribute back; some hyperscaler co-selling motions become harder. Net: better foundation for paid-services + commercial-license dual-track at scale.
@@ -25,7 +25,7 @@ License change. ERPClaw moves from MIT to GNU General Public License v3, retroac
 
 ### Notes
 - ClawHub re-publish for the foundation skill is deliberately deferred to the next functional release (will be bundled with the next code-change version, not done as a license-only republish). Tracking note in `internal/internal_backlog.md`.
-- Plan + lawyer-level analysis: `apps/LICENSE_DECISION_2026-05-05.md`.
+- Plan + lawyer-level analysis: `internal/strategy/LICENSE_DECISION_2026-05-05.md`.
 
 ## [4.1.6] — 2026-05-04
 
@@ -38,7 +38,7 @@ Adds an ed25519 signature on the foundation registry. Reconciliation verifies th
 - Monotonic `registry_version` field inside the signed payload. The verifier rejects any registry whose `registry_version` is lower than the locally tracked value, defending against replay/downgrade of older legitimately-signed registries.
 - Append-only signing log at `scripts/signing_log.txt` recording each signing event (timestamp, hash prefix, version, signer fingerprint). Allows after-the-fact detection of unauthorized signing.
 - Recovery path `--unsafe-trust-bundled` for `update-foundation`. When a published key has been revoked and no rotated key has yet reached an offline install, an operator can reconcile against the locally-bundled hashes only. The flag emits a stderr warning, writes an entry to the audit log, and is documented as a recovery-only operator action; ordinary reconciliation always requires a verified signature.
-- Atomic publish pipeline: new entry-point `erpforge/regen_and_sign.py` runs manifest regeneration + signing in one invocation and verifies registry mtime ≤ signature mtime before completion.
+- Atomic publish pipeline: new entry-point `release/regen_and_sign.py` runs manifest regeneration + signing in one invocation and verifies registry mtime ≤ signature mtime before completion.
 
 ### Changed
 - Foundation action count: 477 → 478 (added `verify-trust-root`).
@@ -53,8 +53,8 @@ Rotation is one of the few legitimate triggers for a future ClawHub re-publish, 
 - Long-running processes hold imported modules in memory; foundation file changes take effect on next launch.
 
 ### Plan + audit
-- `apps/CLAWHUB_FIX_v416_PLAN_2026-05-04.md`
-- `apps/CLAWHUB_FIX_v416_AUDIT_2026-05-04.md` (8 BLOCK + 7 SHOULD adopted from external + internal audits)
+- `internal/completed/sprints/CLAWHUB_FIX_v416_PLAN_2026-05-04.md`
+- `internal/completed/sprints/CLAWHUB_FIX_v416_AUDIT_2026-05-04.md` (8 BLOCK + 7 SHOULD adopted from external + internal audits)
 
 ## [4.1.5] — 2026-05-04
 

@@ -75,13 +75,6 @@ PROPERTYCLAW_MODULES = [
     "propertyclaw/propertyclaw-commercial",
 ]
 
-# PoC modules (AI-generated)
-POC_MODULES = [
-    "groomingclaw",
-    "tattooclaw",
-    "storageclaw",
-]
-
 # ERP Addons (grouped repo, each with init_db.py)
 ADDON_MODULES = [
     "erpclaw-addons/erpclaw-alerts",
@@ -108,7 +101,6 @@ ALL_MODULES = (
     + HEALTHCLAW_MODULES
     + EDUCLAW_MODULES
     + PROPERTYCLAW_MODULES
-    + POC_MODULES
     + ADDON_MODULES
 )
 
@@ -200,26 +192,6 @@ def test_educlaw_module_passes(module_path):
                          ids=[m.split("/")[-1] for m in PROPERTYCLAW_MODULES])
 def test_propertyclaw_module_passes(module_path):
     """Every PropertyClaw module must pass critical articles."""
-    abs_path = _abs_module_path(module_path)
-    if not _module_exists(module_path):
-        pytest.skip(f"Module not found: {abs_path}")
-
-    result = validate_module_static(abs_path, SRC_ROOT)
-
-    for art_num in CRITICAL_ARTICLES:
-        art_result = result["articles"].get(art_num)
-        if art_result == "fail":
-            violations = [v for v in result["violations"] if v.get("article") == art_num]
-            pytest.fail(
-                f"{module_path} fails Article {art_num}: "
-                f"{[v.get('message', str(v)) for v in violations]}"
-            )
-
-
-@pytest.mark.parametrize("module_path", POC_MODULES,
-                         ids=[os.path.basename(m) for m in POC_MODULES])
-def test_poc_module_passes(module_path):
-    """PoC modules (AI-generated) must pass critical articles."""
     abs_path = _abs_module_path(module_path)
     if not _module_exists(module_path):
         pytest.skip(f"Module not found: {abs_path}")

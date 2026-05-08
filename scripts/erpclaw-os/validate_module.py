@@ -76,10 +76,6 @@ _PREFIX_OVERRIDES: dict[str, list[str]] = {
     "erpclaw-region-eu": ["erpclaw_", "eu_"],
     "erpclaw-region-in": ["erpclaw_", "india_"],
     "erpclaw-region-uk": ["erpclaw_", "uk_"],
-    # AI-generated modules from plan examples
-    "groomingclaw": ["groomingclaw_", "groom_"],
-    "tattooclaw": ["tattooclaw_", "tattoo_"],
-    "storageclaw": ["storageclaw_", "storage_"],
 }
 
 # Money-related column name patterns
@@ -327,7 +323,7 @@ def _get_expected_prefixes(module_name: str) -> list[str]:
         return _PREFIX_OVERRIDES[module_name]
 
     # Default: derive from module name
-    # e.g., "groomingclaw" -> ["groomingclaw_", "groom_"]
+    # e.g., "healthclaw" -> ["healthclaw_", "health_"]
     prefixes = [f"{module_name}_"]
 
     # Also accept shortened version (remove "claw" suffix)

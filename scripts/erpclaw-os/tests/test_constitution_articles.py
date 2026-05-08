@@ -175,13 +175,13 @@ class TestArticle1_TablePrefix:
     def test_short_prefix_accepted(self, tmp_path):
         """Short prefix (module name without 'claw') is also accepted."""
         tables = """
-            CREATE TABLE IF NOT EXISTS groom_pet (
+            CREATE TABLE IF NOT EXISTS example_widget (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL
             );
         """
-        path = _make_valid_module(tmp_path, "groomingclaw", tables=tables)
-        result = _check_article_1(path, "groomingclaw")
+        path = _make_valid_module(tmp_path, "exampleclaw", tables=tables)
+        result = _check_article_1(path, "exampleclaw")
         assert result["result"] == "pass"
 
     def test_missing_prefix_fails(self, tmp_path):

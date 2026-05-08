@@ -4,7 +4,7 @@ version: 4.2.0
 description: >
   AI-native ERP system. Full accounting, invoicing, inventory, purchasing,
   tax, billing, HR, payroll, advanced accounting (ASC 606/842, intercompany, consolidation),
-  and financial reporting. 475 actions across 14 domains, 43 optional expansion modules (user-approved install from GitHub).
+  and financial reporting. 478 actions across 14 domains, 45 optional expansion modules (user-approved install from GitHub).
   Double-entry GL, immutable audit trail, US GAAP compliant.
 author: AvanSaber
 homepage: https://github.com/avansaber/erpclaw
@@ -16,7 +16,7 @@ metadata: {"openclaw":{"type":"executable","install":{"post":"python3 scripts/er
 
 # erpclaw
 
-**Full-Stack ERP Controller** for ERPClaw. Company setup, chart of accounts, journal entries, payments, tax, financial reports, customers, sales, suppliers, purchasing, inventory, billing, HR, US payroll, advanced accounting (ASC 606/842, intercompany, consolidation), and 43 optional industry modules. Local-first SQLite, double-entry GL, immutable audit trail.
+**Full-Stack ERP Controller** for ERPClaw. Company setup, chart of accounts, journal entries, payments, tax, financial reports, customers, sales, suppliers, purchasing, inventory, billing, HR, US payroll, advanced accounting (ASC 606/842, intercompany, consolidation), and 45 optional industry modules. Local-first SQLite, double-entry GL, immutable audit trail.
 
 **Security:** Local-first. Parameterized queries. RBAC (PBKDF2). Immutable GL. Sensitive fields encrypted at the column level. Network access limited to `fetch-exchange-rates` (public API) and user-approved `install-module` from `github.com/avansaber/*`.
 
@@ -86,7 +86,7 @@ python3 {baseDir}/scripts/db_query.py --action setup-chart-of-accounts --company
 
 High-impact actions require the `--user-confirmed` flag on every invocation. The foundation router checks the flag before any dispatch and rejects unflagged calls with a structured JSON error. Read-only actions (verbs `list`, `get`, reports) run without the flag.
 
-## All 475 Actions
+## All 478 Actions
 
 ### Setup & Admin (50)
 | Action | Description |

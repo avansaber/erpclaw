@@ -110,7 +110,7 @@ def test_update_entity(db_conn, company_id):
 
 **Description:** A scheduled event with date/time, status lifecycle (scheduled -> confirmed -> in_progress -> completed | cancelled), and association to both a service provider and a client/patient/pet.
 
-**Source modules:** healthclaw (`healthclaw_appointment`), healthclaw-vet (via healthclaw appointments), groomingclaw (`groomingclaw_appointment`)
+**Source modules:** healthclaw (`healthclaw_appointment`), healthclaw-vet (via healthclaw appointments), hospitalityclaw (reservations)
 
 **When to use:**
 - Any business that schedules time-bound events (medical visits, grooming sessions, inspections, consultations)
@@ -191,7 +191,7 @@ def test_cannot_update_completed_appointment(db_conn, company_id):
 
 **Description:** A record of work performed, linked to an entity (patient, pet, vehicle) and optionally to an appointment. Captures service type, description, and amount charged.
 
-**Source modules:** healthclaw-vet (via treatment records), automotiveclaw (service records), groomingclaw (grooming records)
+**Source modules:** healthclaw-vet (via treatment records), automotiveclaw (service records), hospitalityclaw (service tickets)
 
 **When to use:**
 - When work is performed and needs to be documented (treatments, repairs, inspections, cleanings)
@@ -248,7 +248,7 @@ def test_add_service_record(db_conn, company_id, entity_id):
 
 **Description:** The correct way for non-core modules to create financial documents. Uses `cross_skill.create_invoice()` or `cross_skill.call_skill_action()` to delegate to the core billing engine. Never directly writes to `gl_entry`, `sales_invoice`, or `payment_entry`.
 
-**Source modules:** groomingclaw, tattooclaw, storageclaw (all PoC modules use this pattern)
+**Source modules:** healthclaw, hospitalityclaw, automotiveclaw (verticals that bill via cross-skill delegation)
 
 **When to use:**
 - Any time a vertical module needs to generate an invoice, process a payment, or trigger GL postings
@@ -309,7 +309,7 @@ def test_create_invoice_delegates(db_conn, company_id, customer_id, mocker):
 
 **Description:** Tracks certifications, licenses, inspections, and compliance records with expiry dates and renewal workflows. Commonly paired with alerts for upcoming expirations.
 
-**Source modules:** legalclaw (`legalclaw_bar_admission`, `legalclaw_cle_record`), tattooclaw (health inspections), constructclaw (permits, certifications)
+**Source modules:** legalclaw (`legalclaw_bar_admission`, `legalclaw_cle_record`), constructclaw (permits, certifications), healthclaw (provider licenses)
 
 **When to use:**
 - Any business that requires professional licenses (legal, medical, construction)
@@ -387,7 +387,7 @@ def test_check_expiring_finds_upcoming(db_conn, company_id):
 
 **Description:** A bundle of prepaid sessions or credits that a customer purchases upfront and uses over time. Tracks total sessions, used sessions, and remaining balance. Packages expire or become exhausted.
 
-**Source modules:** groomingclaw (`groomingclaw_package`, `groomingclaw_package_usage`), erpclaw-billing (prepaid credits)
+**Source modules:** hospitalityclaw (prepaid stay bundles), erpclaw-billing (prepaid credits)
 
 **When to use:**
 - Prepaid service bundles (10-pack of sessions, monthly retainer hours)
@@ -475,7 +475,7 @@ def test_use_session_on_exhausted_fails(db_conn, exhausted_package_id, company_i
 
 **Description:** Generates invoices on a recurring schedule (monthly, quarterly, annually). Handles proration, late fees, and delinquency tracking. Uses invoice delegation (Pattern 4) for actual GL posting.
 
-**Source modules:** storageclaw (`storageclaw_rental`, billing cycle), propertyclaw (`propertyclaw_lease`, rent charges)
+**Source modules:** propertyclaw (`propertyclaw_lease`, rent charges), erpclaw-billing (recurring template)
 
 **When to use:**
 - Subscription or lease-based businesses (storage, property, SaaS, memberships)
@@ -664,7 +664,7 @@ def test_add_staff_creates_profile(db_conn, company_id, employee_id):
 
 **Description:** The standard pattern for customer data in vertical modules. Core customer fields (name, email, phone, address) live in the core `customer` table. The vertical adds an extension table for domain-specific attributes (donor level, client type, pet owner preferences).
 
-**Source modules:** legalclaw (`legalclaw_client_ext`), automotiveclaw (`automotiveclaw_customer_ext`), nonprofitclaw (`nonprofitclaw_donor_ext`), groomingclaw (via core customer FK)
+**Source modules:** legalclaw (`legalclaw_client_ext`), automotiveclaw (`automotiveclaw_customer_ext`), nonprofitclaw (`nonprofitclaw_donor_ext`), healthclaw (patient extension via core customer FK)
 
 **When to use:**
 - Every vertical module that has customers/clients/patients/donors
@@ -753,12 +753,12 @@ def test_get_client_joins_core_data(db_conn, company_id, client_id):
 | Business Need | Pattern | Example Modules |
 |---------------|---------|-----------------|
 | Store and query entities | 1. CRUD Entity | All modules |
-| Schedule time-bound events | 2. Appointment/Booking | healthclaw, groomingclaw |
+| Schedule time-bound events | 2. Appointment/Booking | healthclaw, hospitalityclaw |
 | Document work performed | 3. Service Record | healthclaw-vet, automotiveclaw |
-| Create invoices/payments | 4. Invoice Delegation | groomingclaw, tattooclaw, storageclaw |
+| Create invoices/payments | 4. Invoice Delegation | healthclaw, hospitalityclaw, automotiveclaw |
 | Track licenses/certifications | 5. Compliance/Licensing | legalclaw, constructclaw |
-| Sell prepaid session bundles | 6. Prepaid Package | groomingclaw |
-| Bill on recurring schedule | 7. Recurring Billing | storageclaw, propertyclaw |
+| Sell prepaid session bundles | 6. Prepaid Package | hospitalityclaw |
+| Bill on recurring schedule | 7. Recurring Billing | propertyclaw, erpclaw-billing |
 | Manage physical goods | 8. Inventory Tracking | retailclaw, automotiveclaw |
 | Extend employee profiles | 9. Employee/Staff Management | healthclaw, legalclaw |
 | Extend customer profiles | 10. Customer Management | All verticals |

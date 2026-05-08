@@ -1792,37 +1792,6 @@
       ],
       "version": "1.0.0"
     },
-    "groomingclaw": {
-      "action_count": 13,
-      "category": "vertical",
-      "description": "Pet grooming business management: appointments, clients, pets, services, and billing.",
-      "display_name": "Pet Grooming",
-      "files_sha256": {
-        "LICENSE.txt": "7bb0c0eb1db8b40884cd154315e459fadacd2bff10190df3516639282608ed0c",
-        "SKILL.md": "62e3250de19d69fd3ec1a8f6ea55af0b092dc7fbc818889fe2cf8412233ff698",
-        "init_db.py": "135d966116ba2c17b2feca12b7438fa8b787ea5349492fbf7a42d56ea696b98d",
-        "scripts/db_query.py": "4bd85d77dc838d729868eef0ab47705236bb6154eec01972d56d4a476d9348b5",
-        "scripts/grooming.py": "0e78026c11881965f9e5d29ae935ab7c1156c4df44ad39e24ec42da3e503895d",
-        "scripts/tests/conftest.py": "2ad1e020afdee9eb5baa04dfefe9a70d3e004f8eb66604daa777816d3b2f4985",
-        "scripts/tests/grooming_helpers.py": "3ecd23719518a7756fb28518afbd5ed8bc07e67d77a0b99caf89b0b8b2c08eba",
-        "scripts/tests/test_grooming.py": "d7a8ff405940286a28d47f4a42187ecc67bb0b98c7aa93a48ae73a23f5e73be3"
-      },
-      "github": "avansaber/groomingclaw",
-      "has_init_db": true,
-      "requires": [
-        "erpclaw"
-      ],
-      "status": "preview",
-      "status_note": "Skeleton only. Plan + post-simulation revisions at apps/THREE_VERTICALS_PLAN_2026-04-27.md. Deferred 2026-04-28; no kickoff in 2026 unless inbound demand surfaces.",
-      "tags": [
-        "grooming",
-        "pets",
-        "appointments",
-        "salon",
-        "veterinary"
-      ],
-      "version": "1.0.0"
-    },
     "healthclaw": {
       "action_count": 231,
       "category": "vertical",
@@ -2280,73 +2249,10 @@
         "e-commerce"
       ],
       "version": "1.0.0"
-    },
-    "storageclaw": {
-      "action_count": 18,
-      "category": "vertical",
-      "description": "Self-storage facility management: units, tenants, leases, access, and billing.",
-      "display_name": "Self-Storage",
-      "files_sha256": {
-        "LICENSE.txt": "7bb0c0eb1db8b40884cd154315e459fadacd2bff10190df3516639282608ed0c",
-        "SKILL.md": "bfda5538bbe3e2f98481d00e3580ae6abc2447bfd524c6f8c35b4044a84fd214",
-        "init_db.py": "72bf67dfa6dcc66d754a54763ea8bfc379fdc5ca41066d3ebaf9b726139b5ff0",
-        "scripts/db_query.py": "966cd87b1fed0eeeac4cbcdb99cf5acaed354e037607be2931e26ab92e469a14",
-        "scripts/storage.py": "23bb6083dd5dd5845c5a744cb6f76cc058395e2855b7f80e3abae82fe62895ce",
-        "scripts/tests/conftest.py": "af49efd3180867c1b483d8174d5e8197f4dc7cd4434dcc6e08ae7b992ebb4136",
-        "scripts/tests/storage_helpers.py": "aac371ae85704f4c394dac580577a7ded78801bde369b92a7d00d7ed4f3d3341",
-        "scripts/tests/test_storage.py": "41a9332090c34c6879972533c49c7094b6022bc0ecb3b930fb424b29d626c4fc"
-      },
-      "github": "avansaber/storageclaw",
-      "has_init_db": true,
-      "requires": [
-        "erpclaw"
-      ],
-      "status": "preview",
-      "status_note": "Skeleton only. Plan + post-simulation revisions at apps/THREE_VERTICALS_PLAN_2026-04-27.md. Deferred 2026-04-28; no kickoff in 2026 unless inbound demand surfaces.",
-      "tags": [
-        "storage",
-        "units",
-        "tenants",
-        "leases",
-        "facility"
-      ],
-      "version": "1.0.0"
-    },
-    "tattooclaw": {
-      "action_count": 18,
-      "category": "vertical",
-      "description": "Tattoo parlor management: artists, appointments, designs, consent forms, and billing.",
-      "display_name": "Tattoo Parlor",
-      "files_sha256": {
-        "LICENSE.txt": "7bb0c0eb1db8b40884cd154315e459fadacd2bff10190df3516639282608ed0c",
-        "SKILL.md": "ba1461bb6aaaa69c54d590ce49d885e4dc968aafaaa9f8ddd79f97d1d3059ffa",
-        "init_db.py": "660ed636a4d56f6b60d513627c3e3ac91ad64da7b5a5c9afc540fd724a48c826",
-        "scripts/db_query.py": "ca5b7168a451f9d3d62359cb2457faefed3f50bf8da33bde8240141e0807582d",
-        "scripts/tattoo.py": "f5f1255300de6469a093f79510e9775f7899d9f3cf34063efcde6a4d6db0fe24",
-        "scripts/tests/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-        "scripts/tests/conftest.py": "631d66c291f74fe3c4e447417e5c4da885d4607c97b92b36cd7924bf4e6a27a9",
-        "scripts/tests/tattoo_helpers.py": "6cf5b65e558bddf48322c28ee86ea4d66d282c96b5601b520cf6c88b5e610854",
-        "scripts/tests/test_tattoo.py": "62f7d430aea1bc9d9e32c7ff3475ad153acdf11b114a333afe8e0097859608ab"
-      },
-      "github": "avansaber/tattooclaw",
-      "has_init_db": true,
-      "requires": [
-        "erpclaw"
-      ],
-      "status": "preview",
-      "status_note": "Skeleton only. Plan + post-simulation revisions at apps/THREE_VERTICALS_PLAN_2026-04-27.md. Deferred 2026-04-28; no kickoff in 2026 unless inbound demand surfaces.",
-      "tags": [
-        "tattoo",
-        "parlor",
-        "artists",
-        "appointments",
-        "body art"
-      ],
-      "version": "1.0.0"
     }
   },
-  "registry_version": 13,
-  "signed_at": "2026-05-05T23:39:56Z",
-  "total_actions": 3135,
+  "registry_version": 16,
+  "signed_at": "2026-05-06T22:11:58Z",
+  "total_actions": 3126,
   "version": "4.2.0"
 }

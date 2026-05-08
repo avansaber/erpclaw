@@ -192,21 +192,21 @@ class TestArticle1:
 
     def test_multiple_valid_prefixes(self, tmp_path):
         """A module can use either full name or short prefix."""
-        module = tmp_path / "groomingclaw"
+        module = tmp_path / "exampleclaw"
         module.mkdir()
         (module / "init_db.py").write_text(textwrap.dedent("""\
             DDL = \"\"\"
-                CREATE TABLE IF NOT EXISTS groom_pet (
+                CREATE TABLE IF NOT EXISTS example_widget (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS groom_appointment (
+                CREATE TABLE IF NOT EXISTS example_order (
                     id TEXT PRIMARY KEY,
-                    pet_id TEXT REFERENCES groom_pet(id)
+                    widget_id TEXT REFERENCES example_widget(id)
                 );
             \"\"\"
         """))
-        result = _check_article_1(str(module), "groomingclaw")
+        result = _check_article_1(str(module), "exampleclaw")
         assert result["result"] == "pass"
 
 
