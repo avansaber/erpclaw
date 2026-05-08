@@ -93,7 +93,7 @@ OpenClaw Bot → erpclaw/scripts/db_query.py --action {action} --args
 - IDs are UUID4 (TEXT)
 - GL entries are immutable — cancellation creates reverse entries
 - All cross-table writes in single SQLite transactions
-- 12-step GL validation on every posting
+- Comprehensive GL invariant validation on every posting
 
 ## Database
 
