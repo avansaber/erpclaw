@@ -792,9 +792,13 @@ def _install_module_inner(args, conn, modules_by_name, depth=0):
     manifest = module_info.get("files_sha256")
     if manifest:
         # Walk the fetched tree to discover what was delivered, applying the
-        # same skip filters used at manifest generation time.
-        SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", "node_modules", "dist", "build"}
-        SKIP_SUFFIXES = (".pyc", ".pyo", ".bak", ".tmp", ".DS_Store")
+        # same skip filters used at manifest generation time. This MUST stay
+        # in lockstep with `release/regen_module_manifests.py`'s walk filters
+        # — drift between the two means hash-clean modules report as
+        # "extra files" or "missing" purely from filter divergence.
+        SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", "node_modules", "dist", "build", "tests", ".github", "bin"}
+        SKIP_SUFFIXES = (".pyc", ".pyo", ".bak", ".tmp", ".DS_Store", ".sig")
+        SKIP_FILE_EXACT = {".DS_Store", ".gitkeep", ".clawhubignore"}
         # Files excluded from manifest by design (self-referential)
         SKIP_RELPATHS = (
             {"scripts/module_registry.json", "scripts/module_registry.json.sig",
@@ -805,6 +809,8 @@ def _install_module_inner(args, conn, modules_by_name, depth=0):
         for root, dirs, files in os.walk(install_path):
             dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
             for fname in files:
+                if fname in SKIP_FILE_EXACT:
+                    continue
                 if any(fname.endswith(s) for s in SKIP_SUFFIXES):
                     continue
                 rel = os.path.relpath(os.path.join(root, fname), install_path)

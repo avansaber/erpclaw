@@ -436,10 +436,10 @@
       "description": "Complete ERP foundation: accounting, inventory, selling, buying, billing, payments, tax, journals, GL, HR, payroll, reports, and setup. 475 actions across 14 domains.",
       "display_name": "ERPClaw Core",
       "files_sha256": {
-        "CHANGELOG.md": "1ad6eb38ed64d1c5ac8da2cde234592bf1ca951d69e73742dc1941c3eb325b5c",
+        "CHANGELOG.md": "65fdbcc92b0716a2a3d920625a73420d21239c922a7b90fb5d021dc8c9ec395b",
         "LICENSE.txt": "7bb0c0eb1db8b40884cd154315e459fadacd2bff10190df3516639282608ed0c",
         "README.md": "4528887ad70e9c9b1beaddfc2de966464bdf7e201de588a5879987fb3e83623e",
-        "SKILL.md": "1d5cc7741906c2c54b4a69a7b5267f16804dd1dc2c19519297702618451b4167",
+        "SKILL.md": "5ac05115b724136b0310a9888c767d12ce06d2c74b0aa9a1a3e2836a64be5c78",
         "UI.yaml": "7c7062cdbc7877a3daa5b22dc6b4e296ce0b1dad7cdf615fd0ddcf0f278b581c",
         "scripts/db_query.py": "101a31e61a1106cd88371bcda41ad289b9bad50349b78fd1bb178d9347faa4ae",
         "scripts/erpclaw-accounting-adv/consolidation.py": "724f2e78bd8818f21375b18d23e519762bcd399733b0771c70daaa27a67df846",
@@ -517,7 +517,7 @@
         "scripts/erpclaw-setup/migrations/001_registry_tables.py": "3290b37faa1daac03990979a3b316a8cf201cab4f14a947a7cb2e3c617ca0602",
         "scripts/erpclaw-tax/db_query.py": "e0d8fc062dcb1b842db97ed93e5f1f133db62bb8c7b8436ae038edca56e915b6",
         "scripts/install_bin.py": "b1cf400544d5600228be8550da25980ca011743f16da5b81b12b8276aa5cbbab",
-        "scripts/module_manager.py": "31453c10aa23a361db32fadfce872d69190d293505abdfff8d36f698df51cd76",
+        "scripts/module_manager.py": "109efec7f38f4f7ed8f14f39fd993ef1819ebb7a70e73bdb36136dfbf7c58b5c",
         "scripts/onboarding.py": "cb4f9ff4c44f74865b5f18cffa62a37304f38a75ce68b133703045353e8a724f",
         "scripts/uninstall_bin.py": "012b5aad68ee6b49a9ed7242c7970d5b4e38d359cd3f6ed1af87eb5ada82a26e"
       },
@@ -543,7 +543,7 @@
         "user",
         "rbac"
       ],
-      "version": "4.2.1"
+      "version": "4.2.2"
     },
     "erpclaw-alerts": {
       "action_count": 14,
@@ -1857,8 +1857,8 @@
       "version": "1.0.0"
     }
   },
-  "registry_version": 21,
-  "signed_at": "2026-05-10T16:00:16Z",
+  "registry_version": 24,
+  "signed_at": "2026-05-10T16:06:41Z",
   "total_actions": 3126,
-  "version": "4.2.1"
+  "version": "4.2.2"
 }

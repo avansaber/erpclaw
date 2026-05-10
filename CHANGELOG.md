@@ -2,12 +2,23 @@
 
 All notable changes to the ERPClaw foundation skill.
 
+## [4.2.2] — 2026-05-10
+
+Companion fix to v4.2.1. The v4.2.1 manifest correctly excluded `tests/`, `.github/`, `bin/`, etc. — but `module_manager.py`'s install-time integrity check kept its old skip set, so when `install-module <vertical>` git-cloned a public repo (which ships the full tree including those dirs), the walk treated `tests/` files as "delivered" while the manifest didn't list them. Result: every `install-module` after a v4.2.1 install failed with "0 mismatched, 0 missing, N extra files".
+
+### Fixed
+- `source/erpclaw/scripts/module_manager.py`: aligned the install-time integrity walk's skip set with `release/regen_module_manifests.py`. `SKIP_DIRS` adds `tests`, `.github`, `bin`; `SKIP_SUFFIXES` adds `.sig`; new `SKIP_FILE_EXACT` covers `.DS_Store`, `.gitkeep`, `.clawhubignore`. The two skip sets must stay in lockstep — drift between them produces "extra"/"missing" false positives. A code comment in `module_manager.py` flags this invariant for future maintainers.
+
+### Notes
+- Foundation must be re-installed (`clawhub update erpclaw --force` or fresh install) to pick up the fixed `module_manager.py`. The bug only manifests when `install-module` is called against a v4.2.0/v4.2.1-installed foundation.
+- Smoke plan re-run on 2026-05-10 confirmed the cold-install path now passes end-to-end with this fix.
+
 ## [4.2.1] — 2026-05-10
 
 Fix-up release for v4.2.0. Two install-blocking issues caught during cold-install smoke testing on the OpenClaw server:
 
 ### Fixed
-- **Manifest / shipped-package alignment.** `release/regen_module_manifests.py` was hashing files (`tests/`, `.github/`, `bin/`, `*.sig`, `.gitkeep`) that ClawHub strips during publish/install. Result: every `install-module` call against a v4.2.0 install failed integrity check with "100 mismatched/missing files" because the manifest claimed files that don't ship. Fixed by aligning the walk's exclude set to ClawHub's actual ship contract: `SKIP_DIRS` now includes `tests`, `.github`, `bin`; `SKIP_FILE_SUFFIXES` adds `.sig`; `SKIP_FILE_EXACT` adds `.gitkeep`, `.clawhubignore`. Foundation manifest dropped from 183 file entries to 84 entries that exactly match what users see post-install. registry_version: 18 → 19.
+- **Manifest / shipped-package alignment.** `release/regen_module_manifests.py` was hashing files (`tests/`, `.github/`, `bin/`, `*.sig`, `.gitkeep`) that ClawHub strips during publish/install. Result: every `install-module` call against a v4.2.0 install failed integrity check with "100 mismatched/missing files" because the manifest claimed files that don't ship. Fixed by aligning the walk's exclude set to ClawHub's actual ship contract: `SKIP_DIRS` now includes `tests`, `.github`, `bin`; `SKIP_FILE_SUFFIXES` adds `.sig`; `SKIP_FILE_EXACT` adds `.gitkeep`, `.clawhubignore`. Foundation manifest dropped from 183 file entries to 84 entries that exactly match what users see post-install. Registry re-signed; signer fingerprint unchanged: `d471:335b:0e4d:75ce`.
 - **Vertical parser fixes propagated to public `avansaber/*` repos.** The four argparse duplicate-flag fixes that shipped in v4.2.0's foundation manifest were not pushed to the public repos that `install-module` clones from (`avansaber/healthclaw`, `avansaber/constructclaw`, `avansaber/legalclaw`, `avansaber/retailclaw`). Result: `install-module healthclaw` cloned the broken parser, hash-verified successfully (we'd hashed the broken file), and crashed at first invocation. Fixed by running `internal/publish/publish_manager.py publish-all --execute`.
 
 ### Notes
