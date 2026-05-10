@@ -1,6 +1,6 @@
 # ERPClaw — AI-Native ERP for OpenClaw
 
-A complete ERP system built as an [OpenClaw](https://openclaw.org) skill. Full double-entry accounting, invoicing, inventory, purchasing, tax, billing, HR, payroll, and financial reporting — all in a single install. 413 actions across 14 domains.
+A complete ERP system built as an [OpenClaw](https://openclaw.org) skill. Full double-entry accounting, invoicing, inventory, purchasing, tax, billing, HR, payroll, and financial reporting — all in a single install. 478 actions across 14 domains.
 
 ## Features
 
@@ -15,7 +15,7 @@ A complete ERP system built as an [OpenClaw](https://openclaw.org) skill. Full d
 - **Payroll** — salary structures, FICA, federal/state income tax, W-2 generation, garnishments
 - **Advanced Accounting** — ASC 606 revenue recognition, ASC 842 lease accounting, intercompany transactions, consolidation
 - **Reports** — trial balance, P&L, balance sheet, cash flow, AR/AP aging, inventory valuation
-- **Module system** — 43 additional modules (44 total including core) available via `install-module` from GitHub
+- **Module system** — 45 additional modules (46 total including core) available via `install-module` from GitHub
 
 ## Quick Start
 

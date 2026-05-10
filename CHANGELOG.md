@@ -2,9 +2,22 @@
 
 All notable changes to the ERPClaw foundation skill.
 
-## [4.2.0] — 2026-05-05
+## [4.2.1] — 2026-05-10
 
-License change. ERPClaw moves from MIT to GNU General Public License v3, retroactively, across the entire codebase (foundation + 48 modules + addons + integrations + website + tooling). Existing copies that were downloaded under MIT retain their MIT rights for that downloaded copy per US copyright law on implied license; new clones, forks, and downloads receive GPL v3 terms. No code, schema, or behavior changes ship with this release; the version bump is solely the license inflection point. Patent (filed under USPTO provisional) is unchanged and continues to apply.
+Fix-up release for v4.2.0. Two install-blocking issues caught during cold-install smoke testing on the OpenClaw server:
+
+### Fixed
+- **Manifest / shipped-package alignment.** `release/regen_module_manifests.py` was hashing files (`tests/`, `.github/`, `bin/`, `*.sig`, `.gitkeep`) that ClawHub strips during publish/install. Result: every `install-module` call against a v4.2.0 install failed integrity check with "100 mismatched/missing files" because the manifest claimed files that don't ship. Fixed by aligning the walk's exclude set to ClawHub's actual ship contract: `SKIP_DIRS` now includes `tests`, `.github`, `bin`; `SKIP_FILE_SUFFIXES` adds `.sig`; `SKIP_FILE_EXACT` adds `.gitkeep`, `.clawhubignore`. Foundation manifest dropped from 183 file entries to 84 entries that exactly match what users see post-install. registry_version: 18 → 19.
+- **Vertical parser fixes propagated to public `avansaber/*` repos.** The four argparse duplicate-flag fixes that shipped in v4.2.0's foundation manifest were not pushed to the public repos that `install-module` clones from (`avansaber/healthclaw`, `avansaber/constructclaw`, `avansaber/legalclaw`, `avansaber/retailclaw`). Result: `install-module healthclaw` cloned the broken parser, hash-verified successfully (we'd hashed the broken file), and crashed at first invocation. Fixed by running `internal/publish/publish_manager.py publish-all --execute`.
+
+### Notes
+- v4.2.0 was published to ClawHub Marketplace 2026-05-10 with these latent bugs. v4.2.1 supersedes; users should `clawhub update erpclaw --force` to receive the fixed package.
+- Cold-install smoke plan: `internal/POST_CLAWHUB_REPUBLISH_SMOKE_PLAN_2026-05-10.md` (run on 2026-05-10 caught both bugs before any external user encountered them).
+- `clawhub install erpclaw` still requires `--force` due to a VirusTotal Code Insight flag that fires on our crypto/external-API patterns. This is a marketplace-side scanner over which we have no control; the flag does not indicate actual malware. Out-of-scope for v4.2.1.
+
+## [4.2.0] — 2026-05-05 (republished 2026-05-10)
+
+License change plus four parser bug fixes in vertical modules. ERPClaw moves from MIT to GNU General Public License v3, retroactively, across the entire codebase (foundation + 48 modules + addons + integrations + website + tooling). Existing copies that were downloaded under MIT retain their MIT rights for that downloaded copy per US copyright law on implied license; new clones, forks, and downloads receive GPL v3 terms. Patent (filed under USPTO provisional) is unchanged and continues to apply.
 
 ### Changed
 - `LICENSE.txt` at every level (48 files) replaced with the canonical GPL v3 text from FSF, prefixed by a short notice and license history.
@@ -16,16 +29,25 @@ License change. ERPClaw moves from MIT to GNU General Public License v3, retroac
 - `release/scripts/publish.py` and `internal/publish/publish_manager.py` `LICENSE_TEMPLATE` re-templated with a short GPL v3 notice + license-history line.
 - `internal/strategy/COMPETITOR_FEATURE_GAP_2026-05-02.md` Section 9 (Open Source Sourcing) rewritten: GPL v3 is now license-compatible with ERPNext, Odoo Community, and other GPL/LGPL upstreams for direct inclusion; AGPL v3 is the new forbidden inbound boundary.
 
+### Fixed
+- Removed duplicate argparse flag registrations that crashed the parser at load time across four vertical modules. None of the affected verticals were callable for any action until the dup was removed.
+  - `healthclaw/scripts/db_query.py`: duplicate `--verified-by` (kept LAB-domain copy at L453, removed Provider-Credentialing duplicate at L530).
+  - `constructclaw/scripts/db_query.py`: duplicate `--spec-section` (kept SUBMITTAL copy at L234, removed Drawing duplicate at L369).
+  - `legalclaw/scripts/db_query.py`: duplicate `--reminder-days` (kept CALENDAR copy at L161, removed SOL-Calculator duplicate at L235).
+  - `retailclaw/scripts/db_query.py`: duplicate `--category-id` (kept MERCHANDISING copy at L136, removed Procurement/Shrinkage duplicate at L215).
+- Cleanup sweep across all `source/*/scripts/db_query.py` confirms zero remaining duplicate argparse registrations.
+
 ### Strategic
 - License re-anchor was driven by long-term enterprise positioning (Linux/Ubuntu/Red Hat playbook): copyleft prevents proprietary fork-and-close by Microsoft / Salesforce / Oracle, while GPL v3 Section 11 patent grant + defensive termination preserves enterprise adoption optics. Trade-off accepted: SaaS resellers must contribute back; some hyperscaler co-selling motions become harder. Net: better foundation for paid-services + commercial-license dual-track at scale.
 
 ### Trust root + signing
 - Registry signing key unchanged. Fingerprint remains `d471:335b:0e4d:75ce`.
-- Manifests regenerated and re-signed (registry_version 8 → 9) to capture the new LICENSE.txt hash for every signed module.
+- Manifests regenerated and re-signed (registry_version 8 → 18) to capture the new LICENSE.txt hash and the four fixed `db_query.py` files.
 
 ### Notes
-- ClawHub re-publish for the foundation skill is deliberately deferred to the next functional release (will be bundled with the next code-change version, not done as a license-only republish). Tracking note in `internal/internal_backlog.md`.
-- Plan + lawyer-level analysis: `internal/strategy/LICENSE_DECISION_2026-05-05.md`.
+- Tested on OpenClaw 2026.5.7 with ClawHub CLI v0.12.3. Foundation passes the full 6-gate pipeline (270 L0 + 3,088 L2 + 248 L3 tests + invariants + smoke).
+- NL routing validated end-to-end on the OpenClaw test server: foundation 5/5 scenarios (companies, customers, invoices, employees, items), three verticals 3/3 (healthclaw patient, educlaw student, constructclaw job).
+- Plan + lawyer-level analysis for the license re-anchor: `internal/strategy/LICENSE_DECISION_2026-05-05.md`.
 
 ## [4.1.6] — 2026-05-04
 

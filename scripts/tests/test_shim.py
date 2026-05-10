@@ -24,16 +24,39 @@ UNINSTALL_BIN = REPO_ROOT / "source/erpclaw/scripts/uninstall_bin.py"
 
 
 def make_mock_home(tmp_path: Path, skills: dict[str, dict]) -> Path:
-    """Create a fake CLAWHUB_HOME with skills + their SKILL.md.
+    """Create a mock OpenClaw workspace + copy the real shim into it.
 
-    `skills` is `{skill_name: {"actions": [list of action names], "with_db_query": bool}}`.
+    Post-v4.1.6 (commit 22a8bbe), the shim self-locates upward from its
+    own __file__ instead of reading CLAWHUB_HOME — so tests must
+    invoke a COPY of the shim placed inside a fabricated skills layout,
+    or it will walk into the live dev tree.
+
+    Resulting layout:
+        <home>/workspace/skills/
+            erpclaw/
+                bin/erpclaw       # always: copy of REPO_ROOT shim
+                SKILL.md          # only if "erpclaw" in `skills` dict
+                scripts/db_query.py  # only if with_db_query for erpclaw
+            <other-skill>/
+                SKILL.md          # per `skills` dict
+                scripts/db_query.py  # per with_db_query
+
+    `skills` is `{skill_name: {"actions": [list], "with_db_query": bool}}`.
     """
     home = tmp_path / "openclaw"
-    skills_dir = home / "skills"
+    skills_dir = home / "workspace" / "skills"
     skills_dir.mkdir(parents=True)
+
+    # Always copy the foundation shim into <skills>/erpclaw/bin/erpclaw.
+    # The shim self-locates via __file__ — its parent.parent.parent is SKILLS_DIR.
+    erpclaw_bin = skills_dir / "erpclaw" / "bin"
+    erpclaw_bin.mkdir(parents=True)
+    shutil.copy2(SHIM, erpclaw_bin / "erpclaw")
+    (erpclaw_bin / "erpclaw").chmod(0o755)
+
     for skill_name, config in skills.items():
         skill_dir = skills_dir / skill_name
-        skill_dir.mkdir()
+        skill_dir.mkdir(exist_ok=True)
         lines = [
             "---",
             f"name: {skill_name}",
@@ -51,7 +74,7 @@ def make_mock_home(tmp_path: Path, skills: dict[str, dict]) -> Path:
         (skill_dir / "SKILL.md").write_text("\n".join(lines))
         if config.get("with_db_query"):
             scripts_dir = skill_dir / "scripts"
-            scripts_dir.mkdir()
+            scripts_dir.mkdir(exist_ok=True)
             # Minimal db_query.py that echoes --action
             (scripts_dir / "db_query.py").write_text(
                 "#!/usr/bin/env python3\n"
@@ -67,10 +90,18 @@ def make_mock_home(tmp_path: Path, skills: dict[str, dict]) -> Path:
 
 
 def run_shim(home: Path, *args: str) -> subprocess.CompletedProcess:
+    """Invoke the shim COPY inside the mock workspace, not REPO_ROOT.
+
+    Post-v4.1.6 the shim self-locates from its own path. To exercise
+    the mock skills layout, we must run the copied shim in
+    <home>/workspace/skills/erpclaw/bin/erpclaw, not the live shim
+    at REPO_ROOT/source/erpclaw/bin/erpclaw.
+    """
     env = os.environ.copy()
-    env["CLAWHUB_HOME"] = str(home)
+    env["CLAWHUB_HOME"] = str(home)  # kept for action_map.json cache + back-compat
+    mock_shim = home / "workspace" / "skills" / "erpclaw" / "bin" / "erpclaw"
     return subprocess.run(
-        [sys.executable, str(SHIM), *args],
+        [sys.executable, str(mock_shim), *args],
         env=env,
         capture_output=True,
         text=True,
@@ -104,9 +135,9 @@ def test_version_without_core_skill_reports_unknown(tmp_path):
 
 
 def test_list_empty_home_returns_1(tmp_path):
+    # Empty skills dict → only the erpclaw bin shim copy exists, no SKILL.md
+    # files, so the action_map is empty and the shim hits the "not found" branch.
     home = make_mock_home(tmp_path, {})
-    # Remove the skills dir entirely so we hit the "not found" branch
-    shutil.rmtree(home / "skills")
     result = run_shim(home, "list")
     assert result.returncode == 1
     assert "No actions found" in result.stderr
@@ -204,8 +235,8 @@ def test_rebuild_action_map_refreshes_cache(tmp_path):
         tmp_path, {"erpclaw": {"actions": ["add-customer"]}},
     )
     run_shim(home, "list")
-    # Add another skill after cache built
-    new_skill = home / "skills" / "erpclaw-new"
+    # Add another skill after cache built (path: workspace/skills, post-v4.1.6)
+    new_skill = home / "workspace" / "skills" / "erpclaw-new"
     new_skill.mkdir()
     (new_skill / "SKILL.md").write_text(
         "---\nname: erpclaw-new\nversion: 1.0\n---\n"
@@ -235,8 +266,8 @@ def test_first_wins_on_duplicate_action(tmp_path):
 def test_deeply_nested_skill_dirs_ignored(tmp_path):
     """Non-directory entries under skills/ are skipped safely."""
     home = make_mock_home(tmp_path, {"erpclaw": {"actions": ["add-customer"]}})
-    # Drop a stray file under skills/
-    (home / "skills" / "README.md").write_text("some doc")
+    # Drop a stray file under workspace/skills/ (post-v4.1.6 layout)
+    (home / "workspace" / "skills" / "README.md").write_text("some doc")
     result = run_shim(home, "list")
     assert result.returncode == 0
     assert "add-customer" in result.stdout
