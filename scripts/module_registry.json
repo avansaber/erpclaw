@@ -431,15 +431,15 @@
       "version": "1.0.0"
     },
     "erpclaw": {
-      "action_count": 478,
+      "action_count": 483,
       "category": "core",
       "description": "Complete ERP foundation: accounting, inventory, selling, buying, billing, payments, tax, journals, GL, HR, payroll, reports, and setup. 475 actions across 14 domains.",
       "display_name": "ERPClaw Core",
       "files_sha256": {
-        "CHANGELOG.md": "3049ac56f5610affd41f1326aa78a3880379bf22a77e3d34ec98f54f73cba32a",
+        "CHANGELOG.md": "2d099a364f62be3522fe0a0ac45b6b523b153aa52318addf212d4a10b0b9a9bc",
         "LICENSE.txt": "7bb0c0eb1db8b40884cd154315e459fadacd2bff10190df3516639282608ed0c",
         "README.md": "4528887ad70e9c9b1beaddfc2de966464bdf7e201de588a5879987fb3e83623e",
-        "SKILL.md": "9eec21c877087abcf4be9c6ad1c5abe9f59abb1d9df2f265ed447186ef6cb15c",
+        "SKILL.md": "ae97aed5b8242859c54f19551b79e83832f64eed0384fe0667db6ba99732e159",
         "UI.yaml": "7c7062cdbc7877a3daa5b22dc6b4e296ce0b1dad7cdf615fd0ddcf0f278b581c",
         "scripts/db_query.py": "101a31e61a1106cd88371bcda41ad289b9bad50349b78fd1bb178d9347faa4ae",
         "scripts/erpclaw-accounting-adv/consolidation.py": "724f2e78bd8818f21375b18d23e519762bcd399733b0771c70daaa27a67df846",
@@ -469,13 +469,13 @@
         "scripts/erpclaw-payments/db_query.py": "93518e8c65cac48b07fbb4ec175ffa0e0cf9dcfff0f1a3c63a1a404ac5316a46",
         "scripts/erpclaw-payroll/db_query.py": "44022c4e57ecd709c3dfe8e00cd6feb040398f95a2bfc780ac1966daa8035241",
         "scripts/erpclaw-reports/db_query.py": "c7c2673a56bc3d47e5e8098e355b0a2cbf06f8abc60649572f443c45d9cb39d3",
-        "scripts/erpclaw-selling/db_query.py": "be3b1036e8a11d81a6cd31f590618e2b95d2d2100c98bcb9fb7945a90de3cafc",
+        "scripts/erpclaw-selling/db_query.py": "e65b781d793f0e19f474b4cbff9b9ff9adddf93e9e4bc9488e695d2ab67a9c5b",
         "scripts/erpclaw-setup/assets/currencies.json": "2083f522591709fca496a3dda1fb3e655b0a22afb35ec3d8ad699aed7767a161",
         "scripts/erpclaw-setup/assets/default_payment_terms.json": "a7756c0d203cad525e9b5db7f6ad768cedba2308154fcb448df42b21f733d80d",
         "scripts/erpclaw-setup/assets/default_uom.json": "baca02db1311acee08226ec22dc2ec98f2306c30f7cfa6cd46840b0711b83259",
         "scripts/erpclaw-setup/assets/us_gaap.json": "8f894ae401adeedafe2840213553b9aed2df0b00409619fe96440f6460862670",
         "scripts/erpclaw-setup/db_query.py": "f340e0abb0ac41d218c226e5889cd4940841d6d6fc6f19327e6cba0fecb62294",
-        "scripts/erpclaw-setup/init_schema.py": "71abf885dd87a659dd855b5b9cdf5cb97939f1fa24284d0b97c21b5c6bd938b6",
+        "scripts/erpclaw-setup/init_schema.py": "ca33c6be5bbe6337e68d845c8c7454f09e6706a071b84d46a9c94400a7ccba59",
         "scripts/erpclaw-setup/lib/erpclaw_lib/__init__.py": "a8461da36a0e441b06a747566bc8464371237bb35d0ca9a3940d90d74b5c17e9",
         "scripts/erpclaw-setup/lib/erpclaw_lib/args.py": "2c8da57e7c7307ae19fc011fc44e06915e431dd5a24f18e45f2a3e877b5294eb",
         "scripts/erpclaw-setup/lib/erpclaw_lib/audit.py": "1991438ca7c3b6acb62919f27b7467815825928909ed4f4961ac66b677685ad6",
@@ -516,6 +516,7 @@
         "scripts/erpclaw-setup/lib/erpclaw_lib/vendor/pypika/terms.py": "94f80937d983aeb8d2b5155ea3e711d0b4a5183c9b6a9155c4a3358f58961123",
         "scripts/erpclaw-setup/lib/erpclaw_lib/vendor/pypika/utils.py": "17351955c5cb611b4685adb1b650eff455ab111fdda14ea1f229149a9851cec8",
         "scripts/erpclaw-setup/migrations/001_registry_tables.py": "3290b37faa1daac03990979a3b316a8cf201cab4f14a947a7cb2e3c617ca0602",
+        "scripts/erpclaw-setup/migrations/002_credit_dunning.py": "2725b7e3f2c1732302d79bd7f3249507f67fabbb65c1a4ebee89823639dc753c",
         "scripts/erpclaw-tax/db_query.py": "e0d8fc062dcb1b842db97ed93e5f1f133db62bb8c7b8436ae038edca56e915b6",
         "scripts/install_bin.py": "b1cf400544d5600228be8550da25980ca011743f16da5b81b12b8276aa5cbbab",
         "scripts/module_manager.py": "2ef0a8791c7adf4d76775b8e1d84047ab2f43c7f37ea9d3e344092e00a22e2c9",
@@ -544,7 +545,7 @@
         "user",
         "rbac"
       ],
-      "version": "4.2.3"
+      "version": "4.3.0"
     },
     "erpclaw-alerts": {
       "action_count": 14,
@@ -1858,8 +1859,8 @@
       "version": "1.0.0"
     }
   },
-  "registry_version": 25,
-  "signed_at": "2026-05-11T01:14:28Z",
+  "registry_version": 26,
+  "signed_at": "2026-05-11T05:03:23Z",
   "total_actions": 3126,
-  "version": "4.2.3"
+  "version": "4.3.0"
 }

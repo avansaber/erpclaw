@@ -2,6 +2,34 @@
 
 All notable changes to the ERPClaw foundation skill.
 
+## [4.3.0] — 2026-05-11
+
+Customer credit limit + dunning levels (ROADMAP S1). B2B AR depth: enforce credit limits at invoice submit and run automated dunning escalation cycles.
+
+### Added
+- 5 new actions in `erpclaw-selling`:
+  - `check-credit-limit --customer-id X` — returns credit_limit, outstanding_ar, available_credit, credit_status (read-only).
+  - `place-customer-on-hold --customer-id X --credit-status on_hold|suspended|active [--reason ...]` — flip credit status. Audited.
+  - `add-dunning-level --company-id X --level N --days-overdue D --dunning-action email|hold|call|suspend` — configure escalation policy.
+  - `run-dunning-cycle --company-id X [--run-date Y-M-D]` — match overdue invoices to highest-applicable dunning level, take action (hold/suspend update credit_status; email/call record-only until M8 ships SMTP).
+  - `list-dunning-runs [--customer-id X] [--company-id Y]` — history.
+- Invoice-submit credit policy hook in `submit-sales-invoice`: blocks suspended customers, blocks on-hold customers, enforces credit_limit when configured. Outstanding AR computed from `sales_invoice.outstanding_amount` of submitted, non-return invoices.
+
+### Schema
+- `customer.credit_status TEXT NOT NULL DEFAULT 'active' CHECK(credit_status IN ('active','on_hold','suspended'))`.
+- `dunning_level` table: id, company_id, level (1-10), days_overdue, action, template_id, description, UNIQUE(company_id, level).
+- `dunning_run` table: id, company_id, run_date, customer_id, level, invoice_ids_json, action_taken, status, generated_email_id, notes.
+- Migration `002_credit_dunning.py` brings existing installs up to date. Idempotent.
+- `customer.credit_limit` already existed (since pre-v4.0); no change there.
+
+### Tests
+- `source/erpclaw/scripts/erpclaw-selling/tests/test_credit_dunning.py` — 17 tests covering check-credit-limit, place-customer-on-hold, add-dunning-level, and the invoice-submit policy hook. All pass.
+
+### Notes
+- The email dunning action is record-only at this version; actual SMTP send ships with ROADMAP M8 (Email marketing real sender). When M8 lands, run-dunning-cycle will trigger real emails for level=email rows.
+- The `call` action is also record-only by design — it logs that a human-call escalation is due; no auto-dialer.
+- credit_status is a separate concept from customer.status: status governs "is this customer still ours" (active / inactive / blocked); credit_status governs "are we currently extending credit" (active / on_hold / suspended). Both must be active for a new invoice to submit.
+
 ## [4.2.3] — 2026-05-10
 
 Operational follow-up to the v4.2.x publish saga. Three small fixes from `internal/PENDING_WORK_PLAN_2026-05-10.md` Tier 1.

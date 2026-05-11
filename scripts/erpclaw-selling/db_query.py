@@ -67,6 +67,8 @@ _t_delivery_note = Table("delivery_note")
 _t_delivery_note_item = Table("delivery_note_item")
 _t_sales_invoice = Table("sales_invoice")
 _t_sales_invoice_item = Table("sales_invoice_item")
+_t_dunning_level = Table("dunning_level")
+_t_dunning_run = Table("dunning_run")
 _t_sales_partner = Table("sales_partner")
 _t_recurring_template = Table("recurring_invoice_template")
 _t_recurring_template_item = Table("recurring_invoice_template_item")
@@ -2276,6 +2278,10 @@ def submit_sales_invoice(conn, args):
     if cust["status"] != "active":
         err(f"Customer is '{cust['status']}', cannot submit invoice")
 
+    # Credit-limit + credit_status policy (ROADMAP S1). Blocks suspended /
+    # on-hold customers and enforces credit_limit when configured.
+    _enforce_credit_policy(conn, customer_id, abs(grand_total))
+
     # Verify items
     siiq = (Q.from_(_t_sales_invoice_item).select(_t_sales_invoice_item.star)
             .where(_t_sales_invoice_item.sales_invoice_id == P()))
@@ -2557,6 +2563,323 @@ def submit_sales_invoice(conn, args):
          "gl_entries_created": len(gl_ids) + len(cogs_gl_ids),
          "sle_entries_created": len(sle_ids),
          "update_stock": bool(update_stock)})
+
+
+# ---------------------------------------------------------------------------
+# Credit limit + dunning (ROADMAP S1)
+# ---------------------------------------------------------------------------
+
+def _customer_outstanding_ar(conn, customer_id: str) -> Decimal:
+    """Sum of unpaid sales_invoice grand_total for a customer.
+
+    Counts only submitted, non-cancelled invoices. Excludes credit notes
+    (is_return=1) since they reduce AR rather than add to it — the grand_total
+    on a credit note is already signed negative or stored as negative, and
+    summing all rows would over-count. We sum is_return=0 invoices and
+    subtract is_return=1 absolute values.
+    """
+    q_owed = (
+        Q.from_(_t_sales_invoice)
+         .select(fn.Coalesce(DecimalSum(_t_sales_invoice.outstanding_amount), 0))
+         .where(_t_sales_invoice.customer_id == P())
+         .where(_t_sales_invoice.status == ValueWrapper("submitted"))
+         .where(_t_sales_invoice.is_return == ValueWrapper(0))
+    )
+    row = conn.execute(q_owed.get_sql(), (customer_id,)).fetchone()
+    return to_decimal(row[0] if row and row[0] is not None else "0")
+
+
+def _enforce_credit_policy(conn, customer_id: str, new_invoice_amount: Decimal):
+    """Invoice-submit hook (T1.4 hook target). Raises via err() if the customer
+    is on-hold/suspended OR if the new invoice would exceed credit_limit.
+
+    Policy:
+    - credit_status='suspended': block (cannot extend any new credit)
+    - credit_status='on_hold':   block new submissions, but existing submitted
+                                  invoices remain payable
+    - credit_status='active' + credit_limit > 0:
+        new invoice + current outstanding must be <= credit_limit
+    - credit_status='active' + credit_limit unset/zero: no limit enforced
+    """
+    cust = conn.execute(
+        Q.from_(_t_customer).select(_t_customer.star)
+         .where(_t_customer.id == P()).get_sql(),
+        (customer_id,),
+    ).fetchone()
+    if not cust:
+        return  # caller already validated existence
+    cust_d = row_to_dict(cust)
+    cstatus = cust_d.get("credit_status") or "active"
+    if cstatus == "suspended":
+        err(f"Customer credit is suspended; cannot submit new invoice")
+    if cstatus == "on_hold":
+        err(f"Customer credit is on hold; cannot submit new invoice. Use --user-confirmed override or place-customer-on-hold to release.")
+    credit_limit_raw = cust_d.get("credit_limit") or "0"
+    try:
+        credit_limit = to_decimal(credit_limit_raw)
+    except (InvalidOperation, TypeError):
+        credit_limit = Decimal("0")
+    if credit_limit <= 0:
+        return  # No limit configured; pass
+    outstanding = _customer_outstanding_ar(conn, customer_id)
+    projected = outstanding + abs(new_invoice_amount)
+    if projected > credit_limit:
+        err(
+            f"Credit limit exceeded: outstanding={outstanding} + new={new_invoice_amount} "
+            f"= {projected} > limit={credit_limit}. Raise credit limit, collect on "
+            f"outstanding invoices, or place customer on hold to acknowledge."
+        )
+
+
+def check_credit_limit(conn, args):
+    """Compute available credit for a customer.
+
+    Returns: customer_id, credit_limit, outstanding_ar, available_credit,
+    credit_status. Read-only; safe to call without --user-confirmed.
+    """
+    if not args.customer_id:
+        err("--customer-id is required")
+    cust = conn.execute(
+        Q.from_(_t_customer).select(_t_customer.star)
+         .where(_t_customer.id == P()).get_sql(),
+        (args.customer_id,),
+    ).fetchone()
+    if not cust:
+        err(f"Customer {args.customer_id} not found")
+    cust_d = row_to_dict(cust)
+    credit_limit_raw = cust_d.get("credit_limit") or "0"
+    credit_limit = to_decimal(credit_limit_raw)
+    outstanding = _customer_outstanding_ar(conn, args.customer_id)
+    available = credit_limit - outstanding if credit_limit > 0 else None
+    ok({
+        "customer_id": args.customer_id,
+        "name": cust_d.get("name"),
+        "credit_limit": str(credit_limit),
+        "credit_status": cust_d.get("credit_status") or "active",
+        "outstanding_ar": str(outstanding),
+        "available_credit": str(available) if available is not None else None,
+        "limit_enforced": credit_limit > 0,
+    })
+
+
+def place_customer_on_hold(conn, args):
+    """Set customer.credit_status to on_hold or suspended. Reversal: call again
+    with --status active. Writes an audit log entry."""
+    if not args.customer_id:
+        err("--customer-id is required")
+    target = args.credit_status or "on_hold"
+    valid = ("active", "on_hold", "suspended")
+    if target not in valid:
+        err(f"--credit-status must be one of: {', '.join(valid)}")
+    cust = conn.execute(
+        Q.from_(_t_customer).select(_t_customer.star)
+         .where(_t_customer.id == P()).get_sql(),
+        (args.customer_id,),
+    ).fetchone()
+    if not cust:
+        err(f"Customer {args.customer_id} not found")
+    prev = (row_to_dict(cust).get("credit_status") or "active")
+    conn.execute(
+        Q.update(_t_customer)
+         .set(_t_customer.credit_status, P())
+         .set(_t_customer.updated_at, ValueWrapper("CURRENT_TIMESTAMP"))
+         .where(_t_customer.id == P())
+         .get_sql(),
+        (target, args.customer_id),
+    )
+    conn.commit()
+    audit(conn, "erpclaw-selling", "place-customer-on-hold", "customer",
+          args.customer_id, old_values={"credit_status": prev},
+          new_values={"credit_status": target},
+          description=(args.reason or ""))
+    ok({"customer_id": args.customer_id, "credit_status": target, "previous": prev})
+
+
+def add_dunning_level(conn, args):
+    """Configure a dunning escalation level: at N days overdue, take action."""
+    if not args.company_id:
+        err("--company-id is required")
+    if args.level is None:
+        err("--level is required (integer 1-10)")
+    if args.days_overdue is None:
+        err("--days-overdue is required")
+    if not args.dunning_action:
+        err("--dunning-action is required (email | hold | call | suspend)")
+    try:
+        level = int(args.level)
+    except (TypeError, ValueError):
+        err("--level must be an integer")
+    if not (1 <= level <= 10):
+        err("--level must be between 1 and 10")
+    try:
+        days = int(args.days_overdue)
+    except (TypeError, ValueError):
+        err("--days-overdue must be a non-negative integer")
+    if days < 0:
+        err("--days-overdue must be >= 0")
+    valid_actions = ("email", "hold", "call", "suspend")
+    if args.dunning_action not in valid_actions:
+        err(f"--dunning-action must be one of: {', '.join(valid_actions)}")
+    dl_id = str(uuid.uuid4())
+    try:
+        conn.execute(
+            Q.into(_t_dunning_level)
+             .columns("id", "company_id", "level", "days_overdue", "action",
+                      "template_id", "description")
+             .insert(P(), P(), P(), P(), P(), P(), P())
+             .get_sql(),
+            (dl_id, args.company_id, level, days, args.dunning_action,
+             args.template_id, args.description),
+        )
+    except sqlite3.IntegrityError as e:
+        err(f"Dunning level {level} already exists for this company (or constraint failed): {e}")
+    conn.commit()
+    audit(conn, "erpclaw-selling", "add-dunning-level", "dunning_level", dl_id,
+          new_values={"level": level, "days_overdue": days,
+                      "action": args.dunning_action})
+    ok({"id": dl_id, "company_id": args.company_id, "level": level,
+        "days_overdue": days, "action": args.dunning_action})
+
+
+def run_dunning_cycle(conn, args):
+    """Find overdue invoices, match each to highest applicable dunning level,
+    take the configured action (record-only for 'email' — we don't send mail
+    yet; 'hold'/'suspend' update customer.credit_status; 'call' just logs).
+
+    Returns: counts of (overdue_invoices, customers_affected, actions_by_type).
+    Idempotent within a date window: if a dunning_run for (customer, level)
+    already exists today, skip to avoid duplicate escalations.
+    """
+    if not args.company_id:
+        err("--company-id is required")
+    today = (args.run_date or datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+
+    # Load dunning levels for this company, ordered by days_overdue DESC
+    # so the most-aged threshold wins.
+    levels = conn.execute(
+        Q.from_(_t_dunning_level).select(_t_dunning_level.star)
+         .where(_t_dunning_level.company_id == P())
+         .orderby("days_overdue", order=Order.desc)
+         .get_sql(),
+        (args.company_id,),
+    ).fetchall()
+    if not levels:
+        ok({"message": "No dunning levels configured for this company",
+            "company_id": args.company_id, "run_date": today})
+        return
+    levels = [row_to_dict(l) for l in levels]
+
+    # Find overdue invoices for this company
+    today_d = datetime.strptime(today, "%Y-%m-%d").date()
+    invoices = conn.execute(
+        Q.from_(_t_sales_invoice).select(_t_sales_invoice.star)
+         .where(_t_sales_invoice.company_id == P())
+         .where(_t_sales_invoice.status == ValueWrapper("submitted"))
+         .where(_t_sales_invoice.is_return == ValueWrapper(0))
+         .where(_t_sales_invoice.outstanding_amount > ValueWrapper("0"))
+         .where(_t_sales_invoice.due_date < ValueWrapper(today))
+         .get_sql(),
+        (args.company_id,),
+    ).fetchall()
+
+    # Bucket by customer + match to highest level
+    by_customer = {}
+    for inv in invoices:
+        inv_d = row_to_dict(inv)
+        try:
+            due = datetime.strptime(inv_d["due_date"], "%Y-%m-%d").date()
+        except (ValueError, TypeError, KeyError):
+            continue
+        days_late = (today_d - due).days
+        # find highest level whose days_overdue <= days_late
+        matched = None
+        for l in levels:
+            if l["days_overdue"] <= days_late:
+                matched = l
+                break
+        if not matched:
+            continue
+        by_customer.setdefault(inv_d["customer_id"], {"level": matched, "invoice_ids": []})
+        # If a customer has invoices at different ages, the highest level wins
+        if matched["days_overdue"] > by_customer[inv_d["customer_id"]]["level"]["days_overdue"]:
+            by_customer[inv_d["customer_id"]]["level"] = matched
+        by_customer[inv_d["customer_id"]]["invoice_ids"].append(inv_d["id"])
+
+    actions_summary = {"email": 0, "hold": 0, "call": 0, "suspend": 0, "skipped": 0}
+    runs_created = []
+    for cust_id, info in by_customer.items():
+        lvl = info["level"]
+        # Skip if a run for this (customer, level) already exists today
+        existing = conn.execute(
+            Q.from_(_t_dunning_run).select(_t_dunning_run.id)
+             .where(_t_dunning_run.customer_id == P())
+             .where(_t_dunning_run.level == P())
+             .where(_t_dunning_run.run_date == P())
+             .get_sql(),
+            (cust_id, lvl["level"], today),
+        ).fetchone()
+        if existing:
+            actions_summary["skipped"] += 1
+            continue
+        # Apply action
+        if lvl["action"] == "hold":
+            conn.execute(
+                Q.update(_t_customer)
+                 .set(_t_customer.credit_status, ValueWrapper("on_hold"))
+                 .where(_t_customer.id == P()).get_sql(),
+                (cust_id,),
+            )
+        elif lvl["action"] == "suspend":
+            conn.execute(
+                Q.update(_t_customer)
+                 .set(_t_customer.credit_status, ValueWrapper("suspended"))
+                 .where(_t_customer.id == P()).get_sql(),
+                (cust_id,),
+            )
+        # 'email' and 'call' are record-only at this phase; email sender
+        # integration ships in a follow-up (ROADMAP M8).
+        run_id = str(uuid.uuid4())
+        conn.execute(
+            Q.into(_t_dunning_run)
+             .columns("id", "company_id", "run_date", "customer_id", "level",
+                      "invoice_ids_json", "action_taken", "status", "notes")
+             .insert(P(), P(), P(), P(), P(), P(), P(), P(), P())
+             .get_sql(),
+            (run_id, args.company_id, today, cust_id, lvl["level"],
+             json.dumps(info["invoice_ids"]), lvl["action"], "completed",
+             f"{len(info['invoice_ids'])} overdue invoice(s)"),
+        )
+        actions_summary[lvl["action"]] += 1
+        runs_created.append(run_id)
+    conn.commit()
+    ok({
+        "run_date": today,
+        "company_id": args.company_id,
+        "customers_processed": len(by_customer),
+        "runs_created": len(runs_created),
+        "actions": actions_summary,
+        "run_ids": runs_created,
+    })
+
+
+def list_dunning_runs(conn, args):
+    """List dunning_run history, optionally filtered by customer + date range."""
+    q = Q.from_(_t_dunning_run).select(_t_dunning_run.star)
+    bound = []
+    if args.customer_id:
+        q = q.where(_t_dunning_run.customer_id == P())
+        bound.append(args.customer_id)
+    if args.company_id:
+        q = q.where(_t_dunning_run.company_id == P())
+        bound.append(args.company_id)
+    q = q.orderby("run_date", order=Order.desc).orderby("created_at", order=Order.desc)
+    if args.limit:
+        try:
+            q = q.limit(int(args.limit))
+        except (TypeError, ValueError):
+            pass
+    rows = conn.execute(q.get_sql(), tuple(bound)).fetchall()
+    ok({"runs": [row_to_dict(r) for r in rows]})
 
 
 def _update_so_invoice_status(conn, sales_order_id: str):
@@ -4812,6 +5135,11 @@ ACTIONS = {
     "get-sales-invoice": get_sales_invoice,
     "list-sales-invoices": list_sales_invoices,
     "submit-sales-invoice": submit_sales_invoice,
+    "check-credit-limit": check_credit_limit,
+    "place-customer-on-hold": place_customer_on_hold,
+    "add-dunning-level": add_dunning_level,
+    "run-dunning-cycle": run_dunning_cycle,
+    "list-dunning-runs": list_dunning_runs,
     "cancel-sales-invoice": cancel_sales_invoice,
     "create-credit-note": create_credit_note,
     "list-credit-notes": list_credit_notes,
@@ -4855,10 +5183,18 @@ def main():
     parser.add_argument("--customer-group")
     parser.add_argument("--payment-terms-id")
     parser.add_argument("--credit-limit")
+    parser.add_argument("--credit-status")
     parser.add_argument("--tax-id")
     parser.add_argument("--exempt-from-sales-tax")
     parser.add_argument("--primary-address")
     parser.add_argument("--primary-contact")
+
+    # Dunning / credit policy fields (S1).
+    # --template-id, --description, --limit already declared elsewhere; reused.
+    parser.add_argument("--level", type=int)
+    parser.add_argument("--days-overdue", type=int)
+    parser.add_argument("--dunning-action", dest="dunning_action")
+    parser.add_argument("--run-date")
 
     # Common fields
     parser.add_argument("--name")

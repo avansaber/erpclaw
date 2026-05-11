@@ -770,6 +770,8 @@ CREATE TABLE IF NOT EXISTS customer (
     default_price_list_id TEXT,
     payment_terms_id TEXT REFERENCES payment_terms(id) ON DELETE RESTRICT,
     credit_limit    TEXT,
+    credit_status   TEXT NOT NULL DEFAULT 'active'
+                    CHECK(credit_status IN ('active','on_hold','suspended')),
     tax_id          TEXT,
     exempt_from_sales_tax INTEGER NOT NULL DEFAULT 0
                     CHECK(exempt_from_sales_tax IN (0,1)),
@@ -786,6 +788,43 @@ CREATE TABLE IF NOT EXISTS customer (
 CREATE INDEX IF NOT EXISTS idx_customer_status ON customer(status);
 CREATE INDEX IF NOT EXISTS idx_customer_company ON customer(company_id);
 CREATE INDEX IF NOT EXISTS idx_customer_group ON customer(customer_group);
+
+-- Credit / dunning escalation policy (ROADMAP S1). dunning_level rows define
+-- "at N days overdue, take action X"; dunning_run logs each invocation.
+CREATE TABLE IF NOT EXISTS dunning_level (
+    id              TEXT PRIMARY KEY,
+    company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE CASCADE,
+    level           INTEGER NOT NULL CHECK(level BETWEEN 1 AND 10),
+    days_overdue    INTEGER NOT NULL CHECK(days_overdue >= 0),
+    action          TEXT NOT NULL
+                    CHECK(action IN ('email','hold','call','suspend')),
+    template_id     TEXT,
+    description     TEXT,
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(company_id, level)
+);
+
+CREATE INDEX IF NOT EXISTS idx_dunning_level_company ON dunning_level(company_id);
+
+CREATE TABLE IF NOT EXISTS dunning_run (
+    id              TEXT PRIMARY KEY,
+    company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE CASCADE,
+    run_date        TEXT NOT NULL,
+    customer_id     TEXT NOT NULL REFERENCES customer(id) ON DELETE CASCADE,
+    level           INTEGER NOT NULL CHECK(level BETWEEN 1 AND 10),
+    invoice_ids_json TEXT NOT NULL DEFAULT '[]',
+    action_taken    TEXT NOT NULL
+                    CHECK(action_taken IN ('email','hold','call','suspend')),
+    status          TEXT NOT NULL DEFAULT 'completed'
+                    CHECK(status IN ('completed','failed','skipped')),
+    generated_email_id TEXT,
+    notes           TEXT,
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_dunning_run_customer ON dunning_run(customer_id);
+CREATE INDEX IF NOT EXISTS idx_dunning_run_date ON dunning_run(run_date);
 
 CREATE TABLE IF NOT EXISTS price_list (
     id              TEXT PRIMARY KEY,
