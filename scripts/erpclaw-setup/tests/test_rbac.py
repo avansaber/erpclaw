@@ -250,7 +250,6 @@ class TestRevokeRole:
 
 
 class TestSetPassword:
-    @pytest.mark.xfail(reason="BUG-005: erp_user table missing password_hash column")
     def test_set_password(self, conn):
         user = call_action(mod.add_user, conn, ns(
             name="pw_user", email="pw@t.com",

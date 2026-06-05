@@ -16,6 +16,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
@@ -257,8 +258,12 @@ def _load_registry(force_refresh=False):
         try:
             sig_bytes = _fetch_with_retry(REMOTE_SIGNATURE_URL, retries=1)
             sig = sig_bytes.decode("utf-8").strip()
-        except Exception:
-            pass
+        except Exception as e:
+            # Empty sig → downstream verify_registry_payload will fail and
+            # downgrade gracefully to an unsigned registry with _signature_warning.
+            # Logging the cause lets operators distinguish network flake from
+            # an intentionally-missing signature file.
+            print(f"WARN: signature fetch failed for {REMOTE_SIGNATURE_URL}: {e}", file=sys.stderr)
         try:
             data = _verify_registry_payload(raw, sig, label="remote")
         except _RegistrySignatureError as e:
@@ -943,37 +948,53 @@ def _install_module_inner(args, conn, modules_by_name, depth=0):
                 env=env,
             )
             if result.returncode != 0:
-                _mark_failed(conn, module_name, f"init_db.py failed: {result.stderr.strip()}")
-                err(f"init_db.py failed for {module_name}: {result.stderr.strip()}")
-            # Try to parse table count from output
-            if result.stdout:
-                try:
-                    init_result = json.loads(result.stdout)
-                    tables_created = init_result.get("tables_created", 0)
-                except json.JSONDecodeError:
-                    # Many init_db.py scripts print human-readable text, not JSON
-                    # Try to extract number from output like "Created 5 tables"
-                    import re as _re
-                    m = _re.search(r'(\d+)\s+tables?', result.stdout)
-                    if m:
-                        tables_created = int(m.group(1))
-            # If still 0, count module-specific tables directly from DB
-            if tables_created == 0:
-                try:
-                    data_db = os.path.expanduser("~/.openclaw/erpclaw/data.sqlite")
-                    if os.path.isfile(data_db):
-                        dconn = sqlite3.connect(data_db)
-                        prefix = module_name.replace("-", "_") + "_"
-                        cursor = dconn.execute(
-                            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE ?",
-                            (prefix + "%",))
-                        tables_created = cursor.fetchone()[0]
-                        dconn.close()
-                except Exception:
-                    pass
+                # init_db.py may write its summary to stderr (intentional in
+                # some modules, e.g. healthclaw) — fall back to stdout so the
+                # operator sees the actual cause, not just an empty error.
+                err_text = (result.stderr or "").strip() or (result.stdout or "").strip() or "(no output)"
+                _mark_failed(conn, module_name, f"init_db.py failed: {err_text}")
+                err(f"init_db.py failed for {module_name}: {err_text}")
         except subprocess.TimeoutExpired:
             _mark_failed(conn, module_name, "init_db.py timed out after 60s")
             err(f"init_db.py timed out for {module_name}")
+
+        # Authoritative table count: query the DB after init_db.py finishes.
+        # Parsing init_db.py output is unreliable across modules (some print to
+        # stderr, some use "Tables: N" rather than "N tables", JSON is rare),
+        # and the historical regex `(\d+)\s+tables?` silently missed
+        # healthclaw/constructclaw/foundation outputs — install_module would
+        # report tables_created=0 even when 59 tables were just created.
+        # Commit any pending registry writes first so the fresh connection
+        # below sees a consistent DB snapshot.
+        try:
+            conn.commit()
+        except sqlite3.Error:
+            pass
+        try:
+            data_db = os.path.expanduser("~/.openclaw/erpclaw/data.sqlite")
+            if os.path.isfile(data_db):
+                dconn = sqlite3.connect(data_db)
+                prefix = module_name.replace("-", "_") + "_"
+                cursor = dconn.execute(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE ?",
+                    (prefix + "%",))
+                tables_created = cursor.fetchone()[0]
+                dconn.close()
+        except sqlite3.Error as e:
+            # Surface the failure instead of burying it (this was a silent
+            # swallow in the prior implementation; install would report 0 with
+            # no indication anything went wrong).
+            print(f"WARN: install_module could not count {module_name} tables: {e}", file=sys.stderr)
+
+    # Apply the module's own migrations (P1 — additive/alter changes init_db can't make)
+    try:
+        applied_migs = _run_module_migrations(module_name, install_path)
+        if applied_migs:
+            print(f"  applied {len(applied_migs)} migration(s) for {module_name}: "
+                  f"{', '.join(applied_migs)}", file=sys.stderr)
+    except Exception as e:
+        _mark_failed(conn, module_name, f"module migration failed: {e}")
+        err(f"module migration failed for {module_name}: {e}")
 
     # Build action cache
     action_count = build_action_cache(conn, module_name, install_path)
@@ -1055,6 +1076,33 @@ def _publish_to_openclaw_skills(install_path, module_name):
         # Don't fail the whole install over this. Surface via the
         # returned None so callers + tests can react if they want.
         return None
+
+
+def _run_module_migrations(module_name, install_path):
+    """Run a module's own migrations/NNN_*.py (P1 — module schema evolution).
+
+    init_db.py is CREATE-TABLE-IF-NOT-EXISTS only, so it cannot alter an existing
+    table on upgrade. A module that needs to add a column / table to an installed
+    DB ships migrations/NNN_*.py; this applies the pending ones via the foundation
+    runner, recorded under the module's name in the shared ledger. No-op if the
+    module has no migrations/ dir. Returns the list of applied migration stems.
+    """
+    migrations_dir = os.path.join(install_path, "migrations")
+    if not os.path.isdir(migrations_dir):
+        return []
+    runner_path = os.path.join(SCRIPT_DIR, "erpclaw-setup", "migration_runner.py")
+    if not os.path.isfile(runner_path):
+        return []
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("migration_runner", runner_path)
+    runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+    data_db = os.path.expanduser("~/.openclaw/erpclaw/data.sqlite")
+    res = runner.run_pending(data_db, migrations_dir=migrations_dir, module_name=module_name)
+    if res.get("ok") is False:
+        raise RuntimeError(
+            f"module migration '{res['failed']}' failed for {module_name}: {res['error']}")
+    return res.get("applied", [])
 
 
 def _mark_failed(conn, module_name, error_msg):
@@ -1223,7 +1271,7 @@ def update_modules(args):
             failed.append({"module": module_name, "error": "git pull timed out"})
             continue
 
-        # Re-run init_db.py if it exists
+        # Re-run init_db.py if it exists (creates any NEW tables)
         init_db_path = os.path.join(install_path, "init_db.py")
         if os.path.isfile(init_db_path):
             try:
@@ -1233,6 +1281,18 @@ def update_modules(args):
                 )
             except subprocess.TimeoutExpired:
                 pass  # Non-fatal for updates
+
+        # Apply the module's pending migrations (P1 — the path that actually
+        # evolves an EXISTING table on upgrade; init_db re-run can't alter tables)
+        try:
+            applied_migs = _run_module_migrations(module_name, install_path)
+            if applied_migs:
+                print(f"  {module_name}: applied {len(applied_migs)} migration(s) "
+                      f"on update: {', '.join(applied_migs)}", file=sys.stderr)
+        except Exception as e:
+            _mark_failed(conn, module_name, f"module migration failed on update: {e}")
+            failed.append({"module": module_name, "error": f"module migration failed: {e}"})
+            continue
 
         # Read updated module.json
         module_json_path = os.path.join(install_path, "module.json")

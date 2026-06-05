@@ -33,11 +33,13 @@ try:
         create_perpetual_inventory_gl,
     )
     from erpclaw_lib.gl_posting import insert_gl_entries, reverse_gl_entries
+    from erpclaw_lib.voucher_types import canonical_voucher_type
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
+    from erpclaw_lib.custom_fields import store_from_arg, merge_into_response
     from erpclaw_lib.dependencies import check_required_tables
     from erpclaw_lib.query_helpers import resolve_company_id
-    from erpclaw_lib.query import Q, P, Table, Field, fn, DecimalSum, DecimalAbs, dynamic_update
+    from erpclaw_lib.query import Q, P, Table, Field, fn, DecimalSum, DecimalAbs, dynamic_update, line_order, latest_insert_order, now
     from erpclaw_lib.vendor.pypika import Order
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
     from erpclaw_lib.vendor.pypika.terms import LiteralValue, ValueWrapper
@@ -46,8 +48,8 @@ except ImportError:
     print(_json.dumps({"status": "error", "error": "ERPClaw foundation not installed. Install erpclaw first: clawhub install erpclaw", "suggestion": "clawhub install erpclaw"}))
     sys.exit(1)
 
-# Convenience alias for datetime('now') SQLite expression
-_NOW = LiteralValue("datetime('now')")
+# Convenience alias for CAST(CURRENT_TIMESTAMP AS TEXT) SQLite expression
+_NOW = now()
 
 REQUIRED_TABLES = ["company"]
 
@@ -156,11 +158,16 @@ def add_item(conn, args):
         sys.stderr.write(f"[erpclaw-inventory] {e}\n")
         err("Item creation failed — check for duplicates or invalid data")
 
+    cf_errors = store_from_arg(conn, "item", item_id, getattr(args, "custom_fields", None))
+    if cf_errors:
+        conn.rollback()
+        err("Custom field error: " + "; ".join(cf_errors))
+
     audit(conn, "erpclaw-inventory", "add-item", "item", item_id,
            new_values={"item_code": args.item_code, "item_name": args.item_name})
     conn.commit()
-    ok({"item_id": item_id, "item_code": args.item_code,
-         "item_name": args.item_name})
+    resp = {"item_id": item_id, "item_code": args.item_code, "item_name": args.item_name}
+    ok(merge_into_response(conn, "item", item_id, resp))
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +212,7 @@ def update_item(conn, args):
     if not updated_fields:
         err("No fields to update")
 
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = now()
     sql, params = dynamic_update("item", data, where={"id": args.item_id})
     conn.execute(sql, params)
 
@@ -265,7 +272,7 @@ def get_item(conn, args):
     data["stock_balances"] = stock_balances
     data["total_qty"] = str(round_currency(total_qty))
     data["total_stock_value"] = str(round_currency(total_value))
-    ok(data)
+    ok(merge_into_response(conn, "item", item["id"], data))
 
 
 # ---------------------------------------------------------------------------
@@ -532,7 +539,7 @@ def update_warehouse(conn, args):
     if not updated_fields:
         err("No fields to update")
 
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = now()
     sql, params = dynamic_update("warehouse", data, where={"id": args.warehouse_id})
     conn.execute(sql, params)
 
@@ -757,7 +764,7 @@ def get_stock_entry(conn, args):
                .left_join(i).on(i.id == sei.item_id)
                .select(sei.star, i.item_code, i.item_name)
                .where(sei.stock_entry_id == P())
-               .orderby(sei.field("rowid")))
+               .orderby(line_order(sei)))
     items = conn.execute(items_q.get_sql(), (args.stock_entry_id,)).fetchall()
     data["items"] = [row_to_dict(r) for r in items]
     ok(data)
@@ -866,7 +873,7 @@ def submit_stock_entry(conn, args):
     sei_t = Table("stock_entry_item")
     sei_q = (Q.from_(sei_t).select(sei_t.star)
              .where(sei_t.stock_entry_id == P())
-             .orderby(Field("rowid")))
+             .orderby(line_order()))
     items = conn.execute(sei_q.get_sql(), (args.stock_entry_id,)).fetchall()
     if not items:
         err("Stock entry has no items")
@@ -1003,7 +1010,7 @@ def submit_stock_entry(conn, args):
 
     # Update status
     conn.execute(
-        "UPDATE stock_entry SET status = 'submitted', updated_at = datetime('now') WHERE id = ?",
+        "UPDATE stock_entry SET status = 'submitted', updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?",
         (args.stock_entry_id,),
     )
 
@@ -1062,7 +1069,7 @@ def cancel_stock_entry(conn, args):
 
     # Update status
     conn.execute(
-        "UPDATE stock_entry SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?",
+        "UPDATE stock_entry SET status = 'cancelled', updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?",
         (args.stock_entry_id,),
     )
 
@@ -1083,6 +1090,10 @@ def create_stock_ledger_entries(conn, args):
     """Cross-skill: create SLE entries (called by selling/buying)."""
     if not args.voucher_type:
         err("--voucher-type is required")
+    # FINDING-006: canonicalize the doctype voucher_type at the gateway boundary
+    # so stock_ledger_entry.voucher_type is stored snake_case (a label like
+    # "Delivery Note" would otherwise break every downstream filter).
+    voucher_type = canonical_voucher_type(args.voucher_type)
     if not args.voucher_id:
         err("--voucher-id is required")
     if not args.posting_date:
@@ -1105,7 +1116,7 @@ def create_stock_ledger_entries(conn, args):
     try:
         sle_ids = insert_sle_entries(
             conn, entries,
-            voucher_type=args.voucher_type,
+            voucher_type=voucher_type,
             voucher_id=args.voucher_id,
             posting_date=args.posting_date,
             company_id=args.company_id,
@@ -1116,7 +1127,7 @@ def create_stock_ledger_entries(conn, args):
 
     audit(conn, "erpclaw-inventory", "create-stock-ledger-entries", "stock_ledger_entry",
            args.voucher_id,
-           new_values={"voucher_type": args.voucher_type,
+           new_values={"voucher_type": voucher_type,
                        "sle_count": len(sle_ids)})
     conn.commit()
     ok({"sle_ids": sle_ids, "count": len(sle_ids)})
@@ -1130,6 +1141,9 @@ def reverse_stock_ledger_entries(conn, args):
     """Cross-skill: reverse SLE entries (called by selling/buying)."""
     if not args.voucher_type:
         err("--voucher-type is required")
+    # FINDING-006: normalize so the reversal lookup matches the canonical
+    # voucher_type the SLE rows were stored under.
+    voucher_type = canonical_voucher_type(args.voucher_type)
     if not args.voucher_id:
         err("--voucher-id is required")
     if not args.posting_date:
@@ -1138,7 +1152,7 @@ def reverse_stock_ledger_entries(conn, args):
     try:
         reversal_ids = reverse_sle_entries(
             conn,
-            voucher_type=args.voucher_type,
+            voucher_type=voucher_type,
             voucher_id=args.voucher_id,
             posting_date=args.posting_date,
         )
@@ -1148,7 +1162,7 @@ def reverse_stock_ledger_entries(conn, args):
 
     audit(conn, "erpclaw-inventory", "reverse-stock-ledger-entries", "stock_ledger_entry",
            args.voucher_id,
-           new_values={"voucher_type": args.voucher_type,
+           new_values={"voucher_type": voucher_type,
                        "reversal_count": len(reversal_ids)})
     conn.commit()
     ok({"reversal_ids": reversal_ids, "count": len(reversal_ids)})
@@ -1202,7 +1216,7 @@ def stock_balance_report(conn, args):
                    (SELECT valuation_rate FROM stock_ledger_entry s2
                     WHERE s2.item_id = sle.item_id AND s2.warehouse_id = sle.warehouse_id
                       AND s2.is_cancelled = 0
-                    ORDER BY s2.rowid DESC LIMIT 1),
+                    ORDER BY {latest_insert_order("s2.")} LIMIT 1),
                    '0'
                ) AS valuation_rate
            FROM stock_ledger_entry sle
@@ -1583,10 +1597,10 @@ def get_item_price(conn, args):
     rows = conn.execute(
         """SELECT * FROM item_price
            WHERE item_id = ? AND price_list_id = ?
-             AND min_qty + 0 <= ? + 0
+             AND CAST(min_qty AS NUMERIC) <= CAST(? AS NUMERIC)
              AND (valid_from IS NULL OR valid_from <= ?)
              AND (valid_to IS NULL OR valid_to >= ?)
-           ORDER BY min_qty + 0 DESC
+           ORDER BY CAST(min_qty AS NUMERIC) DESC
            LIMIT 1""",
         (args.item_id, args.price_list_id, str(qty), today, today),
     ).fetchone()
@@ -1850,7 +1864,7 @@ def submit_stock_reconciliation(conn, args):
 
     # Update status
     conn.execute(
-        "UPDATE stock_reconciliation SET status = 'submitted', updated_at = datetime('now') WHERE id = ?",
+        "UPDATE stock_reconciliation SET status = 'submitted', updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?",
         (args.stock_reconciliation_id,),
     )
 
@@ -1952,7 +1966,7 @@ def revalue_stock(conn, args):
     # --- Single atomic transaction ---
 
     # 1. Insert SLE with actual_qty=0 but new valuation and value difference
-    # Uses datetime('now') as LiteralValue and mixed literal/param values
+    # Uses CAST(CURRENT_TIMESTAMP AS TEXT) as LiteralValue and mixed literal/param values
     # Kept as raw SQL for clarity with the mixed NULL/literal/param pattern
     conn.execute(
         """
@@ -1963,7 +1977,7 @@ def revalue_stock(conn, args):
             voucher_type, voucher_id, batch_id, serial_number,
             incoming_rate, is_cancelled, fiscal_year, created_at
         ) VALUES (?, ?, NULL, ?, ?, '0', ?, ?, ?, ?, 'stock_revaluation', ?,
-                  NULL, NULL, '0', 0, ?, datetime('now'))
+                  NULL, NULL, '0', 0, ?, CAST(CURRENT_TIMESTAMP AS TEXT))
         """,
         (
             sle_id, posting_date, item_id, warehouse_id,
@@ -2049,14 +2063,14 @@ def revalue_stock(conn, args):
                 err(f"GL posting failed: {e}")
 
     # 3. Insert stock_revaluation record
-    # Uses datetime('now') for created_at and updated_at — kept as raw SQL
+    # Uses CAST(CURRENT_TIMESTAMP AS TEXT) for created_at and updated_at — kept as raw SQL
     conn.execute(
         """INSERT INTO stock_revaluation (
             id, naming_series, company_id, item_id, warehouse_id,
             posting_date, current_qty, old_rate, new_rate,
             adjustment_amount, reason, status, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted',
-                  datetime('now'), datetime('now'))""",
+                  CAST(CURRENT_TIMESTAMP AS TEXT), CAST(CURRENT_TIMESTAMP AS TEXT))""",
         (
             reval_id, naming, company_id, item_id, warehouse_id,
             posting_date,
@@ -2123,9 +2137,10 @@ def list_stock_revaluations(conn, args):
 
     ok({
         "revaluations": [row_to_dict(r) for r in rows],
-        "total": total,
+        "total_count": total,
         "limit": limit,
         "offset": offset,
+        "has_more": offset + limit < total,
     })
 
 
@@ -2220,7 +2235,7 @@ def cancel_stock_revaluation(conn, args):
 
     # Update status
     conn.execute(
-        "UPDATE stock_revaluation SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?",
+        "UPDATE stock_revaluation SET status = 'cancelled', updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?",
         (reval_id,),
     )
 
@@ -3013,6 +3028,8 @@ def main():
     parser.add_argument("--to-date")
     parser.add_argument("--limit", default="20")
     parser.add_argument("--offset", default="0")
+    parser.add_argument("--custom-fields", default=None,
+                        help='User-defined fields as a JSON object, e.g. \'{"hs_code": "8471"}\'')
 
     args, unknown = parser.parse_known_args()
     check_unknown_args(parser, unknown)

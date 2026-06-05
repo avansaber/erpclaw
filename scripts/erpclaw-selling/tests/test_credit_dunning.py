@@ -8,8 +8,11 @@ Covers:
   - invoice-submit credit policy hook (block on suspended/on_hold/over-limit)
 """
 import json
+import uuid
 import pytest
 from decimal import Decimal
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 from selling_helpers import (
     call_action, ns, is_error, is_ok, load_db_query,
     seed_company, seed_customer,
@@ -215,3 +218,159 @@ class TestCreditPolicyHook:
         # 1000 new + 0 outstanding > 500 limit → block
         with pytest.raises(SystemExit):
             mod._enforce_credit_policy(conn, env["customer"], Decimal("1000"))
+
+
+# ---------------------------------------------------------------------------
+# run-dunning-cycle email retrofit (M8 phase C)
+# ---------------------------------------------------------------------------
+
+_RUN_DATE = "2026-06-02"
+_DUE_DATE = "2026-04-15"  # ~48 days before _RUN_DATE
+
+
+def _seed_dunning_level(conn, company_id, level=1, days_overdue=30,
+                        action="email", template_id="TPL-DUN"):
+    dl_id = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO dunning_level (id, company_id, level, days_overdue, action, template_id) "
+        "VALUES (?,?,?,?,?,?)",
+        (dl_id, company_id, level, days_overdue, action, template_id),
+    )
+    conn.commit()
+    return dl_id
+
+
+def _seed_overdue_invoice(conn, company_id, customer_id, amount="500"):
+    inv_id = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO sales_invoice (id, customer_id, posting_date, due_date, "
+        "grand_total, outstanding_amount, status, is_return, company_id) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (inv_id, customer_id, "2026-03-15", _DUE_DATE, amount, amount,
+         "submitted", 0, company_id),
+    )
+    conn.commit()
+    return inv_id
+
+
+class TestDunningEmailRetrofit:
+    """run-dunning-cycle 'email' levels enqueue a dunning email via the M8-A
+    send-email ACTION (mocked seam) and backfill dunning_run.generated_email_id.
+    A missing customer email or dunning template skips-with-note, never failing
+    the cycle. Mirrors crm-adv process-drip-sends' _dispatch_email seam.
+    """
+
+    def _run(self, conn, company_id):
+        return call_action(mod.run_dunning_cycle, conn, ns(
+            company_id=company_id, run_date=_RUN_DATE, db_path=None))
+
+    def test_email_path_populates_generated_email_id(self, conn, env):
+        company_id = env["company_id"]
+        customer_id = env["customer"]
+        conn.execute("UPDATE customer SET email='ar@acme.example' WHERE id=?",
+                     (customer_id,))
+        conn.commit()
+        _seed_dunning_level(conn, company_id, action="email", template_id="TPL-DUN")
+        _seed_overdue_invoice(conn, company_id, customer_id)
+
+        with patch.object(mod, "_dispatch_dunning_email",
+                          return_value=(True, "OUTBOX-123")) as m:
+            result = self._run(conn, company_id)
+
+        assert is_ok(result)
+        assert result["runs_created"] == 1
+        assert result["emails"] == {"sent": 1, "skipped": 0}
+        # seam invoked with the resolved recipient + the level's template
+        assert m.called
+        call = m.call_args
+        # _dispatch_dunning_email(conn, to_address, template_id, company_id, db_path)
+        assert call.args[1] == "ar@acme.example"
+        assert call.args[2] == "TPL-DUN"
+        # FK column backfilled with the returned outbox id
+        run_id = result["run_ids"][0]
+        row = conn.execute(
+            "SELECT generated_email_id, action_taken FROM dunning_run WHERE id=?",
+            (run_id,)).fetchone()
+        assert row["generated_email_id"] == "OUTBOX-123"
+        assert row["action_taken"] == "email"
+
+    def test_no_email_skips_cleanly(self, conn, env):
+        company_id = env["company_id"]
+        customer_id = env["customer"]
+        # customer.email stays NULL -> recipient unresolvable
+        _seed_dunning_level(conn, company_id, action="email", template_id="TPL-DUN")
+        _seed_overdue_invoice(conn, company_id, customer_id)
+
+        with patch.object(mod, "_dispatch_dunning_email") as m:
+            result = self._run(conn, company_id)
+
+        assert is_ok(result)  # cycle did NOT fail
+        assert result["runs_created"] == 1
+        assert result["emails"] == {"sent": 0, "skipped": 1}
+        assert not m.called  # never dispatched without an address
+        run_id = result["run_ids"][0]
+        row = conn.execute(
+            "SELECT generated_email_id, notes FROM dunning_run WHERE id=?",
+            (run_id,)).fetchone()
+        assert row["generated_email_id"] is None
+        assert "no email" in row["notes"]
+
+    def test_no_template_skips_cleanly(self, conn, env):
+        company_id = env["company_id"]
+        customer_id = env["customer"]
+        conn.execute("UPDATE customer SET email='ar@acme.example' WHERE id=?",
+                     (customer_id,))
+        conn.commit()
+        _seed_dunning_level(conn, company_id, action="email", template_id=None)
+        _seed_overdue_invoice(conn, company_id, customer_id)
+
+        with patch.object(mod, "_dispatch_dunning_email") as m:
+            result = self._run(conn, company_id)
+
+        assert is_ok(result)
+        assert result["emails"] == {"sent": 0, "skipped": 1}
+        assert not m.called
+        run_id = result["run_ids"][0]
+        row = conn.execute(
+            "SELECT generated_email_id, notes FROM dunning_run WHERE id=?",
+            (run_id,)).fetchone()
+        assert row["generated_email_id"] is None
+        assert "no dunning template" in row["notes"]
+
+    def test_send_failure_skips_with_note(self, conn, env):
+        company_id = env["company_id"]
+        customer_id = env["customer"]
+        conn.execute("UPDATE customer SET email='ar@acme.example' WHERE id=?",
+                     (customer_id,))
+        conn.commit()
+        _seed_dunning_level(conn, company_id, action="email", template_id="TPL-DUN")
+        _seed_overdue_invoice(conn, company_id, customer_id)
+
+        with patch.object(mod, "_dispatch_dunning_email",
+                          return_value=(False, "smtp unreachable")) as m:
+            result = self._run(conn, company_id)
+
+        assert is_ok(result)  # provider failure does not fail the cycle
+        assert result["emails"] == {"sent": 0, "skipped": 1}
+        assert m.called
+        run_id = result["run_ids"][0]
+        row = conn.execute(
+            "SELECT generated_email_id, notes FROM dunning_run WHERE id=?",
+            (run_id,)).fetchone()
+        assert row["generated_email_id"] is None
+        assert "send failed" in row["notes"]
+
+    def test_hold_action_does_not_send_email(self, conn, env):
+        """Non-email levels (hold) never touch the email seam."""
+        company_id = env["company_id"]
+        customer_id = env["customer"]
+        _seed_dunning_level(conn, company_id, action="hold", template_id=None)
+        _seed_overdue_invoice(conn, company_id, customer_id)
+
+        with patch.object(mod, "_dispatch_dunning_email") as m:
+            result = self._run(conn, company_id)
+
+        assert is_ok(result)
+        assert result["emails"] == {"sent": 0, "skipped": 0}
+        assert not m.called
+        assert result["actions"]["hold"] == 1

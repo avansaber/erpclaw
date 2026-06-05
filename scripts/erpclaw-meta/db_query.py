@@ -1718,15 +1718,15 @@ def seed_demo_data(args):
                         _run_skill("erpclaw-support", "update-issue",
                                    issue_id=issue_id_val,
                                    status="in_progress")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        errors.append(f"Phase 12 (issue '{subject}' status update): {e}")
                 elif subject == "Warranty claim for Widget B":
                     try:
                         _run_skill("erpclaw-support", "resolve-issue",
                                    issue_id=issue_id_val,
                                    resolution_notes="Warranty replacement shipped")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        errors.append(f"Phase 12 (issue '{subject}' resolve): {e}")
 
             issue_count += 1
             _progress(f"  Issue: {subject}")

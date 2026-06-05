@@ -331,7 +331,6 @@ class TestGetPrepaidBalance:
 # ──────────────────────────────────────────────────────────────────────────────
 
 class TestStatus:
-    @pytest.mark.xfail(reason="BUG-007: usage_event table missing from init_schema.py")
     def test_status(self, conn, env):
         result = call_action(mod.status_action, conn, ns(
             company_id=env["company_id"],

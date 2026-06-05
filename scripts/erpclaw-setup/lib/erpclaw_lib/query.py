@@ -209,6 +209,7 @@ __all__ = [
     'json_get', 'string_agg', 'days_between', 'hours_between',
     'seconds_between', 'abs_days_between',
     'ddl_now', 'ddl_today',
+    'line_order', 'rowid_col', 'latest_insert_order', 'scalar_max',
 ]
 
 
@@ -349,6 +350,81 @@ def abs_days_between(d1, d2):
     if _DIALECT == "mysql":
         return LiteralValue(f"ABS(DATEDIFF({d1}, {d2}))")
     return LiteralValue(f"ABS(julianday({d1}) - julianday({d2}))")
+
+
+def line_order(table=None):
+    """ORDER BY field for stable document line-item display — dialect-aware.
+
+    Line-item tables (sales_order_item, quotation_item, purchase_order_item, ...)
+    carry no explicit order column, only a UUID ``id``.  SQLite has historically
+    ordered them by the implicit ``rowid`` (true insertion order).  PostgreSQL has
+    no ``rowid`` (``ORDER BY rowid`` → 42703 column-does-not-exist), so it falls
+    back to ``id``: deterministic, but arbitrary line order.  See ERP-33 (the
+    Option-A dialect seam; SQLite behavior is unchanged).
+
+    Pass a PyPika table/alias to scope the column (``"qi"."rowid"``); omit it for a
+    bare column on a single-table query.
+    """
+    col = "id" if _DIALECT == "postgresql" else "rowid"
+    return table.field(col) if table is not None else Field(col)
+
+
+def rowid_col(alias=""):
+    """Raw-SQL column standing in for SQLite's ``rowid`` — dialect-aware.
+
+    SQLite: ``<alias>rowid``.  PostgreSQL: ``<alias>id``.  Use only as a *tiebreak*
+    after a meaningful order key (e.g. ``created_at``); ``id`` alone is arbitrary,
+    not insertion order.  ``alias`` includes the trailing dot, e.g. ``"ge."``.
+
+    Keeping the same seam on both the chain-build (gl_posting) and chain-verify
+    (erpclaw-gl) sides keeps the GL hash chain self-consistent per backend.
+    """
+    return f"{alias}id" if _DIALECT == "postgresql" else f"{alias}rowid"
+
+
+def insert_or_ignore(sql):
+    """Portable "insert, ignore on duplicate" — dialect-aware.
+
+    SQLite spells it ``INSERT OR IGNORE ...``; PostgreSQL has no such verb and
+    uses ``INSERT ... ON CONFLICT DO NOTHING`` (target-less = ignore on ANY
+    unique/PK conflict, the OR-IGNORE equivalent). Pass the full SQLite-form
+    INSERT string; on Postgres the ``OR IGNORE`` is dropped and the conflict
+    clause appended. Values still use ``?`` placeholders as usual.
+    """
+    if _DIALECT == "postgresql":
+        return sql.replace("INSERT OR IGNORE", "INSERT", 1).rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
+    return sql
+
+
+def latest_insert_order(alias=""):
+    """Raw-SQL ORDER BY body selecting the most-recently-inserted row — dialect-aware.
+
+    SQLite: ``<alias>rowid DESC`` (insertion order, unchanged).  PostgreSQL:
+    ``<alias>created_at DESC, <alias>id DESC`` — ``created_at`` mirrors insertion
+    time and ``id`` is the deterministic tiebreak, together reproducing "latest
+    inserted".  Plain ``id DESC`` would pick an arbitrary row, so it is NOT used.
+    ``alias`` includes the trailing dot, e.g. ``"s2."``.  Every table ordered this
+    way (stock_ledger_entry) carries ``created_at``.
+    """
+    if _DIALECT == "postgresql":
+        return f"{alias}created_at DESC, {alias}id DESC"
+    return f"{alias}rowid DESC"
+
+
+def scalar_max(*exprs):
+    """Raw-SQL scalar (row-wise) maximum over the given expressions — dialect-aware.
+
+    SQLite's ``MAX(a, b, ...)`` with 2+ arguments is a *scalar* function (the
+    greatest of its arguments).  PostgreSQL reserves ``MAX`` for the aggregate
+    and spells the scalar form ``GREATEST(a, b, ...)``.  Pass already-formed SQL
+    expression strings (commonly already wrapped in ``CAST(... AS NUMERIC)``);
+    returns the dialect-appropriate fragment, e.g.
+    ``scalar_max("CAST(x AS NUMERIC)", "0")`` → ``GREATEST(...)`` on PG,
+    ``MAX(...)`` on SQLite.
+    """
+    body = ", ".join(exprs)
+    fname = "GREATEST" if _DIALECT == "postgresql" else "MAX"
+    return f"{fname}({body})"
 
 
 def ddl_now():

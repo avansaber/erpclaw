@@ -332,6 +332,7 @@ def seed_role_permissions(conn):
     Idempotent — uses INSERT OR IGNORE.
     """
     import uuid
+    from erpclaw_lib.query import insert_or_ignore
 
     for role_name, permissions in ROLE_PERMISSIONS.items():
         role_row = conn.execute(
@@ -343,9 +344,11 @@ def seed_role_permissions(conn):
 
         for skill, pattern in permissions:
             conn.execute(
-                """INSERT OR IGNORE INTO role_permission
+                insert_or_ignore(
+                    """INSERT OR IGNORE INTO role_permission
                    (id, role_id, skill, action_pattern, allowed)
-                   VALUES (?, ?, ?, ?, 1)""",
+                   VALUES (?, ?, ?, ?, 1)"""
+                ),
                 (str(uuid.uuid4()), role_id, skill, pattern),
             )
     conn.commit()

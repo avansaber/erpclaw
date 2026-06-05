@@ -146,6 +146,77 @@ class TestGetCustomer:
         assert is_error(result)
 
 
+class TestCustomerEmailPhone:
+    """ADR-0012: dedicated email + phone columns (FINDING-003)."""
+
+    def test_add_stores_and_returns_plain_email(self, conn, env):
+        result = call_action(mod.add_customer, conn, ns(
+            name="Wayne Enterprises", company_id=env["company_id"],
+            customer_type=None, customer_group=None,
+            payment_terms_id=None, credit_limit=None,
+            tax_id=None, exempt_from_sales_tax=None,
+            primary_address=None, primary_contact=None,
+            email="bruce@we.com", phone="555-0100",
+        ))
+        assert is_ok(result)
+        # stored verbatim (plain string, NOT a JSON blob)
+        row = conn.execute(
+            "SELECT email, phone FROM customer WHERE id=?",
+            (result["customer_id"],)).fetchone()
+        assert row["email"] == "bruce@we.com"
+        assert row["phone"] == "555-0100"
+
+        got = call_action(mod.get_customer, conn, ns(
+            customer_id=result["customer_id"]))
+        assert is_ok(got)
+        assert got["email"] == "bruce@we.com"
+        assert got["phone"] == "555-0100"
+
+    def test_add_without_email_is_null(self, conn, env):
+        result = call_action(mod.add_customer, conn, ns(
+            name="No Email Co", company_id=env["company_id"],
+            customer_type=None, customer_group=None,
+            payment_terms_id=None, credit_limit=None,
+            tax_id=None, exempt_from_sales_tax=None,
+            primary_address=None, primary_contact=None,
+        ))
+        assert is_ok(result)
+        row = conn.execute(
+            "SELECT email, phone FROM customer WHERE id=?",
+            (result["customer_id"],)).fetchone()
+        assert row["email"] is None
+        assert row["phone"] is None
+
+    def test_update_email_and_phone(self, conn, env):
+        result = call_action(mod.update_customer, conn, ns(
+            customer_id=env["customer"],
+            name=None, credit_limit=None,
+            payment_terms_id=None, customer_group=None,
+            customer_type=None, email="new@we.com", phone="555-0200",
+        ))
+        assert is_ok(result)
+        assert "email" in result["updated_fields"]
+        assert "phone" in result["updated_fields"]
+        row = conn.execute(
+            "SELECT email, phone FROM customer WHERE id=?",
+            (env["customer"],)).fetchone()
+        assert row["email"] == "new@we.com"
+        assert row["phone"] == "555-0200"
+
+    def test_dunning_resolves_email_column(self, conn, env):
+        result = call_action(mod.add_customer, conn, ns(
+            name="Dunning Target", company_id=env["company_id"],
+            customer_type=None, customer_group=None,
+            payment_terms_id=None, credit_limit=None,
+            tax_id=None, exempt_from_sales_tax=None,
+            primary_address=None, primary_contact=None,
+            email="ar@dunning.com", phone=None,
+        ))
+        assert is_ok(result)
+        resolved = mod._resolve_customer_email(conn, result["customer_id"])
+        assert resolved == "ar@dunning.com"
+
+
 class TestListCustomers:
     def test_list_by_company(self, conn, env):
         result = call_action(mod.list_customers, conn, ns(

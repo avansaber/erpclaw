@@ -1,7 +1,8 @@
 """Post-test GL invariant verification.
 
-Connects to a sandbox (or any) SQLite database and verifies that all
-General Ledger entries satisfy the fundamental accounting invariants:
+Connects to a sandbox (or any) ERPClaw database — SQLite or PostgreSQL — and
+verifies that all General Ledger entries satisfy the fundamental accounting
+invariants:
 
 1. Global balance: SUM(debit) == SUM(credit) across all non-cancelled entries
 2. Per-voucher balance: each voucher balances independently
@@ -10,8 +11,13 @@ General Ledger entries satisfy the fundamental accounting invariants:
 5. Valid fiscal year: every fiscal_year references an existing fiscal_year
 
 All comparisons use Python Decimal — never float.
+
+Dialect note: the connection is opened via the dialect-aware
+``erpclaw_lib.db.get_connection`` so ``db_path`` may be a SQLite file path OR a
+PostgreSQL URL (``ERPCLAW_DB_DIALECT=postgresql``). Table-existence probes are
+likewise dialect-aware — SQLite has ``sqlite_master``; PostgreSQL exposes
+``information_schema.tables`` instead.
 """
-import sqlite3
 from decimal import Decimal, ROUND_HALF_UP
 
 
@@ -19,11 +25,35 @@ from decimal import Decimal, ROUND_HALF_UP
 _TOLERANCE = Decimal("0.001")
 
 
+def _table_exists(conn, name: str) -> bool:
+    """Dialect-aware table-existence probe.
+
+    SQLite catalogs tables in ``sqlite_master``; PostgreSQL has no such relation
+    and uses ``information_schema.tables`` (excluding the system schemas).
+    """
+    from erpclaw_lib.db import get_dialect
+    if get_dialect() == "postgresql":
+        row = conn.execute(
+            "SELECT COUNT(*) FROM information_schema.tables "
+            "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
+            "AND table_name = ?",
+            (name,),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master "
+            "WHERE type='table' AND name = ?",
+            (name,),
+        ).fetchone()
+    return row[0] > 0
+
+
 def check_gl_invariants(db_path: str) -> dict:
     """Run GL invariant checks against a database.
 
     Args:
-        db_path: Absolute path to the SQLite database file.
+        db_path: SQLite database file path, or a PostgreSQL URL when
+                 ``ERPCLAW_DB_DIALECT=postgresql``.
 
     Returns:
         {
@@ -36,18 +66,12 @@ def check_gl_invariants(db_path: str) -> dict:
             "violations": [str, ...]
         }
     """
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    from erpclaw_lib.db import setup_pragmas
-    setup_pragmas(conn)
+    from erpclaw_lib.db import get_connection
+    conn = get_connection(db_path)
 
     try:
         # Check if gl_entry table exists
-        table_exists = conn.execute(
-            "SELECT COUNT(*) FROM sqlite_master "
-            "WHERE type='table' AND name='gl_entry'"
-        ).fetchone()[0]
-        if not table_exists:
+        if not _table_exists(conn, "gl_entry"):
             return {
                 "result": "skip",
                 "reason": "gl_entry table does not exist",
@@ -209,11 +233,7 @@ def _check_no_zero_zero(conn, checks, violations):
 def _check_valid_accounts(conn, checks, violations):
     """Check 4: Every account_id in gl_entry references a valid account."""
     # Check if account table exists
-    has_account = conn.execute(
-        "SELECT COUNT(*) FROM sqlite_master "
-        "WHERE type='table' AND name='account'"
-    ).fetchone()[0]
-    if not has_account:
+    if not _table_exists(conn, "account"):
         checks.append({
             "name": "valid_accounts",
             "result": "pass",
@@ -248,11 +268,7 @@ def _check_valid_accounts(conn, checks, violations):
 def _check_valid_fiscal_year(conn, checks, violations):
     """Check 5: Every fiscal_year in gl_entry references a valid fiscal_year."""
     # Check if fiscal_year table exists
-    has_fy = conn.execute(
-        "SELECT COUNT(*) FROM sqlite_master "
-        "WHERE type='table' AND name='fiscal_year'"
-    ).fetchone()[0]
-    if not has_fy:
+    if not _table_exists(conn, "fiscal_year"):
         checks.append({
             "name": "valid_fiscal_year",
             "result": "pass",

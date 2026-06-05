@@ -108,6 +108,14 @@ CREATE TABLE IF NOT EXISTS company (
                     CHECK(three_way_match_policy IN ('strict','tolerant','disabled')),
     -- GRN tolerance: percentage over-receipt allowed (0 = strict, 5 = allow 5% over)
     receipt_tolerance_pct         TEXT NOT NULL DEFAULT '0',
+    -- S2 (advance payments): when set, submit-payment routes the unallocated
+    -- advance leg to these dedicated B1-style sub-accounts instead of AR/AP control.
+    -- NOTE: plain TEXT (not FK) on purpose — company<->account is a circular FK
+    -- (account.company_id -> company), which SQLite defers at CREATE but Postgres
+    -- enforces immediately, breaking provisioning. These are config pointers; the
+    -- target account is validated app-side in the S2 submit-payment path.
+    advance_from_customer_account_id TEXT,
+    advance_to_supplier_account_id   TEXT,
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -186,16 +194,25 @@ CREATE TABLE IF NOT EXISTS custom_field (
     UNIQUE(table_name, field_name)
 );
 
-CREATE TABLE IF NOT EXISTS property_setter (
-    id              TEXT PRIMARY KEY,
+-- EAV value store for custom fields (M1). Column names + composite key match
+-- the shipped erpclaw_lib.custom_fields runtime (doc_id, ON CONFLICT
+-- (table_name, doc_id, field_name)). No surrogate id: the lib's INSERT does not
+-- populate one, so a PRIMARY KEY id would break under Postgres (NOT NULL).
+CREATE TABLE IF NOT EXISTS custom_field_value (
     table_name      TEXT NOT NULL,
+    doc_id          TEXT NOT NULL,  -- parent row's id (the document being extended)
     field_name      TEXT NOT NULL,
-    property        TEXT NOT NULL,  -- e.g. 'mandatory', 'hidden', 'default'
-    value           TEXT,
-    owner_skill     TEXT NOT NULL,
+    value           TEXT,           -- Decimal-as-text for number fields
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(table_name, field_name, property)
+    PRIMARY KEY (table_name, doc_id, field_name)
 );
+
+-- (table_name, doc_id) lookups are served by the PK prefix. This index serves
+-- the "all values of one field" path (remove-custom-field cascade).
+CREATE INDEX IF NOT EXISTS idx_cfv_table_field ON custom_field_value(table_name, field_name);
+
+-- property_setter removed 2026-05-31 (audit P2): Frappe-style field-override table,
+-- never wired (zero code references). Dropped from existing DBs by migration 013.
 
 -- -------------------------------------------------------------------------
 -- RBAC: Role-Based Access Control
@@ -209,6 +226,7 @@ CREATE TABLE IF NOT EXISTS erp_user (
     status          TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','disabled','locked')),
     company_ids     TEXT,   -- JSON array of company IDs this user can access
     last_login      TEXT,
+    password_hash   TEXT,   -- set-password writes here (BUG-005 fix: column was missing)
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -250,21 +268,9 @@ CREATE TABLE IF NOT EXISTS role_permission (
 CREATE INDEX IF NOT EXISTS idx_role_permission_role ON role_permission(role_id);
 CREATE INDEX IF NOT EXISTS idx_role_permission_skill ON role_permission(skill);
 
-CREATE TABLE IF NOT EXISTS user_permission (
-    id              TEXT PRIMARY KEY,
-    user_id         TEXT NOT NULL REFERENCES erp_user(id) ON DELETE CASCADE,
-    entity_type     TEXT NOT NULL,          -- e.g. 'company', 'cost_center', 'warehouse'
-    entity_id       TEXT NOT NULL,          -- the specific entity's ID
-    can_read        INTEGER NOT NULL DEFAULT 1 CHECK(can_read IN (0,1)),
-    can_write       INTEGER NOT NULL DEFAULT 0 CHECK(can_write IN (0,1)),
-    can_submit      INTEGER NOT NULL DEFAULT 0 CHECK(can_submit IN (0,1)),
-    can_cancel      INTEGER NOT NULL DEFAULT 0 CHECK(can_cancel IN (0,1)),
-    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(user_id, entity_type, entity_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_user_permission_user ON user_permission(user_id);
-CREATE INDEX IF NOT EXISTS idx_user_permission_entity ON user_permission(entity_type, entity_id);
+-- user_permission removed 2026-05-31 (audit P2): per-entity ACL table, never wired
+-- (RBAC uses role / role_permission / user_role; zero code references to
+-- user_permission). Dropped from existing DBs by migration 013.
 """
 
 
@@ -286,15 +292,11 @@ CREATE TABLE IF NOT EXISTS account (
     account_number  TEXT,
     parent_id       TEXT REFERENCES account(id) ON DELETE RESTRICT,
     root_type       TEXT NOT NULL CHECK(root_type IN ('asset','liability','equity','income','expense')),
-    account_type    TEXT CHECK(account_type IN (
-                        'bank','cash','receivable','payable','stock',
-                        'fixed_asset','accumulated_depreciation',
-                        'cost_of_goods_sold','tax','equity','revenue',
-                        'expense','stock_received_not_billed',
-                        'stock_adjustment','rounding','exchange_gain_loss',
-                        'depreciation','payroll_payable','temporary',
-                        'asset_received_not_billed'
-                    )),
+    -- account_type validity is sourced from account_type_registry (M0, 2026-05-30),
+    -- not a hardcoded CHECK, so new types can be registered at runtime. NULL stays
+    -- allowed (group/structural accounts). Enforced app-side in erpclaw-gl add-account
+    -- / update-account against the registry; seeded by init_db() + seed-registry-defaults.
+    account_type    TEXT,
     currency        TEXT NOT NULL DEFAULT 'USD',
     is_group        INTEGER NOT NULL DEFAULT 0 CHECK(is_group IN (0,1)),
     is_frozen       INTEGER NOT NULL DEFAULT 0 CHECK(is_frozen IN (0,1)),
@@ -316,12 +318,33 @@ CREATE INDEX IF NOT EXISTS idx_account_parent ON account(parent_id);
 CREATE INDEX IF NOT EXISTS idx_account_root_type ON account(root_type);
 CREATE INDEX IF NOT EXISTS idx_account_type ON account(account_type);
 
+-- cost_center is defined before gl_entry so its FK (gl_entry.cost_center_id)
+-- resolves at table-creation time. PostgreSQL enforces FK target existence
+-- at CREATE TABLE; SQLite defers, so SQLite-only ordering worked previously
+-- but blocked Postgres init. Reordered 2026-05-30 (PREFLIGHT_AUDIT amendment A20).
+CREATE TABLE IF NOT EXISTS cost_center (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,
+    parent_id       TEXT REFERENCES cost_center(id) ON DELETE RESTRICT,
+    company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
+    is_group        INTEGER NOT NULL DEFAULT 0 CHECK(is_group IN (0,1)),
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_cost_center_company ON cost_center(company_id);
+CREATE INDEX IF NOT EXISTS idx_cost_center_parent ON cost_center(parent_id);
+
 CREATE TABLE IF NOT EXISTS gl_entry (
     id              TEXT PRIMARY KEY,
     posting_date    TEXT NOT NULL,     -- YYYY-MM-DD
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
     account_id      TEXT NOT NULL REFERENCES account(id) ON DELETE RESTRICT,
-    party_type      TEXT CHECK(party_type IN ('customer','supplier','employee')),
+    -- party_type / voucher_type validity is sourced from party_type_registry /
+    -- voucher_type_registry (M0 phase 2, 2026-05-31), not hardcoded CHECKs, so
+    -- types can be registered at runtime. Enforced app-side in gl_posting
+    -- insert_gl_entries against the registries; seeded by init_db() + migration 004.
+    party_type      TEXT,
     party_id        TEXT,
     debit           TEXT NOT NULL DEFAULT '0',   -- decimal(18,6)
     credit          TEXT NOT NULL DEFAULT '0',   -- decimal(18,6)
@@ -329,16 +352,7 @@ CREATE TABLE IF NOT EXISTS gl_entry (
     debit_base      TEXT NOT NULL DEFAULT '0',   -- decimal(18,6) in company currency
     credit_base     TEXT NOT NULL DEFAULT '0',   -- decimal(18,6) in company currency
     exchange_rate   TEXT NOT NULL DEFAULT '1',    -- decimal(12,6)
-    voucher_type    TEXT NOT NULL CHECK(voucher_type IN (
-                        'journal_entry','sales_invoice','purchase_invoice',
-                        'payment_entry','stock_entry','depreciation_entry',
-                        'payroll_entry','period_closing','expense_claim',
-                        'asset_disposal','stock_reconciliation',
-                        'purchase_receipt','delivery_note',
-                        'credit_note','debit_note','work_order',
-                        'exchange_rate_revaluation','stock_revaluation',
-                        'elimination_entry'
-                    )),
+    voucher_type    TEXT NOT NULL,
     voucher_id      TEXT NOT NULL,
     entry_set       TEXT NOT NULL DEFAULT 'primary',  -- 'primary', 'cogs', 'tax' etc.
     cost_center_id  TEXT REFERENCES cost_center(id) ON DELETE RESTRICT,
@@ -348,7 +362,10 @@ CREATE TABLE IF NOT EXISTS gl_entry (
     is_cancelled    INTEGER NOT NULL DEFAULT 0 CHECK(is_cancelled IN (0,1)),
     cancelled_by    TEXT,
     sequence        INTEGER,
-    gl_checksum     TEXT         -- SHA-256 chain hash for tamper detection
+    gl_checksum     TEXT,        -- SHA-256 chain hash for tamper detection
+    -- accounting dimensions; previously added only by migration 001 (ALTER),
+    -- now in the base DDL so fresh installs match migrated DBs (M0 phase 2).
+    dimensions_json TEXT NOT NULL DEFAULT '{}'
     -- NOTE: gl_entry is immutable — no updated_at column
 );
 
@@ -360,6 +377,9 @@ CREATE INDEX IF NOT EXISTS idx_gl_entry_fiscal_year ON gl_entry(fiscal_year);
 CREATE INDEX IF NOT EXISTS idx_gl_entry_party ON gl_entry(party_type, party_id);
 CREATE INDEX IF NOT EXISTS idx_gl_entry_cost_center ON gl_entry(cost_center_id);
 CREATE INDEX IF NOT EXISTS idx_gl_entry_is_cancelled ON gl_entry(is_cancelled);
+-- previously added only by migration 001; in the base DDL now so fresh installs
+-- match migrated DBs (M0 phase 2).
+CREATE INDEX IF NOT EXISTS idx_gl_entry_project ON gl_entry(project_id);
 
 CREATE TABLE IF NOT EXISTS fiscal_year (
     id              TEXT PRIMARY KEY,
@@ -387,19 +407,6 @@ CREATE TABLE IF NOT EXISTS period_closing_voucher (
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
-
-CREATE TABLE IF NOT EXISTS cost_center (
-    id              TEXT PRIMARY KEY,
-    name            TEXT NOT NULL,
-    parent_id       TEXT REFERENCES cost_center(id) ON DELETE RESTRICT,
-    company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-    is_group        INTEGER NOT NULL DEFAULT 0 CHECK(is_group IN (0,1)),
-    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_cost_center_company ON cost_center(company_id);
-CREATE INDEX IF NOT EXISTS idx_cost_center_parent ON cost_center(parent_id);
 
 CREATE TABLE IF NOT EXISTS budget (
     id              TEXT PRIMARY KEY,
@@ -530,9 +537,13 @@ PAYMENTS_TABLES = """
 CREATE TABLE IF NOT EXISTS payment_entry (
     id              TEXT PRIMARY KEY,
     naming_series   TEXT,
+    -- payment_type / status stay hardcoded CHECKs: fundamental, non-extensible
+    -- enums (like account.root_type), not registry candidates (M0 phase 3b).
     payment_type    TEXT NOT NULL CHECK(payment_type IN ('receive','pay','internal_transfer')),
     posting_date    TEXT NOT NULL,
-    party_type      TEXT CHECK(party_type IN ('customer','supplier','employee')),
+    -- party_type validity sourced from party_type_registry (M0 phase 3b); enforced
+    -- app-side in erpclaw-payments add-payment. NULL allowed (internal transfers).
+    party_type      TEXT,
     party_id        TEXT,
     paid_from_account TEXT NOT NULL REFERENCES account(id) ON DELETE RESTRICT,
     paid_to_account TEXT NOT NULL REFERENCES account(id) ON DELETE RESTRICT,
@@ -547,7 +558,15 @@ CREATE TABLE IF NOT EXISTS payment_entry (
     unallocated_amount TEXT NOT NULL DEFAULT '0',
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    -- previously added only by migration 001 (ALTER); in the base DDL now so
+    -- fresh installs match migrated DBs (M0 phase 3b).
+    payment_method  TEXT DEFAULT '',
+    -- S2: when submit-payment routes the unallocated (advance) portion to a
+    -- dedicated advance liability/asset sub-account, the account is recorded here
+    -- so allocate-payment knows to post the offsetting reclassification. NULL =
+    -- not routed (legacy/AR-control behavior).
+    advance_account_id TEXT REFERENCES account(id) ON DELETE RESTRICT
 );
 
 CREATE INDEX IF NOT EXISTS idx_payment_entry_status ON payment_entry(status);
@@ -558,10 +577,10 @@ CREATE INDEX IF NOT EXISTS idx_payment_entry_posting_date ON payment_entry(posti
 CREATE TABLE IF NOT EXISTS payment_allocation (
     id              TEXT PRIMARY KEY,
     payment_entry_id TEXT NOT NULL REFERENCES payment_entry(id) ON DELETE RESTRICT,
-    voucher_type    TEXT NOT NULL CHECK(voucher_type IN (
-                        'sales_invoice','purchase_invoice',
-                        'credit_note','debit_note'
-                    )),
+    -- voucher_type validity sourced from voucher_type_registry
+    -- (target_table='payment_allocation'); M0 phase 3b. Values are derived from the
+    -- invoice/document being allocated against, so they are inherently typed.
+    voucher_type    TEXT NOT NULL,
     voucher_id      TEXT NOT NULL,
     allocated_amount TEXT NOT NULL DEFAULT '0',
     exchange_gain_loss TEXT NOT NULL DEFAULT '0',
@@ -587,7 +606,9 @@ CREATE TABLE IF NOT EXISTS payment_ledger_entry (
     id              TEXT PRIMARY KEY,
     posting_date    TEXT NOT NULL,
     account_id      TEXT NOT NULL REFERENCES account(id) ON DELETE RESTRICT,
-    party_type      TEXT NOT NULL CHECK(party_type IN ('customer','supplier','employee')),
+    -- party_type validity sourced from party_type_registry (M0 phase 3b); values are
+    -- derived from the party/voucher this ledger row settles, so inherently typed.
+    party_type      TEXT NOT NULL,
     party_id        TEXT NOT NULL,
     voucher_type    TEXT NOT NULL,
     voucher_id      TEXT NOT NULL,
@@ -778,6 +799,8 @@ CREATE TABLE IF NOT EXISTS customer (
     tax_exemption_certificate TEXT,
     primary_address TEXT,
     primary_contact TEXT,
+    email           TEXT,
+    phone           TEXT,
     status          TEXT NOT NULL DEFAULT 'active'
                     CHECK(status IN ('active','inactive','blocked')),
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
@@ -1186,6 +1209,8 @@ CREATE TABLE IF NOT EXISTS supplier (
     is_1099_vendor  INTEGER NOT NULL DEFAULT 0 CHECK(is_1099_vendor IN (0,1)),
     primary_address TEXT,
     primary_contact TEXT,
+    email           TEXT,
+    phone           TEXT,
     status          TEXT NOT NULL DEFAULT 'active'
                     CHECK(status IN ('active','inactive','blocked')),
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
@@ -1471,21 +1496,8 @@ CREATE TABLE IF NOT EXISTS landed_cost_charge (
 
 CREATE INDEX IF NOT EXISTS idx_lcc_voucher ON landed_cost_charge(landed_cost_voucher_id);
 
-CREATE TABLE IF NOT EXISTS supplier_score (
-    id              TEXT PRIMARY KEY,
-    supplier_id     TEXT NOT NULL REFERENCES supplier(id) ON DELETE RESTRICT,
-    score_date      TEXT NOT NULL,
-    overall_score   TEXT NOT NULL DEFAULT '0',
-    delivery_score  TEXT NOT NULL DEFAULT '0',
-    quality_score   TEXT NOT NULL DEFAULT '0',
-    price_score     TEXT NOT NULL DEFAULT '0',
-    responsiveness_score TEXT NOT NULL DEFAULT '0',
-    factors         TEXT,
-    auto_computed   INTEGER NOT NULL DEFAULT 1 CHECK(auto_computed IN (0,1)),
-    created_at      TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_supplier_score_supplier ON supplier_score(supplier_id);
+-- supplier_score removed 2026-05-31 (audit P2): planned-but-unbuilt, zero code
+-- references. Dropped from existing DBs by migration 013.
 
 CREATE TABLE IF NOT EXISTS recurring_bill_template (
     id              TEXT PRIMARY KEY,
@@ -1671,12 +1683,11 @@ CREATE TABLE IF NOT EXISTS stock_ledger_entry (
     valuation_rate  TEXT NOT NULL DEFAULT '0',
     stock_value     TEXT NOT NULL DEFAULT '0',
     stock_value_difference TEXT NOT NULL DEFAULT '0',
-    voucher_type    TEXT NOT NULL CHECK(voucher_type IN (
-                        'stock_entry','purchase_receipt','delivery_note',
-                        'stock_reconciliation','work_order',
-                        'sales_invoice','credit_note','purchase_invoice','debit_note',
-                        'stock_revaluation'
-                    )),
+    -- voucher_type validity is sourced from voucher_type_registry
+    -- (target_table='stock_ledger_entry'), not a hardcoded CHECK, so new types
+    -- are registrable at runtime (M0 phase 3a, 2026-05-31). Enforced app-side in
+    -- stock_posting.insert_sle_entries; seeded by init_db() + migration 005.
+    voucher_type    TEXT NOT NULL,
     voucher_id      TEXT NOT NULL,
     batch_id        TEXT,
     serial_number   TEXT,
@@ -1785,25 +1796,8 @@ CREATE TABLE IF NOT EXISTS stock_reconciliation_item (
 
 CREATE INDEX IF NOT EXISTS idx_sri_recon ON stock_reconciliation_item(stock_reconciliation_id);
 
-CREATE TABLE IF NOT EXISTS product_bundle (
-    id              TEXT PRIMARY KEY,
-    parent_item_id  TEXT NOT NULL REFERENCES item(id) ON DELETE RESTRICT,
-    description     TEXT,
-    status          TEXT NOT NULL DEFAULT 'active'
-                    CHECK(status IN ('active','disabled')),
-    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS product_bundle_item (
-    id              TEXT PRIMARY KEY,
-    product_bundle_id TEXT NOT NULL REFERENCES product_bundle(id) ON DELETE RESTRICT,
-    item_id         TEXT NOT NULL REFERENCES item(id) ON DELETE RESTRICT,
-    quantity        TEXT NOT NULL DEFAULT '0',
-    uom             TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_pbi_bundle ON product_bundle_item(product_bundle_id);
+-- product_bundle / product_bundle_item removed 2026-05-31 (audit P2): planned-but-
+-- unbuilt, zero code references. Dropped from existing DBs by migration 013.
 
 CREATE TABLE IF NOT EXISTS item_supplier (
     id              TEXT PRIMARY KEY,
@@ -2759,29 +2753,10 @@ CREATE INDEX IF NOT EXISTS idx_garnishment_employee ON wage_garnishment(employee
 CREATE INDEX IF NOT EXISTS idx_garnishment_status ON wage_garnishment(status);
 CREATE INDEX IF NOT EXISTS idx_garnishment_company ON wage_garnishment(company_id);
 
-CREATE TABLE IF NOT EXISTS employee_tax_exemption_category (
-    id              TEXT PRIMARY KEY,
-    name            TEXT NOT NULL UNIQUE,
-    max_exemption_amount TEXT NOT NULL DEFAULT '0',
-    parent_category_id TEXT REFERENCES employee_tax_exemption_category(id) ON DELETE RESTRICT,
-    description     TEXT,
-    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS employee_tax_exemption_declaration (
-    id              TEXT PRIMARY KEY,
-    employee_id     TEXT NOT NULL REFERENCES employee(id) ON DELETE RESTRICT,
-    category_id     TEXT NOT NULL REFERENCES employee_tax_exemption_category(id) ON DELETE RESTRICT,
-    fiscal_year     TEXT NOT NULL,
-    declared_amount TEXT NOT NULL DEFAULT '0',
-    proof_submitted INTEGER NOT NULL DEFAULT 0 CHECK(proof_submitted IN (0,1)),
-    approved        INTEGER NOT NULL DEFAULT 0 CHECK(approved IN (0,1)),
-    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_exemption_decl_employee ON employee_tax_exemption_declaration(employee_id);
+-- employee_tax_exemption_category / _declaration removed 2026-05-31 (audit P2):
+-- planned-but-unbuilt India-style tax-exemption feature, zero code references
+-- (US payroll uses futa_suta_config / income_tax_slab / state_tax_slab). Dropped
+-- from existing DBs by migration 013.
 
 -- =========================================================================
 -- Multi-State Payroll (Sprint 6, Feature #22a)
@@ -3177,8 +3152,9 @@ CREATE TABLE IF NOT EXISTS asset (
     depreciation_start_date TEXT,
     current_book_value TEXT NOT NULL DEFAULT '0',
     accumulated_depreciation TEXT NOT NULL DEFAULT '0',
-    status          TEXT NOT NULL DEFAULT 'draft'
-                    CHECK(status IN ('draft','submitted','in_use','scrapped','sold')),
+    -- status validity sourced from asset_status_registry (M0 phase 4); enforced
+    -- app-side in erpclaw-assets update-asset. DEFAULT 'draft' + NOT NULL retained.
+    status          TEXT NOT NULL DEFAULT 'draft',
     location        TEXT,
     custodian_employee_id TEXT,
     warranty_expiry_date TEXT,
@@ -3733,20 +3709,77 @@ CREATE TABLE IF NOT EXISTS voucher_type_registry (
     skill_name   TEXT NOT NULL,
     label        TEXT NOT NULL,
     target_table TEXT NOT NULL CHECK(target_table IN ('gl_entry','stock_ledger_entry','payment_allocation')),
+    is_active    INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
     PRIMARY KEY (voucher_type, target_table)
 );
 
 CREATE TABLE IF NOT EXISTS party_type_registry (
     party_type  TEXT PRIMARY KEY,
     skill_name  TEXT NOT NULL,
-    label       TEXT NOT NULL
+    label       TEXT NOT NULL,
+    is_active   INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1))
 );
 
 CREATE TABLE IF NOT EXISTS account_type_registry (
     account_type TEXT PRIMARY KEY,
     skill_name   TEXT NOT NULL,
-    label        TEXT NOT NULL
+    label        TEXT NOT NULL,
+    is_active    INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1))
 );
+-- asset lifecycle states; sources asset.status now that its hardcoded CHECK is
+-- dropped, so waves can add states (e.g. under_construction for CWIP) without a
+-- migration. M0 phase 4. Enforced app-side in erpclaw-assets update-asset.
+CREATE TABLE IF NOT EXISTS asset_status_registry (
+    status       TEXT PRIMARY KEY,
+    skill_name   TEXT NOT NULL,
+    label        TEXT NOT NULL,
+    is_active    INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1))
+);
+
+-- Stock revaluation audit record (BUG-006 fix: erpclaw-inventory revalue-stock
+-- wrote/read this table but it was never created). Money as TEXT.
+CREATE TABLE IF NOT EXISTS stock_revaluation (
+    id                TEXT PRIMARY KEY,
+    naming_series     TEXT,
+    company_id        TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
+    item_id           TEXT NOT NULL REFERENCES item(id) ON DELETE RESTRICT,
+    warehouse_id      TEXT NOT NULL REFERENCES warehouse(id) ON DELETE RESTRICT,
+    posting_date      TEXT NOT NULL,
+    current_qty       TEXT,
+    old_rate          TEXT,
+    new_rate          TEXT,
+    adjustment_amount TEXT,
+    reason            TEXT,
+    status            TEXT NOT NULL DEFAULT 'submitted'
+                      CHECK(status IN ('submitted','cancelled')),
+    created_at        TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at        TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_stock_reval_item ON stock_revaluation(item_id, warehouse_id);
+CREATE INDEX IF NOT EXISTS idx_stock_reval_company ON stock_revaluation(company_id);
+
+-- Metered-usage event (BUG-007 fix). Used by both erpclaw-billing (foundation)
+-- and erpclaw-growth (addon). A foundation module depends on it, so foundation
+-- OWNS it (moved here from erpclaw-growth/init_db.py to end the double-definition
+-- ownership smell). Definition kept verbatim from growth's permissive schema so
+-- existing growth + billing code is unaffected. idempotency_key dedups re-sends.
+CREATE TABLE IF NOT EXISTS usage_event (
+    id                TEXT PRIMARY KEY,
+    customer_id       TEXT,
+    meter_id          TEXT,
+    event_type        TEXT NOT NULL,
+    quantity          TEXT NOT NULL DEFAULT '0',
+    timestamp         TEXT NOT NULL,
+    metadata          TEXT,
+    idempotency_key   TEXT UNIQUE,
+    billing_period_id TEXT,
+    processed         INTEGER NOT NULL DEFAULT 0 CHECK(processed IN (0,1)),
+    created_at        TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_usage_event_customer ON usage_event(customer_id);
+CREATE INDEX IF NOT EXISTS idx_usage_event_meter ON usage_event(meter_id);
+CREATE INDEX IF NOT EXISTS idx_usage_event_processed ON usage_event(processed);
+CREATE INDEX IF NOT EXISTS idx_usage_event_idempotency ON usage_event(idempotency_key);
 """
 
 
@@ -3989,8 +4022,260 @@ ALL_DDL_BLOCKS = [
 ]
 
 
+# Canonical account_type_registry seed (M0, 2026-05-30). Sources account_type
+# validity now that the hardcoded CHECK on account.account_type is dropped. Mirror
+# of migration 001's 21 types + the 3 Wave-1 prerequisites (capital_work_in_progress
+# for S3, goodwill for L1, revaluation_reserve for M7). Kept in sync with
+# migration 003. Idempotent seed via init_db() (fresh installs) + seed-registry-defaults.
+ACCOUNT_TYPE_REGISTRY_SEED = [
+    ("bank", "erpclaw-gl", "Bank"),
+    ("cash", "erpclaw-gl", "Cash"),
+    ("receivable", "erpclaw-selling", "Receivable"),
+    ("payable", "erpclaw-buying", "Payable"),
+    ("stock", "erpclaw-inventory", "Stock"),
+    ("fixed_asset", "erpclaw-assets", "Fixed Asset"),
+    ("accumulated_depreciation", "erpclaw-assets", "Accumulated Depreciation"),
+    ("cost_of_goods_sold", "erpclaw-selling", "Cost of Goods Sold"),
+    ("tax", "erpclaw-tax", "Tax"),
+    ("equity", "erpclaw-gl", "Equity"),
+    ("revenue", "erpclaw-selling", "Revenue"),
+    ("expense", "erpclaw-gl", "Expense"),
+    ("stock_received_not_billed", "erpclaw-buying", "Stock Received Not Billed"),
+    ("stock_adjustment", "erpclaw-inventory", "Stock Adjustment"),
+    ("rounding", "erpclaw-gl", "Rounding"),
+    ("exchange_gain_loss", "erpclaw-gl", "Exchange Gain/Loss"),
+    ("depreciation", "erpclaw-assets", "Depreciation"),
+    ("payroll_payable", "erpclaw-payroll", "Payroll Payable"),
+    ("temporary", "erpclaw-gl", "Temporary"),
+    ("asset_received_not_billed", "erpclaw-assets", "Asset Received Not Billed"),
+    ("trust", "erpclaw-gl", "Trust"),
+    ("capital_work_in_progress", "erpclaw-assets", "Capital Work in Progress"),
+    ("goodwill", "erpclaw-accounting-adv", "Goodwill"),
+    ("revaluation_reserve", "erpclaw-assets", "Revaluation Reserve"),
+]
+
+# Canonical voucher_type_registry seed (M0 phase 2). Mirror of migration 001's
+# full set (19 gl_entry + 10 stock_ledger_entry + 4 payment_allocation), keyed by
+# (voucher_type, skill_name, label, target_table). Sources voucher_type validity
+# now that the gl_entry CHECK is dropped. Seeded in init_db() so fresh installs
+# match migrated DBs. Kept in sync with migration 004.
+VOUCHER_TYPE_REGISTRY_SEED = [
+    # target_table = gl_entry
+    ("journal_entry", "erpclaw-journals", "Journal Entry", "gl_entry"),
+    ("sales_invoice", "erpclaw-selling", "Sales Invoice", "gl_entry"),
+    ("purchase_invoice", "erpclaw-buying", "Purchase Invoice", "gl_entry"),
+    ("payment_entry", "erpclaw-payments", "Payment Entry", "gl_entry"),
+    ("stock_entry", "erpclaw-inventory", "Stock Entry", "gl_entry"),
+    ("depreciation_entry", "erpclaw-assets", "Depreciation Entry", "gl_entry"),
+    ("payroll_entry", "erpclaw-payroll", "Payroll Entry", "gl_entry"),
+    ("period_closing", "erpclaw-gl", "Period Closing", "gl_entry"),
+    ("expense_claim", "erpclaw-hr", "Expense Claim", "gl_entry"),
+    ("asset_disposal", "erpclaw-assets", "Asset Disposal", "gl_entry"),
+    ("stock_reconciliation", "erpclaw-inventory", "Stock Reconciliation", "gl_entry"),
+    ("purchase_receipt", "erpclaw-buying", "Purchase Receipt", "gl_entry"),
+    ("delivery_note", "erpclaw-selling", "Delivery Note", "gl_entry"),
+    ("credit_note", "erpclaw-selling", "Credit Note", "gl_entry"),
+    ("debit_note", "erpclaw-buying", "Debit Note", "gl_entry"),
+    ("work_order", "erpclaw-manufacturing", "Work Order", "gl_entry"),
+    ("exchange_rate_revaluation", "erpclaw-gl", "Exchange Rate Revaluation", "gl_entry"),
+    ("stock_revaluation", "erpclaw-inventory", "Stock Revaluation", "gl_entry"),
+    ("elimination_entry", "erpclaw-gl", "Elimination Entry", "gl_entry"),
+    # target_table = stock_ledger_entry
+    ("stock_entry", "erpclaw-inventory", "Stock Entry", "stock_ledger_entry"),
+    ("purchase_receipt", "erpclaw-buying", "Purchase Receipt", "stock_ledger_entry"),
+    ("delivery_note", "erpclaw-selling", "Delivery Note", "stock_ledger_entry"),
+    ("stock_reconciliation", "erpclaw-inventory", "Stock Reconciliation", "stock_ledger_entry"),
+    ("work_order", "erpclaw-manufacturing", "Work Order", "stock_ledger_entry"),
+    ("sales_invoice", "erpclaw-selling", "Sales Invoice", "stock_ledger_entry"),
+    ("credit_note", "erpclaw-selling", "Credit Note", "stock_ledger_entry"),
+    ("purchase_invoice", "erpclaw-buying", "Purchase Invoice", "stock_ledger_entry"),
+    ("debit_note", "erpclaw-buying", "Debit Note", "stock_ledger_entry"),
+    ("stock_revaluation", "erpclaw-inventory", "Stock Revaluation", "stock_ledger_entry"),
+    # target_table = payment_allocation
+    ("sales_invoice", "erpclaw-selling", "Sales Invoice", "payment_allocation"),
+    ("purchase_invoice", "erpclaw-buying", "Purchase Invoice", "payment_allocation"),
+    ("credit_note", "erpclaw-selling", "Credit Note", "payment_allocation"),
+    ("debit_note", "erpclaw-buying", "Debit Note", "payment_allocation"),
+]
+
+# Canonical party_type_registry seed (M0 phase 2).
+PARTY_TYPE_REGISTRY_SEED = [
+    ("customer", "erpclaw-selling", "Customer"),
+    ("supplier", "erpclaw-buying", "Supplier"),
+    ("employee", "erpclaw-hr", "Employee"),
+]
+
+# Canonical asset_status_registry seed (M0 phase 4): the 5 original states + the
+# Wave-1 additions (under_construction for S3 CWIP, impaired for M7, cancelled for
+# the S3 CWIP cancel path). Sources asset.status now that its CHECK is dropped.
+ASSET_STATUS_REGISTRY_SEED = [
+    ("draft", "erpclaw-assets", "Draft"),
+    ("submitted", "erpclaw-assets", "Submitted"),
+    ("in_use", "erpclaw-assets", "In Use"),
+    ("under_construction", "erpclaw-assets", "Under Construction"),
+    ("impaired", "erpclaw-assets", "Impaired"),
+    ("cancelled", "erpclaw-assets", "Cancelled"),
+    ("scrapped", "erpclaw-assets", "Scrapped"),
+    ("sold", "erpclaw-assets", "Sold"),
+]
+
+
+DEFAULT_ROLES = [
+    ("System Manager", "Full system access across all skills and companies", 1),
+    ("Accounts Manager", "Full access to financial modules (GL, journals, payments, tax, reports)", 1),
+    ("Accounts User", "Read access to financial modules, submit journal entries and payments", 1),
+    ("Stock Manager", "Full access to inventory, buying, selling, manufacturing", 1),
+    ("Stock User", "Read access to inventory, create stock entries and orders", 1),
+    ("HR Manager", "Full access to HR, payroll, attendance, leave management", 1),
+    ("HR User", "Read access to HR, mark attendance, apply for leave", 1),
+    ("Sales Manager", "Full access to CRM, selling, customer management", 1),
+    ("Sales User", "Read access to CRM and selling, create quotations and orders", 1),
+    ("Purchase Manager", "Full access to buying, supplier management", 1),
+    ("Purchase User", "Read access to buying, create purchase requests", 1),
+    ("Analytics User", "Read-only access to reports, analytics, and dashboards", 1),
+]
+
+
+def _seed_defaults(conn) -> None:
+    """Seed default roles + M0 type/status registries (idempotent).
+
+    Shared by the SQLite and PostgreSQL provisioning paths. All statements use
+    ``?`` placeholders and timestamp-free INSERTs, so they run unchanged on a
+    raw ``sqlite3.Connection`` (``?`` native) and on the add-on A
+    ``PgConnectionWrapper`` (which translates ``?`` → ``%s``). Both expose
+    ``conn.execute(sql, params)`` returning a cursor with ``fetchone()``.
+    """
+    import uuid
+
+    # Default roles.
+    for role_name, desc, is_sys in DEFAULT_ROLES:
+        existing = conn.execute(
+            "SELECT 1 FROM role WHERE name = ?", (role_name,)
+        ).fetchone()
+        if not existing:
+            conn.execute(
+                """INSERT INTO role (id, name, description, is_system)
+                   VALUES (?, ?, ?, ?)""",
+                (str(uuid.uuid4()), role_name, desc, is_sys)
+            )
+
+    # account_type_registry (M0): fresh installs need it populated now that
+    # account.account_type's CHECK is gone and validity comes from the registry.
+    for at, skill, label in ACCOUNT_TYPE_REGISTRY_SEED:
+        existing = conn.execute(
+            "SELECT 1 FROM account_type_registry WHERE account_type = ?", (at,)
+        ).fetchone()
+        if not existing:
+            conn.execute(
+                "INSERT INTO account_type_registry (account_type, skill_name, label) "
+                "VALUES (?, ?, ?)",
+                (at, skill, label),
+            )
+
+    # voucher_type_registry + party_type_registry (M0 phase 2): validity for
+    # gl_entry.voucher_type/party_type now comes from these registries.
+    for vt, skill, label, target in VOUCHER_TYPE_REGISTRY_SEED:
+        existing = conn.execute(
+            "SELECT 1 FROM voucher_type_registry WHERE voucher_type = ? AND target_table = ?",
+            (vt, target),
+        ).fetchone()
+        if not existing:
+            conn.execute(
+                "INSERT INTO voucher_type_registry (voucher_type, skill_name, label, target_table) "
+                "VALUES (?, ?, ?, ?)",
+                (vt, skill, label, target),
+            )
+    for pt, skill, label in PARTY_TYPE_REGISTRY_SEED:
+        existing = conn.execute(
+            "SELECT 1 FROM party_type_registry WHERE party_type = ?", (pt,)
+        ).fetchone()
+        if not existing:
+            conn.execute(
+                "INSERT INTO party_type_registry (party_type, skill_name, label) "
+                "VALUES (?, ?, ?)",
+                (pt, skill, label),
+            )
+
+    # asset_status_registry (M0 phase 4): sources asset.status now its CHECK is dropped.
+    for st, skill, label in ASSET_STATUS_REGISTRY_SEED:
+        existing = conn.execute(
+            "SELECT 1 FROM asset_status_registry WHERE status = ?", (st,)
+        ).fetchone()
+        if not existing:
+            conn.execute(
+                "INSERT INTO asset_status_registry (status, skill_name, label) "
+                "VALUES (?, ?, ?)",
+                (st, skill, label),
+            )
+
+
+def _init_db_postgres(db_path: str) -> None:
+    """Provision the full ERPClaw schema on PostgreSQL (cross-DB add-on F).
+
+    Mirrors the SQLite path below, but over the add-on A
+    :class:`~erpclaw_lib.db.PgConnectionWrapper` (psycopg2 + ``?`` → ``%s``
+    translation + ``decimal_sum`` aggregate). The DDL blocks are
+    Postgres-portable (cost_center / gl_entry ordering fix, commit 9d5fe69);
+    psycopg2's ``cursor.execute`` runs the multi-statement DDL of each block in
+    one call (the executescript analogue). ``datetime('now')`` is SQLite-only,
+    so the schema_version stamp uses ``now()`` here. Verification counts come
+    from ``information_schema`` rather than ``sqlite_master``.
+    """
+    from erpclaw_lib.db import get_connection
+
+    conn = get_connection(db_path)  # PgConnectionWrapper: timeouts + decimal_sum set
+    try:
+        for skill_name, ddl_sql in ALL_DDL_BLOCKS:
+            conn.execute(ddl_sql)  # params=None → raw multi-statement DDL, no translation
+            existing = conn.execute(
+                "SELECT 1 FROM schema_version WHERE module = ?", (skill_name,)
+            ).fetchone()
+            if not existing:
+                conn.execute(
+                    "INSERT INTO schema_version (module, version, updated_at) "
+                    "VALUES (?, 1, now())",
+                    (skill_name,),
+                )
+        conn.commit()
+
+        _seed_defaults(conn)
+        conn.commit()
+
+        table_count = conn.execute(
+            "SELECT COUNT(*) FROM information_schema.tables "
+            "WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"
+        ).fetchone()[0]
+        index_count = conn.execute(
+            "SELECT COUNT(*) FROM pg_indexes WHERE schemaname = 'public'"
+        ).fetchone()[0]
+
+        print(f"ERPClaw database initialized successfully at: {db_path}", file=sys.stderr)
+        print(f"  Tables created: {table_count}", file=sys.stderr)
+        print(f"  Indexes created: {index_count}", file=sys.stderr)
+        print(f"  Skills registered: {len(ALL_DDL_BLOCKS)}", file=sys.stderr)
+        print(f"  Backend: PostgreSQL", file=sys.stderr)
+    finally:
+        conn.close()
+
+
 def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
-    """Initialize the ERPClaw database with all tables."""
+    """Initialize the ERPClaw database with all tables.
+
+    SQLite (default): build a fresh file DB via ``sqlite3`` + ``executescript``.
+    PostgreSQL (``ERPCLAW_DB_DIALECT=postgresql``): provision the same schema on
+    the configured Postgres cluster via :func:`_init_db_postgres` (cross-DB
+    add-on F — makes "PostgreSQL fully supported", ADR-0004, true for full-schema
+    provisioning, not just per-construct as add-ons B/C tested).
+    """
+    try:
+        from erpclaw_lib.db import get_dialect
+        dialect = get_dialect()
+    except ImportError:
+        dialect = os.environ.get("ERPCLAW_DB_DIALECT", "sqlite")
+    if dialect == "postgresql":
+        _init_db_postgres(db_path)
+        return
+
     # Ensure the directory exists
     db_dir = os.path.dirname(db_path)
     if db_dir:
@@ -4023,32 +4308,8 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
 
         conn.commit()
 
-        # Seed default roles
-        import uuid
-        DEFAULT_ROLES = [
-            ("System Manager", "Full system access across all skills and companies", 1),
-            ("Accounts Manager", "Full access to financial modules (GL, journals, payments, tax, reports)", 1),
-            ("Accounts User", "Read access to financial modules, submit journal entries and payments", 1),
-            ("Stock Manager", "Full access to inventory, buying, selling, manufacturing", 1),
-            ("Stock User", "Read access to inventory, create stock entries and orders", 1),
-            ("HR Manager", "Full access to HR, payroll, attendance, leave management", 1),
-            ("HR User", "Read access to HR, mark attendance, apply for leave", 1),
-            ("Sales Manager", "Full access to CRM, selling, customer management", 1),
-            ("Sales User", "Read access to CRM and selling, create quotations and orders", 1),
-            ("Purchase Manager", "Full access to buying, supplier management", 1),
-            ("Purchase User", "Read access to buying, create purchase requests", 1),
-            ("Analytics User", "Read-only access to reports, analytics, and dashboards", 1),
-        ]
-        for role_name, desc, is_sys in DEFAULT_ROLES:
-            existing = conn.execute(
-                "SELECT 1 FROM role WHERE name = ?", (role_name,)
-            ).fetchone()
-            if not existing:
-                conn.execute(
-                    """INSERT INTO role (id, name, description, is_system)
-                       VALUES (?, ?, ?, ?)""",
-                    (str(uuid.uuid4()), role_name, desc, is_sys)
-                )
+        # Seed default roles + M0 registries (shared with the Postgres path).
+        _seed_defaults(conn)
         conn.commit()
 
         # Verify: count tables

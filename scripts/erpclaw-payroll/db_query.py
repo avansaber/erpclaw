@@ -29,7 +29,7 @@ try:
     from erpclaw_lib.audit import audit
     from erpclaw_lib.dependencies import check_required_tables
     from erpclaw_lib.query import (Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL,
-                                    DecimalSum, DecimalAbs, insert_row, update_row, dynamic_update)
+                                    DecimalSum, DecimalAbs, insert_row, update_row, dynamic_update, now)
     from erpclaw_lib.vendor.pypika.terms import LiteralValue, ValueWrapper
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
 except ImportError:
@@ -1295,7 +1295,7 @@ def update_garnishment(conn, args):
     if not data:
         err("No fields to update")
 
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = now()
     sql, params = dynamic_update("wage_garnishment", data, where={"id": g_id})
     conn.execute(sql, params)
     audit(conn, "erpclaw-payroll", "update-garnishment", "wage_garnishment", g_id)
@@ -2394,7 +2394,7 @@ def generate_salary_slips(conn: sqlite3.Connection, args) -> None:
                 SELECT from_amount, to_amount, rate
                 FROM income_tax_slab_rate
                 WHERE slab_id = ?
-                ORDER BY from_amount + 0 ASC
+                ORDER BY CAST(from_amount AS NUMERIC) ASC
                 """,
                 (fed_slab["id"],),
             ).fetchall()
@@ -2650,17 +2650,17 @@ def generate_salary_slips(conn: sqlite3.Connection, args) -> None:
 
                 # Update cumulative paid on the garnishment record
                 new_cumulative = cumulative + garn_amt
-                # raw SQL — uses datetime('now') which is a SQLite function
+                # raw SQL — uses CAST(CURRENT_TIMESTAMP AS TEXT) which is a SQLite function
                 conn.execute(
-                    "UPDATE wage_garnishment SET cumulative_paid = ?, updated_at = datetime('now') WHERE id = ?",
+                    "UPDATE wage_garnishment SET cumulative_paid = ?, updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?",
                     (str(new_cumulative), garn["id"]),
                 )
 
                 # Auto-complete if fully paid
                 if total_owed_val and new_cumulative >= total_owed_val:
-                    # raw SQL — uses datetime('now') which is a SQLite function
+                    # raw SQL — uses CAST(CURRENT_TIMESTAMP AS TEXT) which is a SQLite function
                     conn.execute(
-                        "UPDATE wage_garnishment SET status = 'completed', updated_at = datetime('now') WHERE id = ?",
+                        "UPDATE wage_garnishment SET status = 'completed', updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?",
                         (garn["id"],),
                     )
 
@@ -2678,7 +2678,7 @@ def generate_salary_slips(conn: sqlite3.Connection, args) -> None:
         slips_generated += 1
 
     # --- Update payroll_run totals ---
-    # raw SQL — uses datetime('now') SQLite function
+    # raw SQL — uses CAST(CURRENT_TIMESTAMP AS TEXT) SQLite function
     conn.execute(
         """
         UPDATE payroll_run
@@ -2686,7 +2686,7 @@ def generate_salary_slips(conn: sqlite3.Connection, args) -> None:
             total_deductions = ?,
             total_net = ?,
             employee_count = ?,
-            updated_at = datetime('now')
+            updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
         WHERE id = ?
         """,
         (str(round_currency(run_total_gross)),
@@ -3279,19 +3279,19 @@ def submit_payroll_run(conn: sqlite3.Connection, args) -> None:
         err(f"GL posting failed: {e}")
 
     # --- Mark all slips as submitted ---
-    # raw SQL — uses datetime('now') SQLite function
+    # raw SQL — uses CAST(CURRENT_TIMESTAMP AS TEXT) SQLite function
     conn.execute(
         """UPDATE salary_slip
-           SET status = 'submitted', updated_at = datetime('now')
+           SET status = 'submitted', updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
            WHERE payroll_run_id = ? AND status = 'draft'""",
         (payroll_run_id,),
     )
 
     # --- Update payroll_run status ---
-    # raw SQL — uses datetime('now') SQLite function
+    # raw SQL — uses CAST(CURRENT_TIMESTAMP AS TEXT) SQLite function
     conn.execute(
         """UPDATE payroll_run
-           SET status = 'submitted', updated_at = datetime('now')
+           SET status = 'submitted', updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
            WHERE id = ?""",
         (payroll_run_id,),
     )
@@ -3365,19 +3365,19 @@ def cancel_payroll_run(conn: sqlite3.Connection, args) -> None:
         err(f"GL reversal failed: {e}")
 
     # --- Mark all slips as cancelled ---
-    # raw SQL — uses datetime('now') SQLite function
+    # raw SQL — uses CAST(CURRENT_TIMESTAMP AS TEXT) SQLite function
     conn.execute(
         """UPDATE salary_slip
-           SET status = 'cancelled', updated_at = datetime('now')
+           SET status = 'cancelled', updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
            WHERE payroll_run_id = ? AND status = 'submitted'""",
         (payroll_run_id,),
     )
 
     # --- Update payroll_run status ---
-    # raw SQL — uses datetime('now') SQLite function
+    # raw SQL — uses CAST(CURRENT_TIMESTAMP AS TEXT) SQLite function
     conn.execute(
         """UPDATE payroll_run
-           SET status = 'cancelled', updated_at = datetime('now')
+           SET status = 'cancelled', updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
            WHERE id = ?""",
         (payroll_run_id,),
     )
@@ -3758,7 +3758,7 @@ def _calculate_state_tax_for_employee(conn, employee_id, gross, total_pretax,
                FROM state_tax_slab
                WHERE state_code = ?
                  AND (filing_status = ? OR filing_status IS NULL)
-               ORDER BY bracket_start + 0 ASC""",
+               ORDER BY CAST(bracket_start AS NUMERIC) ASC""",
             (state_code, filing_status),
         ).fetchall()
 

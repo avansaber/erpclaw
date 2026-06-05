@@ -146,7 +146,6 @@ class TestSubmitStockReconciliation:
 # ──────────────────────────────────────────────────────────────────────────────
 
 class TestRevalueStock:
-    @pytest.mark.xfail(reason="BUG-006: stock_revaluation table not in init_schema.py")
     def test_basic_revalue(self, conn, env):
         result = call_action(mod.revalue_stock, conn, ns(
             item_id=env["item1"], warehouse_id=env["warehouse"],
@@ -165,7 +164,6 @@ class TestRevalueStock:
         assert is_error(result)
 
 
-@pytest.mark.xfail(reason="BUG-006: stock_revaluation table not in init_schema.py")
 class TestListStockRevaluations:
     def test_list(self, conn, env):
         call_action(mod.revalue_stock, conn, ns(
@@ -181,7 +179,6 @@ class TestListStockRevaluations:
         assert result["total_count"] >= 1
 
 
-@pytest.mark.xfail(reason="BUG-006: stock_revaluation table not in init_schema.py")
 class TestGetStockRevaluation:
     def test_get(self, conn, env):
         rv = call_action(mod.revalue_stock, conn, ns(
@@ -201,7 +198,6 @@ class TestGetStockRevaluation:
         assert is_error(result)
 
 
-@pytest.mark.xfail(reason="BUG-006: stock_revaluation table not in init_schema.py")
 class TestCancelStockRevaluation:
     def test_cancel(self, conn, env):
         rv = call_action(mod.revalue_stock, conn, ns(

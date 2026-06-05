@@ -314,7 +314,7 @@ def get_next_name(conn: sqlite3.Connection, entity_type: str,
         INSERT INTO naming_series (id, entity_type, prefix, current_value, company_id)
         VALUES (?, ?, ?, 1, ?)
         ON CONFLICT(entity_type, prefix, company_id)
-        DO UPDATE SET current_value = current_value + 1
+        DO UPDATE SET current_value = naming_series.current_value + 1
         """,
         (entry_id, entity_type, year_prefix, company_id),
     )

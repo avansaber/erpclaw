@@ -32,13 +32,18 @@ try:
         calculate_exchange_gain_loss,
         post_exchange_gain_loss,
     )
+    from erpclaw_lib.payment_clearing import (
+        apply_payment_to_document,
+        reverse_payment_on_document,
+        canonical_voucher_type,
+    )
     from erpclaw_lib.naming import get_next_name
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.dependencies import check_required_tables
     from erpclaw_lib.query_helpers import resolve_company_id
     from erpclaw_lib.query import (
-        Q, P, Table, Field, fn, Order, DecimalSum, insert_row, update_row,
+        Q, P, Table, Field, fn, Order, DecimalSum, insert_row, update_row, now,
     )
     from erpclaw_lib.vendor.pypika.terms import LiteralValue, ValueWrapper
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
@@ -50,7 +55,18 @@ except ImportError:
 REQUIRED_TABLES = ["company", "account"]
 
 VALID_PAYMENT_TYPES = ("receive", "pay", "internal_transfer")
+# Standard party types (used only as the error-message hint). Authoritative
+# validity now comes from party_type_registry via _party_type_registered (M0
+# phase 3b): the hardcoded CHECKs on payment_entry/payment_ledger_entry.party_type
+# were dropped so party types are registry-sourced + extensible at runtime.
 VALID_PARTY_TYPES = ("customer", "supplier", "employee")
+
+
+def _party_type_registered(conn, party_type):
+    """True if party_type exists in party_type_registry (M0 phase 3b source of truth)."""
+    return conn.execute(
+        "SELECT 1 FROM party_type_registry WHERE party_type = ? AND is_active = 1", (party_type,)
+    ).fetchone() is not None
 
 # ── PyPika table aliases ──
 PE = Table("payment_entry")
@@ -82,9 +98,11 @@ def _get_pe_or_err(conn, payment_entry_id: str) -> dict:
 
 def _get_allocations(conn, payment_entry_id: str) -> list[dict]:
     """Fetch allocations for a payment entry."""
+    # Stable, dialect-portable insertion-ish order: created_at then id.
+    # (rowid is SQLite-only and absent on Postgres.)
     q = (Q.from_(PA).select(PA.star)
          .where(PA.payment_entry_id == P())
-         .orderby(LiteralValue("rowid")))
+         .orderby(PA.created_at).orderby(PA.id))
     rows = conn.execute(q.get_sql(), (payment_entry_id,)).fetchall()
     return [row_to_dict(r) for r in rows]
 
@@ -100,9 +118,84 @@ def _insert_allocations(conn, payment_entry_id: str, allocations: list[dict]):
         alloc_id = str(uuid.uuid4())
         amount = round_currency(to_decimal(alloc.get("allocated_amount", "0")))
         total_allocated += amount
+        # Canonicalize voucher_type at the write boundary so the gateway's
+        # doctype-label form ("Sales Invoice") is stored as the snake_case key
+        # the clearing / PLE / INV-22 paths compare against.
+        vtype = canonical_voucher_type(alloc["voucher_type"])
         conn.execute(sql, (alloc_id, payment_entry_id,
-                           alloc["voucher_type"], alloc["voucher_id"], str(amount)))
+                           vtype, alloc["voucher_id"], str(amount)))
     return total_allocated
+
+
+INVOICE_VOUCHER_TYPES = ("sales_invoice", "purchase_invoice")
+
+
+def _post_allocation_ple(conn, pe, voucher_type, voucher_id, allocated_amount):
+    """Insert a per-allocation PLE row that offsets an invoice's voucher PLE.
+
+    The invoice voucher PLE (+grand_total, posted at invoice submit) plus this
+    per-allocation payment PLE (-allocated, against_voucher = the invoice) net to
+    zero when the invoice is fully paid (INV-22). RETAINS the separate party-level
+    payment PLE (-paid_amount, no against_voucher) posted at submit_payment.
+
+    Uses the SAME receivable/payable account as the party-level payment PLE
+    (paid_from for 'receive', paid_to for 'pay'). Subledger, NOT gl_entry — does
+    not route through gl_posting / the 12-step GL validation. Caller owns the
+    transaction; this does NOT commit.
+    """
+    voucher_type = canonical_voucher_type(voucher_type)
+    if voucher_type not in INVOICE_VOUCHER_TYPES:
+        return None
+    if not (pe.get("party_type") and pe.get("party_id")):
+        return None
+
+    ple_account = pe["paid_from_account"] if pe["payment_type"] == "receive" \
+        else pe["paid_to_account"]
+    ple_amount = str(round_currency(-to_decimal(allocated_amount)))
+    ple_id = str(uuid.uuid4())
+    ple_sql, _ = insert_row("payment_ledger_entry", {
+        "id": P(), "posting_date": P(), "account_id": P(),
+        "party_type": P(), "party_id": P(),
+        "voucher_type": P(), "voucher_id": P(),
+        "against_voucher_type": P(), "against_voucher_id": P(),
+        "amount": P(), "amount_in_account_currency": P(),
+        "currency": P(), "remarks": P(),
+    })
+    conn.execute(ple_sql,
+        (ple_id, pe["posting_date"], ple_account,
+         pe["party_type"], pe["party_id"],
+         "payment_entry", pe["id"],
+         voucher_type, voucher_id,
+         ple_amount, ple_amount,
+         pe["payment_currency"],
+         f"Payment {pe['naming_series']} applied to {voucher_type} {voucher_id}"))
+    return ple_id
+
+
+def _clear_invoice_allocation(conn, pe, voucher_type, voucher_id, allocated_amount):
+    """Apply ONE allocation to its document: sync outstanding/status + post PLE.
+
+    Single site combining the two halves so all three entry points
+    (submit/allocate/reconcile) clear an allocation identically. Caller owns the
+    transaction. Raises ValueError on a clearing error (over-application / bad
+    status) — the caller translates to its JSON error contract and rolls back.
+
+    Returns True if a document was actually cleared (an invoice synced + PLE
+    posted), False for the legitimate no-op path (advance / on-account voucher
+    types that never clear a document). Lets callers distinguish "nothing to
+    clear because not an invoice" from a real clearing, so submit/allocate/
+    reconcile never report a false success.
+    """
+    # Defensive canonicalization: handle any pre-existing label-form value that
+    # was stored before the write-boundary fix (e.g. on the live box) so the
+    # INVOICE_VOUCHER_TYPES membership test and the per-allocation PLE both use
+    # the canonical snake_case form.
+    voucher_type = canonical_voucher_type(voucher_type)
+    if voucher_type not in INVOICE_VOUCHER_TYPES:
+        return False
+    apply_payment_to_document(conn, voucher_type, voucher_id, allocated_amount)
+    _post_allocation_ple(conn, pe, voucher_type, voucher_id, allocated_amount)
+    return True
 
 
 def _recalc_unallocated(conn, payment_entry_id: str):
@@ -119,7 +212,7 @@ def _recalc_unallocated(conn, payment_entry_id: str):
     allocated = to_decimal(str(row["total"]))
     unallocated = round_currency(paid - allocated)
     sql = update_row("payment_entry",
-                     data={"unallocated_amount": P(), "updated_at": LiteralValue("datetime('now')")},
+                     data={"unallocated_amount": P(), "updated_at": now()},
                      where={"id": P()})
     conn.execute(sql, (str(unallocated), payment_entry_id))
 
@@ -187,8 +280,8 @@ def add_payment(conn, args):
         err("--posting-date is required")
     party_type = args.party_type
     if payment_type != "internal_transfer":
-        if not party_type or party_type not in VALID_PARTY_TYPES:
-            err(f"--party-type is required. Valid: {VALID_PARTY_TYPES}")
+        if not party_type or not _party_type_registered(conn, party_type):
+            err(f"--party-type is required and must be registered. Standard: {VALID_PARTY_TYPES}")
     party_id = args.party_id
     if payment_type != "internal_transfer" and not party_id:
         err("--party-id is required")
@@ -291,7 +384,7 @@ def update_payment(conn, args):
         received = round_currency(amount * exchange_rate)
         sql = update_row("payment_entry",
                          data={"paid_amount": P(), "received_amount": P(),
-                               "updated_at": LiteralValue("datetime('now')")},
+                               "updated_at": now()},
                          where={"id": P()})
         conn.execute(sql, (str(amount), str(received), pe_id))
         updated_fields.append("paid_amount")
@@ -300,7 +393,7 @@ def update_payment(conn, args):
         old_values["reference_number"] = pe["reference_number"]
         sql = update_row("payment_entry",
                          data={"reference_number": P(),
-                               "updated_at": LiteralValue("datetime('now')")},
+                               "updated_at": now()},
                          where={"id": P()})
         conn.execute(sql, (args.reference_number, pe_id))
         updated_fields.append("reference_number")
@@ -558,6 +651,50 @@ def _assert_currency_match(conn, pe, allocations):
             )
 
 
+def _resolve_advance_routing(conn, pe):
+    """S2: if the company has an advance sub-account configured for this payment's
+    direction, return (advance_account_id, control_account_id, side); else
+    (None, None, None). side is the GL leg to split — 'credit' for a customer
+    receive (the AR/paid_from leg), 'debit' for a supplier pay (the AP/paid_to leg)."""
+    if pe["payment_type"] not in ("receive", "pay") or not pe["party_type"]:
+        return None, None, None
+    row = conn.execute(
+        "SELECT advance_from_customer_account_id, advance_to_supplier_account_id "
+        "FROM company WHERE id = ?", (pe["company_id"],)).fetchone()
+    if not row:
+        return None, None, None
+    if pe["payment_type"] == "receive":
+        return row["advance_from_customer_account_id"], pe["paid_from_account"], "credit"
+    return row["advance_to_supplier_account_id"], pe["paid_to_account"], "debit"
+
+
+def _route_advance_portion(gl_entries, control_acct, advance_acct, amount, side):
+    """Move `amount` of the party control leg (on control_acct, on the given side)
+    onto a new leg on advance_acct. Same side, so debits=credits is preserved.
+    Mutates gl_entries in place. Returns True if a split was applied."""
+    amount = round_currency(amount)
+    for e in gl_entries:
+        if e["account_id"] != control_acct:
+            continue
+        cur = to_decimal(e[side])
+        if cur <= 0:
+            continue
+        if amount > cur:
+            return False  # safety: never route more than the control leg holds
+        remaining = round_currency(cur - amount)
+        if remaining == 0:
+            # the whole control leg is the advance — just repoint it
+            e["account_id"] = advance_acct
+        else:
+            e[side] = str(remaining)
+            adv = {"account_id": advance_acct, "debit": "0", "credit": "0",
+                   "party_type": e.get("party_type"), "party_id": e.get("party_id")}
+            adv[side] = str(amount)
+            gl_entries.append(adv)
+        return True
+    return False
+
+
 def submit_payment(conn, args):
     """Submit a draft payment: post GL entries, create PLE, update status.
 
@@ -582,7 +719,7 @@ def submit_payment(conn, args):
         if resolved != pe[acct_key]:
             # Auto-resolved to leaf child — update the payment entry
             sql = update_row("payment_entry",
-                             data={acct_key: P(), "updated_at": LiteralValue("datetime('now')")},
+                             data={acct_key: P(), "updated_at": now()},
                              where={"id": P()})
             conn.execute(sql, (resolved, pe_id))
             pe[acct_key] = resolved
@@ -628,6 +765,18 @@ def submit_payment(conn, args):
             {"account_id": pe["paid_from_account"], "debit": "0", "credit": str(paid_amount),
              "party_type": pe["party_type"], "party_id": pe["party_id"]},
         ]
+
+    # S2: route the unallocated (advance) portion of the party control leg to a
+    # dedicated advance sub-account if the company configured one. The advance is
+    # a liability (customer) / asset (supplier) until applied to an invoice; the
+    # offsetting reclassification is posted by allocate-payment. Backward-compatible:
+    # no config -> unchanged (whole amount stays on the AR/AP control account).
+    routed_advance_account = None
+    _adv_acct, _ctrl_acct, _adv_side = _resolve_advance_routing(conn, pe)
+    if _adv_acct:
+        _U = to_decimal(pe["unallocated_amount"])
+        if _U > 0 and _route_advance_portion(gl_entries, _ctrl_acct, _adv_acct, _U, _adv_side):
+            routed_advance_account = _adv_acct
 
     # Apply multi-currency: set currency/exchange_rate on GL entries.
     # Per the 2026-04-27 scope rule (invoice currency == payment currency,
@@ -730,12 +879,56 @@ def submit_payment(conn, args):
              f"Payment {pe['naming_series']}"))
 
     sql = update_row("payment_entry",
-                     data={"status": P(), "updated_at": LiteralValue("datetime('now')")},
+                     data={"status": P(), "updated_at": now()},
                      where={"id": P()})
     conn.execute(sql, ("submitted", pe_id))
 
+    # S2: record that the advance portion was routed to a sub-account so
+    # allocate-payment knows to post the offsetting reclassification.
+    if routed_advance_account:
+        conn.execute(
+            "UPDATE payment_entry SET advance_account_id = ? WHERE id = ?",
+            (routed_advance_account, pe_id))
+        pe["advance_account_id"] = routed_advance_account
+
+    # Clear each pre-existing invoice allocation: sync the document's
+    # outstanding/status AND post the per-allocation PLE that offsets the
+    # invoice's voucher PLE (INV-22). Allocations created LATER via
+    # allocate-payment / reconcile-payments are cleared at those sites — each
+    # allocation is processed exactly once.
+    docs_cleared = 0
+    invoice_allocations = 0
+    try:
+        for alloc in allocations:
+            # Canonical view of the allocation's voucher type (a pre-existing
+            # row could still carry a label form; new rows are stored canonical).
+            vt = canonical_voucher_type(alloc["voucher_type"])
+            if vt in INVOICE_VOUCHER_TYPES:
+                invoice_allocations += 1
+            if _clear_invoice_allocation(
+                    conn, pe, alloc["voucher_type"], alloc["voucher_id"],
+                    alloc["allocated_amount"]):
+                docs_cleared += 1
+    except ValueError as e:
+        conn.rollback()
+        sys.stderr.write(f"[erpclaw-payments] {e}\n")
+        err(f"Payment allocation failed: {e}")
+
+    # Guard against a silent false success: if the payment named invoice-like
+    # allocations but none actually cleared, do not pretend the books moved.
+    # (A payment with only advance / on-account allocations legitimately clears
+    # nothing — invoice_allocations == 0 — and is not an error.)
+    if invoice_allocations > 0 and docs_cleared == 0:
+        conn.rollback()
+        sys.stderr.write(
+            "[erpclaw-payments] payment named invoice allocations but cleared "
+            "no document\n")
+        err("Payment named invoice allocations but cleared no document")
+
     result = {"status": "submitted", "payment_entry_id": pe_id,
-              "gl_entries_created": len(gl_ids), "outstanding_updated": True}
+              "gl_entries_created": len(gl_ids),
+              "documents_cleared": docs_cleared,
+              "outstanding_updated": docs_cleared > 0}
     if discount_amount > 0:
         result["early_payment_discount"] = {
             "discount_amount": str(discount_amount),
@@ -779,19 +972,41 @@ def cancel_payment(conn, args):
         sys.stderr.write(f"[erpclaw-payments] {e}\n")
         err(f"GL reversal failed: {e}")
 
-    # Reverse PLE: mark existing as delinked, create offsetting entry
+    # Undo document clearing (Part 1): restore each allocated invoice's
+    # outstanding + status. Read grand_total per doc so the helper stays
+    # table-shape-agnostic. An invoice still partially paid by OTHER payments
+    # stays partially_paid; one fully un-paid returns to submitted.
+    for alloc in _get_allocations(conn, pe_id):
+        # Defensive canonicalization for any pre-existing label-form row.
+        vt, vid = canonical_voucher_type(alloc["voucher_type"]), alloc["voucher_id"]
+        if vt not in INVOICE_VOUCHER_TYPES:
+            continue
+        doc_t = SI if vt == "sales_invoice" else PI
+        gt_q = Q.from_(doc_t).select(doc_t.grand_total).where(doc_t.id == P())
+        gt_row = conn.execute(gt_q.get_sql(), (vid,)).fetchone()
+        if gt_row is None:
+            continue
+        reverse_payment_on_document(
+            conn, vt, vid, alloc["allocated_amount"], gt_row["grand_total"])
+
+    # Reverse PLE: mark existing as delinked, create offsetting entry. This
+    # selects ALL non-delinked PLE rows for this payment — the party-level row
+    # AND the per-allocation rows (Part 2) — so cancel nets every leg back.
     q_ple = (Q.from_(PLE).select(PLE.star)
              .where(PLE.voucher_type == P())
              .where(PLE.voucher_id == P())
              .where(PLE.delinked == P()))
     ple_rows = conn.execute(q_ple.get_sql(), ("payment_entry", pe_id, 0)).fetchall()
     delink_sql = update_row("payment_ledger_entry",
-                            data={"delinked": P(), "updated_at": LiteralValue("datetime('now')")},
+                            data={"delinked": P(), "updated_at": now()},
                             where={"id": P()})
+    # Forward against_voucher_type/id onto the reversing row so per-allocation
+    # reversals stay attributable and net INV-22 back correctly.
     ple_ins_sql, _ = insert_row("payment_ledger_entry", {
         "id": P(), "posting_date": P(), "account_id": P(),
         "party_type": P(), "party_id": P(),
         "voucher_type": P(), "voucher_id": P(),
+        "against_voucher_type": P(), "against_voucher_id": P(),
         "amount": P(), "amount_in_account_currency": P(),
         "currency": P(), "remarks": P(),
     })
@@ -803,12 +1018,14 @@ def cancel_payment(conn, args):
         conn.execute(ple_ins_sql,
             (str(uuid.uuid4()), pe["posting_date"], ple_dict["account_id"],
              ple_dict["party_type"], ple_dict["party_id"],
-             "payment_entry", pe_id, reversal_amount, reversal_amount,
+             "payment_entry", pe_id,
+             ple_dict.get("against_voucher_type"), ple_dict.get("against_voucher_id"),
+             reversal_amount, reversal_amount,
              ple_dict["currency"],
              f"Reversal: Payment {pe['naming_series']}"))
 
     sql = update_row("payment_entry",
-                     data={"status": P(), "updated_at": LiteralValue("datetime('now')")},
+                     data={"status": P(), "updated_at": now()},
                      where={"id": P()})
     conn.execute(sql, ("cancelled", pe_id))
 
@@ -855,12 +1072,17 @@ def create_payment_ledger_entry(conn, args):
     voucher_type = args.voucher_type
     if not voucher_type:
         err("--voucher-type is required")
+    # FINDING-006: canonicalize both doctype voucher_types at the write boundary
+    # so payment_ledger_entry rows store snake_case (the gateway may hand labels
+    # like "Sales Invoice"); PLE netting/outstanding compare against snake_case.
+    voucher_type = canonical_voucher_type(voucher_type)
+    against_voucher_type = canonical_voucher_type(args.against_voucher_type)
     voucher_id = args.voucher_id
     if not voucher_id:
         err("--voucher-id is required")
     party_type = args.party_type
-    if not party_type or party_type not in VALID_PARTY_TYPES:
-        err(f"--party-type is required. Valid: {VALID_PARTY_TYPES}")
+    if not party_type or not _party_type_registered(conn, party_type):
+        err(f"--party-type is required and must be registered. Standard: {VALID_PARTY_TYPES}")
     party_id = args.party_id
     if not party_id:
         err("--party-id is required")
@@ -887,7 +1109,7 @@ def create_payment_ledger_entry(conn, args):
     conn.execute(sql,
         (ple_id, posting_date, account_id, party_type, party_id,
          voucher_type, voucher_id,
-         args.against_voucher_type, args.against_voucher_id,
+         against_voucher_type, args.against_voucher_id,
          str(dec_amount), str(dec_amount), "USD"))
 
     audit(conn, "erpclaw-payments", "create-payment-ledger-entry", "payment_ledger_entry", ple_id,
@@ -918,8 +1140,10 @@ def get_outstanding(conn, args):
     params = [party_type, party_id, 0]
 
     if args.voucher_type:
+        # FINDING-006: filtering by "Sales Invoice" should match stored
+        # "sales_invoice" PLE rows.
         base = base.where(ple.voucher_type == P())
-        params.append(args.voucher_type)
+        params.append(canonical_voucher_type(args.voucher_type))
     if args.voucher_id:
         base = base.where(ple.voucher_id == P())
         params.append(args.voucher_id)
@@ -930,7 +1154,7 @@ def get_outstanding(conn, args):
              DecimalSum(ple.amount).as_("outstanding_amount"),
              fn.Min(ple.posting_date).as_("posting_date"))
          .groupby(ple.voucher_type, ple.voucher_id)
-         .having(LiteralValue('decimal_sum("amount") + 0 != 0'))
+         .having(LiteralValue('CAST(decimal_sum("amount") AS NUMERIC) != 0'))
          .orderby(ple.posting_date))
     rows = conn.execute(q.get_sql(), params).fetchall()
 
@@ -971,7 +1195,7 @@ def get_unallocated_payments(conn, args):
          .where(PE.party_id == P())
          .where(PE.company_id == P())
          .where(PE.status == P())
-         .where(LiteralValue('"unallocated_amount" + 0 > 0'))
+         .where(LiteralValue('CAST("unallocated_amount" AS NUMERIC) > 0'))
          .orderby(PE.posting_date))
     rows = conn.execute(q.get_sql(), (party_type, party_id, company_id, "submitted")).fetchall()
 
@@ -990,6 +1214,8 @@ def allocate_payment(conn, args):
     voucher_type = args.voucher_type
     if not voucher_type:
         err("--voucher-type is required")
+    # Canonicalize at the write boundary (gateway may pass "Sales Invoice").
+    voucher_type = canonical_voucher_type(voucher_type)
     voucher_id = args.voucher_id
     if not voucher_id:
         err("--voucher-id is required")
@@ -1018,6 +1244,59 @@ def allocate_payment(conn, args):
 
     _recalc_unallocated(conn, pe_id)
 
+    # S2: if this payment's advance portion was routed to an advance sub-account at
+    # submit time, applying it to an invoice must RECLASSIFY that amount out of the
+    # advance account and into the AR/AP control account (new offsetting GL entries,
+    # never editing the original posting — immutable GL).
+    #   customer (receive): DR Advance-from-Customer / CR AR(paid_from)
+    #   supplier (pay):      DR AP(paid_to) / CR Advance-to-Supplier
+    adv = pe["advance_account_id"]
+    if adv:
+        if pe["payment_type"] == "receive":
+            reclass = [
+                {"account_id": adv, "debit": str(amount), "credit": "0",
+                 "party_type": pe["party_type"], "party_id": pe["party_id"]},
+                {"account_id": pe["paid_from_account"], "debit": "0", "credit": str(amount),
+                 "party_type": pe["party_type"], "party_id": pe["party_id"]},
+            ]
+        else:  # pay
+            reclass = [
+                {"account_id": pe["paid_to_account"], "debit": str(amount), "credit": "0",
+                 "party_type": pe["party_type"], "party_id": pe["party_id"]},
+                {"account_id": adv, "debit": "0", "credit": str(amount),
+                 "party_type": pe["party_type"], "party_id": pe["party_id"]},
+            ]
+        try:
+            validate_gl_entries(conn, reclass, pe["company_id"], pe["posting_date"],
+                                voucher_type="payment_entry")
+            insert_gl_entries(conn, reclass, voucher_type="payment_entry", voucher_id=pe_id,
+                              posting_date=pe["posting_date"], company_id=pe["company_id"],
+                              remarks=f"Advance applied to {voucher_type} {voucher_id}",
+                              entry_set=f"advance_alloc_{alloc_id}")
+        except ValueError as e:
+            conn.rollback()
+            sys.stderr.write(f"[erpclaw-payments] {e}\n")
+            err(f"Advance reclassification GL failed: {e}")
+
+    # Clear the invoice this allocation targets: sync outstanding/status + post
+    # the per-allocation PLE (INV-22). Only this one allocation is processed here.
+    try:
+        cleared = _clear_invoice_allocation(conn, pe, voucher_type, voucher_id, amount)
+    except ValueError as e:
+        conn.rollback()
+        sys.stderr.write(f"[erpclaw-payments] {e}\n")
+        err(f"Payment allocation failed: {e}")
+
+    # Guard the false-success: an invoice-type voucher that cleared nothing is an
+    # error (the doc must have been synced). Advance / on-account voucher types
+    # legitimately clear nothing and return cleared=False without erroring.
+    if voucher_type in INVOICE_VOUCHER_TYPES and not cleared:
+        conn.rollback()
+        sys.stderr.write(
+            "[erpclaw-payments] allocation named an invoice but cleared no "
+            "document\n")
+        err("Allocation named an invoice but cleared no document")
+
     # Get updated unallocated
     qu = Q.from_(PE).select(PE.unallocated_amount).where(PE.id == P())
     updated = conn.execute(qu.get_sql(), (pe_id,)).fetchone()
@@ -1028,6 +1307,7 @@ def allocate_payment(conn, args):
     conn.commit()
 
     ok({"status": "created", "allocation_id": alloc_id,
+         "document_cleared": bool(cleared),
          "remaining_unallocated": updated["unallocated_amount"]})
 
 
@@ -1048,19 +1328,19 @@ def reconcile_payments(conn, args):
         err("--company-id is required")
 
     # Get unallocated submitted payments (FIFO by posting_date)
-    # Uses arithmetic WHERE (unallocated_amount + 0 > 0) — keep raw SQL
+    # Numeric compare on TEXT-stored amount via CAST (portable; SQLite + PG)
     payments = conn.execute(
         """SELECT id, paid_amount, unallocated_amount, posting_date
            FROM payment_entry
            WHERE party_type = ? AND party_id = ? AND company_id = ?
              AND status = 'submitted'
-             AND unallocated_amount + 0 > 0
+             AND CAST(unallocated_amount AS NUMERIC) > 0
            ORDER BY posting_date, created_at""",
         (party_type, party_id, company_id),
     ).fetchall()
 
     # Get outstanding vouchers from PLE (FIFO by posting_date)
-    # Uses HAVING with decimal_sum + 0 > 0 — keep raw SQL
+    # Numeric compare on the decimal_sum aggregate via CAST (portable; SQLite + PG)
     outstanding_rows = conn.execute(
         """SELECT voucher_type, voucher_id,
                decimal_sum(amount) AS outstanding
@@ -1068,7 +1348,7 @@ def reconcile_payments(conn, args):
            WHERE party_type = ? AND party_id = ? AND delinked = 0
              AND voucher_type IN ('sales_invoice', 'purchase_invoice')
            GROUP BY voucher_type, voucher_id
-           HAVING decimal_sum(amount) + 0 > 0
+           HAVING CAST(decimal_sum(amount) AS NUMERIC) > 0
            ORDER BY MIN(posting_date)""",
         (party_type, party_id),
     ).fetchall()
@@ -1078,6 +1358,7 @@ def reconcile_payments(conn, args):
     inv_idx = 0
     pay_list = [row_to_dict(p) for p in payments]
     inv_list = [row_to_dict(r) for r in outstanding_rows]
+    pe_cache = {}  # payment_entry_id -> full pe row (for per-allocation PLE)
 
     # Track remaining amounts
     for p in pay_list:
@@ -1108,6 +1389,30 @@ def reconcile_payments(conn, args):
         conn.execute(recon_sql,
             (alloc_id, pay["id"], inv["voucher_type"], inv["voucher_id"],
              str(alloc_amount)))
+
+        # Clear the matched invoice: sync outstanding/status + per-allocation PLE
+        # (INV-22). reconcile only matches sales_invoice/purchase_invoice (above),
+        # so every match is a document allocation. Each match processed once.
+        if pay["id"] not in pe_cache:
+            pe_cache[pay["id"]] = _get_pe_or_err(conn, pay["id"])
+        try:
+            cleared = _clear_invoice_allocation(
+                conn, pe_cache[pay["id"]], inv["voucher_type"],
+                inv["voucher_id"], alloc_amount)
+        except ValueError as e:
+            conn.rollback()
+            sys.stderr.write(f"[erpclaw-payments] {e}\n")
+            err(f"Payment reconciliation failed: {e}")
+        # reconcile only matches sales_invoice/purchase_invoice (the outstanding
+        # query above filters to those), so every match MUST clear a document.
+        # A False here means a voucher_type drifted from canonical — fail loud
+        # rather than silently report a match that moved nothing.
+        if not cleared:
+            conn.rollback()
+            sys.stderr.write(
+                "[erpclaw-payments] reconcile matched an invoice but cleared "
+                "no document\n")
+            err("Reconcile matched an invoice but cleared no document")
 
         pay["remaining"] -= alloc_amount
         inv["remaining"] -= alloc_amount
@@ -1254,6 +1559,9 @@ ACTIONS = {
     "get-outstanding": get_outstanding,
     "get-unallocated-payments": get_unallocated_payments,
     "allocate-payment": allocate_payment,
+    # S2: legacy-erp-vocabulary aliases for the existing advance lifecycle (same semantics)
+    "list-open-advances": get_unallocated_payments,
+    "apply-advance-to-invoice": allocate_payment,
     "reconcile-payments": reconcile_payments,
     "bank-reconciliation": bank_reconciliation,
     "status": status,

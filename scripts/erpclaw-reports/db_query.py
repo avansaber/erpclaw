@@ -26,6 +26,7 @@ try:
     from erpclaw_lib.audit import audit
     from erpclaw_lib.dependencies import check_required_tables
     from erpclaw_lib.query_helpers import resolve_company_id
+    from erpclaw_lib.voucher_types import canonical_voucher_type
     from erpclaw_lib.query import Q, P, Table, Field, fn, DecimalSum, DecimalAbs
     from erpclaw_lib.vendor.pypika import Order
     from erpclaw_lib.vendor.pypika.terms import LiteralValue
@@ -199,31 +200,43 @@ def profit_and_loss(conn, args):
     # Raw SQL: too complex for PyPika, readability preserved
     # (COALESCE(decimal_sum(...)) arithmetic in SELECT, LEFT JOIN with date range in ON clause,
     #  HAVING on computed alias — PyPika doesn't support HAVING on aliased expressions cleanly)
+    # CAST(... AS NUMERIC): PostgreSQL has no implicit text arithmetic and
+    # decimal_sum returns TEXT on both backends. The amount expression is
+    # repeated in HAVING because PG (unlike SQLite) disallows a SELECT-list
+    # alias in HAVING.
+    income_amount_expr = (
+        "CAST(COALESCE(decimal_sum(g.credit), '0') AS NUMERIC) "
+        "- CAST(COALESCE(decimal_sum(g.debit), '0') AS NUMERIC)"
+    )
     income_rows = conn.execute(
-        """SELECT a.id, a.name, a.account_number,
-                  COALESCE(decimal_sum(g.credit), '0') - COALESCE(decimal_sum(g.debit), '0') as amount
+        f"""SELECT a.id, a.name, a.account_number,
+                  {income_amount_expr} as amount
            FROM account a
            LEFT JOIN gl_entry g ON g.account_id = a.id
                AND g.posting_date >= ? AND g.posting_date <= ?
-               AND g.is_cancelled = 0""" + proj_join_clause + """
+               AND g.is_cancelled = 0{proj_join_clause}
            WHERE a.company_id = ? AND a.root_type = 'income' AND a.is_group = 0
            GROUP BY a.id
-           HAVING amount != 0
+           HAVING {income_amount_expr} != 0
            ORDER BY a.account_number, a.name""",
         (args.from_date, args.to_date) + proj_params + (company_id,),
     ).fetchall()
 
     # Raw SQL: too complex for PyPika, readability preserved
+    expense_amount_expr = (
+        "CAST(COALESCE(decimal_sum(g.debit), '0') AS NUMERIC) "
+        "- CAST(COALESCE(decimal_sum(g.credit), '0') AS NUMERIC)"
+    )
     expense_rows = conn.execute(
-        """SELECT a.id, a.name, a.account_number,
-                  COALESCE(decimal_sum(g.debit), '0') - COALESCE(decimal_sum(g.credit), '0') as amount
+        f"""SELECT a.id, a.name, a.account_number,
+                  {expense_amount_expr} as amount
            FROM account a
            LEFT JOIN gl_entry g ON g.account_id = a.id
                AND g.posting_date >= ? AND g.posting_date <= ?
-               AND g.is_cancelled = 0""" + proj_join_clause + """
+               AND g.is_cancelled = 0{proj_join_clause}
            WHERE a.company_id = ? AND a.root_type = 'expense' AND a.is_group = 0
            GROUP BY a.id
-           HAVING amount != 0
+           HAVING {expense_amount_expr} != 0
            ORDER BY a.account_number, a.name""",
         (args.from_date, args.to_date) + proj_params + (company_id,),
     ).fetchall()
@@ -270,6 +283,10 @@ def balance_sheet(conn, args):
     def _section(root_type, debit_positive=True):
         # Raw SQL: too complex for PyPika, readability preserved
         # (LEFT JOIN with date filter in ON clause, HAVING on computed aliases)
+        # SELECT stays TEXT (decimal_sum's native return) so Python keeps doing
+        # the exact-Decimal subtraction in _section. HAVING repeats the sums
+        # wrapped in CAST(... AS NUMERIC): PG disallows a SELECT-list alias in
+        # HAVING and rejects the text<->int comparison the alias form relied on.
         rows = conn.execute(
             """SELECT a.id, a.name, a.account_number,
                       COALESCE(decimal_sum(g.debit), '0') as total_debit,
@@ -279,7 +296,8 @@ def balance_sheet(conn, args):
                    AND g.posting_date <= ? AND g.is_cancelled = 0""" + proj_join_clause + """
                WHERE a.company_id = ? AND a.root_type = ? AND a.is_group = 0
                GROUP BY a.id
-               HAVING total_debit != 0 OR total_credit != 0
+               HAVING CAST(COALESCE(decimal_sum(g.debit), '0') AS NUMERIC) != 0
+                   OR CAST(COALESCE(decimal_sum(g.credit), '0') AS NUMERIC) != 0
                ORDER BY a.account_number, a.name""",
             (args.as_of_date,) + proj_join_params + (company_id, root_type),
         ).fetchall()
@@ -321,8 +339,10 @@ def balance_sheet(conn, args):
         fy_start = fy["start_date"]
         # Raw SQL: too complex for PyPika, readability preserved
         # (JOIN with subquery-style arithmetic, decimal_sum aggregates on cross-join result)
+        # CAST(... AS NUMERIC): decimal_sum returns TEXT; PG rejects text - text.
         inc = conn.execute(
-            """SELECT COALESCE(decimal_sum(credit), '0') - COALESCE(decimal_sum(debit), '0') as amt
+            """SELECT CAST(COALESCE(decimal_sum(credit), '0') AS NUMERIC)
+                      - CAST(COALESCE(decimal_sum(debit), '0') AS NUMERIC) as amt
                FROM gl_entry g JOIN account a ON a.id = g.account_id
                WHERE a.company_id = ? AND a.root_type = 'income'
                AND g.posting_date >= ? AND g.posting_date <= ?
@@ -330,7 +350,8 @@ def balance_sheet(conn, args):
             (company_id, fy_start, args.as_of_date) + proj_where_params,
         ).fetchone()
         exp = conn.execute(
-            """SELECT COALESCE(decimal_sum(debit), '0') - COALESCE(decimal_sum(credit), '0') as amt
+            """SELECT CAST(COALESCE(decimal_sum(debit), '0') AS NUMERIC)
+                      - CAST(COALESCE(decimal_sum(credit), '0') AS NUMERIC) as amt
                FROM gl_entry g JOIN account a ON a.id = g.account_id
                WHERE a.company_id = ? AND a.root_type = 'expense'
                AND g.posting_date >= ? AND g.posting_date <= ?
@@ -530,8 +551,10 @@ def general_ledger(conn, args):
         entries_q = entries_q.where(gl_t.party_id == P())
         entries_params.append(args.party_id)
     if args.voucher_type:
+        # FINDING-006: a label filter ("Sales Invoice") should match stored
+        # "sales_invoice" gl_entry rows.
         entries_q = entries_q.where(gl_t.voucher_type == P())
-        entries_params.append(args.voucher_type)
+        entries_params.append(canonical_voucher_type(args.voucher_type))
 
     entries_q = (
         entries_q
@@ -611,7 +634,13 @@ def _aging_report(conn, args, party_type_label, party_table, party_name_col="nam
         .where(ple_t.posting_date <= P())
         .groupby(ple_t.party_id)
         .having(
-            LiteralValue("total + 0 > 0.005 OR total + 0 < -0.005")
+            # Repeat the aggregate rather than the "total" SELECT alias: PostgreSQL
+            # disallows output-column aliases in HAVING, and CAST(... AS NUMERIC)
+            # replaces the SQLite-only "text + 0" numeric coercion.
+            LiteralValue(
+                "CAST(decimal_sum(amount) AS NUMERIC) > 0.005 "
+                "OR CAST(decimal_sum(amount) AS NUMERIC) < -0.005"
+            )
         )
         .get_sql()
     )

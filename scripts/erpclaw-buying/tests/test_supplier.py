@@ -72,6 +72,62 @@ class TestUpdateSupplier:
         assert is_error(result)
 
 
+class TestSupplierEmailPhone:
+    """ADR-0012: dedicated email + phone columns (FINDING-003)."""
+
+    def test_add_stores_and_returns_plain_email(self, conn, env):
+        result = call_action(mod.add_supplier, conn, ns(
+            name="ACME Supply", company_id=env["company_id"],
+            supplier_type=None, supplier_group=None,
+            payment_terms_id=None, tax_id=None,
+            is_1099_vendor=None, primary_address=None,
+            email="sales@acme.com", phone="555-0300",
+        ))
+        assert is_ok(result)
+        row = conn.execute(
+            "SELECT email, phone FROM supplier WHERE id=?",
+            (result["supplier_id"],)).fetchone()
+        assert row["email"] == "sales@acme.com"
+        assert row["phone"] == "555-0300"
+
+        got = call_action(mod.get_supplier, conn, ns(
+            supplier_id=result["supplier_id"], company_id=env["company_id"]))
+        assert is_ok(got)
+        assert got["email"] == "sales@acme.com"
+        assert got["phone"] == "555-0300"
+
+    def test_add_without_email_is_null(self, conn, env):
+        result = call_action(mod.add_supplier, conn, ns(
+            name="No Email Supply", company_id=env["company_id"],
+            supplier_type=None, supplier_group=None,
+            payment_terms_id=None, tax_id=None,
+            is_1099_vendor=None, primary_address=None,
+        ))
+        assert is_ok(result)
+        row = conn.execute(
+            "SELECT email, phone FROM supplier WHERE id=?",
+            (result["supplier_id"],)).fetchone()
+        assert row["email"] is None
+        assert row["phone"] is None
+
+    def test_update_email_and_phone(self, conn, env):
+        result = call_action(mod.update_supplier, conn, ns(
+            supplier_id=env["supplier"], company_id=env["company_id"],
+            name=None, supplier_group=None,
+            supplier_type=None, payment_terms_id=None,
+            tax_id=None, is_1099_vendor=None, primary_address=None,
+            email="new@acme.com", phone="555-0400",
+        ))
+        assert is_ok(result)
+        assert "email" in result["updated_fields"]
+        assert "phone" in result["updated_fields"]
+        row = conn.execute(
+            "SELECT email, phone FROM supplier WHERE id=?",
+            (env["supplier"],)).fetchone()
+        assert row["email"] == "new@acme.com"
+        assert row["phone"] == "555-0400"
+
+
 class TestGetSupplier:
     def test_get_by_id(self, conn, env):
         result = call_action(mod.get_supplier, conn, ns(

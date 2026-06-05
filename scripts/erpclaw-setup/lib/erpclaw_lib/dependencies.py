@@ -210,15 +210,29 @@ def skill_installed(conn: sqlite3.Connection, skill_name: str) -> bool:
 def resolve_skill_script(skill_name: str) -> Optional[str]:
     """Find the db_query.py path for a sibling skill.
 
-    Checks standard deployment locations.
+    Checks every known deployment layout, most-likely-real first:
+      1. ``$OPENCLAW_SKILLS_DIR/<skill>/...``     — explicit override when set
+      2. ``~/.openclaw/workspace/skills/<skill>/...`` — the OpenClaw gateway's skills dir
+      3. ``<foundation_root>/modules/<skill>/...``    — clawhub erpclaw foundation+addon layout
+      4. ``~/clawd/skills/<skill>/...``               — legacy skills dir
+      5. ``<foundation_root>/<skill>/...``            — flat sibling (legacy/dev)
+
+    Earlier versions only checked (4) and (5); on a real box the alerts/growth
+    addons live under ``<root>/modules/`` (or the gateway's workspace skills
+    dir), so cross-module sends (dunning/drip/campaign -> alerts) silently failed
+    to resolve. ``<foundation_root>`` is three levels up from this lib file
+    (``<root>/lib/erpclaw_lib/dependencies.py`` -> ``<root>``).
     """
-    candidates = [
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    candidates = []
+    env_dir = os.environ.get("OPENCLAW_SKILLS_DIR")
+    if env_dir:
+        candidates.append(os.path.join(env_dir, skill_name, "scripts", "db_query.py"))
+    candidates += [
+        os.path.expanduser(f"~/.openclaw/workspace/skills/{skill_name}/scripts/db_query.py"),
+        os.path.join(root, "modules", skill_name, "scripts", "db_query.py"),
         os.path.expanduser(f"~/clawd/skills/{skill_name}/scripts/db_query.py"),
-        os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(
-                os.path.abspath(__file__)))),
-            skill_name, "scripts", "db_query.py",
-        ),
+        os.path.join(root, skill_name, "scripts", "db_query.py"),
     ]
     for path in candidates:
         if os.path.exists(path):

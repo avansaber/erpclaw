@@ -4,8 +4,8 @@ version: 4.3.1
 description: >
   AI-native ERP system. Full accounting, invoicing, inventory, purchasing,
   tax, billing, HR, payroll, advanced accounting (ASC 606/842, intercompany, consolidation),
-  and financial reporting. 478 actions across 14 domains, 45 optional expansion modules (user-approved install from GitHub).
-  Double-entry GL, immutable audit trail, US GAAP compliant.
+  and financial reporting. 483 actions across 14 domains, 45 optional expansion modules (user-approved install from GitHub).
+  Double-entry GL, immutable audit trail, US GAAP compliant. Licensed under GNU GPL v3 (the marketplace "MIT-0" badge is a ClawHub platform default; the LICENSE.txt in the bundle is GPL v3).
 author: AvanSaber
 homepage: https://github.com/avansaber/erpclaw
 source: https://github.com/avansaber/erpclaw
@@ -19,6 +19,16 @@ metadata: {"openclaw":{"type":"executable","install":{"post":"python3 scripts/er
 **Full-Stack ERP Controller** for ERPClaw. Company setup, chart of accounts, journal entries, payments, tax, financial reports, customers, sales, suppliers, purchasing, inventory, billing, HR, US payroll, advanced accounting (ASC 606/842, intercompany, consolidation), and 45 optional industry modules. Local-first SQLite, double-entry GL, immutable audit trail.
 
 **Security:** Local-first. Parameterized queries. RBAC (PBKDF2). Immutable GL. Sensitive fields encrypted at the column level. Network access limited to `fetch-exchange-rates` (public API) and user-approved `install-module` from `github.com/avansaber/*`.
+
+## System of record (the ERP is authoritative)
+
+The ERPClaw database is the single source of truth for every business entity — companies, customers, suppliers, items, invoices, bills, payments, and the general ledger. Before answering what exists or acting on an entity, look it up in the ERP and ground your reply in that result:
+
+- "Which companies/customers/items do we have?" → query it (`list-companies`, `list-customers`, `list-items`). Never answer from memory, earlier conversations, workspace files, or any other context.
+- Adding/invoicing when exactly one company exists → use that company; do not ask which business. When several exist, offer only the ones from `list-companies` and ask which.
+- Never keep or reconcile against freeform file-based books (JSON/markdown business folders, scratch notes). They are not the ledger and may be stale. The ERP database is the only authoritative record.
+
+If a business name appears in your context but is not returned by `list-companies`, it does not exist in the books — do not offer it.
 
 ## Speaking to the user
 
@@ -86,15 +96,19 @@ python3 {baseDir}/scripts/db_query.py --action setup-chart-of-accounts --company
 
 High-impact actions require the `--user-confirmed` flag on every invocation. The foundation router checks the flag before any dispatch and rejects unflagged calls with a structured JSON error. Read-only actions (verbs `list`, `get`, reports) run without the flag.
 
-## All 478 Actions
+## All 483 Actions
 
 ### Setup & Admin (50)
 | Action | Description |
 |--------|-------------|
 | `initialize-database` / `setup-company` / `update-company` / `get-company` / `list-companies` | DB init & company CRUD |
+| `migrate` | Run pending schema migrations (`migrations/NNN_*.py`) in order, recording each in the `erpclaw_schema_migration` ledger. Idempotent + dialect-aware; `--dry-run` lists pending without applying. Run on install and on upgrades. |
 | `add-currency` / `list-currencies` / `add-exchange-rate` / `get-exchange-rate` / `list-exchange-rates` / `fetch-exchange-rates` | Currency & FX |
 | `add-payment-terms` / `list-payment-terms` / `add-uom` / `list-uoms` / `add-uom-conversion` | Terms & UoMs |
 | `seed-defaults` / `seed-demo-data` / `check-installation` / `install-guide` / `setup-web-dashboard` / `tutorial` / `onboarding-step` / `status` | Seeding & utilities |
+| `add-account-type` / `list-account-types` / `deactivate-account-type` / `add-voucher-type` / `list-voucher-types` / `deactivate-voucher-type` / `validate-registry-completeness` | Type/status registry admin (M0): register/inspect/soft-disable the account_type / voucher_type values that replaced hardcoded CHECK constraints |
+| `add-custom-field` / `list-custom-fields` / `remove-custom-field` / `set-custom-field-value` / `get-custom-field-values` | Custom fields (M1): define user-defined fields on any core table and store/read their values. Write-side actions in selling/buying/inventory accept `--custom-fields '{"name":"value"}'` and return them on get |
+| `set-advance-account` | Advances (S2): configure a company's B1-style advance sub-account (`--type customer`→liability, `--type supplier`→asset); submit-payment then routes the unallocated advance leg there |
 | `add-user` / `update-user` / `get-user` / `list-users` / `set-password` | User management |
 | `add-role` / `list-roles` / `assign-role` / `revoke-role` / `seed-permissions` | RBAC & security |
 | `link-telegram-user` / `unlink-telegram-user` / `check-telegram-permission` | Telegram integration |
@@ -127,6 +141,7 @@ High-impact actions require the `--user-confirmed` flag on every invocation. The
 |--------|-------------|
 | `add-payment` / `update-payment` / `get-payment` / `list-payments` / `submit-payment` / `cancel-payment` / `delete-payment` | Payment CRUD & lifecycle |
 | `create-payment-ledger-entry` / `get-outstanding` / `get-unallocated-payments` / `allocate-payment` / `reconcile-payments` / `bank-reconciliation` | Reconciliation |
+| `list-open-advances` / `apply-advance-to-invoice` | Advances (S2): legacy-erp-vocabulary aliases for `get-unallocated-payments` / `allocate-payment` (same semantics) |
 
 ### Tax (17)
 | Action | Description |
@@ -144,10 +159,10 @@ High-impact actions require the `--user-confirmed` flag on every invocation. The
 | `tax-summary` / `payment-summary` / `gl-summary` / `comparative-pl` / `check-overdue` | Summaries |
 | `add-elimination-rule` / `list-elimination-rules` / `run-elimination` / `list-elimination-entries` | Intercompany |
 
-### Selling (48)
+### Selling (53)
 | Action | Description |
 |--------|-------------|
-| `add-customer` / `update-customer` / `get-customer` / `list-customers` / `import-customers` | Customer CRUD |
+| `add-customer` / `update-customer` / `get-customer` / `list-customers` / `import-customers` | Customer CRUD (add/update accept `--email` / `--phone` — dedicated structured columns) |
 | `add-quotation` / `update-quotation` / `get-quotation` / `list-quotations` / `submit-quotation` / `convert-quotation-to-so` | Quotations |
 | `add-sales-order` / `update-sales-order` / `get-sales-order` / `list-sales-orders` / `submit-sales-order` / `cancel-sales-order` / `amend-sales-order` / `close-sales-order` | Sales orders |
 | `add-blanket-order` / `get-blanket-order` / `list-blanket-orders` / `submit-blanket-order` / `create-so-from-blanket` | Blanket orders |
@@ -157,11 +172,13 @@ High-impact actions require the `--user-confirmed` flag on every invocation. The
 | `add-sales-partner` / `list-sales-partners` | Sales partners |
 | `add-recurring-template` / `update-recurring-template` / `list-recurring-templates` / `generate-recurring-invoices` | Recurring invoices |
 | `add-intercompany-account-map` / `list-intercompany-account-maps` / `create-intercompany-invoice` / `list-intercompany-invoices` / `cancel-intercompany-invoice` | Intercompany |
+| `check-credit-limit` / `place-customer-on-hold` | Credit control: compute available credit (limit minus outstanding AR); place customer on hold / suspend / restore active |
+| `add-dunning-level` / `run-dunning-cycle` / `list-dunning-runs` | Dunning: configure escalation levels (at N days overdue → email / call / hold / suspend); run a cycle that matches overdue invoices to their highest applicable level and applies the configured action — `email` levels enqueue a dunning email via the erpclaw-alerts send-email action and record the outbox id on `dunning_run.generated_email_id` (missing customer email or template skips-with-note, never failing the cycle); view run history |
 
 ### Buying (40)
 | Action | Description |
 |--------|-------------|
-| `add-supplier` / `update-supplier` / `get-supplier` / `list-suppliers` / `import-suppliers` | Supplier CRUD |
+| `add-supplier` / `update-supplier` / `get-supplier` / `list-suppliers` / `import-suppliers` | Supplier CRUD (add/update accept `--email` / `--phone` — dedicated structured columns) |
 | `add-material-request` / `submit-material-request` / `list-material-requests` | Material requests |
 | `add-rfq` / `submit-rfq` / `list-rfqs` / `add-supplier-quotation` / `list-supplier-quotations` / `compare-supplier-quotations` | RFQs & quotes |
 | `add-purchase-order` / `update-purchase-order` / `get-purchase-order` / `list-purchase-orders` / `submit-purchase-order` / `cancel-purchase-order` / `close-purchase-order` | Purchase orders |
@@ -257,6 +274,22 @@ High-impact actions require the `--user-confirmed` flag on every invocation. The
 - Restore the database (`restore-database`)
 - Close the fiscal year (`close-fiscal-year`)
 - Force-reinitialize the database (`initialize-database --force`)
+
+## Optional scheduling (background email workers)
+
+ERPClaw never installs cron jobs automatically. Two background workers are meant to run on a schedule once a business turns on email automation. Register them with the OpenClaw cron facility — the same `openclaw cron add` path used for any recurring ERPClaw job (confirm with the user first):
+
+```bash
+# Send queued emails — every 1 minute (erpclaw-alerts: process-email-queue)
+openclaw cron add --name erpclaw-email-queue --cron "* * * * *" \
+  --message "Using erpclaw, run the process-email-queue action."
+
+# Advance drip-campaign sends — every 5 minutes (erpclaw-growth: process-drip-sends)
+openclaw cron add --name erpclaw-drip-sends --cron "*/5 * * * *" \
+  --message "Using erpclaw, run the process-drip-sends action."
+```
+
+`process-email-queue` (every 1 minute) drains the email outbox with exponential backoff; `process-drip-sends` (every 5 minutes) advances due drip enrollments. Both are idempotent, so re-running inside an interval will not double-send. Remove a schedule with `openclaw cron remove --name <name>`. SKILL.md `cron:` blocks are decorative and never auto-register — explicit `openclaw cron add` is the only active scheduling path (see CHANGELOG v4.1.0).
 
 ## Technical Details (Tier 3)
 Router: `scripts/db_query.py` -> 14 core domains. Optional modules installed from GitHub (`avansaber/*`) to `~/.openclaw/erpclaw/modules/` (user-approved only). Single SQLite DB (WAL). 188 core tables (688 with modules). Money=TEXT(Decimal), IDs=TEXT(UUID4), GL immutable. Python 3.10+. All network activity limited to: (1) `fetch-exchange-rates`, the public exchange rate API; (2) `install-module`, git clone from `github.com/avansaber/*` only, requires user approval.

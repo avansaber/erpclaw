@@ -57,7 +57,7 @@ _PREFIX_OVERRIDES: dict[str, list[str]] = {
     "erpclaw-integrations": ["erpclaw_", "integration_", "connv2_", "plaid_", "stripe_", "s3_"],
     "erpclaw-integrations-stripe": ["stripe_"],
     "erpclaw-integrations-shopify": ["shopify_"],
-    "erpclaw-alerts": ["erpclaw_", "alert_", "notification_"],
+    "erpclaw-alerts": ["erpclaw_", "alert_", "notification_", "email_"],  # email_ = M8 email substrate
     "erpclaw-approvals": ["erpclaw_", "approval_"],
     "erpclaw-compliance": ["erpclaw_", "compliance_", "audit_", "risk_", "control_", "policy"],
     "erpclaw-documents": ["erpclaw_", "document_", "document"],
@@ -117,6 +117,7 @@ _MONEY_EXCEPTIONS = {
     "allows_extra_credit",
     "allow_discount",
     "prorate_first_month",
+    "sync_rates",  # connector toggle (sync rate data? 1/0), alongside sync_reservations/sync_availability
     # Medical/scientific values
     "heart_rate",
     "respiratory_rate",

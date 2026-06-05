@@ -28,7 +28,8 @@ try:
     from erpclaw_lib.audit import audit
     from erpclaw_lib.dependencies import check_required_tables
     from erpclaw_lib.query_helpers import resolve_company_id
-    from erpclaw_lib.query import Q, P, Table, Field, fn, DecimalSum, Order, dynamic_update
+    from erpclaw_lib.voucher_types import canonical_voucher_type
+    from erpclaw_lib.query import Q, P, Table, Field, fn, DecimalSum, Order, dynamic_update, now
     from erpclaw_lib.vendor.pypika.terms import LiteralValue, ValueWrapper
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
 except ImportError:
@@ -237,7 +238,7 @@ def update_tax_template(conn, args):
         updated_fields.append("lines")
 
     if data:
-        data["updated_at"] = LiteralValue("datetime('now')")
+        data["updated_at"] = now()
         sql, params = dynamic_update("tax_template", data, where={"id": args.tax_template_id})
         conn.execute(sql, params)
 
@@ -812,6 +813,10 @@ def record_withholding_entry(conn, args):
     if not args.tax_year:
         err("--tax-year is required")
 
+    # FINDING-006: store the canonical snake_case doctype voucher_type, not a
+    # gateway-supplied label.
+    voucher_type = canonical_voucher_type(args.voucher_type)
+
     # Find withholding category for supplier
     q_sup = Q.from_(supp_t).select(supp_t.star).where(supp_t.id == P())
     _sup = conn.execute(q_sup.get_sql(), (args.supplier_id,)).fetchone()
@@ -833,7 +838,7 @@ def record_withholding_entry(conn, args):
     )
     conn.execute(q.get_sql(),
         (eid, args.supplier_id, cat_id, args.tax_year,
-         args.withholding_amount, args.voucher_type, args.voucher_id))
+         args.withholding_amount, voucher_type, args.voucher_id))
     audit(conn, "erpclaw-tax", "record-withholding-entry", "tax_withholding_entry", eid,
            new_values={"supplier_id": args.supplier_id, "amount": args.withholding_amount})
     conn.commit()
@@ -851,6 +856,9 @@ def record_1099_payment(conn, args):
         err("--voucher-type is required")
     if not args.voucher_id:
         err("--voucher-id is required")
+
+    # FINDING-006: store canonical snake_case doctype voucher_type, not a label.
+    voucher_type = canonical_voucher_type(args.voucher_type)
 
     q_sup = Q.from_(supp_t).select(supp_t.star).where(supp_t.id == P())
     _sup = conn.execute(q_sup.get_sql(), (args.supplier_id,)).fetchone()
@@ -872,7 +880,7 @@ def record_1099_payment(conn, args):
     )
     conn.execute(q.get_sql(),
         (eid, args.supplier_id, cat_id, args.tax_year,
-         args.ple_amount, args.voucher_type, args.voucher_id))
+         args.ple_amount, voucher_type, args.voucher_id))
 
     # Get YTD total
     q_ytd = (

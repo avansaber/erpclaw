@@ -28,13 +28,14 @@ try:
         reverse_gl_entries,
         get_account_balance as _lib_get_account_balance,
     )
+    from erpclaw_lib.voucher_types import canonical_voucher_type
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.fx_posting import get_exchange_rate, convert_to_base
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.dependencies import check_required_tables
     from erpclaw_lib.query_helpers import resolve_company_id
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL, DecimalSum, DecimalAbs, dynamic_update, now
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL, DecimalSum, DecimalAbs, dynamic_update, now, rowid_col
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
     from erpclaw_lib.vendor.pypika.terms import LiteralValue, ValueWrapper
 except ImportError:
@@ -169,6 +170,18 @@ def add_account(conn, args):
     if is_group and account_type and account_type.lower() in LEAF_ONLY_TYPES:
         err(f"Account type '{account_type}' must be a posting (leaf) account, "
             f"not a group. Remove --is-group to create a postable account.")
+
+    # account_type validity now comes from account_type_registry (M0, 2026-05-30):
+    # the hardcoded CHECK on account.account_type was dropped so new types can be
+    # registered at runtime. NULL/empty stays allowed (group/structural accounts).
+    if account_type:
+        known = conn.execute(
+            "SELECT 1 FROM account_type_registry WHERE account_type = ? AND is_active = 1",
+            (account_type,),
+        ).fetchone()
+        if not known:
+            err(f"account_type '{account_type}' is not a registered, active type. Register it "
+                f"(add-account-type) or run seed-registry-defaults.")
 
     # Default balance direction
     balance_direction = "debit_normal"
@@ -389,7 +402,10 @@ def unfreeze_account(conn, args):
 # ---------------------------------------------------------------------------
 
 def post_gl_entries(conn, args):
-    voucher_type = args.voucher_type
+    # Canonicalize doctype voucher_type at the gateway boundary (FINDING-006):
+    # the gateway may hand a label ("Sales Invoice"); store the snake_case form
+    # so gl_entry.voucher_type matches what every reader filters on.
+    voucher_type = canonical_voucher_type(args.voucher_type)
     voucher_id = args.voucher_id
     posting_date = args.posting_date
     company_id = args.company_id
@@ -432,7 +448,9 @@ def post_gl_entries(conn, args):
 # ---------------------------------------------------------------------------
 
 def reverse_gl_entries_action(conn, args):
-    voucher_type = args.voucher_type
+    # FINDING-006: normalize so the reversal lookup matches the canonical
+    # voucher_type the entries were stored under.
+    voucher_type = canonical_voucher_type(args.voucher_type)
     voucher_id = args.voucher_id
     posting_date = args.posting_date
 
@@ -474,8 +492,10 @@ def list_gl_entries(conn, args):
         q = q.where(g.account_id == P())
         params.append(args.account_id)
     if args.voucher_type:
+        # FINDING-006: filtering by "Sales Invoice" should match stored
+        # "sales_invoice" rows.
         q = q.where(g.voucher_type == P())
-        params.append(args.voucher_type)
+        params.append(canonical_voucher_type(args.voucher_type))
     if args.voucher_id:
         q = q.where(g.voucher_id == P())
         params.append(args.voucher_id)
@@ -1166,7 +1186,7 @@ def check_gl_integrity(conn, args):
          .select(g.posting_date, g.account_id, g.debit, g.credit,
                  g.voucher_type, g.voucher_id, g.gl_checksum)
          .where(a.company_id == P())
-         .orderby(g.created_at).orderby(LiteralValue('"g"."rowid"')))
+         .orderby(g.created_at).orderby(LiteralValue(rowid_col("g."))))
     entries = conn.execute(q.get_sql(), (company_id,)).fetchall()
 
     chain_intact = True

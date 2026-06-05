@@ -35,8 +35,9 @@ try:
     from erpclaw_lib.gl_posting import insert_gl_entries, reverse_gl_entries
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
+    from erpclaw_lib.custom_fields import store_from_arg, merge_into_response
     from erpclaw_lib.dependencies import check_required_tables
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL, DecimalSum, DecimalAbs, dynamic_update
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL, DecimalSum, DecimalAbs, dynamic_update, line_order, scalar_max, now
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
     from erpclaw_lib.vendor.pypika.terms import LiteralValue, ValueWrapper
 except ImportError:
@@ -186,21 +187,28 @@ def add_supplier(conn, args):
         q = (Q.into(s_t)
              .columns("id", "name", "supplier_group", "supplier_type",
                       "payment_terms_id", "tax_id", "is_1099_vendor",
-                      "primary_address", "status", "company_id")
+                      "primary_address", "email", "phone", "status", "company_id")
              .insert(P(), P(), P(), P(), P(), P(), P(), P(),
-                     ValueWrapper("active"), P()))
+                     P(), P(), ValueWrapper("active"), P()))
         conn.execute(q.get_sql(),
             (supplier_id, args.name, args.supplier_group, supplier_type,
              args.payment_terms_id, args.tax_id, is_1099,
-             primary_address, args.company_id))
+             primary_address, getattr(args, "email", None),
+             getattr(args, "phone", None), args.company_id))
     except sqlite3.IntegrityError as e:
         sys.stderr.write(f"[erpclaw-buying] {e}\n")
         err("Supplier creation failed — check for duplicates or invalid data")
 
+    cf_errors = store_from_arg(conn, "supplier", supplier_id, getattr(args, "custom_fields", None))
+    if cf_errors:
+        conn.rollback()
+        err("Custom field error: " + "; ".join(cf_errors))
+
     audit(conn, "erpclaw-buying", "add-supplier", "supplier", supplier_id,
            new_values={"name": args.name, "type": supplier_type})
     conn.commit()
-    ok({"supplier_id": supplier_id, "name": args.name})
+    resp = {"supplier_id": supplier_id, "name": args.name}
+    ok(merge_into_response(conn, "supplier", supplier_id, resp))
 
 
 # ---------------------------------------------------------------------------
@@ -238,11 +246,17 @@ def update_supplier(conn, args):
             err("--supplier-type must be 'company' or 'individual'")
         data["supplier_type"] = args.supplier_type
         updated_fields.append("supplier_type")
+    if getattr(args, "email", None) is not None:
+        data["email"] = args.email
+        updated_fields.append("email")
+    if getattr(args, "phone", None) is not None:
+        data["phone"] = args.phone
+        updated_fields.append("phone")
 
     if not updated_fields:
         err("No fields to update")
 
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = now()
     sql, params = dynamic_update("supplier", data, where={"id": args.supplier_id})
     conn.execute(sql, params)
 
@@ -283,7 +297,7 @@ def get_supplier(conn, args):
     data["total_outstanding"] = str(round_currency(to_decimal(str(outstanding["total_outstanding"]))))
     data["outstanding_invoice_count"] = outstanding["invoice_count"]
 
-    ok(data)
+    ok(merge_into_response(conn, "supplier", supplier["id"], data))
 
 
 # ---------------------------------------------------------------------------
@@ -413,7 +427,7 @@ def submit_material_request(conn, args):
     q = (Q.update(mr_t)
          .set(mr_t.status, ValueWrapper("submitted"))
          .set(mr_t.naming_series, P())
-         .set(mr_t.updated_at, LiteralValue("datetime('now')"))
+         .set(mr_t.updated_at, now())
          .where(mr_t.id == P()))
     conn.execute(q.get_sql(), (naming, args.material_request_id))
 
@@ -568,14 +582,14 @@ def submit_rfq(conn, args):
     q = (Q.update(rfq_t)
          .set(rfq_t.status, ValueWrapper("submitted"))
          .set(rfq_t.naming_series, P())
-         .set(rfq_t.updated_at, LiteralValue("datetime('now')"))
+         .set(rfq_t.updated_at, now())
          .where(rfq_t.id == P()))
     conn.execute(q.get_sql(), (naming, args.rfq_id))
 
     # Mark sent_date on rfq_supplier rows
     rs_t = Table("rfq_supplier")
     q = (Q.update(rs_t)
-         .set(rs_t.sent_date, LiteralValue("datetime('now')"))
+         .set(rs_t.sent_date, now())
          .where(rs_t.rfq_id == P()))
     conn.execute(q.get_sql(), (args.rfq_id,))
 
@@ -711,7 +725,7 @@ def add_supplier_quotation(conn, args):
     # Mark rfq_supplier as having a response
     rs_t = Table("rfq_supplier")
     q = (Q.update(rs_t)
-         .set(rs_t.response_date, LiteralValue("datetime('now')"))
+         .set(rs_t.response_date, now())
          .set(rs_t.supplier_quotation_id, P())
          .where(rs_t.rfq_id == P())
          .where(rs_t.supplier_id == P()))
@@ -726,7 +740,7 @@ def add_supplier_quotation(conn, args):
     if all_responded["total"] == all_responded["responded"]:
         q = (Q.update(rfq_t)
              .set(rfq_t.status, ValueWrapper("quotation_received"))
-             .set(rfq_t.updated_at, LiteralValue("datetime('now')"))
+             .set(rfq_t.updated_at, now())
              .where(rfq_t.id == P()))
         conn.execute(q.get_sql(), (args.rfq_id,))
 
@@ -1028,7 +1042,7 @@ def update_purchase_order(conn, args):
          .set(po_t.total_amount, P())
          .set(po_t.tax_amount, P())
          .set(po_t.grand_total, P())
-         .set(po_t.updated_at, LiteralValue("datetime('now')"))
+         .set(po_t.updated_at, now())
          .where(po_t.id == P()))
     conn.execute(q.get_sql(),
         (str(round_currency(total_amount)), str(round_currency(tax_amount)),
@@ -1067,7 +1081,7 @@ def get_purchase_order(conn, args):
          .left_join(i_t).on(i_t.id == poi.item_id)
          .select(poi.star, i_t.item_code, i_t.item_name)
          .where(poi.purchase_order_id == P())
-         .orderby(poi.rowid))
+         .orderby(line_order(poi)))
     items = conn.execute(q.get_sql(), (args.purchase_order_id,)).fetchall()
     data["items"] = [row_to_dict(r) for r in items]
 
@@ -1188,7 +1202,7 @@ def submit_purchase_order(conn, args):
     q = (Q.update(po_t)
          .set(po_t.status, ValueWrapper("confirmed"))
          .set(po_t.naming_series, P())
-         .set(po_t.updated_at, LiteralValue("datetime('now')"))
+         .set(po_t.updated_at, now())
          .where(po_t.id == P()))
     conn.execute(q.get_sql(), (naming, args.purchase_order_id))
 
@@ -1244,7 +1258,7 @@ def cancel_purchase_order(conn, args):
 
     q = (Q.update(po_t)
          .set(po_t.status, ValueWrapper("cancelled"))
-         .set(po_t.updated_at, LiteralValue("datetime('now')"))
+         .set(po_t.updated_at, now())
          .where(po_t.id == P()))
     conn.execute(q.get_sql(), (args.purchase_order_id,))
 
@@ -1283,7 +1297,7 @@ def create_purchase_receipt(conn, args):
     poi_t = Table("purchase_order_item")
     q = (Q.from_(poi_t).select(poi_t.star)
          .where(poi_t.purchase_order_id == P())
-         .orderby(poi_t.rowid))
+         .orderby(line_order(poi_t)))
     po_items = conn.execute(q.get_sql(), (args.purchase_order_id,)).fetchall()
 
     # --- GRN Tolerance: look up company-level receipt_tolerance_pct ---
@@ -1412,7 +1426,7 @@ def get_purchase_receipt(conn, args):
          .left_join(i_t).on(i_t.id == pri.item_id)
          .select(pri.star, i_t.item_code, i_t.item_name)
          .where(pri.purchase_receipt_id == P())
-         .orderby(pri.rowid))
+         .orderby(line_order(pri)))
     items = conn.execute(q.get_sql(), (args.purchase_receipt_id,)).fetchall()
     data["items"] = [row_to_dict(r) for r in items]
 
@@ -1499,7 +1513,7 @@ def submit_purchase_receipt(conn, args):
     pri_t = Table("purchase_receipt_item")
     q = (Q.from_(pri_t).select(pri_t.star)
          .where(pri_t.purchase_receipt_id == P())
-         .orderby(pri_t.rowid))
+         .orderby(line_order(pri_t)))
     items = conn.execute(q.get_sql(), (args.purchase_receipt_id,)).fetchall()
     if not items:
         err("Purchase receipt has no items")
@@ -1590,7 +1604,7 @@ def submit_purchase_receipt(conn, args):
             conn.execute(
                 """UPDATE purchase_order_item
                    SET received_qty = CAST(
-                       received_qty + 0 + ? AS TEXT)
+                       CAST(received_qty AS NUMERIC) + CAST(? AS NUMERIC) AS TEXT)
                    WHERE id = ?""",
                 (item["quantity"], item["purchase_order_item_id"]),
             )
@@ -1603,7 +1617,7 @@ def submit_purchase_receipt(conn, args):
     q = (Q.update(pr_t)
          .set(pr_t.status, ValueWrapper("submitted"))
          .set(pr_t.naming_series, P())
-         .set(pr_t.updated_at, LiteralValue("datetime('now')"))
+         .set(pr_t.updated_at, now())
          .where(pr_t.id == P()))
     conn.execute(q.get_sql(), (naming, args.purchase_receipt_id))
 
@@ -1648,7 +1662,7 @@ def _update_po_receipt_status(conn, purchase_order_id):
     q = (Q.update(po_t)
          .set(po_t.per_received, P())
          .set(po_t.status, P())
-         .set(po_t.updated_at, LiteralValue("datetime('now')"))
+         .set(po_t.updated_at, now())
          .where(po_t.id == P()))
     conn.execute(q.get_sql(), (str(per_received), new_status, purchase_order_id))
 
@@ -1705,9 +1719,9 @@ def cancel_purchase_receipt(conn, args):
         if item.get("purchase_order_item_id"):
             # raw SQL — CAST+MAX arithmetic expression not expressible in PyPika
             conn.execute(
-                """UPDATE purchase_order_item
+                f"""UPDATE purchase_order_item
                    SET received_qty = CAST(
-                       MAX(0, received_qty + 0 - ?) AS TEXT)
+                       {scalar_max("0", "CAST(received_qty AS NUMERIC) - CAST(? AS NUMERIC)")} AS TEXT)
                    WHERE id = ?""",
                 (item["quantity"], item["purchase_order_item_id"]),
             )
@@ -1727,13 +1741,13 @@ def cancel_purchase_receipt(conn, args):
             q = (Q.update(po_t)
                  .set(po_t.status, ValueWrapper("confirmed"))
                  .set(po_t.per_received, ValueWrapper("0"))
-                 .set(po_t.updated_at, LiteralValue("datetime('now')"))
+                 .set(po_t.updated_at, now())
                  .where(po_t.id == P()))
             conn.execute(q.get_sql(), (pr_dict["purchase_order_id"],))
 
     q = (Q.update(pr_t)
          .set(pr_t.status, ValueWrapper("cancelled"))
-         .set(pr_t.updated_at, LiteralValue("datetime('now')"))
+         .set(pr_t.updated_at, now())
          .where(pr_t.id == P()))
     conn.execute(q.get_sql(), (args.purchase_receipt_id,))
 
@@ -1993,7 +2007,7 @@ def update_purchase_invoice(conn, args):
              .set(pi_t.tax_amount, P())
              .set(pi_t.grand_total, P())
              .set(pi_t.outstanding_amount, P())
-             .set(pi_t.updated_at, LiteralValue("datetime('now')"))
+             .set(pi_t.updated_at, now())
              .where(pi_t.id == P()))
         conn.execute(q.get_sql(),
             (str(round_currency(total_amount)), str(round_currency(tax_amount)),
@@ -2004,7 +2018,7 @@ def update_purchase_invoice(conn, args):
         err("No fields to update")
 
     q = (Q.update(pi_t)
-         .set(pi_t.updated_at, LiteralValue("datetime('now')"))
+         .set(pi_t.updated_at, now())
          .where(pi_t.id == P()))
     conn.execute(q.get_sql(), (args.purchase_invoice_id,))
 
@@ -2039,7 +2053,7 @@ def get_purchase_invoice(conn, args):
          .left_join(i_t).on(i_t.id == pii.item_id)
          .select(pii.star, i_t.item_code, i_t.item_name)
          .where(pii.purchase_invoice_id == P())
-         .orderby(pii.rowid))
+         .orderby(line_order(pii)))
     items = conn.execute(q.get_sql(), (args.purchase_invoice_id,)).fetchall()
     data["items"] = [row_to_dict(r) for r in items]
 
@@ -2561,7 +2575,7 @@ def submit_purchase_invoice(conn, args):
                 conn.execute(
                     """UPDATE purchase_order_item
                        SET invoiced_qty = CAST(
-                           invoiced_qty + 0 + ? AS TEXT)
+                           CAST(invoiced_qty AS NUMERIC) + CAST(? AS NUMERIC) AS TEXT)
                        WHERE id = ?""",
                     (item["quantity"], item["purchase_order_item_id"]),
                 )
@@ -2571,7 +2585,7 @@ def submit_purchase_invoice(conn, args):
     q = (Q.update(pi_t)
          .set(pi_t.status, ValueWrapper("submitted"))
          .set(pi_t.naming_series, P())
-         .set(pi_t.updated_at, LiteralValue("datetime('now')"))
+         .set(pi_t.updated_at, now())
          .where(pi_t.id == P()))
     conn.execute(q.get_sql(), (naming, args.purchase_invoice_id))
 
@@ -2625,7 +2639,7 @@ def _update_po_invoice_status(conn, purchase_order_id):
         q = (Q.update(po_t)
              .set(po_t.per_invoiced, P())
              .set(po_t.status, P())
-             .set(po_t.updated_at, LiteralValue("datetime('now')"))
+             .set(po_t.updated_at, now())
              .where(po_t.id == P()))
         conn.execute(q.get_sql(),
             (str(per_invoiced), new_status, purchase_order_id))
@@ -2684,7 +2698,7 @@ def cancel_purchase_invoice(conn, args):
     ple_t = Table("payment_ledger_entry")
     q = (Q.update(ple_t)
          .set(ple_t.delinked, 1)
-         .set(ple_t.updated_at, LiteralValue("datetime('now')"))
+         .set(ple_t.updated_at, now())
          .where(ple_t.voucher_type == ValueWrapper("purchase_invoice"))
          .where(ple_t.voucher_id == P()))
     conn.execute(q.get_sql(), (args.purchase_invoice_id,))
@@ -2699,9 +2713,9 @@ def cancel_purchase_invoice(conn, args):
             if item.get("purchase_order_item_id"):
                 # raw SQL — CAST+MAX arithmetic expression not expressible in PyPika
                 conn.execute(
-                    """UPDATE purchase_order_item
+                    f"""UPDATE purchase_order_item
                        SET invoiced_qty = CAST(
-                           MAX(0, invoiced_qty + 0 - ?) AS TEXT)
+                           {scalar_max("0", "CAST(invoiced_qty AS NUMERIC) - CAST(? AS NUMERIC)")} AS TEXT)
                        WHERE id = ?""",
                     (item["quantity"], item["purchase_order_item_id"]),
                 )
@@ -2709,7 +2723,7 @@ def cancel_purchase_invoice(conn, args):
 
     q = (Q.update(pi_t)
          .set(pi_t.status, ValueWrapper("cancelled"))
-         .set(pi_t.updated_at, LiteralValue("datetime('now')"))
+         .set(pi_t.updated_at, now())
          .where(pi_t.id == P()))
     conn.execute(q.get_sql(), (args.purchase_invoice_id,))
 
@@ -2841,34 +2855,26 @@ def update_invoice_outstanding(conn, args):
     if payment_amount <= 0:
         err("--amount must be > 0")
 
-    current_outstanding = to_decimal(pi["outstanding_amount"])
-    new_outstanding = round_currency(current_outstanding - payment_amount)
-
-    if new_outstanding < Decimal("0"):
-        new_outstanding = Decimal("0")
-
-    if new_outstanding == Decimal("0"):
-        new_status = "paid"
-    else:
-        new_status = "partially_paid"
-
-    q = (Q.update(pi_t)
-         .set(pi_t.outstanding_amount, P())
-         .set(pi_t.status, P())
-         .set(pi_t.updated_at, LiteralValue("datetime('now')"))
-         .where(pi_t.id == P()))
-    conn.execute(q.get_sql(),
-        (str(new_outstanding), new_status, args.purchase_invoice_id))
+    # Delegate compute-and-write to the neutral payment-clearing lib so this
+    # action and erpclaw-payments share ONE canonical clearing rule (no drift).
+    # Decision 2: over-payment now REJECTS (was silently clamped to 0) to match
+    # selling and surface real allocation errors instead of hiding them.
+    try:
+        from erpclaw_lib.payment_clearing import apply_payment_to_document
+        res = apply_payment_to_document(
+            conn, "purchase_invoice", args.purchase_invoice_id, args.amount)
+    except ValueError as e:
+        err(str(e))
 
     audit(conn, "erpclaw-buying", "update-invoice-outstanding", "purchase_invoice",
            args.purchase_invoice_id,
            new_values={"payment_amount": str(payment_amount),
-                       "new_outstanding": str(new_outstanding),
-                       "new_status": new_status})
+                       "new_outstanding": res["outstanding_amount"],
+                       "new_status": res["status"]})
     conn.commit()
     ok({"purchase_invoice_id": args.purchase_invoice_id,
-         "outstanding_amount": str(new_outstanding),
-         "status": new_status})
+         "outstanding_amount": res["outstanding_amount"],
+         "status": res["status"]})
 
 
 # ---------------------------------------------------------------------------
@@ -3081,7 +3087,7 @@ def update_receipt_tolerance(conn, args):
 
     q = (Q.update(company_t)
          .set(company_t.receipt_tolerance_pct, P())
-         .set(company_t.updated_at, LiteralValue("datetime('now')"))
+         .set(company_t.updated_at, now())
          .where(company_t.id == P()))
     conn.execute(q.get_sql(), (str(round_currency(pct)), args.company_id))
 
@@ -3114,7 +3120,7 @@ def update_three_way_match_policy(conn, args):
 
     q = (Q.update(company_t)
          .set(company_t.three_way_match_policy, P())
-         .set(company_t.updated_at, LiteralValue("datetime('now')"))
+         .set(company_t.updated_at, now())
          .where(company_t.id == P()))
     conn.execute(q.get_sql(), (policy, args.company_id))
 
@@ -3278,7 +3284,7 @@ def close_purchase_order(conn, args):
          .set(po_t.status, ValueWrapper("closed"))
          .set("close_reason", P())
          .set("closed_by", P())
-         .set(po_t.updated_at, LiteralValue("datetime('now')"))
+         .set(po_t.updated_at, now())
          .where(po_t.id == P()))
     conn.execute(q.get_sql(), (close_reason, closed_by, args.purchase_order_id))
 
@@ -3436,7 +3442,7 @@ def submit_blanket_po(conn, args):
 
     uq = (Q.update(_t_blanket_order)
           .set(_t_blanket_order.status, ValueWrapper("active"))
-          .set(_t_blanket_order.updated_at, LiteralValue("datetime('now')"))
+          .set(_t_blanket_order.updated_at, now())
           .where(_t_blanket_order.id == P()))
     conn.execute(uq.get_sql(), (args.blanket_order_id,))
 
@@ -3631,7 +3637,7 @@ def create_po_from_blanket(conn, args):
         (args.blanket_order_id,)).fetchone()["total"]
     bo_uq = (Q.update(_t_blanket_order)
              .set(_t_blanket_order.ordered_qty, P())
-             .set(_t_blanket_order.updated_at, LiteralValue("datetime('now')"))
+             .set(_t_blanket_order.updated_at, now())
              .where(_t_blanket_order.id == P()))
     conn.execute(bo_uq.get_sql(), (ordered_sum, args.blanket_order_id))
 
@@ -4056,7 +4062,7 @@ def generate_recurring_bills(conn, args):
                 uq_pi = (Q.update(pi_t)
                          .set("status", ValueWrapper("submitted"))
                          .set("naming_series", P())
-                         .set("updated_at", LiteralValue("datetime('now')"))
+                         .set("updated_at", now())
                          .where(pi_t.id == P()))
                 conn.execute(uq_pi.get_sql(), (naming, pi_id))
                 status = "submitted"
@@ -4066,7 +4072,7 @@ def generate_recurring_bills(conn, args):
             uq_rt = (Q.update(_t_recurring_bill_template)
                      .set("last_bill_date", P())
                      .set("next_bill_date", P())
-                     .set("updated_at", LiteralValue("datetime('now')"))
+                     .set("updated_at", now())
                      .where(_t_recurring_bill_template.id == P()))
             conn.execute(uq_rt.get_sql(), (next_date, new_next, template_id))
 
@@ -4074,7 +4080,7 @@ def generate_recurring_bills(conn, args):
             if tmpl_dict.get("end_date") and new_next > tmpl_dict["end_date"]:
                 uq_comp = (Q.update(_t_recurring_bill_template)
                            .set("status", ValueWrapper("completed"))
-                           .set("updated_at", LiteralValue("datetime('now')"))
+                           .set("updated_at", now())
                            .where(_t_recurring_bill_template.id == P()))
                 conn.execute(uq_comp.get_sql(), (template_id,))
                 templates_completed += 1
@@ -4311,6 +4317,8 @@ def main():
     parser.add_argument("--tax-id")
     parser.add_argument("--is-1099-vendor")
     parser.add_argument("--primary-address")
+    parser.add_argument("--email")
+    parser.add_argument("--phone")
     parser.add_argument("--company-id")
     parser.add_argument("--csv-path")
 
@@ -4385,6 +4393,8 @@ def main():
     parser.add_argument("--to-date")
     parser.add_argument("--limit", default="20")
     parser.add_argument("--offset", default="0")
+    parser.add_argument("--custom-fields", default=None,
+                        help='User-defined fields as a JSON object, e.g. \'{"rating": "A"}\'')
 
     args, unknown = parser.parse_known_args()
     check_unknown_args(parser, unknown)

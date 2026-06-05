@@ -44,13 +44,14 @@ from erpclaw_lib.decimal_utils import to_decimal
 from erpclaw_lib.validation import check_input_lengths
 from erpclaw_lib.response import ok, err, row_to_dict
 from erpclaw_lib.audit import audit
-from erpclaw_lib.query import Q, P, Table, Field, fn
+from erpclaw_lib.query import Q, P, Table, Field, fn, now, dynamic_update, insert_or_ignore
 from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
+from erpclaw_lib import custom_fields as cf
 from erpclaw_lib.vendor.pypika import Order
 from erpclaw_lib.vendor.pypika.terms import LiteralValue
 
-# Convenience alias for datetime('now') SQLite expression
-_NOW = LiteralValue("datetime('now')")
+# Convenience alias for CAST(CURRENT_TIMESTAMP AS TEXT) SQLite expression
+_NOW = now()
 
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(SKILL_DIR, "assets")
@@ -178,6 +179,7 @@ def setup_company(conn, args):
 
     # Auto-onboard if --industry is provided
     modules_installed = []
+    modules_failed = []
     onboard_profile = None
     region_module = None
     if getattr(args, "industry", None):
@@ -218,8 +220,13 @@ def setup_company(conn, args):
                             if check and check["install_status"] == "installed":
                                 modules_installed.append(module_name)
                                 already_installed.add(module_name)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            # Best-effort onboarding: one module failing must not
+                            # abort the rest, but the failure must be visible —
+                            # not silently swallowed (user asked for this module).
+                            modules_failed.append({"module": module_name, "error": str(e)})
+                            print(f"WARN: onboarding auto-install of module "
+                                  f"'{module_name}' failed: {e}", file=sys.stderr)
 
                     # Also install regional module based on country
                     country_val = args.country or "United States"
@@ -238,8 +245,10 @@ def setup_company(conn, args):
                                 ).fetchone()
                                 if check and check["install_status"] == "installed":
                                     modules_installed.append(region_module)
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                modules_failed.append({"module": region_module, "error": str(e)})
+                                print(f"WARN: onboarding auto-install of region module "
+                                      f"'{region_module}' failed: {e}", file=sys.stderr)
             except ImportError:
                 pass  # Onboarding not available — skip silently
 
@@ -249,6 +258,8 @@ def setup_company(conn, args):
         result["onboard_profile"] = onboard_profile
     if modules_installed:
         result["modules_installed"] = modules_installed
+    if modules_failed:
+        result["modules_failed"] = modules_failed
     if region_module:
         result["region_module"] = region_module
     ok(result)
@@ -631,7 +642,7 @@ def seed_defaults(conn, args):
         for c in currencies:
             try:
                 conn.execute(
-                    "INSERT OR IGNORE INTO currency (code, name, symbol, decimal_places, enabled) VALUES (?, ?, ?, ?, ?)",
+                    insert_or_ignore("INSERT OR IGNORE INTO currency (code, name, symbol, decimal_places, enabled) VALUES (?, ?, ?, ?, ?)"),
                     (c["code"], c["name"], c.get("symbol", ""),
                      c.get("decimal_places", 2), c.get("enabled", 0)),
                 )
@@ -647,7 +658,7 @@ def seed_defaults(conn, args):
         for u in uoms:
             try:
                 conn.execute(
-                    "INSERT OR IGNORE INTO uom (id, name, must_be_whole_number) VALUES (?, ?, ?)",
+                    insert_or_ignore("INSERT OR IGNORE INTO uom (id, name, must_be_whole_number) VALUES (?, ?, ?)"),
                     (str(uuid.uuid4()), u["name"], u.get("must_be_whole_number", 0)),
                 )
                 counts["uoms_seeded"] += 1
@@ -662,9 +673,9 @@ def seed_defaults(conn, args):
         for t in terms:
             try:
                 conn.execute(
-                    """INSERT OR IGNORE INTO payment_terms
+                    insert_or_ignore("""INSERT OR IGNORE INTO payment_terms
                        (id, name, due_days, discount_percentage, discount_days, description)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
+                       VALUES (?, ?, ?, ?, ?, ?)"""),
                     (str(uuid.uuid4()), t["name"], t.get("due_days", 30),
                      t.get("discount_percentage"), t.get("discount_days"),
                      t.get("description")),
@@ -754,7 +765,7 @@ def update_regional_settings(conn, args):
         conn.execute(
             """INSERT INTO regional_settings (id, company_id, key, value)
                VALUES (?, ?, ?, ?)
-               ON CONFLICT(company_id, key) DO UPDATE SET value = ?, updated_at = datetime('now')""",
+               ON CONFLICT(company_id, key) DO UPDATE SET value = ?, updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)""",
             (str(uuid.uuid4()), company_id, key, value, value),
         )
 
@@ -2034,7 +2045,22 @@ def onboarding_step(conn, args):
         company_name = data["company_name"]
         currency = data.get("currency", "USD")
         fiscal_month = data.get("fiscal_month", 1)
-        results = {"steps_completed": []}
+        results = {"steps_completed": [], "steps_failed": []}
+
+        def _record_step(step_name, proc):
+            """Record a subprocess setup step outcome. A zero exit appends to
+            steps_completed; a non-zero exit is surfaced in steps_failed and on
+            stderr rather than being reported as completed. subprocess.run is
+            called without check=True, so without this a failed step would
+            silently look successful."""
+            if proc.returncode == 0:
+                results["steps_completed"].append(step_name)
+            else:
+                detail = (proc.stderr or proc.stdout or "").strip()[:300]
+                results["steps_failed"].append(
+                    {"step": step_name, "error": detail or f"exit {proc.returncode}"})
+                print(f"WARN: onboarding step '{step_name}' exited "
+                      f"{proc.returncode}: {detail[:200]}", file=sys.stderr)
 
         # Step A: Create company
         import subprocess
@@ -2074,9 +2100,10 @@ def onboarding_step(conn, args):
                  "--company-id", company_id],
                 capture_output=True, text=True, timeout=30
             )
-            results["steps_completed"].append("seed-defaults")
-        except Exception:
-            pass  # Non-critical
+            _record_step("seed-defaults", result)
+        except Exception as e:
+            results["steps_failed"].append({"step": "seed-defaults", "error": str(e)})
+            print(f"WARN: onboarding step 'seed-defaults' failed: {e}", file=sys.stderr)
 
         # Step C: Setup chart of accounts (via erpclaw-gl if available)
         gl_script = os.path.join(
@@ -2092,9 +2119,10 @@ def onboarding_step(conn, args):
                      "--standard", "us_gaap"],
                     capture_output=True, text=True, timeout=30
                 )
-                results["steps_completed"].append("setup-chart-of-accounts")
-            except Exception:
-                pass  # Non-critical
+                _record_step("setup-chart-of-accounts", result)
+            except Exception as e:
+                results["steps_failed"].append({"step": "setup-chart-of-accounts", "error": str(e)})
+                print(f"WARN: onboarding step 'setup-chart-of-accounts' failed: {e}", file=sys.stderr)
 
         # Step D: Load demo data if requested (via erpclaw meta-package)
         if load_demo:
@@ -2109,9 +2137,10 @@ def onboarding_step(conn, args):
                          "--action", "seed-demo-data"],
                         capture_output=True, text=True, timeout=120
                     )
-                    results["steps_completed"].append("seed-demo-data")
-                except Exception:
-                    pass  # Non-critical
+                    _record_step("seed-demo-data", result)
+                except Exception as e:
+                    results["steps_failed"].append({"step": "seed-demo-data", "error": str(e)})
+                    print(f"WARN: onboarding step 'seed-demo-data' failed: {e}", file=sys.stderr)
 
         state["completed"] = True
         _save_onboarding_state(state)
@@ -2120,6 +2149,13 @@ def onboarding_step(conn, args):
                        "July", "August", "September", "October", "November", "December"]
         fiscal_name = month_names[fiscal_month - 1]
 
+        failed_note = ""
+        if results["steps_failed"]:
+            failed_names = ", ".join(s["step"] for s in results["steps_failed"])
+            failed_note = (f"Some steps did not complete: {failed_names}. "
+                           f"Your company was created; you can re-run those steps "
+                           f"or check the logs.\n\n")
+
         summary = (
             f"Setup complete! Here's your configuration:\n\n"
             f"  Company: {company_name}\n"
@@ -2127,6 +2163,7 @@ def onboarding_step(conn, args):
             f"  Fiscal Year Start: {fiscal_name}\n"
             f"  Demo Data: {'Loaded' if load_demo else 'Skipped'}\n\n"
             f"Steps completed: {', '.join(results['steps_completed'])}\n\n"
+            f"{failed_note}"
             f"You're ready to go! Try:\n"
             f"  - 'list customers' to see your customer data\n"
             f"  - 'show trial balance' to view your financials\n"
@@ -2364,8 +2401,352 @@ def migrate_credentials_action(conn, args):
     })
 
 
+# ---------------------------------------------------------------------------
+# Type/status registry administration (M0 additive slice)
+# The registries (account_type_registry, voucher_type_registry,
+# party_type_registry, asset_status_registry) are the runtime source of truth
+# for the type/status values that used to be hardcoded CHECK constraints.
+# These actions let an admin extend + inspect + soft-disable them at runtime.
+# ---------------------------------------------------------------------------
+
+def add_account_type(conn, args):
+    """Register a new account_type so accounts can use it (M0)."""
+    at = (args.account_type or "").strip()
+    if not at:
+        err("--account-type is required")
+    label = args.label or at.replace("_", " ").title()
+    skill = args.skill_name or "custom"
+    try:
+        conn.execute(
+            "INSERT INTO account_type_registry (account_type, skill_name, label, is_active) "
+            "VALUES (?, ?, ?, 1)", (at, skill, label))
+        audit(conn, "erpclaw-setup", "create", "account_type_registry", at,
+              new_values={"account_type": at, "label": label})
+        conn.commit()
+    except sqlite3.IntegrityError:
+        err(f"account_type '{at}' is already registered")
+    ok({"result": "registered", "account_type": at, "label": label})
+
+
+def list_account_types(conn, args):
+    """List registered account types (active only unless --include-inactive)."""
+    t = Table("account_type_registry")
+    q = Q.from_(t).select(t.star)
+    if not args.include_inactive:
+        q = q.where(t.is_active == 1)
+    rows = conn.execute(q.orderby(t.account_type).get_sql()).fetchall()
+    ok({"account_types": [row_to_dict(r) for r in rows], "count": len(rows)})
+
+
+def deactivate_account_type(conn, args):
+    """Soft-disable an account_type (is_active=0). Blocked if any account uses it."""
+    at = (args.account_type or "").strip()
+    if not at:
+        err("--account-type is required")
+    in_use = conn.execute(
+        "SELECT COUNT(*) AS c FROM account WHERE account_type = ?", (at,)).fetchone()["c"]
+    if in_use:
+        err(f"Cannot deactivate account_type '{at}': {in_use} account(s) still use it.")
+    conn.execute("UPDATE account_type_registry SET is_active = 0 WHERE account_type = ?", (at,))
+    if conn.total_changes == 0:
+        err(f"account_type '{at}' is not registered")
+    audit(conn, "erpclaw-setup", "update", "account_type_registry", at,
+          new_values={"is_active": 0})
+    conn.commit()
+    ok({"result": "deactivated", "account_type": at})
+
+
+_VOUCHER_TARGETS = ("gl_entry", "stock_ledger_entry", "payment_allocation")
+
+
+def add_voucher_type(conn, args):
+    """Register a new voucher_type for a target table (M0)."""
+    vt = (args.voucher_type or "").strip()
+    target = (args.target_table or "").strip()
+    if not vt:
+        err("--voucher-type is required")
+    if target not in _VOUCHER_TARGETS:
+        err(f"--target-table must be one of: {', '.join(_VOUCHER_TARGETS)}")
+    label = args.label or vt.replace("_", " ").title()
+    skill = args.skill_name or "custom"
+    try:
+        conn.execute(
+            "INSERT INTO voucher_type_registry (voucher_type, skill_name, label, target_table, is_active) "
+            "VALUES (?, ?, ?, ?, 1)", (vt, skill, label, target))
+        audit(conn, "erpclaw-setup", "create", "voucher_type_registry", f"{vt}/{target}",
+              new_values={"voucher_type": vt, "target_table": target, "label": label})
+        conn.commit()
+    except sqlite3.IntegrityError:
+        err(f"voucher_type '{vt}' is already registered for {target}")
+    ok({"result": "registered", "voucher_type": vt, "target_table": target, "label": label})
+
+
+def list_voucher_types(conn, args):
+    """List registered voucher types (optionally filtered by --target-table)."""
+    t = Table("voucher_type_registry")
+    q = Q.from_(t).select(t.star)
+    if not args.include_inactive:
+        q = q.where(t.is_active == 1)
+    if args.target_table:
+        q = q.where(t.target_table == P())
+        params = (args.target_table,)
+    else:
+        params = ()
+    rows = conn.execute(q.orderby(t.target_table).orderby(t.voucher_type).get_sql(), params).fetchall()
+    ok({"voucher_types": [row_to_dict(r) for r in rows], "count": len(rows)})
+
+
+def deactivate_voucher_type(conn, args):
+    """Soft-disable a voucher_type for a target table. Blocked if live rows use it."""
+    vt = (args.voucher_type or "").strip()
+    target = (args.target_table or "").strip()
+    if not vt:
+        err("--voucher-type is required")
+    if target not in _VOUCHER_TARGETS:
+        err(f"--target-table must be one of: {', '.join(_VOUCHER_TARGETS)}")
+    in_use = conn.execute(
+        f"SELECT COUNT(*) AS c FROM {target} WHERE voucher_type = ?", (vt,)).fetchone()["c"]
+    if in_use:
+        err(f"Cannot deactivate voucher_type '{vt}' for {target}: {in_use} row(s) still use it.")
+    conn.execute(
+        "UPDATE voucher_type_registry SET is_active = 0 WHERE voucher_type = ? AND target_table = ?",
+        (vt, target))
+    if conn.total_changes == 0:
+        err(f"voucher_type '{vt}' is not registered for {target}")
+    audit(conn, "erpclaw-setup", "update", "voucher_type_registry", f"{vt}/{target}",
+          new_values={"is_active": 0})
+    conn.commit()
+    ok({"result": "deactivated", "voucher_type": vt, "target_table": target})
+
+
+def validate_registry_completeness(conn, args):
+    """Diagnostic: report type/status values used in live data that are NOT
+    registered+active (i.e. would now be rejected on new writes). Read-only."""
+    def _distinct(table, col, extra=""):
+        try:
+            return {r[0] for r in conn.execute(
+                f"SELECT DISTINCT {col} FROM {table} WHERE {col} IS NOT NULL AND {col} != ''{extra}")}
+        except sqlite3.OperationalError:
+            return set()  # table not present on a minimal install
+
+    def _active(table, col, target=None):
+        sql = f"SELECT {col} FROM {table} WHERE is_active = 1"
+        params = ()
+        if target:
+            sql += " AND target_table = ?"
+            params = (target,)
+        return {r[0] for r in conn.execute(sql, params)}
+
+    report = {}
+    # account_type
+    used = _distinct("account", "account_type")
+    report["account_type"] = sorted(used - _active("account_type_registry", "account_type"))
+    # party_type (across the tables that carry it)
+    party_used = (_distinct("gl_entry", "party_type") | _distinct("payment_entry", "party_type")
+                  | _distinct("payment_ledger_entry", "party_type"))
+    report["party_type"] = sorted(party_used - _active("party_type_registry", "party_type"))
+    # voucher_type per target table
+    for target in _VOUCHER_TARGETS:
+        used = _distinct(target, "voucher_type")
+        report[f"voucher_type[{target}]"] = sorted(
+            used - _active("voucher_type_registry", "voucher_type", target))
+    # asset status
+    used = _distinct("asset", "status")
+    report["asset_status"] = sorted(used - _active("asset_status_registry", "status"))
+
+    unregistered = {k: v for k, v in report.items() if v}
+    ok({"complete": not unregistered,
+        "unregistered_in_use": unregistered,
+        "detail": "Values listed are present in live data but not registered+active; "
+                  "new writes using them would be rejected. Register via add-*-type."})
+
+
+def migrate_action(conn, args):
+    """Run pending foundation migrations (migrations/NNN_*.py), recording each in
+    the erpclaw_schema_migration ledger. Idempotent + dialect-aware. --dry-run
+    lists pending without applying. (Manages its own DB connections via db_path.)"""
+    import importlib.util
+    runner_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "migration_runner.py")
+    spec = importlib.util.spec_from_file_location("migration_runner", runner_path)
+    runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+    db_path = getattr(args, "db_path", None) or DEFAULT_DB_PATH
+    res = runner.run_pending(db_path, dry_run=bool(getattr(args, "dry_run", False)))
+    if res.get("ok") is False:
+        err(f"Migration '{res['failed']}' failed: {res['error']}",
+            suggestion=res.get("detail"))
+    ok(res)
+
+
+# ---------------------------------------------------------------------------
+# Custom fields (M1 — UDF runtime admin surface; wraps erpclaw_lib.custom_fields)
+# ---------------------------------------------------------------------------
+
+_VALID_CF_TYPES = ("text", "int", "float", "date", "select", "link", "json")
+
+
+def add_custom_field_action(conn, args):
+    """Register a custom field definition on a core table (M1)."""
+    table = (args.table or "").strip()
+    field = (args.field_name or "").strip()
+    if not table or not field:
+        err("--table and --field-name are required")
+    ftype = (args.field_type or "").strip()
+    if ftype not in _VALID_CF_TYPES:
+        err(f"--field-type must be one of: {', '.join(_VALID_CF_TYPES)}")
+    # --options is a convenience for select/link types; stored as the lib's
+    # field_options JSON. For select: comma list -> {"values": [...]}.
+    field_options = None
+    if args.options:
+        if ftype == "select":
+            field_options = json.dumps(
+                {"values": [o.strip() for o in args.options.split(",") if o.strip()]})
+        elif ftype == "link":
+            field_options = json.dumps({"table": args.options.strip()})
+        else:
+            field_options = args.options  # caller-supplied raw JSON
+    try:
+        field_id = cf.add_custom_field(
+            conn, table, field, ftype, owner_skill=args.skill_name or "erpclaw-setup",
+            label=args.label, required=bool(args.required),
+            default_value=args.default, field_options=field_options)
+    except sqlite3.IntegrityError:
+        err(f"Custom field '{field}' already exists on {table}")
+    audit(conn, "erpclaw-setup", "create", "custom_field", field_id,
+          new_values={"table_name": table, "field_name": field, "field_type": ftype})
+    conn.commit()
+    ok({"result": "registered", "custom_field_id": field_id,
+        "table": table, "field_name": field, "field_type": ftype})
+
+
+def list_custom_fields_action(conn, args):
+    """List custom field definitions (optionally filtered by --table)."""
+    t = Table("custom_field")
+    q = Q.from_(t).select(t.star)
+    params = ()
+    if args.table:
+        q = q.where(t.table_name == P())
+        params = (args.table,)
+    rows = conn.execute(q.orderby(t.table_name).orderby(t.field_name).get_sql(), params).fetchall()
+    ok({"custom_fields": [row_to_dict(r) for r in rows], "count": len(rows)})
+
+
+def remove_custom_field_action(conn, args):
+    """Remove a custom field definition + its stored values.
+
+    Hard delete (matches the shipped lib). Guarded: refuses if any stored values
+    exist unless --confirm is passed, so you can't silently drop live data.
+    """
+    table = (args.table or "").strip()
+    field = (args.field_name or "").strip()
+    if not table or not field:
+        err("--table and --field-name are required")
+    defn = conn.execute(
+        "SELECT owner_skill FROM custom_field WHERE table_name = ? AND field_name = ?",
+        (table, field)).fetchone()
+    if not defn:
+        err(f"Custom field '{field}' not found on {table}")
+    in_use = conn.execute(
+        "SELECT COUNT(*) AS c FROM custom_field_value WHERE table_name = ? AND field_name = ?",
+        (table, field)).fetchone()["c"]
+    if in_use and not args.confirm:
+        err(f"Custom field '{field}' has {in_use} stored value(s). "
+            f"Pass --confirm to delete the field and its values.")
+    removed = cf.remove_custom_field(conn, table, field, owner_skill=defn["owner_skill"])
+    if not removed:
+        err(f"Could not remove '{field}' (owner mismatch)")
+    audit(conn, "erpclaw-setup", "delete", "custom_field", f"{table}/{field}",
+          new_values={"deleted_values": in_use})
+    conn.commit()
+    ok({"result": "removed", "table": table, "field_name": field, "deleted_values": in_use})
+
+
+def set_custom_field_value_action(conn, args):
+    """Set a single custom field value on a row (validated)."""
+    table = (args.table or "").strip()
+    if not table or not args.row_id or not args.field_name:
+        err("--table, --row-id and --field-name are required")
+    if args.value is None:
+        err("--value is required")
+    values = {args.field_name: args.value}
+    errors = cf.validate_custom_field_values(conn, table, values)
+    if errors:
+        err("; ".join(errors))
+    cf.store_custom_field_values(conn, table, args.row_id, values)
+    conn.commit()
+    ok({"result": "stored", "table": table, "row_id": args.row_id,
+        "field_name": args.field_name, "value": args.value})
+
+
+def get_custom_field_values_action(conn, args):
+    """Get stored custom field values for a row (all, or one --field-name)."""
+    table = (args.table or "").strip()
+    if not table or not args.row_id:
+        err("--table and --row-id are required")
+    values = cf.fetch_custom_field_values(conn, table, args.row_id)
+    if args.field_name:
+        values = {args.field_name: values.get(args.field_name)}
+    ok({"table": table, "row_id": args.row_id, "custom_fields": values})
+
+
+def set_advance_account(conn, args):
+    """Configure the B1-style advance sub-account on a company (S2).
+
+    --type customer -> company.advance_from_customer_account_id (must be a
+    liability account; we owe the customer until delivery).
+    --type supplier -> company.advance_to_supplier_account_id (must be an asset
+    account; the supplier owes us delivery). When set, submit-payment routes the
+    unallocated advance leg here instead of the AR/AP control account.
+    """
+    company_id = getattr(args, "company_id", None)
+    acct_id = getattr(args, "account_id", None)
+    kind = (getattr(args, "type", None) or "").strip().lower()
+    if not company_id or not acct_id:
+        err("--company-id and --account-id are required")
+    if kind not in ("customer", "supplier"):
+        err("--type must be 'customer' or 'supplier'")
+    if not conn.execute("SELECT 1 FROM company WHERE id = ?", (company_id,)).fetchone():
+        err(f"Company {company_id} not found")
+    acct = conn.execute(
+        "SELECT root_type, is_group FROM account WHERE id = ?", (acct_id,)).fetchone()
+    if not acct:
+        err(f"Account {acct_id} not found")
+    if acct["is_group"]:
+        err("Advance account must be a ledger (non-group) account")
+    required_root = "liability" if kind == "customer" else "asset"
+    if acct["root_type"] != required_root:
+        err(f"Advance-from-{kind} account must be a '{required_root}' account, "
+            f"got '{acct['root_type']}'")
+    column = ("advance_from_customer_account_id" if kind == "customer"
+              else "advance_to_supplier_account_id")
+    # dialect-aware updated_at (now() -> CAST(CURRENT_TIMESTAMP AS TEXT) on SQLite, NOW()::text
+    # on Postgres); column is one of two allowlisted names above.
+    sql, params = dynamic_update(
+        "company", {column: acct_id, "updated_at": now()}, {"id": company_id})
+    conn.execute(sql, params)
+    audit(conn, "erpclaw-setup", "update", "company", company_id,
+          new_values={column: acct_id})
+    conn.commit()
+    ok({"result": "set", "company_id": company_id, "type": kind,
+        "column": column, "account_id": acct_id})
+
+
 ACTIONS = {
     "initialize-database": initialize_database,
+    "migrate": migrate_action,
+    "add-account-type": add_account_type,
+    "list-account-types": list_account_types,
+    "deactivate-account-type": deactivate_account_type,
+    "add-voucher-type": add_voucher_type,
+    "list-voucher-types": list_voucher_types,
+    "deactivate-voucher-type": deactivate_voucher_type,
+    "validate-registry-completeness": validate_registry_completeness,
+    "add-custom-field": add_custom_field_action,
+    "list-custom-fields": list_custom_fields_action,
+    "remove-custom-field": remove_custom_field_action,
+    "set-custom-field-value": set_custom_field_value_action,
+    "get-custom-field-values": get_custom_field_values_action,
+    "set-advance-account": set_advance_account,
     "set-credential": set_credential_action,
     "get-credential": get_credential_action,
     "list-credentials": list_credentials_action,
@@ -2538,6 +2919,37 @@ def main():
     parser.add_argument("--force", action="store_true", default=False,
                         help="Force re-initialize: drop and recreate the database")
 
+    # Migrate: reuses the existing --dry-run flag above (list pending without applying)
+
+    # Type/status registry administration (M0)
+    parser.add_argument("--account-type", default=None, help="Registry: account_type value")
+    parser.add_argument("--voucher-type", default=None, help="Registry: voucher_type value")
+    parser.add_argument("--target-table", default=None,
+                        help="Registry: voucher_type target (gl_entry|stock_ledger_entry|payment_allocation)")
+    parser.add_argument("--label", default=None, help="Registry: human-readable label")
+    parser.add_argument("--skill-name", default=None, help="Registry: owning skill (default 'custom')")
+    parser.add_argument("--include-inactive", action="store_true", default=False,
+                        help="Registry list: include is_active=0 rows")
+
+    # Advance account config (S2)
+    parser.add_argument("--account-id", default=None, help="set-advance-account: the GL account id")
+    parser.add_argument("--type", default=None, help="set-advance-account: 'customer' or 'supplier'")
+
+    # Custom fields (M1 — UDF runtime). --label / --skill-name reused from above.
+    parser.add_argument("--table", default=None, help="Custom field: target table (e.g. customer)")
+    parser.add_argument("--field-name", default=None, help="Custom field: field name (snake_case)")
+    parser.add_argument("--field-type", default=None,
+                        help="Custom field: text|int|float|date|select|link|json")
+    parser.add_argument("--default", default=None, help="Custom field: default value")
+    parser.add_argument("--required", action="store_true", default=False,
+                        help="Custom field: mark required")
+    parser.add_argument("--options", default=None,
+                        help="Custom field: select -> comma list; link -> target table; else raw JSON")
+    parser.add_argument("--row-id", default=None, help="Custom field value: parent row id")
+    # --value reused from the existing config flag above (set-custom-field-value)
+    parser.add_argument("--confirm", action="store_true", default=False,
+                        help="Custom field: confirm destructive removal of a field with stored values")
+
     args, unknown = parser.parse_known_args()
     check_unknown_args(parser, unknown)
     check_input_lengths(args)
@@ -2546,6 +2958,15 @@ def main():
     if args.action == "initialize-database":
         try:
             initialize_database(None, args)
+        except Exception as e:
+            err(str(e))
+        return
+
+    # migrate runs migration scripts that open their own connections; don't hold
+    # one open here (avoids SQLite writer contention during table rebuilds)
+    if args.action == "migrate":
+        try:
+            migrate_action(None, args)
         except Exception as e:
             err(str(e))
         return

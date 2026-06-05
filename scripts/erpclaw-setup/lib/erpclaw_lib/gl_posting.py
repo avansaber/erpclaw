@@ -19,6 +19,7 @@ from typing import Optional
 
 from erpclaw_lib.decimal_utils import to_decimal, amounts_equal, round_currency
 from erpclaw_lib.fx_posting import convert_to_base
+from erpclaw_lib.query import rowid_col
 
 
 # --- Helper: fetch account row ---
@@ -377,6 +378,28 @@ def insert_gl_entries(
             f"GL entries already exist for voucher ({voucher_type}, {voucher_id}, entry_set={entry_set})"
         )
 
+    # 1b. voucher_type / party_type validity from the registries (M0 phase 2):
+    # the hardcoded CHECKs on gl_entry were dropped so these types are sourced
+    # from voucher_type_registry / party_type_registry and enforced here on every
+    # GL write. (Same membership the CHECKs enforced; now extensible at runtime.)
+    if not conn.execute(
+        "SELECT 1 FROM voucher_type_registry WHERE voucher_type = ? AND target_table = 'gl_entry' AND is_active = 1",
+        (voucher_type,),
+    ).fetchone():
+        raise ValueError(
+            f"voucher_type '{voucher_type}' is not a registered, active type for gl_entry. "
+            f"Register it (add-voucher-type) or run seed-registry-defaults."
+        )
+    for _e in entries:
+        _pt = _e.get("party_type")
+        if _pt and not conn.execute(
+            "SELECT 1 FROM party_type_registry WHERE party_type = ? AND is_active = 1", (_pt,)
+        ).fetchone():
+            raise ValueError(
+                f"party_type '{_pt}' is not a registered, active type. "
+                f"Register it (add-party-type) or run seed-registry-defaults."
+            )
+
     # 2. Normalize entries
     entries = _normalize_entries(entries)
 
@@ -422,10 +445,10 @@ def insert_gl_entries(
     # 5. Insert gl_entry rows with chain checksums
     # Get the last checksum in this company's chain
     prev_hash_row = conn.execute(
-        """SELECT gl_checksum FROM gl_entry ge
+        f"""SELECT gl_checksum FROM gl_entry ge
            JOIN account a ON ge.account_id = a.id
            WHERE a.company_id = ? AND ge.gl_checksum IS NOT NULL
-           ORDER BY ge.created_at DESC, ge.rowid DESC LIMIT 1""",
+           ORDER BY ge.created_at DESC, {rowid_col("ge.")} DESC LIMIT 1""",
         (company_id,),
     ).fetchone()
     prev_hash = prev_hash_row["gl_checksum"] if prev_hash_row else "GENESIS"
@@ -458,7 +481,7 @@ def insert_gl_entries(
                 currency, exchange_rate,
                 voucher_type, voucher_id, entry_set, cost_center_id, project_id,
                 remarks, fiscal_year, is_cancelled, gl_checksum, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, datetime('now'))
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, CAST(CURRENT_TIMESTAMP AS TEXT))
             """,
             (
                 entry_id,
@@ -535,7 +558,7 @@ def reverse_gl_entries(
                 currency, exchange_rate,
                 voucher_type, voucher_id, entry_set, cost_center_id, project_id,
                 remarks, fiscal_year, is_cancelled, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'))
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, CAST(CURRENT_TIMESTAMP AS TEXT))
             """,
             (
                 reversal_id,

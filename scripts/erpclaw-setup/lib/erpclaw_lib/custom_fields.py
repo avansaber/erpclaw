@@ -207,8 +207,10 @@ def validate_custom_field_values(conn, table_name, values):
                 if target_table:
                     if not re.match(r'^[a-z][a-z0-9_]*$', target_table):
                         raise ValueError(f"Invalid table name: {target_table}")
+                    # Bare identifier (regex-validated above): portable across
+                    # SQLite + Postgres. [bracket] quoting is SQLite-only.
                     exists = conn.execute(
-                        f"SELECT 1 FROM [{target_table}] WHERE id = ?",
+                        f"SELECT 1 FROM {target_table} WHERE id = ?",
                         (value,),
                     ).fetchone()
                     if not exists:
@@ -306,3 +308,54 @@ def apply_defaults(conn, table_name, values):
         if fname not in values and fdef["default_value"] is not None:
             values[fname] = fdef["default_value"]
     return values
+
+
+# ---------------------------------------------------------------------------
+# Wrapper integration helpers (M1 — used by add-*/get-* actions in
+# selling/buying/inventory so callers never touch the EAV tables directly)
+# ---------------------------------------------------------------------------
+
+def store_from_arg(conn, table_name, doc_id, custom_fields_arg):
+    """Parse a `--custom-fields` JSON-object arg, apply defaults, validate, store.
+
+    The single point a write-side wrapper calls after inserting its primary row
+    (before commit, so a validation failure can be rolled back cleanly).
+
+    Args:
+        conn: database connection
+        table_name: the doctype/table the row belongs to
+        doc_id: the just-inserted row's id
+        custom_fields_arg: the raw `--custom-fields` value (JSON object string),
+            or None / "" when the caller passed no custom fields
+
+    Returns:
+        list of error strings (empty = stored, or nothing to do). On a non-empty
+        return the caller should roll back and surface the errors; nothing was
+        written to custom_field_value.
+    """
+    if not custom_fields_arg:
+        return []
+    try:
+        values = json.loads(custom_fields_arg)
+    except (json.JSONDecodeError, TypeError):
+        return ["--custom-fields must be a valid JSON object, e.g. '{\"priority\": \"Gold\"}'"]
+    if not isinstance(values, dict):
+        return ["--custom-fields must be a JSON object mapping field names to values"]
+    apply_defaults(conn, table_name, values)
+    errors = validate_custom_field_values(conn, table_name, values)
+    if errors:
+        return errors
+    store_custom_field_values(conn, table_name, doc_id, values)
+    return []
+
+
+def merge_into_response(conn, table_name, doc_id, response):
+    """Attach a row's stored custom field values to a `get-*` response dict.
+
+    Adds a `custom_fields` key only when the row has stored values, so responses
+    for rows without UDFs stay unchanged. Returns the same dict for chaining.
+    """
+    values = fetch_custom_field_values(conn, table_name, doc_id)
+    if values:
+        response["custom_fields"] = values
+    return response

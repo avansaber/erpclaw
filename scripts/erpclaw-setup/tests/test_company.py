@@ -295,3 +295,69 @@ class TestUpdateCompany:
             "SELECT * FROM audit_log WHERE entity_type='company' AND action='update'"
         ).fetchone()
         assert log is not None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# onboarding-step subprocess-failure surfacing (A14 follow-up)
+#
+# The wizard's seed steps call subprocess.run() without check=True. Previously a
+# non-zero exit (or a raised exception) was swallowed by `except Exception: pass`
+# AND the return code was never inspected — so a failed step was reported as
+# completed. These tests guard that a failed step now lands in steps_failed and
+# the user-facing prompt says so, instead of silently lying about success.
+# ──────────────────────────────────────────────────────────────────────────────
+
+import json as _json
+import subprocess as _subprocess
+
+
+def _fake_run_factory(fail_steps):
+    """Return a subprocess.run stand-in: setup-company always succeeds (so the
+    wizard reaches the seed steps); each named action in fail_steps exits 1."""
+    def fake_run(cmd, *a, **kw):
+        joined = " ".join(cmd)
+        if "setup-company" in joined:
+            return _subprocess.CompletedProcess(
+                cmd, 0, stdout=_json.dumps({"company_id": "co-test"}), stderr="")
+        for action in ("seed-defaults", "setup-chart-of-accounts", "seed-demo-data"):
+            if action in joined:
+                rc = 1 if action in fail_steps else 0
+                return _subprocess.CompletedProcess(
+                    cmd, rc, stdout="", stderr=(f"{action} boom" if rc else ""))
+        return _subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    return fake_run
+
+
+def _drive_onboarding_step5(conn, monkeypatch, fail_steps):
+    """Drive onboarding_step from step 4 -> 5 (company create + seed) with a
+    monkeypatched subprocess + state, returning the action result dict."""
+    state = {"step": 4, "completed": False,
+             "data": {"company_name": "TestCo", "currency": "USD", "fiscal_month": 1}}
+    monkeypatch.setattr(mod, "_load_onboarding_state", lambda: state)
+    monkeypatch.setattr(mod, "_save_onboarding_state", lambda s: None)
+    monkeypatch.setattr(mod, "_clear_onboarding_state", lambda: None)
+    monkeypatch.setattr("subprocess.run", _fake_run_factory(fail_steps))
+    return call_action(mod.onboarding_step, conn, ns(reset=False, answer="yes"))
+
+
+class TestOnboardingStepFailureSurfacing:
+    def test_failed_seed_step_is_surfaced_not_swallowed(self, conn, monkeypatch):
+        r = _drive_onboarding_step5(conn, monkeypatch, fail_steps={"seed-defaults"})
+        assert is_ok(r)
+        results = r["results"]
+        # The failed step must NOT be reported as completed...
+        assert "seed-defaults" not in results["steps_completed"]
+        # ...it must be surfaced in steps_failed with the captured detail...
+        failed = {s["step"]: s["error"] for s in results["steps_failed"]}
+        assert "seed-defaults" in failed
+        assert "boom" in failed["seed-defaults"]
+        # ...and the user-facing prompt must say a step did not complete.
+        assert "seed-defaults" in r["prompt"]
+        assert "did not complete" in r["prompt"]
+
+    def test_successful_seed_step_records_completed(self, conn, monkeypatch):
+        r = _drive_onboarding_step5(conn, monkeypatch, fail_steps=set())
+        assert is_ok(r)
+        results = r["results"]
+        assert "seed-defaults" in results["steps_completed"]
+        assert all(s["step"] != "seed-defaults" for s in results["steps_failed"])

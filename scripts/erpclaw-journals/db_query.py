@@ -32,7 +32,7 @@ try:
     from erpclaw_lib.audit import audit
     from erpclaw_lib.dependencies import check_required_tables
     from erpclaw_lib.query_helpers import resolve_company_id
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, line_order
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
 except ImportError:
     import json as _json
@@ -139,7 +139,7 @@ def _get_je_lines(conn, journal_entry_id: str) -> list[dict]:
          .select(jel.star, a.name.as_("account_name"))
          .join(a).on(a.id == jel.account_id)
          .where(jel.journal_entry_id == P())
-         .orderby(jel.rowid))
+         .orderby(line_order(jel)))
     rows = conn.execute(q.get_sql(), (journal_entry_id,)).fetchall()
     return [row_to_dict(r) for r in rows]
 
@@ -233,7 +233,7 @@ def update_journal_entry(conn, args):
     # Update posting_date
     if args.posting_date:
         old_values["posting_date"] = je["posting_date"]
-        conn.execute("UPDATE journal_entry SET posting_date = ?, updated_at = datetime('now') WHERE id = ?",
+        conn.execute("UPDATE journal_entry SET posting_date = ?, updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?",
                      (args.posting_date, je_id))
         updated_fields.append("posting_date")
 
@@ -242,14 +242,14 @@ def update_journal_entry(conn, args):
         if args.entry_type not in VALID_ENTRY_TYPES:
             err(f"Invalid entry type '{args.entry_type}'. Valid: {VALID_ENTRY_TYPES}")
         old_values["entry_type"] = je["entry_type"]
-        conn.execute("UPDATE journal_entry SET entry_type = ?, updated_at = datetime('now') WHERE id = ?",
+        conn.execute("UPDATE journal_entry SET entry_type = ?, updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?",
                      (args.entry_type, je_id))
         updated_fields.append("entry_type")
 
     # Update remark
     if args.remark is not None:
         old_values["remark"] = je["remark"]
-        conn.execute("UPDATE journal_entry SET remark = ?, updated_at = datetime('now') WHERE id = ?",
+        conn.execute("UPDATE journal_entry SET remark = ?, updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?",
                      (args.remark, je_id))
         updated_fields.append("remark")
 
@@ -279,7 +279,7 @@ def update_journal_entry(conn, args):
 
         conn.execute(
             """UPDATE journal_entry SET total_debit = ?, total_credit = ?,
-               updated_at = datetime('now') WHERE id = ?""",
+               updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?""",
             (str(total_debit), str(total_credit), je_id),
         )
         updated_fields.append("lines")
@@ -463,7 +463,7 @@ def submit_journal_entry(conn, args):
 
     conn.execute(
         """UPDATE journal_entry SET status = 'submitted',
-           updated_at = datetime('now') WHERE id = ?""",
+           updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?""",
         (je_id,),
     )
 
@@ -503,7 +503,7 @@ def cancel_journal_entry(conn, args):
 
     conn.execute(
         """UPDATE journal_entry SET status = 'cancelled',
-           updated_at = datetime('now') WHERE id = ?""",
+           updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?""",
         (je_id,),
     )
 
@@ -542,7 +542,7 @@ def amend_journal_entry(conn, args):
 
     conn.execute(
         """UPDATE journal_entry SET status = 'amended',
-           updated_at = datetime('now') WHERE id = ?""",
+           updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?""",
         (je_id,),
     )
 
@@ -1006,37 +1006,37 @@ def update_recurring_template(conn, args):
     updated_fields = []
 
     if args.template_name:
-        conn.execute("UPDATE recurring_journal_template SET name = ?, updated_at = datetime('now') WHERE id = ?",
+        conn.execute("UPDATE recurring_journal_template SET name = ?, updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?",
                      (args.template_name, template_id))
         updated_fields.append("name")
 
     if args.frequency:
         if args.frequency not in VALID_FREQUENCIES:
             err(f"Invalid frequency '{args.frequency}'. Valid: {VALID_FREQUENCIES}")
-        conn.execute("UPDATE recurring_journal_template SET frequency = ?, updated_at = datetime('now') WHERE id = ?",
+        conn.execute("UPDATE recurring_journal_template SET frequency = ?, updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?",
                      (args.frequency, template_id))
         updated_fields.append("frequency")
 
     if args.end_date:
-        conn.execute("UPDATE recurring_journal_template SET end_date = ?, updated_at = datetime('now') WHERE id = ?",
+        conn.execute("UPDATE recurring_journal_template SET end_date = ?, updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?",
                      (args.end_date, template_id))
         updated_fields.append("end_date")
 
     if args.entry_type:
         if args.entry_type not in VALID_ENTRY_TYPES:
             err(f"Invalid entry type '{args.entry_type}'. Valid: {VALID_ENTRY_TYPES}")
-        conn.execute("UPDATE recurring_journal_template SET entry_type = ?, updated_at = datetime('now') WHERE id = ?",
+        conn.execute("UPDATE recurring_journal_template SET entry_type = ?, updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?",
                      (args.entry_type, template_id))
         updated_fields.append("entry_type")
 
     if args.remark is not None:
-        conn.execute("UPDATE recurring_journal_template SET remark = ?, updated_at = datetime('now') WHERE id = ?",
+        conn.execute("UPDATE recurring_journal_template SET remark = ?, updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?",
                      (args.remark, template_id))
         updated_fields.append("remark")
 
     if args.auto_submit is not None:
         val = 1 if args.auto_submit else 0
-        conn.execute("UPDATE recurring_journal_template SET auto_submit = ?, updated_at = datetime('now') WHERE id = ?",
+        conn.execute("UPDATE recurring_journal_template SET auto_submit = ?, updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?",
                      (val, template_id))
         updated_fields.append("auto_submit")
 
@@ -1054,14 +1054,14 @@ def update_recurring_template(conn, args):
             acct = conn.execute(q_acct.get_sql(), (line["account_id"],)).fetchone()
             if not acct:
                 err(f"Line {i+1}: account {line['account_id']} not found")
-        conn.execute("UPDATE recurring_journal_template SET lines = ?, updated_at = datetime('now') WHERE id = ?",
+        conn.execute("UPDATE recurring_journal_template SET lines = ?, updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?",
                      (json.dumps(lines) if isinstance(lines, list) else args.lines, template_id))
         updated_fields.append("lines")
 
     if args.template_status:
         if args.template_status not in ("active", "paused"):
             err(f"Can only set status to 'active' or 'paused', got '{args.template_status}'")
-        conn.execute("UPDATE recurring_journal_template SET status = ?, updated_at = datetime('now') WHERE id = ?",
+        conn.execute("UPDATE recurring_journal_template SET status = ?, updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?",
                      (args.template_status, template_id))
         updated_fields.append("status")
 
@@ -1222,7 +1222,7 @@ def process_recurring(conn, args):
                     remarks=remark, is_opening=is_opening,
                 )
                 conn.execute(
-                    "UPDATE journal_entry SET status = 'submitted', updated_at = datetime('now') WHERE id = ?",
+                    "UPDATE journal_entry SET status = 'submitted', updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?",
                     (je_id,),
                 )
                 je_status = "submitted"
@@ -1243,7 +1243,7 @@ def process_recurring(conn, args):
         conn.execute(
             """UPDATE recurring_journal_template
                SET next_run_date = ?, last_generated_date = ?,
-                   status = ?, updated_at = datetime('now')
+                   status = ?, updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
                WHERE id = ?""",
             (new_next_str, posting_date, new_status, template_id),
         )

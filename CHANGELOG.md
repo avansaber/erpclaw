@@ -134,8 +134,8 @@ Rotation is one of the few legitimate triggers for a future ClawHub re-publish, 
 - Long-running processes hold imported modules in memory; foundation file changes take effect on next launch.
 
 ### Plan + audit
-- `internal/completed/sprints/CLAWHUB_FIX_v416_PLAN_2026-05-04.md`
-- `internal/completed/sprints/CLAWHUB_FIX_v416_AUDIT_2026-05-04.md` (8 BLOCK + 7 SHOULD adopted from external + internal audits)
+- `internal/completed/2026/sprints/CLAWHUB_FIX_v416_PLAN_2026-05-04.md`
+- `internal/completed/2026/sprints/CLAWHUB_FIX_v416_AUDIT_2026-05-04.md` (8 BLOCK + 7 SHOULD adopted from external + internal audits)
 
 ## [4.1.5] — 2026-05-04
 

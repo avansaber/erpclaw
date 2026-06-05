@@ -1,6 +1,10 @@
 # ERPClaw — AI-Native ERP for OpenClaw
 
-A complete ERP system built as an [OpenClaw](https://openclaw.org) skill. Full double-entry accounting, invoicing, inventory, purchasing, tax, billing, HR, payroll, and financial reporting — all in a single install. 478 actions across 14 domains.
+<!-- SYNC:facts:start -->
+ERPClaw v4.3.1 | 46 modules (46 active + 0 preview) | 3,154 actions
+<!-- SYNC:facts:end -->
+
+A complete ERP system built as an [OpenClaw](https://openclaw.org) skill. Full double-entry accounting, invoicing, inventory, purchasing, tax, billing, HR, payroll, and financial reporting — all in a single install. The foundation ships 483 actions across 14 user-facing domains; total project surface is 3,131 actions across 46 modules.
 
 ## Features
 
@@ -25,7 +29,7 @@ A complete ERP system built as an [OpenClaw](https://openclaw.org) skill. Full d
 clawhub install erpclaw
 ```
 
-This installs the core ERP (413 actions) and initializes the database.
+This installs the core ERP (483 actions) and initializes the database.
 
 ### First Steps
 
@@ -42,7 +46,7 @@ The bot will:
 
 ### Adding Modules
 
-ERPClaw has 43 additional modules for specific industries and features:
+ERPClaw has 45 additional modules for specific industries and features:
 
 ```
 "I need manufacturing capabilities"
@@ -56,9 +60,9 @@ ERPClaw has 43 additional modules for specific industries and features:
 ```
 
 Available modules:
-- **Addon modules** (16): CRM, Manufacturing, Projects, Assets, Quality, Fleet, POS, Logistics, and more
+- **Addon modules** (19): CRM, Manufacturing, Projects, Assets, Quality, Fleet, POS, Logistics, Stripe, Shopify, OS Engine, and more
 - **Healthcare** (5): Core clinical + Dental, Veterinary, Mental Health, Home Health
-- **Education** (8): Core SIS + Financial Aid, K-12, Scheduling, LMS, State Reporting, Higher Ed, SPED
+- **Education** (7): Core SIS + Financial Aid, K-12, Scheduling, LMS, State Reporting, Higher Ed
 - **Property** (2): Residential + Commercial property management
 - **Industry verticals** (8): Retail, Construction, Agriculture, Automotive, Food, Hospitality, Legal, Nonprofit
 - **Regional** (4): Canada, UK, India, EU (tax rules, COA templates, compliance)
@@ -80,12 +84,18 @@ OpenClaw Bot → erpclaw/scripts/db_query.py --action {action} --args
                          ├── erpclaw-reports   → Financial statements
                          ├── erpclaw-hr        → Employees, leave, attendance
                          ├── erpclaw-payroll   → Salary, tax withholding, W-2
-                         └── erpclaw-accounting-adv → ASC 606/842, intercompany
+                         ├── erpclaw-accounting-adv → ASC 606/842, intercompany
+                         │
+                         │   (infrastructure, not user-facing domains:)
+                         ├── erpclaw-meta      → Module metadata, registry helpers
+                         └── erpclaw-os        → Read-only validate / inspect layer
                          │
                          ▼
               SQLite (local database)
               WAL mode, FK enforcement, parameterized queries
 ```
+
+The 14 user-facing domains map 1:1 with the routing rows above (`setup` through `accounting-adv`). `erpclaw-meta` and `erpclaw-os` live alongside in `scripts/` but are infrastructure (registry helpers + module-validation reads). The generate / deploy / DGM half of the OS lives in the optional `erpclaw-os-engine` addon, not the foundation.
 
 ### Data Integrity
 
@@ -107,7 +117,7 @@ Single SQLite database at `~/.openclaw/erpclaw/data.sqlite`:
 
 ## Module Registry
 
-The module registry (`scripts/module_registry.json`) tracks all 48 modules across 14 GitHub repositories. Use `install-module` to add any module:
+The module registry (`scripts/module_registry.json`) tracks all 46 modules across 16 GitHub repositories. Use `install-module` to add any module:
 
 ```
 "Install the manufacturing module"

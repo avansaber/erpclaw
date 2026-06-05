@@ -27,6 +27,8 @@ from decimal import Decimal
 from typing import Optional
 
 from erpclaw_lib.decimal_utils import to_decimal, round_currency
+from erpclaw_lib.db import db_error_types
+from erpclaw_lib.query import latest_insert_order
 
 
 # ---------------------------------------------------------------------------
@@ -37,15 +39,19 @@ def _get_item_valuation_method(conn: sqlite3.Connection, item_id: str) -> str:
     """Return the valuation method for an item ('moving_average' or 'fifo').
 
     Falls back to 'moving_average' if item not found or column missing.
+    Dialect-agnostic: the except classes come from db_error_types() (SQLite + PG).
     """
+    _missing_table, _db_error = db_error_types()
     try:
         row = conn.execute(
             "SELECT valuation_method FROM item WHERE id = ?", (item_id,)
         ).fetchone()
         if row and row["valuation_method"]:
             return row["valuation_method"]
-    except (KeyError, sqlite3.OperationalError):
-        pass
+    except (KeyError,) + _missing_table:
+        pass  # item/column/table absent on minimal installs; use the default
+    except _db_error:
+        pass  # any other DB read issue → fall back to the default method
     return "moving_average"
 
 
@@ -74,7 +80,7 @@ def _insert_fifo_layer(
             id, item_id, warehouse_id, posting_date,
             qty, rate, remaining_qty,
             source_voucher_type, source_voucher_id, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(CURRENT_TIMESTAMP AS TEXT))
         """,
         (
             layer_id, item_id, warehouse_id, posting_date,
@@ -399,6 +405,19 @@ def insert_sle_entries(
             f"SLE entries already exist for voucher ({voucher_type}, {voucher_id})"
         )
 
+    # 1b. voucher_type validity from voucher_type_registry (M0 phase 3a): the
+    # hardcoded CHECK on stock_ledger_entry.voucher_type was dropped, so the type
+    # is registry-sourced and enforced here on every SLE write (same membership
+    # the CHECK enforced; now extensible at runtime).
+    if not conn.execute(
+        "SELECT 1 FROM voucher_type_registry WHERE voucher_type = ? AND target_table = 'stock_ledger_entry' AND is_active = 1",
+        (voucher_type,),
+    ).fetchone():
+        raise ValueError(
+            f"voucher_type '{voucher_type}' is not a registered, active type for stock_ledger_entry. "
+            f"Register it (add-voucher-type) or run seed-registry-defaults."
+        )
+
     # 2. Validate
     _warnings = validate_stock_entries(conn, entries, posting_date, company_id)
 
@@ -449,7 +468,7 @@ def insert_sle_entries(
                 stock_value, stock_value_difference,
                 voucher_type, voucher_id, batch_id, serial_number,
                 incoming_rate, is_cancelled, fiscal_year, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, datetime('now'))
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, CAST(CURRENT_TIMESTAMP AS TEXT))
             """,
             (
                 sle_id,
@@ -663,7 +682,7 @@ def reverse_sle_entries(
                 stock_value, stock_value_difference,
                 voucher_type, voucher_id, batch_id, serial_number,
                 incoming_rate, is_cancelled, fiscal_year, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, datetime('now'))
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, CAST(CURRENT_TIMESTAMP AS TEXT))
             """,
             (
                 reversal_id,
@@ -719,21 +738,21 @@ def get_stock_balance(
     """
     if as_of_date:
         row = conn.execute(
-            """
+            f"""
             SELECT
                 COALESCE(decimal_sum(actual_qty), '0') as total_qty,
                 COALESCE(
                     (SELECT stock_value FROM stock_ledger_entry
                      WHERE item_id = ? AND warehouse_id = ? AND is_cancelled = 0
                        AND posting_date <= ?
-                     ORDER BY rowid DESC LIMIT 1),
+                     ORDER BY {latest_insert_order()} LIMIT 1),
                     '0'
                 ) as last_stock_value,
                 COALESCE(
                     (SELECT valuation_rate FROM stock_ledger_entry
                      WHERE item_id = ? AND warehouse_id = ? AND is_cancelled = 0
                        AND posting_date <= ?
-                     ORDER BY rowid DESC LIMIT 1),
+                     ORDER BY {latest_insert_order()} LIMIT 1),
                     '0'
                 ) as last_valuation_rate
             FROM stock_ledger_entry
@@ -748,19 +767,19 @@ def get_stock_balance(
         ).fetchone()
     else:
         row = conn.execute(
-            """
+            f"""
             SELECT
                 COALESCE(decimal_sum(actual_qty), '0') as total_qty,
                 COALESCE(
                     (SELECT stock_value FROM stock_ledger_entry
                      WHERE item_id = ? AND warehouse_id = ? AND is_cancelled = 0
-                     ORDER BY rowid DESC LIMIT 1),
+                     ORDER BY {latest_insert_order()} LIMIT 1),
                     '0'
                 ) as last_stock_value,
                 COALESCE(
                     (SELECT valuation_rate FROM stock_ledger_entry
                      WHERE item_id = ? AND warehouse_id = ? AND is_cancelled = 0
-                     ORDER BY rowid DESC LIMIT 1),
+                     ORDER BY {latest_insert_order()} LIMIT 1),
                     '0'
                 ) as last_valuation_rate
             FROM stock_ledger_entry

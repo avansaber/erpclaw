@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 import uuid
 import calendar
@@ -35,8 +36,9 @@ try:
     from erpclaw_lib.gl_posting import insert_gl_entries, reverse_gl_entries
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
+    from erpclaw_lib.custom_fields import store_from_arg, merge_into_response
     from erpclaw_lib.dependencies import check_required_tables
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL, DecimalSum, DecimalAbs, dynamic_update
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL, DecimalSum, DecimalAbs, dynamic_update, line_order, scalar_max, now
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
     from erpclaw_lib.vendor.pypika.terms import LiteralValue, ValueWrapper
 except ImportError:
@@ -257,11 +259,11 @@ def _apply_pricing_rule(conn, item_id: str, customer_id: str,
                  OR applies_to = 'item_group'
                  OR applies_to = 'customer_group'
              )
-             AND (min_qty IS NULL OR min_qty + 0 <= ? + 0)
-             AND (max_qty IS NULL OR max_qty + 0 >= ? + 0)
+             AND (min_qty IS NULL OR CAST(min_qty AS NUMERIC) <= CAST(? AS NUMERIC))
+             AND (max_qty IS NULL OR CAST(max_qty AS NUMERIC) >= CAST(? AS NUMERIC))
              AND (valid_from IS NULL OR valid_from <= ?)
              AND (valid_to IS NULL OR valid_to >= ?)
-           ORDER BY priority DESC, COALESCE(min_qty, '0') + 0 DESC
+           ORDER BY priority DESC, CAST(COALESCE(min_qty, '0') AS NUMERIC) DESC
            LIMIT 1""",
         (company_id, item_id, customer_id, str(qty), str(qty),
          posting_date, posting_date),
@@ -405,23 +407,30 @@ def add_customer(conn, args):
              .columns("id", "name", "customer_type", "customer_group",
                        "payment_terms_id", "credit_limit", "tax_id",
                        "exempt_from_sales_tax", "primary_address",
-                       "primary_contact", "status", "company_id")
+                       "primary_contact", "email", "phone", "status", "company_id")
              .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(), P(),
-                     ValueWrapper("active"), P()))
+                     P(), P(), ValueWrapper("active"), P()))
         conn.execute(q.get_sql(),
             (cust_id, args.name, customer_type, args.customer_group,
              args.payment_terms_id, credit_limit, args.tax_id, exempt,
-             primary_address, primary_contact, args.company_id),
+             primary_address, primary_contact,
+             getattr(args, "email", None), getattr(args, "phone", None),
+             args.company_id),
         )
     except sqlite3.IntegrityError as e:
         sys.stderr.write(f"[erpclaw-selling] {e}\n")
         err("Customer creation failed — check for duplicates or invalid data")
 
+    cf_errors = store_from_arg(conn, "customer", cust_id, getattr(args, "custom_fields", None))
+    if cf_errors:
+        conn.rollback()
+        err("Custom field error: " + "; ".join(cf_errors))
+
     audit(conn, "erpclaw-selling", "add-customer", "customer", cust_id,
            new_values={"name": args.name, "customer_type": customer_type})
     conn.commit()
-    ok({"customer_id": cust_id, "name": args.name,
-         "customer_type": customer_type})
+    resp = {"customer_id": cust_id, "name": args.name, "customer_type": customer_type}
+    ok(merge_into_response(conn, "customer", cust_id, resp))
 
 
 # ---------------------------------------------------------------------------
@@ -462,11 +471,17 @@ def update_customer(conn, args):
             err(f"--customer-type must be one of: {', '.join(VALID_CUSTOMER_TYPES)}")
         data["customer_type"] = args.customer_type
         updated_fields.append("customer_type")
+    if getattr(args, "email", None) is not None:
+        data["email"] = args.email
+        updated_fields.append("email")
+    if getattr(args, "phone", None) is not None:
+        data["phone"] = args.phone
+        updated_fields.append("phone")
 
     if not updated_fields:
         err("No fields to update")
 
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = now()
     sql, params = dynamic_update("customer", data, where={"id": args.customer_id})
     conn.execute(sql, params)
 
@@ -503,7 +518,7 @@ def get_customer(conn, args):
                   COUNT(*) as invoice_count
            FROM sales_invoice
            WHERE customer_id = ? AND status IN ('submitted', 'overdue', 'partially_paid')
-             AND outstanding_amount + 0 > 0""",
+             AND CAST(outstanding_amount AS NUMERIC) > 0""",
         (args.customer_id,),
     ).fetchone()
 
@@ -511,7 +526,7 @@ def get_customer(conn, args):
         to_decimal(str(outstanding_row["total_outstanding"]))))
     data["outstanding_invoice_count"] = outstanding_row["invoice_count"]
 
-    ok(data)
+    ok(merge_into_response(conn, "customer", cust["id"], data))
 
 
 # ---------------------------------------------------------------------------
@@ -653,7 +668,7 @@ def update_quotation(conn, args):
     if args.valid_till is not None:
         uq = (Q.update(_t_quotation)
               .set("valid_until", P())
-              .set("updated_at", LiteralValue("datetime('now')"))
+              .set("updated_at", now())
               .where(_t_quotation.id == P()))
         conn.execute(uq.get_sql(), (args.valid_till, args.quotation_id))
         updated_fields.append("valid_until")
@@ -687,7 +702,7 @@ def update_quotation(conn, args):
                .set("total_amount", P())
                .set("tax_amount", P())
                .set("grand_total", P())
-               .set("updated_at", LiteralValue("datetime('now')"))
+               .set("updated_at", now())
                .where(_t_quotation.id == P()))
         conn.execute(uq2.get_sql(),
             (str(total_amount), str(tax_amount), str(grand_total),
@@ -726,7 +741,7 @@ def get_quotation(conn, args):
                .left_join(i).on(i.id == qi.item_id)
                .select(qi.star, i.item_name)
                .where(qi.quotation_id == P())
-               .orderby(qi.rowid))
+               .orderby(line_order(qi)))
     items = conn.execute(items_q.get_sql(), (args.quotation_id,)).fetchall()
     data["items"] = [row_to_dict(r) for r in items]
     ok(data)
@@ -812,7 +827,7 @@ def submit_quotation(conn, args):
     uq = (Q.update(_t_quotation)
           .set("status", ValueWrapper("open"))
           .set("naming_series", P())
-          .set("updated_at", LiteralValue("datetime('now')"))
+          .set("updated_at", now())
           .where(_t_quotation.id == P()))
     conn.execute(uq.get_sql(), (naming, args.quotation_id))
 
@@ -845,7 +860,7 @@ def convert_quotation_to_so(conn, args):
     # Fetch quotation items
     qi_q = (Q.from_(_t_quotation_item).select(_t_quotation_item.star)
             .where(_t_quotation_item.quotation_id == P())
-            .orderby(_t_quotation_item.rowid))
+            .orderby(line_order(_t_quotation_item)))
     q_items = conn.execute(qi_q.get_sql(), (args.quotation_id,)).fetchall()
     if not q_items:
         err("Quotation has no items")
@@ -889,7 +904,7 @@ def convert_quotation_to_so(conn, args):
     uq = (Q.update(_t_quotation)
           .set("status", ValueWrapper("ordered"))
           .set("converted_to", P())
-          .set("updated_at", LiteralValue("datetime('now')"))
+          .set("updated_at", now())
           .where(_t_quotation.id == P()))
     conn.execute(uq.get_sql(), (so_id, args.quotation_id))
 
@@ -995,7 +1010,7 @@ def update_sales_order(conn, args):
     if args.delivery_date is not None:
         uq = (Q.update(_t_sales_order)
               .set("delivery_date", P())
-              .set("updated_at", LiteralValue("datetime('now')"))
+              .set("updated_at", now())
               .where(_t_sales_order.id == P()))
         conn.execute(uq.get_sql(), (args.delivery_date, args.sales_order_id))
         updated_fields.append("delivery_date")
@@ -1030,7 +1045,7 @@ def update_sales_order(conn, args):
                .set("total_amount", P())
                .set("tax_amount", P())
                .set("grand_total", P())
-               .set("updated_at", LiteralValue("datetime('now')"))
+               .set("updated_at", now())
                .where(_t_sales_order.id == P()))
         conn.execute(uq2.get_sql(),
             (str(total_amount), str(tax_amount), str(grand_total),
@@ -1070,7 +1085,7 @@ def get_sales_order(conn, args):
                .left_join(i).on(i.id == soi.item_id)
                .select(soi.star, i.item_name, i.item_code)
                .where(soi.sales_order_id == P())
-               .orderby(soi.rowid))
+               .orderby(line_order(soi)))
     items = conn.execute(items_q.get_sql(), (args.sales_order_id,)).fetchall()
     data["items"] = [row_to_dict(r) for r in items]
 
@@ -1204,7 +1219,7 @@ def submit_sales_order(conn, args):
             """SELECT COALESCE(decimal_sum(outstanding_amount), '0') as total
                FROM sales_invoice
                WHERE customer_id = ? AND status IN ('submitted', 'overdue', 'partially_paid')
-                 AND outstanding_amount + 0 > 0""",
+                 AND CAST(outstanding_amount AS NUMERIC) > 0""",
             (customer_id,),
         ).fetchone()
         outstanding = to_decimal(str(outstanding_row["total"]))
@@ -1235,7 +1250,7 @@ def submit_sales_order(conn, args):
     uq = (Q.update(_t_sales_order)
           .set("status", ValueWrapper("confirmed"))
           .set("naming_series", P())
-          .set("updated_at", LiteralValue("datetime('now')"))
+          .set("updated_at", now())
           .where(_t_sales_order.id == P()))
     conn.execute(uq.get_sql(), (naming, args.sales_order_id))
 
@@ -1283,7 +1298,7 @@ def cancel_sales_order(conn, args):
 
     uq = (Q.update(_t_sales_order)
           .set("status", ValueWrapper("cancelled"))
-          .set("updated_at", LiteralValue("datetime('now')"))
+          .set("updated_at", now())
           .where(_t_sales_order.id == P()))
     conn.execute(uq.get_sql(), (args.sales_order_id,))
 
@@ -1318,7 +1333,7 @@ def create_delivery_note(conn, args):
     # Fetch SO items
     soiq = (Q.from_(_t_sales_order_item).select(_t_sales_order_item.star)
             .where(_t_sales_order_item.sales_order_id == P())
-            .orderby(_t_sales_order_item.rowid))
+            .orderby(line_order(_t_sales_order_item)))
     so_items = conn.execute(soiq.get_sql(), (args.sales_order_id,)).fetchall()
     if not so_items:
         err("Sales order has no items")
@@ -1449,7 +1464,7 @@ def get_delivery_note(conn, args):
                .left_join(i).on(i.id == dni.item_id)
                .select(dni.star, i.item_name, i.item_code)
                .where(dni.delivery_note_id == P())
-               .orderby(dni.rowid))
+               .orderby(line_order(dni)))
     items = conn.execute(items_q.get_sql(), (args.delivery_note_id,)).fetchall()
     data["items"] = [row_to_dict(r) for r in items]
     ok(data)
@@ -1544,7 +1559,7 @@ def submit_delivery_note(conn, args):
     # Fetch DN items
     dniq = (Q.from_(_t_delivery_note_item).select(_t_delivery_note_item.star)
             .where(_t_delivery_note_item.delivery_note_id == P())
-            .orderby(_t_delivery_note_item.rowid))
+            .orderby(line_order(_t_delivery_note_item)))
     dn_items = conn.execute(dniq.get_sql(), (args.delivery_note_id,)).fetchall()
     if not dn_items:
         err("Delivery note has no items")
@@ -1665,7 +1680,7 @@ def submit_delivery_note(conn, args):
     uq = (Q.update(_t_delivery_note)
           .set("status", ValueWrapper("submitted"))
           .set("naming_series", P())
-          .set("updated_at", LiteralValue("datetime('now')"))
+          .set("updated_at", now())
           .where(_t_delivery_note.id == P()))
     conn.execute(uq.get_sql(), (naming, args.delivery_note_id))
 
@@ -1678,7 +1693,7 @@ def submit_delivery_note(conn, args):
                 conn.execute(
                     """UPDATE sales_order_item
                        SET delivered_qty = CAST(
-                           delivered_qty + 0 + ?
+                           CAST(delivered_qty AS NUMERIC) + CAST(? AS NUMERIC)
                        AS TEXT)
                        WHERE id = ?""",
                     (dni_dict["quantity"], dni_dict["sales_order_item_id"]),
@@ -1724,7 +1739,7 @@ def _update_so_delivery_status(conn, sales_order_id: str):
     uq = (Q.update(_t_sales_order)
           .set("per_delivered", P())
           .set("status", P())
-          .set("updated_at", LiteralValue("datetime('now')"))
+          .set("updated_at", now())
           .where(_t_sales_order.id == P()))
     conn.execute(uq.get_sql(), (str(per_delivered), new_status, sales_order_id))
 
@@ -1785,7 +1800,7 @@ def cancel_delivery_note(conn, args):
     # Update DN status
     uq = (Q.update(_t_delivery_note)
           .set("status", ValueWrapper("cancelled"))
-          .set("updated_at", LiteralValue("datetime('now')"))
+          .set("updated_at", now())
           .where(_t_delivery_note.id == P()))
     conn.execute(uq.get_sql(), (args.delivery_note_id,))
 
@@ -1799,9 +1814,9 @@ def cancel_delivery_note(conn, args):
             if dni_dict.get("sales_order_item_id"):
                 # raw SQL — CAST with MAX and arithmetic on TEXT column
                 conn.execute(
-                    """UPDATE sales_order_item
+                    f"""UPDATE sales_order_item
                        SET delivered_qty = CAST(
-                           MAX(delivered_qty + 0 - ?, 0)
+                           {scalar_max("CAST(delivered_qty AS NUMERIC) - CAST(? AS NUMERIC)", "0")}
                        AS TEXT)
                        WHERE id = ?""",
                     (dni_dict["quantity"], dni_dict["sales_order_item_id"]),
@@ -1846,7 +1861,7 @@ def _update_so_delivery_status_after_cancel(conn, sales_order_id: str):
     uq = (Q.update(_t_sales_order)
           .set("per_delivered", P())
           .set("status", P())
-          .set("updated_at", LiteralValue("datetime('now')"))
+          .set("updated_at", now())
           .where(_t_sales_order.id == P()))
     conn.execute(uq.get_sql(), (str(per_delivered), new_status, sales_order_id))
 
@@ -1895,7 +1910,7 @@ def create_sales_invoice(conn, args):
 
         soiq = (Q.from_(_t_sales_order_item).select(_t_sales_order_item.star)
                 .where(_t_sales_order_item.sales_order_id == P())
-                .orderby(_t_sales_order_item.rowid))
+                .orderby(line_order(_t_sales_order_item)))
         so_items = conn.execute(soiq.get_sql(), (sales_order_id,)).fetchall()
 
         si_items_data = []
@@ -1940,7 +1955,7 @@ def create_sales_invoice(conn, args):
 
         dniq = (Q.from_(_t_delivery_note_item).select(_t_delivery_note_item.star)
                 .where(_t_delivery_note_item.delivery_note_id == P())
-                .orderby(_t_delivery_note_item.rowid))
+                .orderby(line_order(_t_delivery_note_item)))
         dn_items = conn.execute(dniq.get_sql(), (delivery_note_id,)).fetchall()
 
         si_items_data = []
@@ -2096,7 +2111,7 @@ def update_sales_invoice(conn, args):
     if args.due_date is not None:
         uq = (Q.update(_t_sales_invoice)
               .set("due_date", P())
-              .set("updated_at", LiteralValue("datetime('now')"))
+              .set("updated_at", now())
               .where(_t_sales_invoice.id == P()))
         conn.execute(uq.get_sql(), (args.due_date, args.sales_invoice_id))
         updated_fields.append("due_date")
@@ -2129,7 +2144,7 @@ def update_sales_invoice(conn, args):
                .set("tax_amount", P())
                .set("grand_total", P())
                .set("outstanding_amount", P())
-               .set("updated_at", LiteralValue("datetime('now')"))
+               .set("updated_at", now())
                .where(_t_sales_invoice.id == P()))
         conn.execute(uq2.get_sql(),
             (str(total_amount), str(tax_amount), str(grand_total),
@@ -2170,7 +2185,7 @@ def get_sales_invoice(conn, args):
                .left_join(i).on(i.id == sii.item_id)
                .select(sii.star, i.item_name, i.item_code)
                .where(sii.sales_invoice_id == P())
-               .orderby(sii.rowid))
+               .orderby(line_order(sii)))
     items = conn.execute(items_q.get_sql(), (args.sales_invoice_id,)).fetchall()
     data["items"] = [row_to_dict(r) for r in items]
 
@@ -2534,7 +2549,7 @@ def submit_sales_invoice(conn, args):
     uq = (Q.update(_t_sales_invoice)
           .set("status", ValueWrapper("submitted"))
           .set("naming_series", P())
-          .set("updated_at", LiteralValue("datetime('now')"))
+          .set("updated_at", now())
           .where(_t_sales_invoice.id == P()))
     conn.execute(uq.get_sql(), (naming, args.sales_invoice_id))
 
@@ -2547,7 +2562,7 @@ def submit_sales_invoice(conn, args):
                 conn.execute(
                     """UPDATE sales_order_item
                        SET invoiced_qty = CAST(
-                           invoiced_qty + 0 + ?
+                           CAST(invoiced_qty AS NUMERIC) + CAST(? AS NUMERIC)
                        AS TEXT)
                        WHERE id = ?""",
                     (sii_dict["quantity"], sii_dict["sales_order_item_id"]),
@@ -2741,14 +2756,86 @@ def add_dunning_level(conn, args):
         "days_overdue": days, "action": args.dunning_action})
 
 
+def _resolve_customer_email(conn, customer_id):
+    """READ-only lookup of a customer's contact email from the customer record.
+
+    The customer record carries its deliverable email in the dedicated `email`
+    column (ADR-0012); that is the address for dunning mail. This is a READ of an
+    owned table (selling owns `customer`); we never write another module's tables
+    here. Returns the email string, or None when no email is set.
+    """
+    row = conn.execute(
+        "SELECT email FROM customer WHERE id = ?", (customer_id,)
+    ).fetchone()
+    if row and row[0]:
+        return row[0]
+    return None
+
+
+def _dispatch_dunning_email(conn, to_address, template_id, company_id, db_path):
+    """Enqueue one dunning email via the erpclaw-alerts `send-email` ACTION.
+
+    Cross-module reach is by INVOKING the action (subprocess to alerts'
+    db_query.py) -- we never write erpclaw-alerts' email_outbox/email_log tables
+    directly (owning-module-writes). Returns (ok: bool, info: str) where `info`
+    is the returned email_outbox id on success, else the error message. This is
+    the single seam tests patch (no real subprocess in CI), mirroring
+    erpclaw-crm-adv's process-drip-sends `_dispatch_email`.
+    """
+    from erpclaw_lib.dependencies import check_subprocess_target, resolve_skill_script
+    dep_err = check_subprocess_target(conn, "erpclaw-alerts", "email_outbox")
+    if dep_err:
+        return False, dep_err["error"]
+    script = resolve_skill_script("erpclaw-alerts")
+    cmd = [
+        sys.executable, script,
+        "--action", "send-email",
+        "--to", to_address,
+        "--template-id", template_id,
+    ]
+    if company_id:
+        cmd.extend(["--company-id", company_id])
+    if db_path:
+        cmd.extend(["--db-path", db_path])
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        return False, "send-email timed out (30s)"
+    if result.returncode != 0:
+        return False, (result.stdout.strip() or result.stderr.strip() or "send-email failed")
+    try:
+        resp = json.loads(result.stdout)
+    except (json.JSONDecodeError, TypeError):
+        return False, f"invalid response from erpclaw-alerts: {result.stdout[:200]}"
+    if resp.get("status") != "ok":
+        return False, resp.get("message") or resp.get("error") or "send-email failed"
+    return True, resp.get("email_outbox_id") or "queued"
+
+
+def _append_dunning_note(conn, run_id, extra):
+    """Append a status note to a dunning_run row, preserving the original note."""
+    cur = conn.execute("SELECT notes FROM dunning_run WHERE id = ?", (run_id,)).fetchone()
+    base = (cur[0] if cur and cur[0] else "")
+    new = f"{base}; {extra}" if base else extra
+    conn.execute("UPDATE dunning_run SET notes = ? WHERE id = ?", (new, run_id))
+
+
 def run_dunning_cycle(conn, args):
     """Find overdue invoices, match each to highest applicable dunning level,
-    take the configured action (record-only for 'email' — we don't send mail
-    yet; 'hold'/'suspend' update customer.credit_status; 'call' just logs).
+    take the configured action. For 'email' levels we ALSO enqueue a dunning
+    email via the erpclaw-alerts send-email ACTION (cross-module subprocess) and
+    record the returned outbox id on dunning_run.generated_email_id (M8-C).
+    'hold'/'suspend' update customer.credit_status; 'call' just logs.
 
-    Returns: counts of (overdue_invoices, customers_affected, actions_by_type).
-    Idempotent within a date window: if a dunning_run for (customer, level)
-    already exists today, skip to avoid duplicate escalations.
+    Email sends run AFTER the dunning-run transaction commits: the send-email
+    action opens its own connection to write erpclaw-alerts' outbox, so we must
+    not hold an open write transaction while it runs. A missing customer email
+    or missing dunning template skips-with-note WITHOUT failing the cycle.
+
+    Returns: counts of (overdue_invoices, customers_affected, actions_by_type)
+    plus an `emails` summary. Idempotent within a date window: if a dunning_run
+    for (customer, level) already exists today, skip to avoid duplicate
+    escalations.
     """
     if not args.company_id:
         err("--company-id is required")
@@ -2807,6 +2894,8 @@ def run_dunning_cycle(conn, args):
 
     actions_summary = {"email": 0, "hold": 0, "call": 0, "suspend": 0, "skipped": 0}
     runs_created = []
+    # (run_id, customer_id, template_id) tuples to send AFTER the commit below.
+    pending_emails = []
     for cust_id, info in by_customer.items():
         lvl = info["level"]
         # Skip if a run for this (customer, level) already exists today
@@ -2836,8 +2925,8 @@ def run_dunning_cycle(conn, args):
                  .where(_t_customer.id == P()).get_sql(),
                 (cust_id,),
             )
-        # 'email' and 'call' are record-only at this phase; email sender
-        # integration ships in a follow-up (ROADMAP M8).
+        # 'call' is record-only; 'email' records the run now and the actual send
+        # is dispatched post-commit (see pending_emails below) via M8-A.
         run_id = str(uuid.uuid4())
         conn.execute(
             Q.into(_t_dunning_run)
@@ -2851,13 +2940,47 @@ def run_dunning_cycle(conn, args):
         )
         actions_summary[lvl["action"]] += 1
         runs_created.append(run_id)
+        if lvl["action"] == "email":
+            pending_emails.append((run_id, cust_id, lvl.get("template_id")))
     conn.commit()
+
+    # M8-C: send the dunning emails AFTER the dunning-run transaction commits.
+    # The send-email action opens its own connection to write the alerts outbox,
+    # so we must not hold an open write transaction here. A missing customer
+    # email or missing dunning template is a skip-with-note, never a cycle
+    # failure; on success we backfill dunning_run.generated_email_id.
+    email_summary = {"sent": 0, "skipped": 0}
+    db_path = getattr(args, "db_path", None)
+    for run_id, cust_id, template_id in pending_emails:
+        recipient = _resolve_customer_email(conn, cust_id)
+        if not template_id:
+            _append_dunning_note(conn, run_id, "email skipped: no dunning template configured")
+            email_summary["skipped"] += 1
+            continue
+        if not recipient:
+            _append_dunning_note(conn, run_id, "email skipped: no email on customer record")
+            email_summary["skipped"] += 1
+            continue
+        sent_ok, detail = _dispatch_dunning_email(
+            conn, recipient, template_id, args.company_id, db_path)
+        if sent_ok:
+            conn.execute(
+                "UPDATE dunning_run SET generated_email_id = ? WHERE id = ?",
+                (detail, run_id))
+            email_summary["sent"] += 1
+        else:
+            _append_dunning_note(conn, run_id, f"email skipped: send failed: {detail}")
+            email_summary["skipped"] += 1
+    if pending_emails:
+        conn.commit()
+
     ok({
         "run_date": today,
         "company_id": args.company_id,
         "customers_processed": len(by_customer),
         "runs_created": len(runs_created),
         "actions": actions_summary,
+        "emails": email_summary,
         "run_ids": runs_created,
     })
 
@@ -2914,7 +3037,7 @@ def _update_so_invoice_status(conn, sales_order_id: str):
         uq = (Q.update(_t_sales_order)
               .set("per_invoiced", P())
               .set("status", P())
-              .set("updated_at", LiteralValue("datetime('now')"))
+              .set("updated_at", now())
               .where(_t_sales_order.id == P()))
         conn.execute(uq.get_sql(), (str(per_invoiced), new_status, sales_order_id))
 
@@ -2973,7 +3096,7 @@ def cancel_sales_invoice(conn, args):
     # Mark PLE as delinked
     ple_uq = (Q.update(_t_payment_ledger)
               .set("delinked", 1)
-              .set("updated_at", LiteralValue("datetime('now')"))
+              .set("updated_at", now())
               .where(_t_payment_ledger.voucher_type == P())
               .where(_t_payment_ledger.voucher_id == P()))
     conn.execute(ple_uq.get_sql(), (cancel_voucher_type, args.sales_invoice_id))
@@ -2982,7 +3105,7 @@ def cancel_sales_invoice(conn, args):
     uq = (Q.update(_t_sales_invoice)
           .set("status", ValueWrapper("cancelled"))
           .set("outstanding_amount", ValueWrapper("0"))
-          .set("updated_at", LiteralValue("datetime('now')"))
+          .set("updated_at", now())
           .where(_t_sales_invoice.id == P()))
     conn.execute(uq.get_sql(), (args.sales_invoice_id,))
 
@@ -2996,9 +3119,9 @@ def cancel_sales_invoice(conn, args):
             if sii_dict.get("sales_order_item_id"):
                 # raw SQL — CAST with MAX and arithmetic on TEXT column
                 conn.execute(
-                    """UPDATE sales_order_item
+                    f"""UPDATE sales_order_item
                        SET invoiced_qty = CAST(
-                           MAX(invoiced_qty + 0 - ?, 0)
+                           {scalar_max("CAST(invoiced_qty AS NUMERIC) - CAST(? AS NUMERIC)", "0")}
                        AS TEXT)
                        WHERE id = ?""",
                     (sii_dict["quantity"], sii_dict["sales_order_item_id"]),
@@ -3200,38 +3323,29 @@ def update_invoice_outstanding(conn, args):
     if si["status"] not in ("submitted", "overdue", "partially_paid"):
         err(f"Cannot update outstanding: invoice is '{si['status']}'")
 
-    current_outstanding = to_decimal(si["outstanding_amount"])
     payment_amount = to_decimal(args.amount)
-
     if payment_amount <= 0:
         err("--amount must be > 0")
-    if payment_amount > current_outstanding:
-        err(f"Payment amount {payment_amount} exceeds outstanding {current_outstanding}")
 
-    new_outstanding = round_currency(current_outstanding - payment_amount)
-
-    if new_outstanding <= Decimal("0"):
-        new_status = "paid"
-        new_outstanding = Decimal("0")
-    else:
-        new_status = "partially_paid"
-
-    uq = (Q.update(_t_sales_invoice)
-          .set("outstanding_amount", P())
-          .set("status", P())
-          .set("updated_at", LiteralValue("datetime('now')"))
-          .where(_t_sales_invoice.id == P()))
-    conn.execute(uq.get_sql(), (str(new_outstanding), new_status, args.sales_invoice_id))
+    # Delegate compute-and-write to the neutral payment-clearing lib so this
+    # action and erpclaw-payments share ONE canonical clearing rule (no drift).
+    # The clearable-status guard + over-payment REJECT live in the helper.
+    try:
+        from erpclaw_lib.payment_clearing import apply_payment_to_document
+        res = apply_payment_to_document(
+            conn, "sales_invoice", args.sales_invoice_id, args.amount)
+    except ValueError as e:
+        err(str(e))
 
     audit(conn, "erpclaw-selling", "update-invoice-outstanding", "sales_invoice",
            args.sales_invoice_id,
            new_values={"payment_amount": str(payment_amount),
-                       "new_outstanding": str(new_outstanding),
-                       "new_status": new_status})
+                       "new_outstanding": res["outstanding_amount"],
+                       "new_status": res["status"]})
     conn.commit()
     ok({"sales_invoice_id": args.sales_invoice_id,
-         "outstanding_amount": str(new_outstanding),
-         "status": new_status})
+         "outstanding_amount": res["outstanding_amount"],
+         "status": res["status"]})
 
 
 # ---------------------------------------------------------------------------
@@ -3385,7 +3499,7 @@ def update_recurring_template(conn, args):
             err(f"--frequency must be one of: {', '.join(VALID_FREQUENCIES)}")
         uq = (Q.update(_t_recurring_template)
               .set("frequency", P())
-              .set("updated_at", LiteralValue("datetime('now')"))
+              .set("updated_at", now())
               .where(_t_recurring_template.id == P()))
         conn.execute(uq.get_sql(), (args.frequency, args.template_id))
         updated_fields.append("frequency")
@@ -3395,7 +3509,7 @@ def update_recurring_template(conn, args):
             err("--status must be 'active', 'paused', or 'cancelled'")
         uq2 = (Q.update(_t_recurring_template)
                .set("status", P())
-               .set("updated_at", LiteralValue("datetime('now')"))
+               .set("updated_at", now())
                .where(_t_recurring_template.id == P()))
         conn.execute(uq2.get_sql(), (args.template_status, args.template_id))
         updated_fields.append("status")
@@ -3660,7 +3774,7 @@ def generate_recurring_invoices(conn, args):
             uq_si = (Q.update(_t_sales_invoice)
                      .set("status", ValueWrapper("submitted"))
                      .set("naming_series", P())
-                     .set("updated_at", LiteralValue("datetime('now')"))
+                     .set("updated_at", now())
                      .where(_t_sales_invoice.id == P()))
             conn.execute(uq_si.get_sql(), (naming, si_id))
 
@@ -3669,7 +3783,7 @@ def generate_recurring_invoices(conn, args):
             uq_rt = (Q.update(_t_recurring_template)
                      .set("last_invoice_date", P())
                      .set("next_invoice_date", P())
-                     .set("updated_at", LiteralValue("datetime('now')"))
+                     .set("updated_at", now())
                      .where(_t_recurring_template.id == P()))
             conn.execute(uq_rt.get_sql(), (next_date, new_next, template_id))
 
@@ -3677,7 +3791,7 @@ def generate_recurring_invoices(conn, args):
             if tmpl_dict.get("end_date") and new_next > tmpl_dict["end_date"]:
                 uq_comp = (Q.update(_t_recurring_template)
                            .set("status", ValueWrapper("completed"))
-                           .set("updated_at", LiteralValue("datetime('now')"))
+                           .set("updated_at", now())
                            .where(_t_recurring_template.id == P()))
                 conn.execute(uq_comp.get_sql(), (template_id,))
                 templates_completed += 1
@@ -3811,7 +3925,7 @@ def submit_blanket_order(conn, args):
 
     uq = (Q.update(_t_blanket_order)
           .set(_t_blanket_order.status, ValueWrapper("active"))
-          .set(_t_blanket_order.updated_at, LiteralValue("datetime('now')"))
+          .set(_t_blanket_order.updated_at, now())
           .where(_t_blanket_order.id == P()))
     conn.execute(uq.get_sql(), (args.blanket_order_id,))
 
@@ -4018,7 +4132,7 @@ def create_so_from_blanket(conn, args):
         (args.blanket_order_id,)).fetchone()["total"]
     bo_uq = (Q.update(_t_blanket_order)
              .set(_t_blanket_order.ordered_qty, P())
-             .set(_t_blanket_order.updated_at, LiteralValue("datetime('now')"))
+             .set(_t_blanket_order.updated_at, now())
              .where(_t_blanket_order.id == P()))
     conn.execute(bo_uq.get_sql(), (ordered_sum, args.blanket_order_id))
 
@@ -4088,7 +4202,7 @@ def status_action(conn, args):
         """SELECT COALESCE(decimal_sum(outstanding_amount), '0') as total
            FROM sales_invoice
            WHERE company_id = ? AND status IN ('submitted', 'overdue', 'partially_paid')
-             AND outstanding_amount + 0 > 0""",
+             AND CAST(outstanding_amount AS NUMERIC) > 0""",
         (company_id,),
     ).fetchone()
     total_outstanding = str(round_currency(
@@ -4607,7 +4721,7 @@ def close_sales_order(conn, args):
           .set("status", ValueWrapper("closed"))
           .set("close_reason", P())
           .set("closed_by", P())
-          .set("updated_at", LiteralValue("datetime('now')"))
+          .set("updated_at", now())
           .where(_t_sales_order.id == P()))
     conn.execute(uq.get_sql(), (close_reason, closed_by, args.sales_order_id))
 
@@ -4662,7 +4776,7 @@ def amend_sales_order(conn, args):
     # Cancel original SO
     uq_cancel = (Q.update(_t_sales_order)
                  .set("status", ValueWrapper("cancelled"))
-                 .set("updated_at", LiteralValue("datetime('now')"))
+                 .set("updated_at", now())
                  .where(_t_sales_order.id == P()))
     conn.execute(uq_cancel.get_sql(), (args.sales_order_id,))
     audit(conn, "erpclaw-selling", "amend-sales-order", "sales_order",
@@ -4676,7 +4790,7 @@ def amend_sales_order(conn, args):
         # Copy items from original
         soiq = (Q.from_(_t_sales_order_item).select(_t_sales_order_item.star)
                 .where(_t_sales_order_item.sales_order_id == P())
-                .orderby(_t_sales_order_item.rowid))
+                .orderby(line_order(_t_sales_order_item)))
         so_items = conn.execute(soiq.get_sql(), (args.sales_order_id,)).fetchall()
         items = []
         for soi in so_items:
@@ -4846,7 +4960,7 @@ def create_drop_ship_order(conn, args):
     soiq = (Q.from_(_t_sales_order_item).select(_t_sales_order_item.star)
             .where(_t_sales_order_item.sales_order_id == P())
             .where(_t_sales_order_item.is_drop_ship == 1)
-            .orderby(_t_sales_order_item.rowid))
+            .orderby(line_order(_t_sales_order_item)))
     so_items = conn.execute(soiq.get_sql(), (args.sales_order_id,)).fetchall()
     if not so_items:
         err("No drop-ship items found in this sales order")
@@ -5068,7 +5182,7 @@ def get_packing_slip(conn, args):
             .select(_t_packing_slip_item.star,
                     _t_item.item_code, _t_item.item_name)
             .where(_t_packing_slip_item.packing_slip_id == P())
-            .orderby(_t_packing_slip_item.rowid))
+            .orderby(line_order(_t_packing_slip_item)))
     items = conn.execute(psiq.get_sql(), (args.packing_slip_id,)).fetchall()
     data["items"] = [row_to_dict(r) for r in items]
 
@@ -5188,6 +5302,8 @@ def main():
     parser.add_argument("--exempt-from-sales-tax")
     parser.add_argument("--primary-address")
     parser.add_argument("--primary-contact")
+    parser.add_argument("--email")
+    parser.add_argument("--phone")
 
     # Dunning / credit policy fields (S1).
     # --template-id, --limit already declared elsewhere; reused.
@@ -5265,6 +5381,8 @@ def main():
     parser.add_argument("--to-date")
     parser.add_argument("--limit", default="20")
     parser.add_argument("--offset", default="0")
+    parser.add_argument("--custom-fields", default=None,
+                        help='User-defined fields as a JSON object, e.g. \'{"priority": "Gold"}\'')
 
     args, unknown = parser.parse_known_args()
     check_unknown_args(parser, unknown)
