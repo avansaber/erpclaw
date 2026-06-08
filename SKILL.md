@@ -1,6 +1,6 @@
 ---
 name: erpclaw
-version: 4.6.0
+version: 4.6.1
 description: >
   AI-native ERP system. Full accounting, invoicing, inventory, purchasing,
   tax, billing, HR, payroll, advanced accounting (ASC 606/842, intercompany, consolidation),
