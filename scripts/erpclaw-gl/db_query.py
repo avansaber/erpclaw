@@ -701,6 +701,15 @@ def close_fiscal_year(conn, args):
     if closing_acct["root_type"] != "equity":
         err("Closing account must be an equity account (retained earnings)")
 
+    # ADR-0016: the closing account MUST belong to the fiscal year's company.
+    # A cross-company pairing would post one tenant's net income into another
+    # tenant's equity (silent, immutable). Hard-fail before any GL is posted.
+    if closing_acct["company_id"] != fy["company_id"]:
+        err("Closing account does not belong to the fiscal year's company. "
+            f"Fiscal year '{fy['name']}' is company {fy['company_id']}; "
+            f"closing account {closing_account_id} is company {closing_acct['company_id']}. "
+            "Pick the retained-earnings account that belongs to the same company as the fiscal year.")
+
     company_id = fy["company_id"]
 
     # raw SQL — SELECT uses column arithmetic (decimal_sum(credit) - decimal_sum(debit))

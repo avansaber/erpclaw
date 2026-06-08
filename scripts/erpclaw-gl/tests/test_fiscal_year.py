@@ -151,6 +151,145 @@ class TestCloseFiscalYear:
         assert is_error(result)
 
 
+class TestCloseFiscalYearCompanyGuard:
+    """ADR-0016 / FINDING-013: close-fiscal-year must refuse a closing account
+    that belongs to a different company than the fiscal year, and must do so
+    BEFORE any write (no PCV, no period-closing GL) → full rollback."""
+
+    def test_cross_company_closing_account_hard_errors_and_rolls_back(self, conn):
+        # Two companies, each with its own chart + retained-earnings account.
+        comp_a = seed_company(conn, name="Acme", abbr="AC")
+        comp_b = seed_company(conn, name="Beta", abbr="BE")
+
+        fyid_a = seed_fiscal_year(conn, comp_a, "FY A Close",
+                                  "2026-01-01", "2026-12-31")
+        cash_a = seed_account(conn, comp_a, "Cash A", "asset", "cash", "1000")
+        revenue_a = seed_account(conn, comp_a, "Revenue A", "income",
+                                 "revenue", "4000")
+        expense_a = seed_account(conn, comp_a, "Expenses A", "expense",
+                                 "expense", "5000")
+        cc_a = seed_cost_center(conn, comp_a, "CC A")
+
+        # Company B's retained-earnings account (the WRONG account to close A with).
+        retained_b = seed_account(conn, comp_b, "Retained Earnings B", "equity",
+                                  "equity", "3000")
+
+        # Post some P&L under company A so a close would otherwise write GL.
+        post_inc = call_action(mod.post_gl_entries, conn, ns(
+            voucher_type="journal_entry", voucher_id="JE-INC-A",
+            posting_date="2026-06-15", company_id=comp_a,
+            entries=json.dumps([
+                {"account_id": cash_a, "debit": "8000.00", "credit": "0"},
+                {"account_id": revenue_a, "debit": "0", "credit": "8000.00",
+                 "cost_center_id": cc_a},
+            ]),
+        ))
+        assert is_ok(post_inc), f"Income posting failed: {post_inc}"
+
+        post_exp = call_action(mod.post_gl_entries, conn, ns(
+            voucher_type="journal_entry", voucher_id="JE-EXP-A",
+            posting_date="2026-06-15", company_id=comp_a,
+            entries=json.dumps([
+                {"account_id": expense_a, "debit": "3000.00", "credit": "0",
+                 "cost_center_id": cc_a},
+                {"account_id": cash_a, "debit": "0", "credit": "3000.00"},
+            ]),
+        ))
+        assert is_ok(post_exp), f"Expense posting failed: {post_exp}"
+
+        # Attempt to close A's FY using B's equity account → must hard-error.
+        result = call_action(mod.close_fiscal_year, conn, ns(
+            fiscal_year_id=fyid_a,
+            closing_account_id=retained_b,
+            posting_date="2026-12-31",
+        ))
+        assert is_error(result), f"Expected company-mismatch error, got: {result}"
+        assert "company" in result["message"].lower()
+
+        # Rollback proven by DB state, not the return code alone:
+        # 1) FY A is still open.
+        fy = conn.execute("SELECT is_closed FROM fiscal_year WHERE id=?",
+                          (fyid_a,)).fetchone()
+        assert fy["is_closed"] == 0
+
+        # 2) No period_closing_voucher for A's FY.
+        pcv_cnt = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM period_closing_voucher WHERE fiscal_year_id=?",
+            (fyid_a,)).fetchone()["cnt"]
+        assert pcv_cnt == 0
+
+        # 3) No period-closing GL entries at all (the only ones would be the close).
+        pcgl_cnt = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM gl_entry WHERE voucher_type='period_closing'"
+        ).fetchone()["cnt"]
+        assert pcgl_cnt == 0
+
+        # 4) Company B's equity account received nothing.
+        b_gl_cnt = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM gl_entry WHERE account_id=?",
+            (retained_b,)).fetchone()["cnt"]
+        assert b_gl_cnt == 0
+
+    def test_same_company_close_still_succeeds(self, conn):
+        comp_a = seed_company(conn, name="Acme2", abbr="A2")
+        fyid_a = seed_fiscal_year(conn, comp_a, "FY A OK",
+                                  "2026-01-01", "2026-12-31")
+        cash_a = seed_account(conn, comp_a, "Cash", "asset", "cash", "1000")
+        revenue_a = seed_account(conn, comp_a, "Revenue", "income",
+                                 "revenue", "4000")
+        expense_a = seed_account(conn, comp_a, "Expenses", "expense",
+                                 "expense", "5000")
+        retained_a = seed_account(conn, comp_a, "Retained Earnings", "equity",
+                                  "equity", "3000")
+        cc_a = seed_cost_center(conn, comp_a, "CC")
+
+        call_action(mod.post_gl_entries, conn, ns(
+            voucher_type="journal_entry", voucher_id="JE-INC",
+            posting_date="2026-06-15", company_id=comp_a,
+            entries=json.dumps([
+                {"account_id": cash_a, "debit": "8000.00", "credit": "0"},
+                {"account_id": revenue_a, "debit": "0", "credit": "8000.00",
+                 "cost_center_id": cc_a},
+            ]),
+        ))
+        call_action(mod.post_gl_entries, conn, ns(
+            voucher_type="journal_entry", voucher_id="JE-EXP",
+            posting_date="2026-06-15", company_id=comp_a,
+            entries=json.dumps([
+                {"account_id": expense_a, "debit": "3000.00", "credit": "0",
+                 "cost_center_id": cc_a},
+                {"account_id": cash_a, "debit": "0", "credit": "3000.00"},
+            ]),
+        ))
+
+        result = call_action(mod.close_fiscal_year, conn, ns(
+            fiscal_year_id=fyid_a,
+            closing_account_id=retained_a,
+            posting_date="2026-12-31",
+        ))
+        assert is_ok(result), f"Same-company close should succeed: {result}"
+        # Net P&L = income 8000 - expense 3000 = 5000.00 (exact Decimal).
+        assert Decimal(result["net_pl_transferred"]) == Decimal("5000.00")
+        assert result["pcv_id"] is not None
+
+        fy = conn.execute("SELECT is_closed FROM fiscal_year WHERE id=?",
+                          (fyid_a,)).fetchone()
+        assert fy["is_closed"] == 1
+
+        pcv = conn.execute(
+            "SELECT company_id FROM period_closing_voucher WHERE fiscal_year_id=?",
+            (fyid_a,)).fetchone()
+        assert pcv["company_id"] == comp_a
+
+        # Period-closing GL is balanced (debits == credits).
+        sums = conn.execute(
+            """SELECT COALESCE(decimal_sum(debit),'0') AS d,
+                      COALESCE(decimal_sum(credit),'0') AS c
+               FROM gl_entry WHERE voucher_type='period_closing'"""
+        ).fetchone()
+        assert Decimal(sums["d"]) == Decimal(sums["c"])
+
+
 class TestReopenFiscalYear:
     def test_reopen_closed_fy(self, conn):
         cid = seed_company(conn)

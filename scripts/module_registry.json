@@ -438,10 +438,10 @@
       "description": "Complete ERP foundation: accounting, inventory, selling, buying, billing, payments, tax, journals, GL, HR, payroll, reports, and setup. 475 actions across 14 domains.",
       "display_name": "ERPClaw Core",
       "files_sha256": {
-        "CHANGELOG.md": "4936855f0d15a79709d9711c3de88d26ccbd88dec2bb411c62b059ac413f14b7",
+        "CHANGELOG.md": "e32811c9e13fccdaa8dbf3a1d72edf72b41f781201ce41ea5f37198270408fe1",
         "LICENSE.txt": "7bb0c0eb1db8b40884cd154315e459fadacd2bff10190df3516639282608ed0c",
-        "README.md": "d9bf679c3a10615356f9dadbf4fcfea2ab94e7f97e31f544fd9198d90e1e7f11",
-        "SKILL.md": "88e90b7b78ef38c1dd4b7252e517256f9eb6ea45dcaf7aa3c33ea8ae5dbb8409",
+        "README.md": "f9085b0f1203c33ceb89b7c8747fb3325f6e4712e9b18c6d8d41c7bd10ded8bc",
+        "SKILL.md": "ca50060d1ddd8b0b254829e15fc1d54bfca478017f287bced7c814ff20bb2f45",
         "UI.yaml": "7c7062cdbc7877a3daa5b22dc6b4e296ce0b1dad7cdf615fd0ddcf0f278b581c",
         "scripts/db_query.py": "4319cd8ded11288102591fdec5b0de3cdb78c257786d55bd6b3ab83aa2b11f71",
         "scripts/erpclaw-accounting-adv/consolidation.py": "724f2e78bd8818f21375b18d23e519762bcd399733b0771c70daaa27a67df846",
@@ -453,7 +453,7 @@
         "scripts/erpclaw-billing/db_query.py": "affa9fe480b10e999dac8fec6813c76e9a1dd9c59f37149d6517de01e73be379",
         "scripts/erpclaw-buying/db_query.py": "e59f6609e1ee762c856d10fec65a1a5d7973afb6873108c1d13525a61f73d450",
         "scripts/erpclaw-gl/assets/charts/us_gaap.json": "8f894ae401adeedafe2840213553b9aed2df0b00409619fe96440f6460862670",
-        "scripts/erpclaw-gl/db_query.py": "02772b135fee73b25e8fe8fbbb9504077c747c87f4f7be63eefcd80777abf868",
+        "scripts/erpclaw-gl/db_query.py": "d73c765d74d9ecc548b115b067fecaa9060caa0009874746c7b6094d4e02fe22",
         "scripts/erpclaw-hr/db_query.py": "17b26f9a1ed004de91b3d273b48ffd13e2465842ce3d4131ecdfcf82e8bf7002",
         "scripts/erpclaw-inventory/db_query.py": "e1390bda852f3973186f8bf95cc550757f1115ee27c434aac13d3ede2705f47e",
         "scripts/erpclaw-journals/db_query.py": "b83872bae470cdfb3391a188f2802a1e9176438a43764b77db671acbc825bec2",
@@ -563,7 +563,7 @@
         "user",
         "rbac"
       ],
-      "version": "4.6.0"
+      "version": "4.6.1"
     },
     "erpclaw-alerts": {
       "action_count": 21,
@@ -1889,8 +1889,8 @@
       "version": "1.0.0"
     }
   },
-  "registry_version": 52,
-  "signed_at": "2026-06-08T09:29:37Z",
+  "registry_version": 53,
+  "signed_at": "2026-06-08T20:28:27Z",
   "total_actions": 3126,
-  "version": "4.6.0"
+  "version": "4.6.1"
 }

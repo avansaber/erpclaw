@@ -2,6 +2,11 @@
 
 All notable changes to the ERPClaw foundation skill.
 
+## [4.6.1] — 2026-06-08
+
+### Fixed
+- `close-fiscal-year` now refuses to close when the chosen closing (retained-earnings) account belongs to a different company than the fiscal year being closed: it hard-errors with an actionable message and rolls back before any GL is posted. Previously, in a multi-company database, a mismatched closing account would have posted one company's net income into another company's equity (a silent cross-tenant contamination). Pure pre-write validation, no schema or API change. (FINDING-013, ADR-0016)
+
 ## [4.6.0] — 2026-06-08
 
 ### Added
