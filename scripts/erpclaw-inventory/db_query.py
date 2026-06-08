@@ -672,7 +672,9 @@ def update_warehouse(conn, args):
 
 def list_warehouses(conn, args):
     """List warehouses for a company."""
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     w = Table("warehouse").as_("w")
 
@@ -1317,7 +1319,9 @@ def get_stock_balance_action(conn, args):
 
 def stock_balance_report(conn, args):
     """All items stock summary for a company."""
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     # This query uses decimal_sum() aggregate and a correlated subquery for
     # valuation_rate — kept as raw SQL due to complexity of correlated subquery
@@ -2240,7 +2244,9 @@ def revalue_stock(conn, args):
 
 def list_stock_revaluations(conn, args):
     """List stock revaluations for a company."""
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     limit = int(args.limit or "20")
     offset = int(args.offset or "0")
@@ -2387,7 +2393,9 @@ def cancel_stock_revaluation(conn, args):
 
 def status_action(conn, args):
     """Inventory summary for a company."""
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     item_t = Table("item")
     items_q = Q.from_(item_t).select(fn.Count("*").as_("cnt"))
@@ -2435,7 +2443,9 @@ def status_action(conn, args):
 
 def check_reorder(conn, args):
     """Find items whose current stock is at or below their reorder level."""
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     # Get items with a meaningful reorder_level set
     # Uses IS NULL / IS NOT NULL comparisons — kept as raw SQL (rule 16)
@@ -3088,6 +3098,7 @@ def main():
     parser.add_argument("--account-id")
     parser.add_argument("--is-group")
     parser.add_argument("--company-id")
+    parser.add_argument("--company", dest="company_name", default=None)  # NL: company by name
     parser.add_argument("--csv-path")
 
     # Stock entry

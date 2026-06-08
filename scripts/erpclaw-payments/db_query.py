@@ -469,7 +469,9 @@ def get_payment(conn, args):
 
 def list_payments(conn, args):
     """List payment entries with filtering."""
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     pe = Table("payment_entry")
     base = Q.from_(pe).where(pe.company_id == P())
@@ -1186,7 +1188,9 @@ def get_unallocated_payments(conn, args):
     party_id = args.party_id
     if not party_id:
         err("--party-id is required")
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     q = (Q.from_(PE)
          .select(PE.id, PE.naming_series, PE.paid_amount,
@@ -1506,7 +1510,9 @@ def bank_reconciliation(conn, args):
 
 def status(conn, args):
     """Show payment entry counts and totals."""
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     pe = Table("payment_entry")
     q1 = (Q.from_(pe)
@@ -1576,6 +1582,7 @@ def main():
     # Payment entry fields
     parser.add_argument("--payment-entry-id")
     parser.add_argument("--company-id")
+    parser.add_argument("--company", dest="company_name", default=None)  # NL: company by name
     parser.add_argument("--payment-type")
     parser.add_argument("--posting-date")
     parser.add_argument("--party-type")

@@ -1,6 +1,6 @@
 ---
 name: erpclaw
-version: 4.5.0
+version: 4.6.0
 description: >
   AI-native ERP system. Full accounting, invoicing, inventory, purchasing,
   tax, billing, HR, payroll, advanced accounting (ASC 606/842, intercompany, consolidation),
@@ -26,10 +26,9 @@ The ERPClaw database is the single source of truth for every business entity —
 
 - "Which companies/customers/items do we have?" → query it (`list-companies`, `list-customers`, `list-items`). Never answer from memory, earlier conversations, workspace files, or any other context.
 - When a user names a product loosely or in plural ("20 Brake Pad Sets"), call `resolve-item --name "<their words>"` first; use the single match, or ask the user to choose when `multiple_matches` is true, before invoicing/ordering.
-- Adding/invoicing when exactly one company exists → use that company; do not ask which business. When several exist, offer only the ones from `list-companies` and ask which.
-- Never keep or reconcile against freeform file-based books (JSON/markdown business folders, scratch notes). They are not the ledger and may be stale. The ERP database is the only authoritative record.
-
-If a business name appears in your context but is not returned by `list-companies`, it does not exist in the books — do not offer it.
+- Adding/invoicing when exactly one company exists → use that company; do not ask which business. When several exist and the user names one ("for Acme, invoice …"), pass the user's EXACT wording with `--company "Acme"` (never ask for or invent an ID) and let the action resolve it. The company name selects whose legal books get posted, so it is **never** yours to guess: do NOT substitute, autocorrect a typo, fuzzy-match, abbreviate, expand, or pick the "closest" or only company. Exact match only: "Acmee" is not "Acme Widgets", and "Acme" is not "Acme Widgets". Read `list-companies` to ground, NOT to choose a near-match.
+- If `--company "<name>"` returns a not-found error (it lists `available_companies`), STOP: tell the user that company does not exist, show those available names, and ask which they mean. Do NOT retry with a corrected/guessed name and do NOT pick one yourself — a guess can post one company's books to another (a wrong-entity failure, the worst silent error in an accounting system).
+- Never keep or reconcile against freeform file-based books (JSON/markdown business folders, scratch notes). They are not the ledger and may be stale. The ERP database is the only authoritative record. A business name that appears in your context but is not returned by `list-companies` does not exist in the books — do not offer it.
 
 ## Speaking to the user
 

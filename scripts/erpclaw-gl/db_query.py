@@ -272,7 +272,9 @@ def update_account(conn, args):
 # ---------------------------------------------------------------------------
 
 def list_accounts(conn, args):
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     limit_val = int(args.limit or 20)
     offset_val = int(args.offset or 0)
@@ -476,7 +478,9 @@ def reverse_gl_entries_action(conn, args):
 # ---------------------------------------------------------------------------
 
 def list_gl_entries(conn, args):
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     g = Table("gl_entry").as_("g")
     a = Table("account").as_("a")
@@ -578,7 +582,9 @@ def add_fiscal_year(conn, args):
 # ---------------------------------------------------------------------------
 
 def list_fiscal_years(conn, args):
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     limit_val = int(args.limit or 20)
     offset_val = int(args.offset or 0)
@@ -973,7 +979,9 @@ def add_cost_center(conn, args):
 # ---------------------------------------------------------------------------
 
 def list_cost_centers(conn, args):
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     limit_val = int(args.limit or 20)
     offset_val = int(args.offset or 0)
@@ -1051,7 +1059,9 @@ def list_budgets(conn, args):
     fy_id = args.fiscal_year_id
     if not fy_id:
         err("--fiscal-year-id is required")
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     limit = int(args.limit or 20)
     offset = int(args.offset or 0)
@@ -1164,7 +1174,9 @@ def check_gl_integrity(conn, args):
     """Verify GL balance and SHA-256 chain integrity for a company."""
     import hashlib
 
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     g = Table("gl_entry").as_("g")
     a = Table("account").as_("a")
@@ -1722,6 +1734,7 @@ def main():
     # Chart of accounts
     parser.add_argument("--template", default=None)
     parser.add_argument("--company-id", default=None)
+    parser.add_argument("--company", dest="company_name", default=None)  # NL: company by name
 
     # Account
     parser.add_argument("--account-id", default=None)

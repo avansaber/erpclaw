@@ -2,6 +2,11 @@
 
 All notable changes to the ERPClaw foundation skill.
 
+## [4.6.0] — 2026-06-08
+
+### Added
+- NL company-by-name resolution: business users can address a company by name ("for Acme, invoice Bruce") instead of a UUID. The `resolve_company_id` chokepoint now accepts a `--company "<name>"` flag (exact, case-insensitive, dialect-neutral `LOWER(name)`, never `.ilike()`) alongside the unchanged `--company-id`; the sole-company auto-detect path is byte-unchanged. Wired across the GL, payments, inventory, tax, journals, and reports actions plus the educlaw-k12 router (~70 call sites). A named-but-missing company fails loudly listing the available company names and never falls through to a different company, so one entity's books can never post to another. SKILL.md instructs the agent to pass the user's exact wording and never fuzzy-substitute or autocorrect a company name. Verified end-to-end on the live gateway (mc01 right-company invoice; mc02 missing-name hard-error with zero posting). (FINDING-001, ADR-0015)
+
 ## [4.5.0] — 2026-06-05
 
 ### Added

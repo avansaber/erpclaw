@@ -346,7 +346,9 @@ def get_journal_entry(conn, args):
 
 def list_journal_entries(conn, args):
     """List journal entries with filtering."""
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     je = Table("journal_entry")
     params = [company_id]
@@ -1083,7 +1085,9 @@ def update_recurring_template(conn, args):
 
 def list_recurring_templates(conn, args):
     """List recurring journal templates for a company."""
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     rjt = Table("recurring_journal_template")
     params = [company_id]
@@ -1298,7 +1302,9 @@ def delete_recurring_template(conn, args):
 
 def status(conn, args):
     """Show journal entry counts by status."""
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     q_je = (Q.from_(_t_je)
             .select(_t_je.status, fn.Count("*").as_("cnt"))
@@ -1358,6 +1364,7 @@ def main():
     # Journal entry fields
     parser.add_argument("--journal-entry-id")
     parser.add_argument("--company-id")
+    parser.add_argument("--company", dest="company_name", default=None)  # NL: company by name
     parser.add_argument("--posting-date")
     parser.add_argument("--entry-type")
     parser.add_argument("--remark")

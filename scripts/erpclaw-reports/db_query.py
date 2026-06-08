@@ -70,7 +70,9 @@ def _parse_json_arg(value, name):
 # ---------------------------------------------------------------------------
 
 def trial_balance(conn, args):
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
     if not args.to_date:
         err("--to-date is required")
 
@@ -184,7 +186,9 @@ def trial_balance(conn, args):
 # ---------------------------------------------------------------------------
 
 def profit_and_loss(conn, args):
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
     if not args.from_date:
         err("--from-date is required")
     if not args.to_date:
@@ -265,7 +269,9 @@ def profit_and_loss(conn, args):
 # ---------------------------------------------------------------------------
 
 def balance_sheet(conn, args):
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
     if not args.as_of_date:
         err("--as-of-date is required")
 
@@ -379,7 +385,9 @@ def balance_sheet(conn, args):
 # ---------------------------------------------------------------------------
 
 def cash_flow(conn, args):
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
     if not args.from_date:
         err("--from-date is required")
     if not args.to_date:
@@ -497,7 +505,9 @@ def cash_flow(conn, args):
 # ---------------------------------------------------------------------------
 
 def general_ledger(conn, args):
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
     if not args.from_date:
         err("--from-date is required")
     if not args.to_date:
@@ -610,7 +620,9 @@ _PARTY_TABLE_ALLOWLIST = {"customer": "customer", "supplier": "supplier"}
 def _aging_report(conn, args, party_type_label, party_table, party_name_col="name"):
     if party_table not in _PARTY_TABLE_ALLOWLIST:
         err(f"Invalid party table: {party_table}")
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
     if not args.as_of_date:
         err("--as-of-date is required")
 
@@ -756,7 +768,9 @@ def ap_aging(conn, args):
 def budget_vs_actual(conn, args):
     if not args.fiscal_year_id:
         err("--fiscal-year-id is required")
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     fy_t = Table("fiscal_year")
     fy_sql = (
@@ -948,7 +962,9 @@ def party_ledger(conn, args):
 # ---------------------------------------------------------------------------
 
 def tax_summary(conn, args):
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
     if not args.from_date:
         err("--from-date is required")
     if not args.to_date:
@@ -1004,7 +1020,9 @@ def tax_summary(conn, args):
 # ---------------------------------------------------------------------------
 
 def payment_summary(conn, args):
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
     if not args.from_date:
         err("--from-date is required")
     if not args.to_date:
@@ -1068,7 +1086,9 @@ def payment_summary(conn, args):
 # ---------------------------------------------------------------------------
 
 def gl_summary(conn, args):
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
     if not args.from_date:
         err("--from-date is required")
     if not args.to_date:
@@ -1112,7 +1132,9 @@ def gl_summary(conn, args):
 # ---------------------------------------------------------------------------
 
 def comparative_pl(conn, args):
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     periods = _parse_json_arg(args.periods, "periods")
     if not periods or not isinstance(periods, list):
@@ -1193,7 +1215,9 @@ def comparative_pl(conn, args):
 # ---------------------------------------------------------------------------
 
 def status_action(conn, args):
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     gl_t = Table("gl_entry").as_("g")
     acct_t = Table("account").as_("a")
@@ -1245,7 +1269,9 @@ def status_action(conn, args):
 
 def check_overdue(conn, args):
     """Find overdue sales invoices and group them into aging buckets."""
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     today = datetime.now().strftime("%Y-%m-%d")
 
@@ -1660,6 +1686,7 @@ def main():
 
     # Common filters
     parser.add_argument("--company-id")
+    parser.add_argument("--company", dest="company_name", default=None)  # NL: company by name
     parser.add_argument("--from-date")
     parser.add_argument("--to-date")
     parser.add_argument("--as-of-date")

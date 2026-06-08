@@ -267,7 +267,9 @@ def get_tax_template(conn, args):
 
 
 def list_tax_templates(conn, args):
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     limit = int(args.limit or 20)
     offset = int(args.offset or 0)
@@ -396,7 +398,9 @@ def add_tax_rule(conn, args):
 
 
 def list_tax_rules(conn, args):
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     limit = int(args.limit or 20)
     offset = int(args.offset or 0)
@@ -437,7 +441,9 @@ def resolve_tax_template(conn, args):
         err(f"--party-type '{args.party_type}' is not registered. Valid types: {', '.join(all_types)}")
     if not args.party_id:
         err("--party-id is required")
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     if args.transaction_type:
         tx_type = args.transaction_type
@@ -734,7 +740,9 @@ def get_withholding_details(conn, args):
         err("--supplier-id is required")
     if not args.tax_year:
         err("--tax-year is required")
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     # Check supplier
     q_sup = Q.from_(supp_t).select(supp_t.star).where(supp_t.id == P())
@@ -901,7 +909,9 @@ def record_1099_payment(conn, args):
 def generate_1099_data(conn, args):
     if not args.tax_year:
         err("--tax-year is required")
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     # Get all withholding categories for this company
     q_cats = Q.from_(twc_t).select(twc_t.star).where(twc_t.company_id == P())
@@ -954,7 +964,9 @@ def generate_1099_data(conn, args):
 # ---------------------------------------------------------------------------
 
 def status_action(conn, args):
-    company_id = resolve_company_id(conn, getattr(args, 'company_id', None))
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
 
     q_tt = Q.from_(tt_t).select(fn.Count("*").as_("cnt")).where(tt_t.company_id == P())
     templates = conn.execute(q_tt.get_sql(), (company_id,)).fetchone()["cnt"]
@@ -1034,6 +1046,7 @@ def main():
     parser.add_argument("--party-type")
     parser.add_argument("--party-id")
     parser.add_argument("--company-id")
+    parser.add_argument("--company", dest="company_name", default=None)  # NL: company by name
     parser.add_argument("--transaction-type")
     parser.add_argument("--shipping-address")  # JSON string
 
