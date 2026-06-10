@@ -13,7 +13,7 @@ import os
 import sqlite3
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal, InvalidOperation
 
 # Add shared lib to path
@@ -35,7 +35,7 @@ try:
     from erpclaw_lib.audit import audit
     from erpclaw_lib.dependencies import check_required_tables
     from erpclaw_lib.query_helpers import resolve_company_id
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL, DecimalSum, DecimalAbs, dynamic_update, now, rowid_col
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL, DecimalSum, DecimalAbs, dynamic_update, now, rowid_col, json_get
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
     from erpclaw_lib.vendor.pypika.terms import LiteralValue, ValueWrapper
 except ImportError:
@@ -1700,6 +1700,167 @@ def import_opening_balances(conn, args):
 # Action routing
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Accounting dimensions (M6 multi-dimensional GL) — dimension_registry CRUD
+# ---------------------------------------------------------------------------
+
+# Dimension keys may not collide with the gl_entry columns that already carry a
+# dimension's worth of meaning (the registry stores keys, not column names).
+_RESERVED_DIMENSION_KEYS = {"account_id", "cost_center_id", "project_id"}
+_DIMENSION_DATA_TYPES = ("text", "uuid_fk", "enum")
+
+
+def _csv_to_json_list(value):
+    """Parse a comma-separated CLI value into a canonical JSON list, or None."""
+    if value is None:
+        return None
+    items = [v.strip() for v in str(value).split(",") if v.strip()]
+    return json.dumps(items) if items else None
+
+
+def add_dimension(conn, args):
+    """Register a new accounting dimension (drives gl_entry.dimensions_json)."""
+    key = (args.key or "").strip()
+    label = (args.label or "").strip()
+    data_type = (getattr(args, "dimension_type", None) or "text").strip()
+    if not key:
+        err("--key is required")
+    if not label:
+        err("--label is required")
+    if data_type not in _DIMENSION_DATA_TYPES:
+        err(f"--type must be one of {', '.join(_DIMENSION_DATA_TYPES)}")
+    if key in _RESERVED_DIMENSION_KEYS:
+        err(f"Dimension key '{key}' collides with an existing gl_entry column; "
+            f"reserved keys: {', '.join(sorted(_RESERVED_DIMENSION_KEYS))}")
+
+    referenced_table = (args.refers_to or "").strip() or None
+    if data_type == "uuid_fk" and not referenced_table:
+        err("--refers-to TABLE is required when --type uuid_fk")
+    allowed_values_json = _csv_to_json_list(args.allowed_values)
+    if data_type == "enum" and not allowed_values_json:
+        err("--allowed-values \"a,b,c\" is required when --type enum")
+    required_json = _csv_to_json_list(args.required_on_account_types)
+
+    dim_id = str(uuid.uuid4())
+    try:
+        conn.execute(
+            "INSERT INTO dimension_registry "
+            "(id, key, label, data_type, referenced_table, allowed_values_json, "
+            " is_required_on_account_types_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (dim_id, key, label, data_type, referenced_table,
+             allowed_values_json, required_json),
+        )
+        audit(conn, "erpclaw-gl", "create", "dimension_registry", dim_id,
+              new_values={"key": key, "data_type": data_type})
+        conn.commit()
+    except sqlite3.IntegrityError as e:
+        sys.stderr.write(f"[erpclaw-gl] {e}\n")
+        err(f"Dimension '{key}' already exists")
+
+    ok({"status": "created", "dimension_id": dim_id, "key": key,
+        "data_type": data_type})
+
+
+def list_dimensions(conn, args):
+    """List registered accounting dimensions (active by default)."""
+    t = Table("dimension_registry")
+    q = Q.from_(t).select(t.star)
+    if not getattr(args, "include_inactive", False):
+        q = q.where(t.is_active == P())
+        params = [1]
+    else:
+        params = []
+    q = q.orderby(t.key)
+    rows = conn.execute(q.get_sql(), params).fetchall()
+    ok({"dimensions": [row_to_dict(r) for r in rows], "count": len(rows)})
+
+
+def update_dimension(conn, args):
+    """Update a dimension's metadata by key. Cannot rename the key itself."""
+    key = (args.key or "").strip()
+    if not key:
+        err("--key is required")
+    existing = conn.execute(
+        "SELECT * FROM dimension_registry WHERE key = ?", (key,)
+    ).fetchone()
+    if existing is None:
+        err(f"Dimension '{key}' does not exist")
+
+    updates, params = [], []
+    if args.label is not None:
+        updates.append("label = ?"); params.append(args.label.strip())
+    if getattr(args, "dimension_type", None) is not None:
+        dt = args.dimension_type.strip()
+        if dt not in _DIMENSION_DATA_TYPES:
+            err(f"--type must be one of {', '.join(_DIMENSION_DATA_TYPES)}")
+        updates.append("data_type = ?"); params.append(dt)
+    if args.refers_to is not None:
+        updates.append("referenced_table = ?")
+        params.append(args.refers_to.strip() or None)
+    if args.allowed_values is not None:
+        updates.append("allowed_values_json = ?")
+        params.append(_csv_to_json_list(args.allowed_values))
+    if args.required_on_account_types is not None:
+        updates.append("is_required_on_account_types_json = ?")
+        params.append(_csv_to_json_list(args.required_on_account_types))
+    if getattr(args, "is_active", None) is not None:
+        updates.append("is_active = ?"); params.append(1 if args.is_active else 0)
+
+    if not updates:
+        err("Nothing to update — pass at least one field to change")
+
+    updates.append("updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)")
+    params.append(key)
+    conn.execute(
+        f"UPDATE dimension_registry SET {', '.join(updates)} WHERE key = ?", params
+    )
+    audit(conn, "erpclaw-gl", "update", "dimension_registry", existing["id"],
+          new_values={"key": key})
+    conn.commit()
+    ok({"status": "updated", "key": key})
+
+
+def deactivate_dimension(conn, args):
+    """Deactivate a dimension. Blocked while still referenced by recent live GL.
+
+    A dimension referenced by any non-cancelled gl_entry posted within the
+    look-back window (default 90 days, --within-days) is in active use; over the
+    threshold it becomes read-only and may be deactivated.
+    """
+    key = (args.key or "").strip()
+    if not key:
+        err("--key is required")
+    existing = conn.execute(
+        "SELECT * FROM dimension_registry WHERE key = ?", (key,)
+    ).fetchone()
+    if existing is None:
+        err(f"Dimension '{key}' does not exist")
+
+    within_days = int(getattr(args, "within_days", None) or 90)
+    cutoff = (datetime.now(timezone.utc).date()
+              - timedelta(days=within_days)).isoformat()
+    key_sql = str(json_get("dimensions_json", key))  # dialect-aware, key-escaped
+    # key_sql is a json_get fragment (escaped key); cutoff is the only bound value.
+    recent = conn.execute(
+        "SELECT COUNT(*) AS cnt FROM gl_entry "
+        "WHERE is_cancelled = 0 AND " + key_sql + " IS NOT NULL AND posting_date >= ?",
+        (cutoff,),
+    ).fetchone()
+    if recent["cnt"] > 0:
+        err(f"Dimension '{key}' is referenced by {recent['cnt']} live GL "
+            f"entr{'y' if recent['cnt'] == 1 else 'ies'} since {cutoff} "
+            f"(within {within_days} days); cannot deactivate")
+
+    conn.execute(
+        "UPDATE dimension_registry SET is_active = 0, "
+        "updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE key = ?", (key,)
+    )
+    audit(conn, "erpclaw-gl", "update", "dimension_registry", existing["id"],
+          new_values={"key": key, "is_active": 0})
+    conn.commit()
+    ok({"status": "deactivated", "key": key})
+
+
 ACTIONS = {
     "setup-chart-of-accounts": setup_chart_of_accounts,
     "add-account": add_account,
@@ -1718,6 +1879,10 @@ ACTIONS = {
     "reopen-fiscal-year": reopen_fiscal_year,
     "add-cost-center": add_cost_center,
     "list-cost-centers": list_cost_centers,
+    "add-dimension": add_dimension,
+    "list-dimensions": list_dimensions,
+    "update-dimension": update_dimension,
+    "deactivate-dimension": deactivate_dimension,
     "add-budget": add_budget,
     "list-budgets": list_budgets,
     "seed-naming-series": seed_naming_series,
@@ -1780,6 +1945,20 @@ def main():
 
     # Naming series
     parser.add_argument("--entity-type", default=None)
+
+    # Accounting dimensions (M6)
+    parser.add_argument("--key", default=None)
+    parser.add_argument("--label", default=None)
+    parser.add_argument("--type", dest="dimension_type", default=None)
+    parser.add_argument("--refers-to", dest="refers_to", default=None)
+    parser.add_argument("--allowed-values", dest="allowed_values", default=None)
+    parser.add_argument("--required-on-account-types",
+                        dest="required_on_account_types", default=None)
+    parser.add_argument("--within-days", dest="within_days", default=None)
+    parser.add_argument("--include-inactive", dest="include_inactive",
+                        action="store_true", default=False)
+    parser.add_argument("--is-active", dest="is_active", default=None,
+                        type=lambda x: x.lower() == "true")
 
     # Balance / dates
     parser.add_argument("--as-of-date", default=None)

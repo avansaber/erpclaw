@@ -33,6 +33,10 @@ try:
         create_perpetual_inventory_gl,
     )
     from erpclaw_lib.gl_posting import insert_gl_entries, reverse_gl_entries
+    from erpclaw_lib.cwip_posting import (
+        get_under_construction_asset, resolve_cwip_account, record_cwip_accumulation,
+        reverse_cwip_accumulations,
+    )
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.custom_fields import store_from_arg, merge_into_response
@@ -1784,6 +1788,21 @@ def create_purchase_invoice(conn, args):
     pr_id_arg = args.purchase_receipt_id
     update_stock = 1  # Default for US perpetual inventory
 
+    # S3 CWIP hook (AVA-43): a --cwip-asset-id bill is a standalone cost capitalised
+    # to construction-in-progress, not a stock receipt. Validate the asset is
+    # under_construction up front and force cost-bill semantics; submit routes the
+    # expense GL to the asset's CWIP account and records the accumulation in-tx.
+    cwip_asset_id = getattr(args, "cwip_asset_id", None)
+    if cwip_asset_id:
+        if po_id or pr_id_arg:
+            err("--cwip-asset-id is for standalone cost bills; it cannot combine with "
+                "--purchase-order-id / --purchase-receipt-id (CWIP costs are not stock receipts).")
+        try:
+            get_under_construction_asset(conn, cwip_asset_id)
+        except ValueError as e:
+            err(str(e))
+        update_stock = 0  # CWIP cost posts to CWIP, no inventory movement
+
     pi_id = str(uuid.uuid4())
     pi_items = []
     total_amount = Decimal("0")
@@ -1912,14 +1931,14 @@ def create_purchase_invoice(conn, args):
                   "total_amount", "tax_amount", "grand_total",
                   "outstanding_amount", "tax_template_id", "status",
                   "purchase_order_id", "purchase_receipt_id",
-                  "update_stock", "company_id")
+                  "update_stock", "cwip_asset_id", "company_id")
          .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(),
-                 ValueWrapper("draft"), P(), P(), P(), P()))
+                 ValueWrapper("draft"), P(), P(), P(), P(), P()))
     conn.execute(q.get_sql(),
         (pi_id, supplier_id, posting_date, due_date,
          str(round_currency(total_amount)), str(round_currency(tax_amount)),
          str(grand_total), str(grand_total),
-         tax_template_id, po_id, pr_id_arg, update_stock, company_id))
+         tax_template_id, po_id, pr_id_arg, update_stock, cwip_asset_id, company_id))
 
     # Insert items
     pii_t = Table("purchase_invoice_item")
@@ -2293,6 +2312,22 @@ def submit_purchase_invoice(conn, args):
     tax_amount = to_decimal(pi_dict["tax_amount"])
     grand_total = to_decimal(pi_dict["grand_total"])
 
+    # S3 CWIP hook (AVA-43): when the bill carries a --cwip-asset-id, route its
+    # expense legs to the asset's capital_work_in_progress account and record the
+    # accumulation row in THIS submit transaction (input tax stays recoverable and
+    # is not capitalised; the accumulated amount is the pre-tax item total).
+    cwip_asset_id = pi_dict.get("cwip_asset_id")
+    cwip_asset = None
+    cwip_acct = None
+    if cwip_asset_id:
+        if is_return:
+            err("--cwip-asset-id bills cannot be returns/debit notes.")
+        try:
+            cwip_asset = get_under_construction_asset(conn, cwip_asset_id)
+            cwip_acct = resolve_cwip_account(conn, cwip_asset_id, company_id)
+        except ValueError as e:
+            err(str(e))
+
     # --- Build GL entries ---
     gl_entries = []
 
@@ -2341,6 +2376,9 @@ def submit_purchase_invoice(conn, args):
                 debit_acct = item.get("expense_account_id") or default_expense_acct
         else:
             debit_acct = item.get("expense_account_id") or default_expense_acct
+        if cwip_acct:
+            # CWIP cost bill: capitalise the item to construction-in-progress.
+            debit_acct = cwip_acct
         if not debit_acct:
             err(f"No expense account for item {item['item_id']} and no company default")
         item_cc = item.get("cost_center_id") or cost_center_id
@@ -2452,6 +2490,21 @@ def submit_purchase_invoice(conn, args):
         except ValueError as e:
             sys.stderr.write(f"[erpclaw-buying] {e}\n")
             err(f"GL posting failed: {e}")
+
+    # S3 CWIP hook (AVA-43): record the accumulation against the routed CWIP leg
+    # in this same submit transaction. gl_ids[0] is the first item's DR CWIP leg.
+    cwip_accum_id = None
+    if cwip_asset_id and gl_ids:
+        try:
+            cwip_accum_id = record_cwip_accumulation(
+                conn, cwip_asset, abs(total_amount),
+                source_voucher_type="purchase_invoice",
+                source_voucher_id=args.purchase_invoice_id,
+                gl_entry_id=gl_ids[0], accumulated_at=posting_date,
+                notes=f"Purchase invoice {naming}")
+        except ValueError as e:
+            sys.stderr.write(f"[erpclaw-buying] {e}\n")
+            err(f"CWIP accumulation failed: {e}")
 
     # --- SLE if update_stock=1 ---
     sle_ids = []
@@ -2611,12 +2664,16 @@ def submit_purchase_invoice(conn, args):
                        "gl_count": len(gl_ids), "sle_count": len(sle_ids),
                        "update_stock": update_stock})
     conn.commit()
-    ok({"purchase_invoice_id": args.purchase_invoice_id,
-         "naming_series": naming, "status": "submitted",
-         "is_return": is_return, "voucher_type": voucher_type,
-         "gl_entries_created": len(gl_ids),
-         "sle_entries_created": len(sle_ids),
-         "update_stock": bool(update_stock)})
+    resp = {"purchase_invoice_id": args.purchase_invoice_id,
+            "naming_series": naming, "status": "submitted",
+            "is_return": is_return, "voucher_type": voucher_type,
+            "gl_entries_created": len(gl_ids),
+            "sle_entries_created": len(sle_ids),
+            "update_stock": bool(update_stock)}
+    if cwip_accum_id:
+        resp["cwip_asset_id"] = cwip_asset_id
+        resp["cwip_accumulation_id"] = cwip_accum_id
+    ok(resp)
 
 
 def _update_po_invoice_status(conn, purchase_order_id):
@@ -2694,6 +2751,11 @@ def cancel_purchase_invoice(conn, args):
 
     # Stock/COGS GL entries (entry_set="cogs") are reversed by the same call above
     # since reverse_gl_entries finds ALL entries for (voucher_type, voucher_id)
+
+    # S3 CWIP hook (AVA-43): if this bill capitalised cost to a CWIP asset, unwind
+    # the accumulation row + asset carrying value (its CWIP GL leg was just reversed).
+    if pi_dict.get("cwip_asset_id"):
+        reverse_cwip_accumulations(conn, "purchase_invoice", args.purchase_invoice_id)
 
     # Reverse SLE if update_stock
     reversal_sle_ids = []
@@ -4361,6 +4423,8 @@ def main():
     parser.add_argument("--purchase-invoice-id")
     parser.add_argument("--due-date")
     parser.add_argument("--pi-status", dest="pi_status")
+    # S3 CWIP hook (AVA-43): capitalise this bill to a construction-in-progress asset
+    parser.add_argument("--cwip-asset-id")
 
     # Debit note / close fields
     parser.add_argument("--against-invoice-id")

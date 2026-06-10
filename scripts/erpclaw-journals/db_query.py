@@ -27,6 +27,10 @@ try:
         insert_gl_entries,
         reverse_gl_entries,
     )
+    from erpclaw_lib.cwip_posting import (
+        get_under_construction_asset, cwip_debit_legs, record_cwip_accumulation,
+        reverse_cwip_accumulations,
+    )
     from erpclaw_lib.naming import get_next_name
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
@@ -166,6 +170,16 @@ def add_journal_entry(conn, args):
     if not company:
         err(f"Company {company_id} not found")
 
+    # S3 CWIP hook (AVA-43): a --cwip-asset-id JE capitalises cost to a
+    # construction-in-progress asset. Validate the asset is under_construction up
+    # front; submit records the accumulation against the JE's CWIP debit leg in-tx.
+    cwip_asset_id = getattr(args, "cwip_asset_id", None)
+    if cwip_asset_id:
+        try:
+            get_under_construction_asset(conn, cwip_asset_id)
+        except ValueError as e:
+            err(str(e))
+
     # Parse lines
     lines_json = args.lines
     if not lines_json:
@@ -194,11 +208,11 @@ def add_journal_entry(conn, args):
     conn.execute(
         """INSERT INTO journal_entry
            (id, naming_series, posting_date, entry_type, total_debit, total_credit,
-            remark, status, company_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?)""",
+            remark, status, cwip_asset_id, company_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)""",
         (je_id, naming, posting_date, entry_type,
          str(total_debit), str(total_credit),
-         args.remark, company_id),
+         args.remark, cwip_asset_id, company_id),
     )
 
     _insert_lines(conn, je_id, lines)
@@ -458,10 +472,40 @@ def submit_journal_entry(conn, args):
             company_id=je["company_id"],
             remarks=je.get("remark") or "",
             is_opening=is_opening,
+            # S3 CWIP hook (AVA-43): a --cwip-asset-id JE is the sanctioned
+            # capitalization path, so its CWIP debit leg is permitted.
+            allow_cwip=bool(je.get("cwip_asset_id")),
         )
     except ValueError as e:
         sys.stderr.write(f"[erpclaw-journals] {e}\n")
         err(f"GL posting failed: {e}")
+
+    # S3 CWIP hook (AVA-43): a JE tagged with --cwip-asset-id must debit a
+    # capital_work_in_progress account; record the accumulation against that leg
+    # in THIS submit transaction. gl_ids is 1:1 with gl_entries by index.
+    cwip_accum_id = None
+    cwip_asset_id = je.get("cwip_asset_id")
+    if cwip_asset_id:
+        try:
+            cwip_asset = get_under_construction_asset(conn, cwip_asset_id)
+            legs = cwip_debit_legs(conn, gl_entries)
+            if not legs:
+                raise ValueError(
+                    "A journal entry tagged with --cwip-asset-id must debit a "
+                    "capital_work_in_progress account.")
+            if len({a for _, a, _ in legs}) > 1:
+                raise ValueError(
+                    "Journal entry debits multiple capital_work_in_progress "
+                    "accounts; one CWIP account per asset.")
+            cwip_amount = sum((d for _, _, d in legs), Decimal("0"))
+            cwip_accum_id = record_cwip_accumulation(
+                conn, cwip_asset, cwip_amount,
+                source_voucher_type="journal_entry", source_voucher_id=je_id,
+                gl_entry_id=gl_ids[legs[0][0]], accumulated_at=je["posting_date"],
+                notes=je.get("remark") or f"Journal entry {je.get('naming_series') or je_id}")
+        except ValueError as e:
+            sys.stderr.write(f"[erpclaw-journals] {e}\n")
+            err(f"CWIP accumulation failed: {e}")
 
     conn.execute(
         """UPDATE journal_entry SET status = 'submitted',
@@ -473,8 +517,12 @@ def submit_journal_entry(conn, args):
            new_values={"gl_entries_created": len(gl_ids)})
     conn.commit()
 
-    ok({"status": "submitted", "journal_entry_id": je_id,
-         "gl_entries_created": len(gl_ids)})
+    resp = {"status": "submitted", "journal_entry_id": je_id,
+            "gl_entries_created": len(gl_ids)}
+    if cwip_accum_id:
+        resp["cwip_asset_id"] = cwip_asset_id
+        resp["cwip_accumulation_id"] = cwip_accum_id
+    ok(resp)
 
 
 # ---------------------------------------------------------------------------
@@ -502,6 +550,11 @@ def cancel_journal_entry(conn, args):
     except ValueError as e:
         sys.stderr.write(f"[erpclaw-journals] {e}\n")
         err(f"GL reversal failed: {e}")
+
+    # S3 CWIP hook (AVA-43): if this JE accumulated cost to a CWIP asset, unwind the
+    # accumulation row + asset carrying value (the GL CWIP leg was just reversed).
+    if je.get("cwip_asset_id"):
+        reverse_cwip_accumulations(conn, "journal_entry", je_id)
 
     conn.execute(
         """UPDATE journal_entry SET status = 'cancelled',
@@ -1370,6 +1423,8 @@ def main():
     parser.add_argument("--remark")
     parser.add_argument("--lines")
     parser.add_argument("--amended-from")
+    # S3 CWIP hook (AVA-43): capitalise this JE's CWIP debit leg to an asset
+    parser.add_argument("--cwip-asset-id")
 
     # Intercompany fields
     parser.add_argument("--source-company-id")

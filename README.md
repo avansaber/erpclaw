@@ -1,7 +1,7 @@
 # ERPClaw — AI-Native ERP for OpenClaw
 
 <!-- SYNC:facts:start -->
-ERPClaw v4.6.1 | 46 modules (46 active + 0 preview) | 3,154 actions
+ERPClaw v4.7.0 | 46 modules (46 active + 0 preview) | 3,169 actions
 <!-- SYNC:facts:end -->
 
 A complete ERP system built as an [OpenClaw](https://openclaw.org) skill. Full double-entry accounting, invoicing, inventory, purchasing, tax, billing, HR, payroll, and financial reporting — all in a single install. The foundation ships 483 actions across 14 user-facing domains; total project surface is 3,131 actions across 46 modules.

@@ -280,16 +280,40 @@ def ilike(field_expr, pattern):
     return LiteralValue(f"LOWER({field_expr}) LIKE LOWER({pattern})")
 
 
+def _sql_str_literal(s):
+    """Render ``s`` as a safe single-quoted SQL string literal.
+
+    Doubles embedded single quotes (the ANSI escape, valid on SQLite,
+    PostgreSQL, and MySQL). The key is interpolated into the SQL TEXT of the
+    helper (not a bound parameter, since it names a JSON path / object key),
+    so it MUST be escaped here — a Python ``repr`` would flip to double quotes
+    on an embedded ``'`` and produce a broken / injectable identifier on
+    Postgres. Keys are normally drawn from the dimension_registry, but the
+    helper does not rely on that.
+    """
+    return "'" + str(s).replace("'", "''") + "'"
+
+
 def json_get(col, key):
     """JSON field access — dialect-aware.
 
     Replaces: LiteralValue("json_extract(col, '$.key')")
+
+    Postgres note: ``dimensions_json`` (and peer JSON columns) are declared
+    ``TEXT`` in the schema, and Postgres provisions them as ``text`` — the
+    ``->>`` operator does NOT exist for ``text``, so the column is cast to
+    ``jsonb`` first. The key is a plain object key for ``->>`` (NOT a SQLite
+    ``$.key`` JSONPath). Both verified on PostgreSQL 16 (Wave 1 P0 / SIM-0).
     """
     if _DIALECT == "postgresql":
-        return LiteralValue(f"{col}->>'$.{key}'")
+        return LiteralValue(f"{col}::jsonb->>{_sql_str_literal(key)}")
     if _DIALECT == "mysql":
-        return LiteralValue(f"JSON_UNQUOTE(JSON_EXTRACT({col}, '$.{key}'))")
-    return LiteralValue(f"json_extract({col}, '$.{key}')")
+        return LiteralValue(
+            f"JSON_UNQUOTE(JSON_EXTRACT({col}, {_sql_str_literal('$.' + str(key))}))"
+        )
+    return LiteralValue(
+        f"json_extract({col}, {_sql_str_literal('$.' + str(key))})"
+    )
 
 
 def string_agg(col, separator="', '"):

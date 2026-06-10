@@ -27,7 +27,7 @@ try:
     from erpclaw_lib.dependencies import check_required_tables
     from erpclaw_lib.query_helpers import resolve_company_id
     from erpclaw_lib.voucher_types import canonical_voucher_type
-    from erpclaw_lib.query import Q, P, Table, Field, fn, DecimalSum, DecimalAbs
+    from erpclaw_lib.query import Q, P, Table, Field, fn, DecimalSum, DecimalAbs, json_get
     from erpclaw_lib.vendor.pypika import Order
     from erpclaw_lib.vendor.pypika.terms import LiteralValue
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
@@ -65,6 +65,30 @@ def _parse_json_arg(value, name):
         err(f"Invalid JSON for --{name}: {value}")
 
 
+def _dimension_filter(args, alias=None):
+    """Build an accounting-dimension WHERE fragment (M6) from repeated
+    ``--dimension-key/--dimension-value`` pairs.
+
+    Returns ``(" AND <frag> = ? [AND ...]", [values])`` for raw-SQL concatenation,
+    or ``("", [])`` when no dimension filter was requested. The key is rendered via
+    ``erpclaw_lib.query.json_get`` (dialect-aware + ANSI-escaped); the value is a
+    bound parameter, never interpolated. ``alias`` qualifies the JSON column when
+    the query aliases ``gl_entry`` (e.g. ``"g"``); pass ``None`` for unaliased SQL.
+    """
+    keys = getattr(args, "dimension_key", None) or []
+    vals = getattr(args, "dimension_value", None) or []
+    if len(keys) != len(vals):
+        err("Each --dimension-key must be paired with a --dimension-value")
+    if not keys:
+        return "", []
+    col = f"{alias}.dimensions_json" if alias else "dimensions_json"
+    clauses, params = [], []
+    for k, v in zip(keys, vals):
+        clauses.append(f"{json_get(col, k)} = ?")
+        params.append(v)
+    return " AND " + " AND ".join(clauses), params
+
+
 # ---------------------------------------------------------------------------
 # Trial Balance
 # ---------------------------------------------------------------------------
@@ -86,6 +110,11 @@ def trial_balance(conn, args):
     if project_id:
         proj_clause = " AND project_id = ?"
         proj_params = (project_id,)
+
+    # Multi-dimensional filter (M6): repeated --dimension-key/--dimension-value.
+    _dim_clause, _dim_params = _dimension_filter(args, alias=None)
+    proj_clause += _dim_clause
+    proj_params = proj_params + tuple(_dim_params)
 
     # Get all accounts for the company
     acct_t = Table("account")
@@ -201,6 +230,11 @@ def profit_and_loss(conn, args):
         proj_join_clause = " AND g.project_id = ?"
         proj_params = (project_id,)
 
+    # Multi-dimensional filter (M6): folded into the LEFT JOIN ON like project_id.
+    _dim_clause, _dim_params = _dimension_filter(args, alias="g")
+    proj_join_clause += _dim_clause
+    proj_params = proj_params + tuple(_dim_params)
+
     # Raw SQL: too complex for PyPika, readability preserved
     # (COALESCE(decimal_sum(...)) arithmetic in SELECT, LEFT JOIN with date range in ON clause,
     #  HAVING on computed alias — PyPika doesn't support HAVING on aliased expressions cleanly)
@@ -285,6 +319,14 @@ def balance_sheet(conn, args):
         proj_where_clause = " AND g.project_id = ?"
         proj_join_params = (project_id,)
         proj_where_params = (project_id,)
+
+    # Multi-dimensional filter (M6): applied to both the section LEFT JOIN ON and
+    # the net-income gl_entry WHERE so the statement still balances.
+    _dim_clause, _dim_params = _dimension_filter(args, alias="g")
+    proj_join_clause += _dim_clause
+    proj_where_clause += _dim_clause
+    proj_join_params = proj_join_params + tuple(_dim_params)
+    proj_where_params = proj_where_params + tuple(_dim_params)
 
     def _section(root_type, debit_positive=True):
         # Raw SQL: too complex for PyPika, readability preserved
@@ -393,14 +435,18 @@ def cash_flow(conn, args):
     if not args.to_date:
         err("--to-date is required")
 
+    # Multi-dimensional filter (M6): repeated --dimension-key/--dimension-value.
+    _dim_clause, _dim_params = _dimension_filter(args, alias="g")
+    _dim_params = tuple(_dim_params)
+
     # Raw SQL: too complex for PyPika, readability preserved
     # (JOIN + decimal_sum arithmetic in SELECT with IN clause on account_type)
     opening = conn.execute(
         """SELECT COALESCE(decimal_sum(g.debit), '0') - COALESCE(decimal_sum(g.credit), '0') as bal
            FROM gl_entry g JOIN account a ON a.id = g.account_id
            WHERE a.company_id = ? AND a.account_type IN ('bank','cash')
-           AND g.posting_date < ? AND g.is_cancelled = 0""",
-        (company_id, args.from_date),
+           AND g.posting_date < ? AND g.is_cancelled = 0""" + _dim_clause,
+        (company_id, args.from_date) + _dim_params,
     ).fetchone()
     opening_balance = _d(opening["bal"])
 
@@ -409,8 +455,8 @@ def cash_flow(conn, args):
         """SELECT COALESCE(decimal_sum(g.debit), '0') - COALESCE(decimal_sum(g.credit), '0') as bal
            FROM gl_entry g JOIN account a ON a.id = g.account_id
            WHERE a.company_id = ? AND a.account_type IN ('bank','cash')
-           AND g.posting_date <= ? AND g.is_cancelled = 0""",
-        (company_id, args.to_date),
+           AND g.posting_date <= ? AND g.is_cancelled = 0""" + _dim_clause,
+        (company_id, args.to_date) + _dim_params,
     ).fetchone()
     closing_balance = _d(closing["bal"])
 
@@ -432,11 +478,11 @@ def cash_flow(conn, args):
            WHERE a.company_id = ?
            AND g.posting_date >= ? AND g.posting_date <= ?
            AND g.is_cancelled = 0
-           AND a.account_type NOT IN ('bank','cash')
+           AND a.account_type NOT IN ('bank','cash')""" + _dim_clause + """
            GROUP BY a.id
            HAVING d != 0 OR c != 0
            ORDER BY a.root_type, a.name""",
-        (company_id, args.from_date, args.to_date),
+        (company_id, args.from_date, args.to_date) + _dim_params,
     ).fetchall()
 
     operating = Decimal("0")
@@ -516,6 +562,11 @@ def general_ledger(conn, args):
     limit = int(args.limit or "100")
     offset = int(args.offset or "0")
 
+    # Multi-dimensional filter (M6): repeated --dimension-key/--dimension-value,
+    # rendered as a single AND-joined literal (keys via json_get, values bound).
+    _dim_clause, _dim_params = _dimension_filter(args, alias="g")
+    _dim_lit = _dim_clause[5:] if _dim_clause else ""  # strip leading " AND "
+
     gl_t = Table("gl_entry").as_("g")
     acct_t = Table("account").as_("a")
 
@@ -535,6 +586,9 @@ def general_ledger(conn, args):
     if args.account_id:
         opening_q = opening_q.where(gl_t.account_id == P())
         opening_params.append(args.account_id)
+    if _dim_lit:
+        opening_q = opening_q.where(LiteralValue(_dim_lit))
+        opening_params.extend(_dim_params)
 
     opening = conn.execute(opening_q.get_sql(), opening_params).fetchone()
     opening_balance = _d(opening["bal"])
@@ -565,6 +619,9 @@ def general_ledger(conn, args):
         # "sales_invoice" gl_entry rows.
         entries_q = entries_q.where(gl_t.voucher_type == P())
         entries_params.append(canonical_voucher_type(args.voucher_type))
+    if _dim_lit:
+        entries_q = entries_q.where(LiteralValue(_dim_lit))
+        entries_params.extend(_dim_params)
 
     entries_q = (
         entries_q
@@ -1655,12 +1712,152 @@ def list_elimination_entries(conn, args):
 # Action dispatch
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Multi-dimensional reports (M6)
+# ---------------------------------------------------------------------------
+
+def multi_dim_trial_balance(conn, args):
+    """Trial balance grouped by one or more accounting dimensions.
+
+    --group-by "project,department" groups gl_entry rows by each dimension's value
+    (read from dimensions_json via json_get) and sums debit/credit per group.
+    """
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
+    if not args.to_date:
+        err("--to-date is required")
+    group_by = [k.strip() for k in (getattr(args, "group_by", None) or "").split(",")
+                if k.strip()]
+    if not group_by:
+        err('--group-by "project,department" is required')
+
+    select_cols, group_exprs = [], []
+    for k in group_by:
+        frag = str(json_get("g.dimensions_json", k))  # dialect-aware, key-escaped
+        select_cols.append(f'{frag} AS "{k}"')
+        group_exprs.append(frag)
+
+    where = "a.company_id = ? AND g.is_cancelled = 0 AND g.posting_date <= ?"
+    params = [company_id, args.to_date]
+    if args.from_date:
+        where += " AND g.posting_date >= ?"
+        params.append(args.from_date)
+    dim_clause, dim_params = _dimension_filter(args, alias="g")
+    where += dim_clause
+    params += dim_params
+
+    # select_cols/group_exprs are json_get fragments (escaped keys); `where` carries
+    # bound ? placeholders. Concatenated (not f-string) so the intentional identifier
+    # interpolation is explicit and every value stays bound.
+    group_sql = ", ".join(group_exprs)
+    sql = (
+        "SELECT " + ", ".join(select_cols) + ", "
+        "COALESCE(decimal_sum(g.debit), '0') AS total_debit, "
+        "COALESCE(decimal_sum(g.credit), '0') AS total_credit "
+        "FROM gl_entry g JOIN account a ON a.id = g.account_id "
+        "WHERE " + where + " "
+        "GROUP BY " + group_sql + " "
+        "ORDER BY " + group_sql
+    )
+    rows = conn.execute(sql, params).fetchall()
+
+    groups = []
+    total_debit = Decimal("0")
+    total_credit = Decimal("0")
+    for r in rows:
+        d = _d(r["total_debit"])
+        c = _d(r["total_credit"])
+        total_debit += d
+        total_credit += c
+        group = {k: r[k] for k in group_by}
+        group["debit"] = _s(d)
+        group["credit"] = _s(c)
+        group["balance"] = _s(d - c)
+        groups.append(group)
+
+    ok({
+        "group_by": group_by,
+        "as_of_date": args.to_date,
+        "groups": groups,
+        "total_debit": _s(total_debit),
+        "total_credit": _s(total_credit),
+    })
+
+
+def dimension_balance_report(conn, args):
+    """Balance per value of a single accounting dimension.
+
+    --dimension K returns the net balance (debit - credit) for each distinct value
+    of dimension K; optional --values "a,b,c" restricts to those values.
+    """
+    company_id = resolve_company_id(conn,
+                                    getattr(args, 'company_id', None),
+                                    getattr(args, 'company_name', None))
+    key = (getattr(args, "dimension", None) or "").strip()
+    if not key:
+        err("--dimension K is required")
+    if not args.to_date:
+        err("--to-date is required")
+
+    frag = str(json_get("g.dimensions_json", key))  # dialect-aware, key-escaped
+    where = "a.company_id = ? AND g.is_cancelled = 0 AND g.posting_date <= ?"
+    params = [company_id, args.to_date]
+    if args.from_date:
+        where += " AND g.posting_date >= ?"
+        params.append(args.from_date)
+
+    values = [v.strip() for v in (getattr(args, "values", None) or "").split(",")
+              if v.strip()]
+    if values:
+        placeholders = ",".join("?" for _ in values)
+        where += " AND " + frag + " IN (" + placeholders + ")"
+        params += values
+
+    # frag is a json_get fragment (escaped key); `where` carries bound ? values.
+    # Concatenated (not f-string) so identifier interpolation is explicit/bound-safe.
+    sql = (
+        "SELECT " + frag + " AS dim_value, "
+        "COALESCE(decimal_sum(g.debit), '0') AS total_debit, "
+        "COALESCE(decimal_sum(g.credit), '0') AS total_credit "
+        "FROM gl_entry g JOIN account a ON a.id = g.account_id "
+        "WHERE " + where + " AND " + frag + " IS NOT NULL "
+        "GROUP BY " + frag + " ORDER BY dim_value"
+    )
+    rows = conn.execute(sql, params).fetchall()
+
+    out = []
+    total_debit = Decimal("0")
+    total_credit = Decimal("0")
+    for r in rows:
+        d = _d(r["total_debit"])
+        c = _d(r["total_credit"])
+        total_debit += d
+        total_credit += c
+        out.append({
+            "value": r["dim_value"],
+            "debit": _s(d),
+            "credit": _s(c),
+            "balance": _s(d - c),
+        })
+
+    ok({
+        "dimension": key,
+        "as_of_date": args.to_date,
+        "values": out,
+        "total_debit": _s(total_debit),
+        "total_credit": _s(total_credit),
+    })
+
+
 ACTIONS = {
     "trial-balance": trial_balance,
     "profit-and-loss": profit_and_loss,
     "balance-sheet": balance_sheet,
     "cash-flow": cash_flow,
     "general-ledger": general_ledger,
+    "multi-dim-trial-balance": multi_dim_trial_balance,
+    "dimension-balance-report": dimension_balance_report,
     "ar-aging": ar_aging,
     "ap-aging": ap_aging,
     "budget-vs-actual": budget_vs_actual,
@@ -1698,6 +1895,13 @@ def main():
     parser.add_argument("--party-type")
     parser.add_argument("--party-id")
     parser.add_argument("--voucher-type")
+
+    # Accounting dimensions (M6)
+    parser.add_argument("--dimension-key", dest="dimension_key", action="append")
+    parser.add_argument("--dimension-value", dest="dimension_value", action="append")
+    parser.add_argument("--group-by", dest="group_by")
+    parser.add_argument("--dimension", dest="dimension")
+    parser.add_argument("--values", dest="values")
 
     # Aging
     parser.add_argument("--customer-id")
