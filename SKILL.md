@@ -1,6 +1,6 @@
 ---
 name: erpclaw
-version: 4.6.1
+version: 4.7.0
 description: >
   AI-native ERP system. Full accounting, invoicing, inventory, purchasing,
   tax, billing, HR, payroll, advanced accounting (ASC 606/842, intercompany, consolidation),
@@ -97,7 +97,7 @@ python3 {baseDir}/scripts/db_query.py --action setup-chart-of-accounts --company
 
 High-impact actions require the `--user-confirmed` flag on every invocation. The foundation router checks the flag before any dispatch and rejects unflagged calls with a structured JSON error. Read-only actions (verbs `list`, `get`, reports) run without the flag.
 
-## All 483 Actions
+## All 489 Actions
 
 ### Setup & Admin (50)
 | Action | Description |
@@ -118,7 +118,7 @@ High-impact actions require the `--user-confirmed` flag on every invocation. The
 | `import-master-key-from-backup` | Cross-machine restore: install master key from a backup taken on another machine |
 | `get-audit-log` / `get-schema-version` / `update-regional-settings` / `onboard` | System admin |
 
-### General Ledger (26)
+### General Ledger (30)
 | Action | Description |
 |--------|-------------|
 | `setup-chart-of-accounts` / `add-account` / `update-account` / `get-account` / `list-accounts` | Account CRUD |
@@ -126,13 +126,14 @@ High-impact actions require the `--user-confirmed` flag on every invocation. The
 | `post-gl-entries` / `reverse-gl-entries` / `list-gl-entries` | GL posting |
 | `add-fiscal-year` / `list-fiscal-years` / `validate-period-close` / `close-fiscal-year` / `reopen-fiscal-year` | Fiscal year |
 | `add-cost-center` / `list-cost-centers` / `add-budget` / `list-budgets` | Cost centers & budgets |
+| `add-dimension` / `list-dimensions` / `update-dimension` / `deactivate-dimension` | Accounting dimensions (M6): register/inspect/update/retire the dimension keys that drive `gl_entry.dimensions_json` (enforced as GL validation step 13). `deactivate-dimension` is blocked while recent live GL still references the key |
 | `seed-naming-series` / `next-series` / `revalue-foreign-balances` | Naming & FX revaluation |
 | `import-chart-of-accounts` / `import-opening-balances` | CSV import |
 
 ### Journal Entries (16)
 | Action | Description |
 |--------|-------------|
-| `add-journal-entry` / `update-journal-entry` / `get-journal-entry` / `list-journal-entries` | JE CRUD |
+| `add-journal-entry` / `update-journal-entry` / `get-journal-entry` / `list-journal-entries` | JE CRUD. `add-journal-entry --cwip-asset-id <A>` tags the JE; submit records its CWIP debit leg as a cost accumulation against the asset (S3) |
 | `submit-journal-entry` / `cancel-journal-entry` / `amend-journal-entry` / `delete-journal-entry` / `duplicate-journal-entry` | JE lifecycle |
 | `create-intercompany-je` | Intercompany JE |
 | `add-recurring-template` / `update-recurring-template` / `list-recurring-templates` / `get-recurring-template` / `process-recurring` / `delete-recurring-template` | Recurring JEs |
@@ -152,10 +153,10 @@ High-impact actions require the `--user-confirmed` flag on every invocation. The
 | `add-item-tax-template` / `add-tax-withholding-category` / `get-withholding-details` | Withholding |
 | `record-withholding-entry` / `record-1099-payment` / `generate-1099-data` | 1099 reporting |
 
-### Financial Reports (20)
+### Financial Reports (22)
 | Action | Description |
 |--------|-------------|
-| `trial-balance` / `profit-and-loss` / `balance-sheet` / `cash-flow` / `general-ledger` / `party-ledger` | Core statements |
+| `trial-balance` / `profit-and-loss` / `balance-sheet` / `cash-flow` / `general-ledger` / `party-ledger` / `multi-dim-trial-balance` / `dimension-balance-report` | Core statements; the four headline statements + `general-ledger` accept repeated `--dimension-key/--dimension-value` filters, and the two M6 reports group/break-down by `gl_entry.dimensions_json` |
 | `ar-aging` / `ap-aging` / `budget-vs-actual` (alias: `budget-variance`) | Aging & budget |
 | `tax-summary` / `payment-summary` / `gl-summary` / `comparative-pl` / `check-overdue` | Summaries |
 | `add-elimination-rule` / `list-elimination-rules` / `run-elimination` / `list-elimination-entries` | Intercompany |
@@ -185,7 +186,7 @@ High-impact actions require the `--user-confirmed` flag on every invocation. The
 | `add-purchase-order` / `update-purchase-order` / `get-purchase-order` / `list-purchase-orders` / `submit-purchase-order` / `cancel-purchase-order` / `close-purchase-order` | Purchase orders |
 | `add-blanket-po` / `get-blanket-po` / `list-blanket-pos` / `submit-blanket-po` / `create-po-from-blanket` / `create-po-from-so` / `create-drop-ship-order` | Blanket POs & drop ship |
 | `create-purchase-receipt` / `get-purchase-receipt` / `list-purchase-receipts` / `submit-purchase-receipt` / `cancel-purchase-receipt` | Receipts |
-| `create-purchase-invoice` / `update-purchase-invoice` / `get-purchase-invoice` / `list-purchase-invoices` / `submit-purchase-invoice` / `cancel-purchase-invoice` | Purchase invoices |
+| `create-purchase-invoice` / `update-purchase-invoice` / `get-purchase-invoice` / `list-purchase-invoices` / `submit-purchase-invoice` / `cancel-purchase-invoice` | Purchase invoices. `create-purchase-invoice --cwip-asset-id <A>` (standalone cost bill) routes the expense GL to the asset's CWIP account + records a cost accumulation on submit (S3) |
 | `create-debit-note` / `add-landed-cost-voucher` / `update-receipt-tolerance` / `update-three-way-match-policy` | Adjustments |
 
 **Receiving purchased stock — flow:** to bring purchased goods into inventory, receive them against their source document so valuation carries automatically. Canonical flow: `submit-purchase-order` (confirms the order + rate) → `create-purchase-receipt --purchase-order-id <PO>` then `submit-purchase-receipt` (this values the stock at the PO rate and posts inventory GL) → `create-purchase-invoice` + `submit-purchase-invoice` for the bill (leave stock update off — the receipt already moved it) → pay. Do NOT use a standalone `add-stock-entry --type material_receipt` to receive purchased goods unless you restate the unit cost; a rate-less receipt cannot be valued and will be refused.

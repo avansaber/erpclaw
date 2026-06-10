@@ -466,6 +466,7 @@ CREATE TABLE IF NOT EXISTS journal_entry (
     status          TEXT NOT NULL DEFAULT 'draft'
                     CHECK(status IN ('draft','submitted','cancelled','amended')),
     amended_from    TEXT REFERENCES journal_entry(id) ON DELETE RESTRICT,
+    cwip_asset_id   TEXT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
@@ -1433,6 +1434,7 @@ CREATE TABLE IF NOT EXISTS purchase_invoice (
     return_against  TEXT,
     update_stock    INTEGER NOT NULL DEFAULT 1 CHECK(update_stock IN (0,1)),
     amended_from    TEXT,
+    cwip_asset_id   TEXT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
@@ -3158,6 +3160,10 @@ CREATE TABLE IF NOT EXISTS asset (
     location        TEXT,
     custodian_employee_id TEXT,
     warranty_expiry_date TEXT,
+    -- S3 CWIP: the project an under-construction asset belongs to. Plain TEXT
+    -- (mirrors gl_entry.project_id — no FK, validated app-side); add-cwip sets it
+    -- and every accumulation stamps gl_entry.project_id for per-project roll-up.
+    cwip_project_id TEXT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
@@ -3211,6 +3217,11 @@ CREATE TABLE IF NOT EXISTS asset_maintenance (
     status          TEXT NOT NULL DEFAULT 'planned'
                     CHECK(status IN ('planned','overdue','completed')),
     next_due_date   TEXT,
+    -- M7: capex-vs-opex split. When 1, complete-maintenance capitalizes the
+    -- cost into the asset (DR Asset / CR Cash) and recomputes the depreciation
+    -- schedule; when 0, it posts the cost as repair expense (DR Repair / CR Cash).
+    -- Backfilled to 0 (opex) on existing rows by migration 019.
+    is_capex        INTEGER NOT NULL DEFAULT 0 CHECK(is_capex IN (0,1)),
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -3232,6 +3243,65 @@ CREATE TABLE IF NOT EXISTS asset_disposal (
 );
 
 CREATE INDEX IF NOT EXISTS idx_asset_disposal_asset ON asset_disposal(asset_id);
+
+-- M7 asset depth: impairment + capitalization. Both are submit-only, immutable
+-- (no updated_at) — cancel = reverse via another row + reversing GL, per the
+-- coding rules. gl_entry_id links the originating GL voucher for traceability.
+CREATE TABLE IF NOT EXISTS asset_impairment (
+    id                  TEXT PRIMARY KEY,
+    asset_id            TEXT NOT NULL REFERENCES asset(id) ON DELETE RESTRICT,
+    impairment_date     TEXT NOT NULL,
+    impairment_amount   TEXT NOT NULL DEFAULT '0',
+    recoverable_amount  TEXT NOT NULL DEFAULT '0',
+    book_value_before   TEXT NOT NULL DEFAULT '0',
+    reason              TEXT,
+    -- 'submitted' on creation; 'reversed' once a reverse-impairment mirrors it.
+    status              TEXT NOT NULL DEFAULT 'submitted'
+                        CHECK(status IN ('submitted','reversed')),
+    reversed_by_id      TEXT REFERENCES asset_impairment(id) ON DELETE RESTRICT,
+    posted_by_user_id   TEXT,
+    gl_entry_id         TEXT,
+    created_at          TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_asset_impairment_asset ON asset_impairment(asset_id);
+CREATE INDEX IF NOT EXISTS idx_asset_impairment_status ON asset_impairment(status);
+
+CREATE TABLE IF NOT EXISTS asset_capitalization (
+    id                  TEXT PRIMARY KEY,
+    asset_id            TEXT NOT NULL REFERENCES asset(id) ON DELETE RESTRICT,
+    purchase_invoice_id TEXT,
+    cwip_source_id      TEXT,
+    capitalized_amount  TEXT NOT NULL DEFAULT '0',
+    capitalization_date TEXT NOT NULL,
+    source_account_id   TEXT REFERENCES account(id) ON DELETE RESTRICT,
+    gl_entry_id         TEXT,
+    created_at          TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_asset_capitalization_asset ON asset_capitalization(asset_id);
+CREATE INDEX IF NOT EXISTS idx_asset_capitalization_pi ON asset_capitalization(purchase_invoice_id);
+
+-- S3 CWIP: one immutable row per cost accumulated against an under-construction
+-- asset. Submit-only (no updated_at) — cancel = reverse via a mirror GL +
+-- status='reversed', per the coding rules. gl_entry_id links the originating
+-- accumulation voucher (voucher_type='cwip_capitalization').
+CREATE TABLE IF NOT EXISTS cwip_cost_accumulation (
+    id                  TEXT PRIMARY KEY,
+    asset_id            TEXT NOT NULL REFERENCES asset(id) ON DELETE RESTRICT,
+    source_voucher_type TEXT NOT NULL,
+    source_voucher_id   TEXT,
+    accumulated_amount  TEXT NOT NULL DEFAULT '0',
+    gl_entry_id         TEXT,
+    status              TEXT NOT NULL DEFAULT 'submitted'
+                        CHECK(status IN ('submitted','reversed')),
+    accumulated_at      TEXT NOT NULL,
+    notes               TEXT,
+    created_at          TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_cwip_accum_asset ON cwip_cost_accumulation(asset_id);
+CREATE INDEX IF NOT EXISTS idx_cwip_accum_status ON cwip_cost_accumulation(status);
 """
 
 
@@ -3736,6 +3806,27 @@ CREATE TABLE IF NOT EXISTS asset_status_registry (
     is_active    INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1))
 );
 
+-- accounting dimensions registry (M6 multi-dimensional GL). Drives which keys may
+-- appear in gl_entry.dimensions_json, their type, and which account_types require
+-- them (enforced app-side as GL validation step 13). 'key' is the JSON object key
+-- stored in dimensions_json (e.g. 'project'); 'id' is the UUID PK per coding rules.
+-- Seeded by init_db() (project/department/cost_center) so fresh installs match
+-- migration-017'd DBs.
+CREATE TABLE IF NOT EXISTS dimension_registry (
+    id                                TEXT PRIMARY KEY,
+    key                               TEXT NOT NULL UNIQUE,
+    label                             TEXT NOT NULL,
+    data_type                         TEXT NOT NULL DEFAULT 'text'
+                                      CHECK(data_type IN ('text','uuid_fk','enum')),
+    referenced_table                  TEXT,
+    allowed_values_json               TEXT,
+    is_required_on_account_types_json TEXT,
+    is_active                         INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
+    created_at                        TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at                        TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_dimension_registry_active ON dimension_registry(is_active);
+
 -- Stock revaluation audit record (BUG-006 fix: erpclaw-inventory revalue-stock
 -- wrote/read this table but it was never created). Money as TEXT.
 CREATE TABLE IF NOT EXISTS stock_revaluation (
@@ -4055,7 +4146,7 @@ ACCOUNT_TYPE_REGISTRY_SEED = [
 ]
 
 # Canonical voucher_type_registry seed (M0 phase 2). Mirror of migration 001's
-# full set (19 gl_entry + 10 stock_ledger_entry + 4 payment_allocation), keyed by
+# full set (23 gl_entry + 10 stock_ledger_entry + 4 payment_allocation), keyed by
 # (voucher_type, skill_name, label, target_table). Sources voucher_type validity
 # now that the gl_entry CHECK is dropped. Seeded in init_db() so fresh installs
 # match migrated DBs. Kept in sync with migration 004.
@@ -4071,6 +4162,11 @@ VOUCHER_TYPE_REGISTRY_SEED = [
     ("period_closing", "erpclaw-gl", "Period Closing", "gl_entry"),
     ("expense_claim", "erpclaw-hr", "Expense Claim", "gl_entry"),
     ("asset_disposal", "erpclaw-assets", "Asset Disposal", "gl_entry"),
+    ("asset_impairment", "erpclaw-assets", "Asset Impairment", "gl_entry"),
+    ("asset_capitalization", "erpclaw-assets", "Asset Capitalization", "gl_entry"),
+    ("asset_revaluation", "erpclaw-assets", "Asset Revaluation", "gl_entry"),
+    ("asset_repair_capex", "erpclaw-assets", "Asset Repair (Capex)", "gl_entry"),
+    ("cwip_capitalization", "erpclaw-assets", "CWIP Capitalization", "gl_entry"),
     ("stock_reconciliation", "erpclaw-inventory", "Stock Reconciliation", "gl_entry"),
     ("purchase_receipt", "erpclaw-buying", "Purchase Receipt", "gl_entry"),
     ("delivery_note", "erpclaw-selling", "Delivery Note", "gl_entry"),
@@ -4117,6 +4213,18 @@ ASSET_STATUS_REGISTRY_SEED = [
     ("cancelled", "erpclaw-assets", "Cancelled"),
     ("scrapped", "erpclaw-assets", "Scrapped"),
     ("sold", "erpclaw-assets", "Sold"),
+]
+
+
+# Canonical dimension_registry seed (M6 multi-dimensional GL). The three default
+# accounting dimensions; none is required by default (is_required_on_account_types_json
+# stays NULL) so existing postings keep validating. cost_center aliases the existing
+# gl_entry.cost_center_id column; project/department drive dimensions_json.
+# (key, label, data_type, referenced_table, allowed_values_json, is_required_on_account_types_json)
+DIMENSION_REGISTRY_SEED = [
+    ("project", "Project", "uuid_fk", "project", None, None),
+    ("department", "Department", "text", None, None, None),
+    ("cost_center", "Cost Center", "uuid_fk", "cost_center", None, None),
 ]
 
 
@@ -4206,6 +4314,19 @@ def _seed_defaults(conn) -> None:
                 "INSERT INTO asset_status_registry (status, skill_name, label) "
                 "VALUES (?, ?, ?)",
                 (st, skill, label),
+            )
+
+    # dimension_registry (M6): the default accounting dimensions. Idempotent on key.
+    for key, label, dtype, ref_table, allowed, req in DIMENSION_REGISTRY_SEED:
+        existing = conn.execute(
+            "SELECT 1 FROM dimension_registry WHERE key = ?", (key,)
+        ).fetchone()
+        if not existing:
+            conn.execute(
+                "INSERT INTO dimension_registry "
+                "(id, key, label, data_type, referenced_table, allowed_values_json, "
+                " is_required_on_account_types_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (str(uuid.uuid4()), key, label, dtype, ref_table, allowed, req),
             )
 
 

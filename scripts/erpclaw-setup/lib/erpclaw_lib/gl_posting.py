@@ -12,6 +12,8 @@ Key functions:
 NEVER commit inside these functions — the caller owns the transaction.
 """
 import hashlib
+import json
+import re
 import uuid
 import sqlite3
 from decimal import Decimal
@@ -327,7 +329,93 @@ def validate_gl_entries(
                 elif budget["action_if_exceeded"] == "warn":
                     warnings.append(f"GL Validation Step 12 Warning: {msg}")
 
+    # Step 13: Required accounting dimensions present (M6 multi-dimensional GL).
+    # The dimension_registry says which dimensions are required for an account's
+    # account_type; reject if a required dimension is missing/blank. For dimensions
+    # declared uuid_fk, a supplied value must reference an existing row (this is the
+    # path that finally enforces the project FK). Dimensions ride on
+    # entry["dimensions"] (a dict); absent → {} so every existing caller still
+    # validates. Distinct from cost_center validation (step 8), which stays.
+    _validate_dimensions(conn, entries, account_cache)
+
     return warnings
+
+
+# ---------------------------------------------------------------------------
+# Step 13 helper — required-dimension + uuid_fk enforcement
+# ---------------------------------------------------------------------------
+
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _validate_dimensions(conn, entries, account_cache):
+    """GL validation step 13: enforce required dimensions and uuid_fk integrity.
+
+    No-op when the dimension_registry has no active rows (or no required ones and
+    no supplied uuid_fk values), so the cost of M6 is zero for callers that pass
+    no dimensions.
+    """
+    reg_rows = conn.execute(
+        "SELECT key, data_type, referenced_table, is_required_on_account_types_json "
+        "FROM dimension_registry WHERE is_active = 1"
+    ).fetchall()
+    if not reg_rows:
+        return
+
+    dims_reg = []
+    for r in reg_rows:
+        req_types = set()
+        raw = r["is_required_on_account_types_json"]
+        if raw:
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, (list, tuple)):
+                    req_types = {str(t) for t in parsed}
+            except (ValueError, TypeError):
+                req_types = set()
+        dims_reg.append((r["key"], r["data_type"], r["referenced_table"], req_types))
+
+    for entry in entries:
+        account = account_cache.get(entry.get("account_id"))
+        if account is None:
+            account = _get_account(conn, entry["account_id"])
+            account_cache[entry["account_id"]] = account
+        acct_type = account.get("account_type", "") or ""
+
+        entry_dims = entry.get("dimensions") or {}
+        if not isinstance(entry_dims, dict):
+            raise ValueError(
+                "GL Validation Step 13 Failed: dimensions must be a JSON object "
+                f"(dict) for account '{account.get('name')}'"
+            )
+
+        for key, data_type, ref_table, req_types in dims_reg:
+            val = entry_dims.get(key)
+            has_val = val is not None and str(val).strip() != ""
+
+            if acct_type in req_types and not has_val:
+                raise ValueError(
+                    f"GL Validation Step 13 Failed: required dimension '{key}' is "
+                    f"missing for account '{account.get('name')}' "
+                    f"(account_type='{acct_type}')"
+                )
+
+            if has_val and data_type == "uuid_fk" and ref_table:
+                if not _IDENTIFIER_RE.match(ref_table):
+                    raise ValueError(
+                        f"GL Validation Step 13 Failed: dimension '{key}' has an "
+                        f"invalid referenced_table '{ref_table}'"
+                    )
+                # ref_table is a validated identifier (regex above); identifiers
+                # cannot be bound parameters, so concatenate rather than f-string.
+                exists = conn.execute(
+                    "SELECT 1 FROM " + ref_table + " WHERE id = ?", (val,)
+                ).fetchone()
+                if not exists:
+                    raise ValueError(
+                        f"GL Validation Step 13 Failed: dimension '{key}' references "
+                        f"{ref_table} id '{val}' which does not exist"
+                    )
 
 
 # --- Insert GL Entries ---
@@ -343,16 +431,23 @@ def insert_gl_entries(
     is_opening: bool = False,
     context_role: str | None = None,
     entry_set: str = "primary",
+    allow_cwip: bool = False,
 ) -> list[str]:
     """Insert GL entries within the caller's transaction.
 
     MUST be called inside an existing transaction. Does NOT commit.
 
+    `allow_cwip` lifts the manual-journal-entry CWIP block (step 4) for the
+    sanctioned S3 capitalization path: the erpclaw-journals --cwip-asset-id hook
+    (AVA-43) records the accumulation in the same transaction, so its journal_entry
+    legs ARE the asset capitalization workflow rather than a manual JE. Defaults to
+    False so every other journal_entry caller keeps the guard.
+
     Steps:
     1. Idempotency check — reject if entries already exist for this voucher+entry_set
     2. Normalize entries (negative auto-toggle)
     3. Run 12-step validation
-    4. CWIP restriction check
+    4. CWIP restriction check (skipped when allow_cwip=True)
     5. Insert gl_entry rows
 
     Args:
@@ -415,8 +510,9 @@ def insert_gl_entries(
     if not entries:
         return []
 
-    # 4. CWIP restriction for journal entries
-    if voucher_type == "journal_entry":
+    # 4. CWIP restriction for journal entries (the S3 --cwip-asset-id hook passes
+    # allow_cwip=True — it IS the asset capitalization workflow, not a manual JE).
+    if voucher_type == "journal_entry" and not allow_cwip:
         for entry in entries:
             account = _get_account(conn, entry["account_id"])
             if account.get("account_type") == "capital_work_in_progress":
@@ -473,6 +569,11 @@ def insert_gl_entries(
         ])
         checksum = hashlib.sha256(hash_input.encode("utf-8")).hexdigest()
 
+        # Serialize accounting dimensions (M6). Backward compatible: callers that
+        # pass no dimensions get the column's '{}' default. sort_keys keeps the
+        # stored JSON canonical so the gl_checksum chain stays reproducible.
+        dimensions_json = json.dumps(entry.get("dimensions") or {}, sort_keys=True)
+
         conn.execute(
             """
             INSERT INTO gl_entry (
@@ -480,8 +581,8 @@ def insert_gl_entries(
                 debit, credit, debit_base, credit_base,
                 currency, exchange_rate,
                 voucher_type, voucher_id, entry_set, cost_center_id, project_id,
-                remarks, fiscal_year, is_cancelled, gl_checksum, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, CAST(CURRENT_TIMESTAMP AS TEXT))
+                remarks, fiscal_year, is_cancelled, gl_checksum, dimensions_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, CAST(CURRENT_TIMESTAMP AS TEXT))
             """,
             (
                 entry_id,
@@ -503,6 +604,7 @@ def insert_gl_entries(
                 remarks,
                 entry.get("fiscal_year"),
                 checksum,
+                dimensions_json,
             ),
         )
 
@@ -557,8 +659,8 @@ def reverse_gl_entries(
                 debit, credit, debit_base, credit_base,
                 currency, exchange_rate,
                 voucher_type, voucher_id, entry_set, cost_center_id, project_id,
-                remarks, fiscal_year, is_cancelled, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, CAST(CURRENT_TIMESTAMP AS TEXT))
+                remarks, fiscal_year, is_cancelled, dimensions_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, CAST(CURRENT_TIMESTAMP AS TEXT))
             """,
             (
                 reversal_id,
@@ -579,6 +681,8 @@ def reverse_gl_entries(
                 orig["project_id"],
                 f"Reversal of {orig['id']}",
                 orig["fiscal_year"],
+                # preserve the original entry's accounting dimensions on the mirror
+                orig["dimensions_json"] if "dimensions_json" in orig.keys() else "{}",
             ),
         )
 
