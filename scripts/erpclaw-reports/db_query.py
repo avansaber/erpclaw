@@ -89,6 +89,26 @@ def _dimension_filter(args, alias=None):
     return " AND " + " AND ".join(clauses), params
 
 
+def _assert_dimension_registered(conn, key):
+    """M6: reject a --group-by/--dimension key that is not an active registered
+    accounting dimension, with a message that points at `list-dimensions`.
+
+    A key absent from dimension_registry (or present but deactivated) means the
+    user asked to group by something the books never tag, so the grouped report
+    would be empty/meaningless; failing loudly beats a silently-empty statement.
+    """
+    row = conn.execute(
+        "SELECT is_active FROM dimension_registry WHERE key = ?", (key,)
+    ).fetchone()
+    if row is None:
+        err(f"Unknown accounting dimension '{key}'. Register it with "
+            f"add-dimension, or run list-dimensions to see the available "
+            f"dimensions to group by.")
+    if not row["is_active"]:
+        err(f"Accounting dimension '{key}' is deactivated and cannot be used "
+            f"to group a report. Run list-dimensions to see active dimensions.")
+
+
 # ---------------------------------------------------------------------------
 # Trial Balance
 # ---------------------------------------------------------------------------
@@ -214,6 +234,72 @@ def trial_balance(conn, args):
 # Profit & Loss
 # ---------------------------------------------------------------------------
 
+_UNTAGGED_BUCKET = "(untagged)"
+
+
+def _grouped_pl(conn, company_id, key, from_date, to_date, dim_clause, dim_params):
+    """Compose a P&L broken down by one accounting dimension value (M6).
+
+    income/expense accounts ONLY (root_type filter), netted per value of `key`
+    read from gl_entry.dimensions_json via the shared dialect-aware json_get
+    helper — the same grouping idiom multi_dim_trial_balance uses, scoped here to
+    the P&L account types. Entries whose dimensions_json lacks `key` collapse to
+    a single ``(untagged)`` bucket (COALESCE on the json_get fragment) so nothing
+    is dropped. Returns (groups, income_total, expense_total) with exact Decimals.
+    """
+    frag = str(json_get("g.dimensions_json", key))  # dialect-aware, key-escaped
+    # The grouped expression is repeated (SELECT + GROUP BY) because PG disallows a
+    # SELECT-list alias in GROUP BY; COALESCE folds NULL/absent keys into one bucket.
+    bucket_expr = f"COALESCE({frag}, ?)"
+    # decimal_sum returns TEXT on both backends; keep the exact subtraction in Python.
+    sql = (
+        "SELECT " + bucket_expr + " AS dim_value, a.root_type AS root_type, "
+        "COALESCE(decimal_sum(g.debit), '0') AS total_debit, "
+        "COALESCE(decimal_sum(g.credit), '0') AS total_credit "
+        "FROM account a "
+        "LEFT JOIN gl_entry g ON g.account_id = a.id "
+        "  AND g.posting_date >= ? AND g.posting_date <= ? "
+        "  AND g.is_cancelled = 0" + dim_clause + " "
+        "WHERE a.company_id = ? AND a.root_type IN ('income', 'expense') "
+        "  AND a.is_group = 0 "
+        "GROUP BY " + bucket_expr + ", a.root_type "
+        "ORDER BY dim_value"
+    )
+    # Param order mirrors the textual ?-order: SELECT bucket default, JOIN dates +
+    # dim filter, WHERE company, GROUP BY bucket default.
+    params = ([_UNTAGGED_BUCKET, from_date, to_date]
+              + list(dim_params) + [company_id, _UNTAGGED_BUCKET])
+    rows = conn.execute(sql, params).fetchall()
+
+    # Fold the (value, root_type) rows into per-value {revenue, expenses}.
+    acc = {}
+    for r in rows:
+        val = r["dim_value"]
+        d = _d(r["total_debit"])
+        c = _d(r["total_credit"])
+        if d == 0 and c == 0:
+            continue  # LEFT JOIN produced an all-account row with no activity
+        slot = acc.setdefault(val, {"revenue": Decimal("0"), "expenses": Decimal("0")})
+        if r["root_type"] == "income":
+            slot["revenue"] += (c - d)
+        else:  # expense
+            slot["expenses"] += (d - c)
+
+    groups, income_total, expense_total = [], Decimal("0"), Decimal("0")
+    for val in sorted(acc.keys(), key=lambda v: (v == _UNTAGGED_BUCKET, str(v))):
+        rev = acc[val]["revenue"]
+        exp = acc[val]["expenses"]
+        income_total += rev
+        expense_total += exp
+        groups.append({
+            key: val,
+            "revenue": _s(rev),
+            "expenses": _s(exp),
+            "net": _s(rev - exp),
+        })
+    return groups, income_total, expense_total
+
+
 def profit_and_loss(conn, args):
     company_id = resolve_company_id(conn,
                                     getattr(args, 'company_id', None),
@@ -222,6 +308,37 @@ def profit_and_loss(conn, args):
         err("--from-date is required")
     if not args.to_date:
         err("--to-date is required")
+
+    # M6 routing: "P&L grouped by <dimension>" is handled HERE (the natural call
+    # the agent reaches for) by delegating to the shared M6 grouping helper, rather
+    # than forcing the agent to discover multi-dim-trial-balance. Absent --group-by,
+    # the flat company-wide statement below is byte-identical to before.
+    group_by_raw = (getattr(args, "group_by", None) or "").strip()
+    if group_by_raw:
+        keys = [k.strip() for k in group_by_raw.split(",") if k.strip()]
+        if not keys:
+            err('--group-by needs a dimension name (e.g. --group-by department); '
+                'run list-dimensions to see the available dimensions.')
+        if len(keys) != 1:
+            err('--group-by takes exactly one dimension for a P&L breakdown '
+                '(e.g. --group-by department); use multi-dim-trial-balance for '
+                'multi-dimension grouping.')
+        key = keys[0]
+        _assert_dimension_registered(conn, key)
+        # An optional --dimension-key/--dimension-value filter scopes the subset
+        # first; then we break that subset down by `key` (filter-then-group).
+        _dim_clause, _dim_params = _dimension_filter(args, alias="g")
+        groups, income_total, expense_total = _grouped_pl(
+            conn, company_id, key, args.from_date, args.to_date,
+            _dim_clause, _dim_params)
+        ok({
+            "period": f"{args.from_date} to {args.to_date}",
+            "group_by": key,
+            "groups": groups,
+            "income_total": _s(income_total),
+            "expense_total": _s(expense_total),
+            "net_income": _s(income_total - expense_total),
+        })
 
     project_id = getattr(args, "project_id", None)
     proj_join_clause = ""

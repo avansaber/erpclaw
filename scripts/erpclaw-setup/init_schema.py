@@ -4084,6 +4084,108 @@ CREATE INDEX IF NOT EXISTS idx_erpclaw_dgm_variant_selected
 
 
 # ===========================================================================
+# SKILL: erpclaw-integrations (M2 — bank statement import + matching)
+# Tables: bank_statement, bank_statement_line, bank_match_rule
+# Defined in the foundation schema (mirrors the M6 dimension_registry / S3
+# cwip_cost_accumulation precedent: Wave-1 tables live here but are written
+# exclusively by their owning addon module — here erpclaw-integrations'
+# bank.py). The matching engine reads gl_entry / payment_entry / account /
+# party tables (any module may READ) but only ever WRITES these three.
+# ===========================================================================
+
+BANK_TABLES = """
+-- =========================================================================
+-- SKILL: erpclaw-integrations (M2 bank statement import + matching)
+-- =========================================================================
+
+-- One row per imported statement file (or future feed pull). The matcher is
+-- source-agnostic: ofx/camt053/mt940/bai2 file imports today, plaid/manual_csv
+-- reserved for the future feed path (the Plaid stub is untouched by M2).
+CREATE TABLE IF NOT EXISTS bank_statement (
+    id                  TEXT PRIMARY KEY,
+    bank_account_id     TEXT NOT NULL REFERENCES account(id) ON DELETE RESTRICT,
+    company_id          TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
+    source              TEXT NOT NULL
+                        CHECK(source IN ('ofx','camt053','mt940','bai2','plaid','manual_csv')),
+    file_path           TEXT,
+    period_start        TEXT,
+    period_end          TEXT,
+    opening_balance     TEXT,
+    closing_balance     TEXT,
+    currency            TEXT NOT NULL DEFAULT 'USD',
+    import_status       TEXT NOT NULL DEFAULT 'imported'
+                        CHECK(import_status IN ('pending','imported','partially_matched','fully_matched','archived')),
+    line_count          INTEGER NOT NULL DEFAULT 0,
+    imported_at         TEXT NOT NULL,
+    imported_by_user_id TEXT,
+    created_at          TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_bank_statement_account ON bank_statement(bank_account_id);
+CREATE INDEX IF NOT EXISTS idx_bank_statement_company ON bank_statement(company_id);
+CREATE INDEX IF NOT EXISTS idx_bank_statement_status ON bank_statement(import_status);
+
+-- User-configurable auto-match rules, run in priority order against unmatched
+-- lines. match_field/operator/value describe the predicate; target_action +
+-- target_id the disposition. Defined before bank_statement_line so the latter's
+-- match_rule_id FK target exists at CREATE time (Postgres enforces FK targets
+-- at table-creation; see the cost_center ordering note above).
+CREATE TABLE IF NOT EXISTS bank_match_rule (
+    id              TEXT PRIMARY KEY,
+    company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
+    name            TEXT NOT NULL,
+    match_field     TEXT NOT NULL
+                    CHECK(match_field IN ('description','counterparty_name','reference','amount')),
+    match_operator  TEXT NOT NULL
+                    CHECK(match_operator IN ('equals','contains','regex','amount_range')),
+    match_value     TEXT NOT NULL,
+    target_action   TEXT NOT NULL
+                    CHECK(target_action IN ('map_to_account','map_to_vendor','map_to_customer','ignore')),
+    target_id       TEXT,
+    priority        INTEGER NOT NULL DEFAULT 100,
+    is_active       INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_bank_match_rule_company ON bank_match_rule(company_id);
+CREATE INDEX IF NOT EXISTS idx_bank_match_rule_priority ON bank_match_rule(priority);
+
+-- One row per parsed transaction. amount is a SIGNED Decimal-as-TEXT
+-- (+ receipts / − payments), never float. external_id is the provider txn id;
+-- the (source, bank_account_id, external_id) UNIQUE makes re-import idempotent
+-- (a duplicate line is skipped, never double-booked).
+CREATE TABLE IF NOT EXISTS bank_statement_line (
+    id                       TEXT PRIMARY KEY,
+    bank_statement_id        TEXT NOT NULL REFERENCES bank_statement(id) ON DELETE CASCADE,
+    bank_account_id          TEXT NOT NULL REFERENCES account(id) ON DELETE RESTRICT,
+    source                   TEXT NOT NULL,
+    txn_date                 TEXT NOT NULL,
+    value_date               TEXT,
+    amount                   TEXT NOT NULL,
+    currency                 TEXT NOT NULL DEFAULT 'USD',
+    description              TEXT,
+    counterparty_name        TEXT,
+    counterparty_account     TEXT,
+    reference                TEXT,
+    external_id              TEXT NOT NULL,
+    match_status             TEXT NOT NULL DEFAULT 'unmatched'
+                             CHECK(match_status IN ('unmatched','auto_matched','manual_matched','ignored')),
+    matched_gl_entry_id      TEXT,
+    matched_payment_entry_id TEXT,
+    match_confidence         TEXT,
+    match_rule_id            TEXT REFERENCES bank_match_rule(id) ON DELETE SET NULL,
+    created_at               TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(source, bank_account_id, external_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_bank_line_statement ON bank_statement_line(bank_statement_id);
+CREATE INDEX IF NOT EXISTS idx_bank_line_account ON bank_statement_line(bank_account_id);
+CREATE INDEX IF NOT EXISTS idx_bank_line_match_status ON bank_statement_line(match_status);
+"""
+
+
+# ===========================================================================
 # DATABASE INITIALIZATION
 # ===========================================================================
 
@@ -4093,6 +4195,7 @@ ALL_DDL_BLOCKS = [
     ("erpclaw-gl",             GL_TABLES),
     ("erpclaw-journals",       JOURNALS_TABLES),
     ("erpclaw-payments",       PAYMENTS_TABLES),
+    ("erpclaw-integrations",   BANK_TABLES),
     ("erpclaw-tax",            TAX_TABLES),
     ("erpclaw-selling",        SELLING_TABLES),
     ("erpclaw-buying",         BUYING_TABLES),

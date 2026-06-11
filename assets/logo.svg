@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" fill="none" role="img" aria-label="ERPClaw logo">
+  <!-- Ledger book mark with balanced check — ERPClaw teal -->
+  <rect x="16" y="10" width="88" height="100" rx="11" fill="#0d9488" opacity="0.12"/>
+  <rect x="16" y="10" width="88" height="100" rx="11" stroke="#0d9488" stroke-width="5"/>
+  <!-- Ledger lines -->
+  <line x1="34" y1="38" x2="86" y2="38" stroke="#0d9488" stroke-width="5" stroke-linecap="round"/>
+  <line x1="34" y1="60" x2="86" y2="60" stroke="#0d9488" stroke-width="5" stroke-linecap="round"/>
+  <line x1="34" y1="82" x2="66" y2="82" stroke="#0d9488" stroke-width="5" stroke-linecap="round"/>
+  <!-- Balanced check mark -->
+  <path d="M70 74l8 8 16-16" stroke="#14b8a6" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

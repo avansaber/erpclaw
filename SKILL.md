@@ -1,10 +1,10 @@
 ---
 name: erpclaw
-version: 4.7.0
+version: 4.8.0
 description: >
   AI-native ERP system. Full accounting, invoicing, inventory, purchasing,
   tax, billing, HR, payroll, advanced accounting (ASC 606/842, intercompany, consolidation),
-  and financial reporting. 483 actions across 14 domains, 45 optional expansion modules (user-approved install from GitHub).
+  and financial reporting (including P&L / trial balance / spend grouped by department, project, cost center, location, or fund). 483 actions across 14 domains, 45 optional expansion modules (user-approved install from GitHub).
   Double-entry GL, immutable audit trail, US GAAP compliant. Licensed under GNU GPL v3 (the marketplace "MIT-0" badge is a ClawHub platform default; the LICENSE.txt in the bundle is GPL v3).
 author: AvanSaber
 homepage: https://github.com/avansaber/erpclaw
@@ -80,7 +80,7 @@ The same rule applies to the bookkeeping behind an action: erpclaw returns the t
 
 ### Skill Activation Triggers
 
-Activate when user mentions: ERP, accounting, invoice, sales order, purchase order, customer, supplier, inventory, payment, GL, trial balance, P&L, balance sheet, tax, billing, modules, install module, onboard, CRM, manufacturing, healthcare, education, retail, employee, HR, payroll, salary, leave, attendance, expense claim, W-2, garnishment, integration.
+Activate when user mentions: ERP, accounting, invoice, sales order, purchase order, customer, supplier, inventory, payment, GL, trial balance, P&L, balance sheet, P&L / spend / revenue by department or project or cost center or location or fund, tax, billing, modules, install module, onboard, CRM, manufacturing, healthcare, education, retail, employee, HR, payroll, salary, leave, attendance, expense claim, W-2, garnishment, integration. **"By department / project / cost center / location / fund" reporting is a first-class capability (accounting dimensions), never hand-rolled:** tag entries at booking time with `--dimension-key/--dimension-value`, then report with `profit-and-loss --group-by <dimension>` (P&L by that dimension) or `multi-dim-trial-balance --group-by <dimension>` (whole trial balance) — NOT a `cost_center` column or raw SQL — see the Journal Entries and Financial Reports rows.
 
 ### Auto-Detection
 
@@ -126,14 +126,14 @@ High-impact actions require the `--user-confirmed` flag on every invocation. The
 | `post-gl-entries` / `reverse-gl-entries` / `list-gl-entries` | GL posting |
 | `add-fiscal-year` / `list-fiscal-years` / `validate-period-close` / `close-fiscal-year` / `reopen-fiscal-year` | Fiscal year |
 | `add-cost-center` / `list-cost-centers` / `add-budget` / `list-budgets` | Cost centers & budgets |
-| `add-dimension` / `list-dimensions` / `update-dimension` / `deactivate-dimension` | Accounting dimensions (M6): register/inspect/update/retire the dimension keys that drive `gl_entry.dimensions_json` (enforced as GL validation step 13). `deactivate-dimension` is blocked while recent live GL still references the key |
+| `add-dimension` / `list-dimensions` / `update-dimension` / `deactivate-dimension` | Accounting dimensions (M6): register/inspect/update/retire the dimension keys (department, project, location, fund, etc.) that drive `gl_entry.dimensions_json` (enforced as GL validation step 13). **To make a posting reportable "by <dimension>", tag it at entry time with `--dimension-key/--dimension-value` on the journal/invoice/payment actions** — then report with `multi-dim-trial-balance` / `dimension-balance-report` (see Financial Reports). `deactivate-dimension` is blocked while recent live GL still references the key |
 | `seed-naming-series` / `next-series` / `revalue-foreign-balances` | Naming & FX revaluation |
 | `import-chart-of-accounts` / `import-opening-balances` | CSV import |
 
 ### Journal Entries (16)
 | Action | Description |
 |--------|-------------|
-| `add-journal-entry` / `update-journal-entry` / `get-journal-entry` / `list-journal-entries` | JE CRUD. `add-journal-entry --cwip-asset-id <A>` tags the JE; submit records its CWIP debit leg as a cost accumulation against the asset (S3) |
+| `add-journal-entry` / `update-journal-entry` / `get-journal-entry` / `list-journal-entries` | JE CRUD. **When the user attributes an entry to a department / project / location / fund / cost center (e.g. "office supplies for Engineering", "travel on the Apollo project"), tag it with `--dimension-key department --dimension-value Engineering` — do NOT add a "cost center" line/column or hand-roll the attribution; the dimension tag is what makes it reportable later with `multi-dim-trial-balance`.** `add-journal-entry --cwip-asset-id <A>` tags the JE; submit records its CWIP debit leg as a cost accumulation against the asset (S3) |
 | `submit-journal-entry` / `cancel-journal-entry` / `amend-journal-entry` / `delete-journal-entry` / `duplicate-journal-entry` | JE lifecycle |
 | `create-intercompany-je` | Intercompany JE |
 | `add-recurring-template` / `update-recurring-template` / `list-recurring-templates` / `get-recurring-template` / `process-recurring` / `delete-recurring-template` | Recurring JEs |
@@ -156,7 +156,7 @@ High-impact actions require the `--user-confirmed` flag on every invocation. The
 ### Financial Reports (22)
 | Action | Description |
 |--------|-------------|
-| `trial-balance` / `profit-and-loss` / `balance-sheet` / `cash-flow` / `general-ledger` / `party-ledger` / `multi-dim-trial-balance` / `dimension-balance-report` | Core statements; the four headline statements + `general-ledger` accept repeated `--dimension-key/--dimension-value` filters, and the two M6 reports group/break-down by `gl_entry.dimensions_json` |
+| `trial-balance` / `profit-and-loss` / `balance-sheet` / `cash-flow` / `general-ledger` / `party-ledger` / `multi-dim-trial-balance` / `dimension-balance-report` | Core statements. **For a "P&L by DEPARTMENT / project / cost center / location / fund / any dimension" ask, call `profit-and-loss --group-by <dimension>` — it returns revenue / expenses / net per dimension value (with an explicit `(untagged)` bucket), so you NEVER hand-roll the split or write SQL over `cost_center`.** Example: "show me this month's P&L broken down by department" → `profit-and-loss --group-by department --from-date <start> --to-date <end>`. For grouping the WHOLE trial balance (all account types, not just income/expense) use `multi-dim-trial-balance --group-by "project,department"`; `dimension-balance-report --dimension K` gives one dimension's balances. `--group-by` takes ONE dimension on `profit-and-loss`; group by an UNREGISTERED dimension errors (run `list-dimensions`). Without `--group-by`, `profit-and-loss` returns ONE company-wide statement. All four headline statements + `general-ledger` also accept repeated `--dimension-key/--dimension-value` filters to scope (and `profit-and-loss` filters THEN groups) |
 | `ar-aging` / `ap-aging` / `budget-vs-actual` (alias: `budget-variance`) | Aging & budget |
 | `tax-summary` / `payment-summary` / `gl-summary` / `comparative-pl` / `check-overdue` | Summaries |
 | `add-elimination-rule` / `list-elimination-rules` / `run-elimination` / `list-elimination-entries` | Intercompany |

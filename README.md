@@ -1,199 +1,156 @@
-# ERPClaw — AI-Native ERP for OpenClaw
+<p align="center">
+  <img src="assets/logo.svg" alt="ERPClaw" width="120" height="120">
+</p>
 
-<!-- SYNC:facts:start -->
-ERPClaw v4.7.0 | 46 modules (46 active + 0 preview) | 3,169 actions
-<!-- SYNC:facts:end -->
+<h1 align="center">ERPClaw</h1>
 
-A complete ERP system built as an [OpenClaw](https://openclaw.org) skill. Full double-entry accounting, invoicing, inventory, purchasing, tax, billing, HR, payroll, and financial reporting — all in a single install. The foundation ships 483 actions across 14 user-facing domains; total project surface is 3,131 actions across 46 modules.
+<p align="center">
+  <em>The AI-native ERP. Chat with your books.</em>
+</p>
 
-## Features
+<p align="center">
+  <img src="https://img.shields.io/badge/license-GPL--3.0-green" alt="License: GPL-3.0">
+  <!-- version badge is static; bump at each release publish -->
+  <img src="https://img.shields.io/badge/version-v4.8.0-0d9488" alt="Version v4.8.0">
+  <img src="https://img.shields.io/badge/OpenClaw-skill-14b8a6" alt="OpenClaw Skill">
+  <img src="https://img.shields.io/badge/database-SQLite%20%7C%20PostgreSQL-0d9488" alt="SQLite or PostgreSQL">
+  <a href="https://www.erpclaw.ai"><img src="https://img.shields.io/badge/website-erpclaw.ai-14b8a6" alt="Website erpclaw.ai"></a>
+  <img src="https://img.shields.io/badge/Stripe%20Marketplace-Live-635bff" alt="Stripe Marketplace · Live">
+</p>
 
-- **Double-entry GL** — US GAAP chart of accounts, immutable journal entries, multi-company support
-- **Sales** — customers, sales orders, delivery notes, sales invoices, credit notes, payment tracking
-- **Buying** — suppliers, purchase orders, purchase invoices, goods received notes
-- **Inventory** — items, warehouses, stock entries, serial/batch tracking, reorder levels
-- **Billing** — usage-based billing, recurring invoices, subscription management
-- **Tax** — tax templates, multi-rate support, tax returns
-- **Payments** — payment entries, bank reconciliation, multi-currency
-- **HR** — employees, departments, designations, leave management, attendance, expenses
-- **Payroll** — salary structures, FICA, federal/state income tax, W-2 generation, garnishments
-- **Advanced Accounting** — ASC 606 revenue recognition, ASC 842 lease accounting, intercompany transactions, consolidation
-- **Reports** — trial balance, P&L, balance sheet, cash flow, AR/AP aging, inventory valuation
-- **Module system** — 45 additional modules (46 total including core) available via `install-module` from GitHub
+<p align="center">
+  <img src="assets/demo.svg" alt="ERPClaw demo: add a customer, invoice them, record their payment, and see a P&amp;L by department, all in plain English" width="760">
+</p>
 
-## Quick Start
+**ERPClaw runs your whole business from plain English.** Tell it "invoice Wayne
+Industries for 10 widgets at $100" and it writes the invoice, posts the
+balanced journal entries, and replies with the invoice number. Record a payment,
+close the month, pull a P&L by department, run payroll, the assistant you
+already use does the work and the books stay audit-grade underneath. No forms to
+click through, no screens to learn, no per-seat bill. It is open source, it is
+free forever, and it runs on your own machine so your data never leaves it.
 
-### Install via OpenClaw
+The difference from every other "AI" accounting tool is structural: ERPClaw was
+built AI-native from the first commit, with the assistant as the primary
+interface and the accounting rules as auditable code. That is not a chat sidebar
+bolted onto a forms app, and it is not something a legacy product can retrofit.
+
+<sub>The rest of this README is the technical reference for installing and
+running the foundation. If you just want the product overview, see
+<a href="https://www.erpclaw.ai">erpclaw.ai</a>.</sub>
+
+## Quick start
+
+ERPClaw is one product. You install it once, then describe your business and it
+sets itself up.
 
 ```
 clawhub install erpclaw
 ```
 
-This installs the core ERP (483 actions) and initializes the database.
-
-### First Steps
-
-Once installed, just talk to your AI assistant naturally:
+This installs the foundation and initializes the database. From there you just
+talk to your AI assistant:
 
 ```
 "I'm opening a retail store called Sunrise Goods in Portland, Oregon. Set me up."
+→ creates your company, a US GAAP chart of accounts, fiscal year, and tax rates
 ```
 
-The bot will:
-1. Create your company with US GAAP chart of accounts (94 accounts)
-2. Set up fiscal year, tax rates, and cost center
-3. Suggest relevant modules for your industry
-
-### Adding Modules
-
-ERPClaw has 45 additional modules for specific industries and features:
+Industry coverage comes the same way, with no second install command:
 
 ```
-"I need manufacturing capabilities"
-→ Installs erpclaw-ops (Manufacturing, Projects, Assets, Quality, Support)
-
-"I need CRM"
-→ Installs erpclaw-growth (CRM, Analytics, AI Engine)
-
-"Set me up for healthcare"
-→ Installs HealthClaw (140+ actions for clinical practice management)
+"I'm a school"           → ERPClaw pulls the education vertical and creates its tables
+"I need manufacturing"   → pulls Manufacturing, Projects, Assets, Quality, Support
+"Set me up for a clinic" → pulls clinical practice management
 ```
 
-Available modules:
-- **Addon modules** (19): CRM, Manufacturing, Projects, Assets, Quality, Fleet, POS, Logistics, Stripe, Shopify, OS Engine, and more
-- **Healthcare** (5): Core clinical + Dental, Veterinary, Mental Health, Home Health
-- **Education** (7): Core SIS + Financial Aid, K-12, Scheduling, LMS, State Reporting, Higher Ed
-- **Property** (2): Residential + Commercial property management
-- **Industry verticals** (8): Retail, Construction, Agriculture, Automotive, Food, Hospitality, Legal, Nonprofit
-- **Regional** (4): Canada, UK, India, EU (tax rules, COA templates, compliance)
+Vertical code lives on GitHub and is fetched on demand by sparse checkout, so
+only the module you asked for is downloaded. You never run another install
+command and never have to know what a module is.
 
-## Architecture
+## What it covers
 
-```
-OpenClaw Bot → erpclaw/scripts/db_query.py --action {action} --args
-                         │
-                         ├── erpclaw-setup     → Company, COA, fiscal year, database init
-                         ├── erpclaw-gl        → Chart of accounts, journal entries
-                         ├── erpclaw-selling   → Customers, sales orders, invoices
-                         ├── erpclaw-buying    → Suppliers, purchase orders
-                         ├── erpclaw-inventory → Items, warehouses, stock
-                         ├── erpclaw-billing   → Recurring invoices, subscriptions
-                         ├── erpclaw-tax       → Tax templates, calculations
-                         ├── erpclaw-payments  → Payment entries, reconciliation
-                         ├── erpclaw-journals  → Manual journal entries
-                         ├── erpclaw-reports   → Financial statements
-                         ├── erpclaw-hr        → Employees, leave, attendance
-                         ├── erpclaw-payroll   → Salary, tax withholding, W-2
-                         ├── erpclaw-accounting-adv → ASC 606/842, intercompany
-                         │
-                         │   (infrastructure, not user-facing domains:)
-                         ├── erpclaw-meta      → Module metadata, registry helpers
-                         └── erpclaw-os        → Read-only validate / inspect layer
-                         │
-                         ▼
-              SQLite (local database)
-              WAL mode, FK enforcement, parameterized queries
-```
+One install, one shared database, every major business function:
 
-The 14 user-facing domains map 1:1 with the routing rows above (`setup` through `accounting-adv`). `erpclaw-meta` and `erpclaw-os` live alongside in `scripts/` but are infrastructure (registry helpers + module-validation reads). The generate / deploy / DGM half of the OS lives in the optional `erpclaw-os-engine` addon, not the foundation.
+- **Accounting**: double-entry general ledger, US GAAP chart of accounts,
+  immutable journal entries, multi-company, multi-currency
+- **Sales & buying**: customers, suppliers, orders, delivery notes, invoices,
+  credit notes, goods received notes
+- **Inventory**: items, warehouses, stock moves, serial and batch tracking,
+  reorder levels, valuation
+- **Payments & billing**: payment entries, bank reconciliation, usage-based
+  billing, recurring invoices, subscriptions
+- **Tax & payroll**: tax templates and returns, salary structures, FICA,
+  federal and state withholding, W-2s, garnishments
+- **Advanced accounting**: ASC 606 revenue recognition, ASC 842 leases,
+  intercompany transactions, consolidation
+- **Reporting**: trial balance, P&L, balance sheet, cash flow, AR/AP aging
+- **Industries**: retail, healthcare, education, property, construction,
+  agriculture, automotive, food, hospitality, legal, nonprofit, plus regional
+  tax packs for Canada, the UK, India, and the EU
+- **Deep integrations**: Stripe and Shopify sync straight into your general
+  ledger, free and self-hosted, with ASC 606 revenue recognition built in
 
-### Data Integrity
+## Runs your way
 
-- All financial amounts stored as TEXT (Python `Decimal`) — never float
+- **SQLite by default, PostgreSQL fully supported.** The same code runs on
+  either through a query-builder abstraction. SQLite needs zero setup; point it
+  at PostgreSQL when you outgrow a single file.
+- **Self-hosted.** The database lives at `~/.openclaw/erpclaw/data.sqlite` on
+  your own machine. Your books never leave your infrastructure.
+- **$0 forever.** GPL v3, open source, no freemium tier, no per-seat pricing.
+
+### Built to be trusted with money
+
+- All financial amounts stored as TEXT (Python `Decimal`), never float
 - IDs are UUID4 (TEXT)
-- GL entries are immutable — cancellation creates reverse entries
-- All cross-table writes in single SQLite transactions
-- Comprehensive GL invariant validation on every posting
+- GL entries are immutable; a cancellation posts reversing entries, never an edit
+- Every cross-table write happens in a single transaction
+- Every posting passes the full GL invariant validation before it commits
 
-## Database
+## Reference
 
-Single SQLite database at `~/.openclaw/erpclaw/data.sqlite`:
+The foundation routes every operation through one entry point,
+`scripts/db_query.py --action {action} --args`, across 14 user-facing accounting
+domains (`setup`, `gl`, `selling`, `buying`, `inventory`, `billing`, `tax`,
+`payments`, `journals`, `reports`, `hr`, `payroll`, `accounting-adv`) plus
+`meta` and `os` infrastructure. The module registry
+(`scripts/module_registry.json`) tracks every additional module across the
+`github.com/avansaber/*` repos and installs them on demand by sparse checkout.
 
-- **688 tables** across all modules (188 core)
-- WAL mode for concurrent reads
-- Foreign key enforcement ON
-- `PRAGMA busy_timeout = 5000`
-- Shared library at `~/.openclaw/erpclaw/lib/erpclaw_lib/`
+Module authoring and DGM evolution (code generation, sandboxed test runs, the
+deploy pipeline) live in the optional
+[`erpclaw-os-engine`](https://github.com/avansaber/erpclaw-addons/tree/main/erpclaw-os-engine)
+addon, which is not installed by default. The foundation runs no
+module-generation or auto-deploy code paths.
 
-## Module Registry
+<sub>Current build:
+<!-- SYNC:facts:start -->
+ERPClaw v4.8.0 | 46 modules (46 active + 0 preview) | 3,169 actions
+<!-- SYNC:facts:end -->
+</sub>
 
-The module registry (`scripts/module_registry.json`) tracks all 46 modules across 16 GitHub repositories. Use `install-module` to add any module:
+## Web dashboard
 
-```
-"Install the manufacturing module"
-"Add retail capabilities"
-"I need dental practice management"
-```
+The primary interface is the AI assistant, but two optional dashboards exist:
 
-Modules install from `github.com/avansaber/*` repos via sparse checkout — only the requested module is downloaded, not the entire repo.
-
-## Deep Integrations
-
-ERPClaw ships with two free, open-source, self-hosted deep integrations that sync directly into your general ledger. Your data stays on your own ERPClaw instance.
-
-### Stripe (`erpclaw-integrations-stripe`)
-
-Deep Stripe integration. 67 actions across 10 domains: account management, charges/refunds/disputes/payouts/subscriptions sync, customer mapping, GL posting with rule engine, payout reconciliation, ASC 606 revenue recognition, Connect platform fees, webhook processing, and financial reports (revenue, MRR, fees, disputes).
-
-```
-install-module erpclaw-integrations-stripe
-```
-
-- **Stripe Marketplace listing:** [marketplace.stripe.com/apps/erpclaw-accounting](https://marketplace.stripe.com/apps/erpclaw-accounting)
-- **Docs:** [erpclaw.ai/docs/stripe](https://www.erpclaw.ai/docs/stripe)
-
-### Shopify (`erpclaw-integrations-shopify`)
-
-Deep Shopify integration. 66 actions across 15 domains: order/refund/payout/dispute sync, product + customer mapping, 14 GL account mappings, configurable GL routing rules, three-layer payout reconciliation, COGS tracking, gift card deferred revenue, GDPR webhooks, App Store OAuth pairing with status mirror, and revenue/fee/refund reports.
-
-```
-install-module erpclaw-integrations-shopify
-```
-
-- **Shopify App Store:** ERPClaw Accounting & ERP (listing pending approval)
-- **Docs:** [erpclaw.ai/docs/shopify](https://www.erpclaw.ai/docs/shopify)
-
-OAuth tokens are forwarded once to your ERPClaw during pairing and deleted from the Worker within 60 seconds. A custom-app flow is also available for air-gapped installs.
-
-## Web Dashboard
-
-Two web dashboard options are available:
-
-### ERPClaw Web (Recommended)
-
-[ERPClaw Web](https://github.com/avansaber/erpclaw-web) is a purpose-built dashboard for ERPClaw with live data tables, action execution, AI chat, and real-time WebSocket updates.
-
-```bash
-git clone https://github.com/avansaber/erpclaw-web.git
-cd erpclaw-web && npm install && pip install -r api/requirements.txt
-```
-
-See [erpclaw-web README](https://github.com/avansaber/erpclaw-web#readme) for setup and deployment.
-
-### WebClaw (Universal)
-
-[WebClaw](https://github.com/avansaber/webclaw) is a universal OpenClaw dashboard that works with any skill:
-
-```
-clawhub install webclaw
-```
-
-WebClaw reads ERPClaw's SKILL.md and automatically generates forms, data tables, charts, and dashboards — zero per-skill configuration needed.
-
-## Optional: ERPClaw OS Engine (developer tooling)
-
-A separate addon, [`erpclaw-os-engine`](https://github.com/avansaber/erpclaw-addons/tree/main/erpclaw-os-engine), provides developer tooling for authoring new ERPClaw vertical modules. Generation runs sandbox-first; the user reviews diffs and approves before any deploy. Not installed by default. Foundation does not run module-generation code paths.
+- **[ERPClaw Web](https://github.com/avansaber/erpclaw-web)**: purpose-built
+  dashboard with live data tables, action execution, AI chat, and real-time
+  updates.
+- **[WebClaw](https://github.com/avansaber/webclaw)**: universal OpenClaw
+  dashboard that reads ERPClaw's SKILL.md and generates forms, tables, and
+  charts with zero per-skill setup (`clawhub install webclaw`).
 
 ## Links
 
-- **Website**: [erpclaw.ai](https://www.erpclaw.ai)
-- **ERPClaw Web**: [erpclaw-web](https://github.com/avansaber/erpclaw-web) — purpose-built web dashboard
-- **WebClaw**: [webclaw](https://github.com/avansaber/webclaw) — universal OpenClaw dashboard
-- **OpenClaw**: [openclaw.org](https://openclaw.org)
-- **All modules**: [github.com/avansaber](https://github.com/avansaber)
+- **Website:** [erpclaw.ai](https://www.erpclaw.ai)
+- **Stripe Marketplace:** [marketplace.stripe.com/apps/erpclaw-accounting](https://marketplace.stripe.com/apps/erpclaw-accounting)
+- **Docs:** [erpclaw.ai/docs](https://www.erpclaw.ai/docs)
+- **All modules:** [github.com/avansaber](https://github.com/avansaber)
+- **OpenClaw:** [openclaw.org](https://openclaw.org)
 
 ## License
 
-GNU General Public License v3 — Copyright (c) 2026 AvanSaber
+GNU General Public License v3. Copyright © 2026 AvanSaber Inc.
 
 See [LICENSE.txt](LICENSE.txt) for details.
