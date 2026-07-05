@@ -801,7 +801,7 @@
       "display_name": "ERPClaw Growth",
       "files_sha256": {
         "LICENSE.txt": "7bb0c0eb1db8b40884cd154315e459fadacd2bff10190df3516639282608ed0c",
-        "SKILL.md": "262c43f6ce4d8990c6a84c69f48e45d3f12e3f5228c83408a5bcf88223509f76",
+        "SKILL.md": "54e4aec3712ac965b1ea9aa2bbac23bba17334479ce164f6f9d6516f21d0eaa3",
         "UI.yaml": "207fa7053ebd076ef93a49e0963187269e83554c15c7f7cd58a70d24487cd71c",
         "init_db.py": "c66a35de6a840ace5917da7856c919f5f50b4ef0d1b7f3c1b3e79236e8a30e01",
         "migrations/001_crm_contact_company_tables.py": "0ac810ae35307db31facae0f80797222bb8f270b0c530814ce95e5645ddb15fe",
@@ -852,7 +852,7 @@
         "email-campaigns",
         "web-tracking"
       ],
-      "version": "2.9.0"
+      "version": "2.9.1"
     },
     "erpclaw-integrations": {
       "action_count": 91,
@@ -1943,8 +1943,8 @@
       "version": "1.1.0"
     }
   },
-  "registry_version": 68,
-  "signed_at": "2026-07-05T20:09:33Z",
+  "registry_version": 69,
+  "signed_at": "2026-07-05T23:17:10Z",
   "total_actions": 3226,
   "version": "4.12.1"
 }
