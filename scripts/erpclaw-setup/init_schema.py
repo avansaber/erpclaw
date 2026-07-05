@@ -2957,7 +2957,9 @@ CREATE INDEX IF NOT EXISTS idx_emp_bank_acct_employee ON employee_bank_account(e
 # ---------------------------------------------------------------------------
 # SKILL: erpclaw-crm
 # Tables: lead, lead_source, opportunity, campaign, campaign_lead,
-#         crm_activity, communication
+#         crm_activity
+# (communication table dropped 2026-07-02, M31 H2 / migration 028: zero writers
+#  ever; the story is carried by crm_activity + email_log.)
 # ---------------------------------------------------------------------------
 
 CRM_TABLES = """
@@ -3088,23 +3090,6 @@ CREATE TABLE IF NOT EXISTS crm_activity (
 CREATE INDEX IF NOT EXISTS idx_crm_activity_lead ON crm_activity(lead_id);
 CREATE INDEX IF NOT EXISTS idx_crm_activity_opportunity ON crm_activity(opportunity_id);
 CREATE INDEX IF NOT EXISTS idx_crm_activity_customer ON crm_activity(customer_id);
-
-CREATE TABLE IF NOT EXISTS communication (
-    id              TEXT PRIMARY KEY,
-    communication_type TEXT NOT NULL CHECK(communication_type IN ('email','sms','call','chat')),
-    subject         TEXT,
-    content         TEXT,
-    sender          TEXT,
-    recipients      TEXT,
-    reference_type  TEXT,
-    reference_id    TEXT,
-    sent_or_received TEXT NOT NULL DEFAULT 'sent'
-                    CHECK(sent_or_received IN ('sent','received')),
-    communication_date TEXT NOT NULL,
-    created_at      TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_communication_ref ON communication(reference_type, reference_id);
 """
 
 
@@ -4041,41 +4026,17 @@ CREATE INDEX IF NOT EXISTS idx_erpclaw_module_action_module ON erpclaw_module_ac
 
 # ===========================================================================
 # SKILL: erpclaw-os (Module Validation / ERPClaw OS)
-# Tables: erpclaw_module_validation, erpclaw_table_ownership
+# Tables: erpclaw_semantic_rule, erpclaw_semantic_finding, erpclaw_deploy_audit,
+#         erpclaw_improvement_log, erpclaw_dgm_run, erpclaw_dgm_variant
+# (erpclaw_module_validation + erpclaw_table_ownership dropped 2026-07-02, M31 H2
+#  / migration 028: pre-v4.0.0 OS persistence; the validate layer is deliberately
+#  stateless and builds its registry in-memory — zero writers ever.)
 # ===========================================================================
 
 OS_TABLES = """
 -- =========================================================================
 -- SKILL: erpclaw-os (Module Validation)
 -- =========================================================================
-
-CREATE TABLE IF NOT EXISTS erpclaw_module_validation (
-    id              TEXT PRIMARY KEY,
-    module_name     TEXT NOT NULL,
-    module_path     TEXT NOT NULL,
-    validation_type TEXT NOT NULL CHECK(validation_type IN ('static', 'runtime', 'full')),
-    result          TEXT NOT NULL CHECK(result IN ('pass', 'fail')),
-    violations      TEXT,  -- JSON array of violation objects
-    article_results TEXT,  -- JSON object: {article_number: pass/fail/skip}
-    duration_ms     INTEGER,
-    validated_at    TEXT DEFAULT CURRENT_TIMESTAMP,
-    validated_by    TEXT  -- 'human' or 'system'
-);
-
-CREATE INDEX IF NOT EXISTS idx_erpclaw_module_validation_module
-    ON erpclaw_module_validation(module_name);
-CREATE INDEX IF NOT EXISTS idx_erpclaw_module_validation_result
-    ON erpclaw_module_validation(result);
-
-CREATE TABLE IF NOT EXISTS erpclaw_table_ownership (
-    table_name      TEXT PRIMARY KEY,
-    module_name     TEXT NOT NULL,
-    init_db_path    TEXT NOT NULL,
-    discovered_at   TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_erpclaw_table_ownership_module
-    ON erpclaw_table_ownership(module_name);
 
 -- Phase 3 (3a): Semantic Correctness Engine
 CREATE TABLE IF NOT EXISTS erpclaw_semantic_rule (

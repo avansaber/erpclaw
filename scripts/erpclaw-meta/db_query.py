@@ -144,7 +144,9 @@ SKILL_TABLES = {
     "erpclaw-region-eu": [],
     "erpclaw-region-in": [],
     "erpclaw-region-uk": [],
-    "erpclaw-integrations": ["plaid_config", "stripe_config", "s3_config"],
+    # plaid_config/stripe_config/s3_config dropped 2026-07-02 (M31 H2); represent
+    # the module by its live core tables instead.
+    "erpclaw-integrations": ["integration_connector", "integration_credential", "integration_sync"],
     "webclaw": [],
 }
 

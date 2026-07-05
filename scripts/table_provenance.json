@@ -1,0 +1,3494 @@
+{
+ "_note": "G1 (M31-H3, ADR-0027 D3 / FINDINGS §2): table provenance manifest — every table declares WHY it exists (doc_ref or parent_concept or accepted_risk). Backfilled 2026-07-04 from the QA-verified register (heuristics + judgment tail per the amended plan; SIM P10). FROZEN as the baseline: the L0 gate (test_table_provenance.py) blocks only NEW provenance-less tables. Classes: direct (token-level doc hit) > child_of_traced (inherits parent's ref) > module_spec (owning module's SKILL.md — concept furniture; visibly weaker, G5 separately polices whole-module emptiness) > accepted_risk (FINDINGS A1) > runtime_ledger/runtime_created.",
+ "tables": {
+  "account": {
+   "doc_ref": "ARCHITECTURE.md",
+   "class": "direct"
+  },
+  "account_type_registry": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_1_SPRINT_PLAN_2026-06-10.md",
+   "class": "direct"
+  },
+  "action_call_log": {
+   "doc_ref": "internal/completed/2026/sprints/erpforge_os_erpclaw_os_implementation.md",
+   "class": "direct"
+  },
+  "advacct_amortization_entry": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "advacct_consolidation_group": {
+   "doc_ref": "internal/legacy-erp/MIGRATION_SCHEMA_AUDIT_2026-05-31.md",
+   "class": "direct"
+  },
+  "advacct_elimination_entry": {
+   "doc_ref": "internal/legacy-erp/WAVE_5_CONSOLIDATION_2026-05-28.md",
+   "class": "direct"
+  },
+  "advacct_group_entity": {
+   "doc_ref": "internal/legacy-erp/WAVE_5_CONSOLIDATION_2026-05-28.md",
+   "class": "direct"
+  },
+  "advacct_ic_transaction": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "advacct_lease": {
+   "doc_ref": "internal/legacy-erp/MIGRATION_SCHEMA_AUDIT_2026-05-31.md",
+   "class": "direct"
+  },
+  "advacct_lease_payment": {
+   "parent_concept": "advacct_lease",
+   "doc_ref": "internal/legacy-erp/MIGRATION_SCHEMA_AUDIT_2026-05-31.md",
+   "class": "child_of_traced"
+  },
+  "advacct_performance_obligation": {
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_erpclaw_stripe_module_plan.md",
+   "class": "direct"
+  },
+  "advacct_revenue_contract": {
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_erpclaw_stripe_module_plan-implementation.md",
+   "class": "direct"
+  },
+  "advacct_revenue_schedule": {
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_erpclaw_stripe_module_plan.md",
+   "class": "direct"
+  },
+  "advacct_transfer_price_rule": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "advacct_variable_consideration": {
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_erpclaw_stripe_module_plan.md",
+   "class": "direct"
+  },
+  "agricultureclaw_animal": {
+   "doc_ref": "source/agricultureclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "agricultureclaw_chemical_application": {
+   "doc_ref": "source/agricultureclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "agricultureclaw_coop_member": {
+   "doc_ref": "source/agricultureclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "agricultureclaw_crop_type": {
+   "doc_ref": "source/agricultureclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "agricultureclaw_delivery_ticket": {
+   "doc_ref": "source/agricultureclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "agricultureclaw_feeding_record": {
+   "doc_ref": "source/agricultureclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "agricultureclaw_field_operation": {
+   "doc_ref": "source/agricultureclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "agricultureclaw_growth_stage": {
+   "doc_ref": "source/agricultureclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "agricultureclaw_harvest_record": {
+   "doc_ref": "source/agricultureclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "agricultureclaw_health_record": {
+   "doc_ref": "source/agricultureclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "agricultureclaw_irrigation_log": {
+   "doc_ref": "source/agricultureclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "agricultureclaw_land_use_record": {
+   "doc_ref": "source/agricultureclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "agricultureclaw_parcel": {
+   "doc_ref": "source/agricultureclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "agricultureclaw_planting_plan": {
+   "doc_ref": "source/agricultureclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "agricultureclaw_pool_account": {
+   "doc_ref": "source/agricultureclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "agricultureclaw_quality_grade": {
+   "doc_ref": "source/agricultureclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "agricultureclaw_scouting_report": {
+   "doc_ref": "source/agricultureclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "agricultureclaw_seed_lot": {
+   "doc_ref": "source/agricultureclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "agricultureclaw_soil_test": {
+   "doc_ref": "source/agricultureclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "agricultureclaw_storage_bin": {
+   "doc_ref": "source/agricultureclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "agricultureclaw_weight_record": {
+   "doc_ref": "source/agricultureclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "alert_log": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "alert_rule": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "anomaly": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_1_SPRINT_PLAN_2026-06-10.md",
+   "class": "direct"
+  },
+  "approval_request": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "approval_rule": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "approval_step": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "asset": {
+   "doc_ref": "internal/completed/2026/sprints/CLAWHUB_REPUBLISH_PLAN_2026-06-11.md",
+   "class": "direct"
+  },
+  "asset_capitalization": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_1_SPRINT_PLAN_2026-06-10.md",
+   "class": "direct"
+  },
+  "asset_category": {
+   "doc_ref": "internal/legacy-erp/WAVE_1_ANALYST_SPEC_2026-06-10.md",
+   "class": "direct"
+  },
+  "asset_disposal": {
+   "doc_ref": "internal/legacy-erp/WAVE_1_ANALYST_SPEC_2026-06-10.md",
+   "class": "direct"
+  },
+  "asset_impairment": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_1_SPRINT_PLAN_2026-06-10.md",
+   "class": "direct"
+  },
+  "asset_maintenance": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_1_SPRINT_PLAN_2026-06-10.md",
+   "class": "direct"
+  },
+  "asset_movement": {
+   "doc_ref": "internal/legacy-erp/WAVE_1_ANALYST_SPEC_2026-06-10.md",
+   "class": "direct"
+  },
+  "asset_status_registry": {
+   "doc_ref": "internal/legacy-erp/MIGRATION_SCHEMA_AUDIT_2026-05-31.md",
+   "class": "direct"
+  },
+  "attendance": {
+   "doc_ref": "internal/completed/2026/sprints/SUITE_B_SLUG_LEAKAGE_SIMULATION_2026-05-04.md",
+   "class": "direct"
+  },
+  "attendance_regularization_rule": {
+   "parent_concept": "attendance",
+   "doc_ref": "internal/completed/2026/sprints/SUITE_B_SLUG_LEAKAGE_SIMULATION_2026-05-04.md",
+   "class": "child_of_traced"
+  },
+  "audit_conversation": {
+   "doc_ref": "internal/completed/2026/sprints/housekeeping_march_9.md",
+   "class": "direct"
+  },
+  "audit_finding": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "audit_log": {
+   "doc_ref": "internal/completed/2026/sprints/SUITE_B_REDESIGN_2026-05-04.md",
+   "class": "direct"
+  },
+  "audit_plan": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "automotiveclaw_buyer_order": {
+   "doc_ref": "source/automotiveclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "automotiveclaw_compliance_check": {
+   "doc_ref": "source/automotiveclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "automotiveclaw_customer_ext": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "automotiveclaw_deal": {
+   "doc_ref": "source/automotiveclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "automotiveclaw_deal_fi_product": {
+   "doc_ref": "source/automotiveclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "automotiveclaw_fi_product": {
+   "doc_ref": "source/automotiveclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "automotiveclaw_part": {
+   "doc_ref": "source/automotiveclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "automotiveclaw_parts_order": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "automotiveclaw_repair_order": {
+   "doc_ref": "source/automotiveclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "automotiveclaw_service_line": {
+   "doc_ref": "source/automotiveclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "automotiveclaw_trade_in": {
+   "doc_ref": "source/automotiveclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "automotiveclaw_vehicle": {
+   "doc_ref": "source/automotiveclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "automotiveclaw_vehicle_photo": {
+   "doc_ref": "source/automotiveclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "automotiveclaw_warranty_claim": {
+   "doc_ref": "source/automotiveclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "bank_account_extended": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "bank_match_rule": {
+   "doc_ref": "internal/legacy-erp/WAVE_1_ANALYST_SPEC_2026-06-10.md",
+   "class": "direct"
+  },
+  "bank_statement": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_1_SPRINT_PLAN_2026-06-10.md",
+   "class": "direct"
+  },
+  "bank_statement_line": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_1_SPRINT_PLAN_2026-06-10.md",
+   "class": "direct"
+  },
+  "batch": {
+   "doc_ref": "internal/completed/2026/sprints/C6_PAPERCLIP_NLQA_PLAN_2026-06-08.md",
+   "class": "direct"
+  },
+  "billing_adjustment": {
+   "doc_ref": "internal/completed/2026/sprints/fixes_for_march_10.md",
+   "class": "direct"
+  },
+  "billing_period": {
+   "doc_ref": "internal/completed/2026/sprints/THREE_VERTICALS_PLAN_2026-04-27.md",
+   "class": "direct"
+  },
+  "blanket_order": {
+   "doc_ref": "internal/completed/2026/sprints/erpforge_os_improving-erpclaw-os-march-19.md",
+   "class": "direct"
+  },
+  "blanket_order_item": {
+   "parent_concept": "blanket_order",
+   "doc_ref": "internal/completed/2026/sprints/erpforge_os_improving-erpclaw-os-march-19.md",
+   "class": "child_of_traced"
+  },
+  "bom": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_2_SPRINT_PLAN_2026-06-19.md",
+   "class": "direct"
+  },
+  "bom_item": {
+   "parent_concept": "bom",
+   "doc_ref": "internal/completed/2026/sprints/WAVE_2_SPRINT_PLAN_2026-06-19.md",
+   "class": "child_of_traced"
+  },
+  "bom_item_substitute": {
+   "doc_ref": "internal/legacy-erp/OVERVIEW_2026-05-28.md",
+   "class": "direct"
+  },
+  "bom_operation": {
+   "parent_concept": "bom",
+   "doc_ref": "internal/completed/2026/sprints/WAVE_2_SPRINT_PLAN_2026-06-19.md",
+   "class": "child_of_traced"
+  },
+  "bom_output_item": {
+   "parent_concept": "bom",
+   "doc_ref": "internal/completed/2026/sprints/WAVE_2_SPRINT_PLAN_2026-06-19.md",
+   "class": "child_of_traced"
+  },
+  "budget": {
+   "doc_ref": "internal/completed/2026/sprints/C6_PAPERCLIP_NLQA_PLAN_2026-06-08.md",
+   "class": "direct"
+  },
+  "business_rule": {
+   "doc_ref": "internal/completed/2026/sprints/housekeeping_march_9.md",
+   "class": "direct"
+  },
+  "campaign": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "campaign_lead": {
+   "doc_ref": "internal/legacy-erp/WAVE_0_PLATFORM_ENABLERS_2026-05-28.md",
+   "class": "direct"
+  },
+  "cash_flow_forecast": {
+   "doc_ref": "internal/completed/2026/sprints/housekeeping_march_9.md",
+   "class": "direct"
+  },
+  "cash_forecast": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "cash_position": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "categorization_rule": {
+   "doc_ref": "internal/completed/2026/sprints/housekeeping_march_9.md",
+   "class": "direct"
+  },
+  "commercial_cam_allocation": {
+   "doc_ref": "source/propertyclaw/propertyclaw-commercial/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "commercial_cam_expense": {
+   "doc_ref": "source/propertyclaw/propertyclaw-commercial/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "commercial_cam_pool": {
+   "doc_ref": "source/propertyclaw/propertyclaw-commercial/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "commercial_expense_passthrough": {
+   "doc_ref": "source/propertyclaw/propertyclaw-commercial/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "commercial_nnn_lease": {
+   "doc_ref": "internal/legacy-erp/MIGRATION_SCHEMA_AUDIT_2026-05-31.md",
+   "class": "direct"
+  },
+  "commercial_ti_allowance": {
+   "doc_ref": "source/propertyclaw/propertyclaw-commercial/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "commercial_ti_draw": {
+   "doc_ref": "source/propertyclaw/propertyclaw-commercial/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "company": {
+   "doc_ref": "ARCHITECTURE.md",
+   "class": "direct"
+  },
+  "compliance_calendar": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "connv2_booking_connector": {
+   "doc_ref": "internal/legacy-erp/MIGRATION_SCHEMA_AUDIT_2026-05-31.md",
+   "class": "direct"
+  },
+  "connv2_booking_sync_log": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-integrations/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "connv2_delivery_connector": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-integrations/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "connv2_delivery_order": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-integrations/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "connv2_financial_connector": {
+   "doc_ref": "internal/legacy-erp/WAVE_1_ANALYST_SPEC_2026-06-10.md",
+   "class": "direct"
+  },
+  "connv2_productivity_connector": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-integrations/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "connv2_realestate_connector": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-integrations/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "connv2_realestate_lead": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-integrations/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_bid": {
+   "doc_ref": "source/constructclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_cco": {
+   "doc_ref": "source/constructclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_certified_payroll_entry": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "constructclaw_commitment": {
+   "doc_ref": "source/constructclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_cost_code": {
+   "doc_ref": "source/constructclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_cost_entry": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "constructclaw_daily_labor": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "constructclaw_daily_material": {
+   "doc_ref": "source/constructclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_daily_report": {
+   "doc_ref": "source/constructclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_earned_value": {
+   "doc_ref": "source/constructclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_equipment_assignment": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "constructclaw_estimate": {
+   "doc_ref": "source/constructclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_estimate_line": {
+   "doc_ref": "source/constructclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_incident": {
+   "doc_ref": "source/constructclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_insurance_bond": {
+   "doc_ref": "source/constructclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_job": {
+   "doc_ref": "internal/completed/2026/sprints/POST_CLAWHUB_REPUBLISH_SMOKE_PLAN_2026-05-10.md",
+   "class": "direct"
+  },
+  "constructclaw_lien_waiver": {
+   "doc_ref": "source/constructclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_milestone": {
+   "doc_ref": "source/constructclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_pay_application": {
+   "doc_ref": "source/constructclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_pco": {
+   "doc_ref": "source/constructclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_permit": {
+   "doc_ref": "source/constructclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_prevailing_wage_rate": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "constructclaw_progress_bill": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "constructclaw_progress_bill_line": {
+   "parent_concept": "constructclaw_progress_bill",
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "child_of_traced"
+  },
+  "constructclaw_punch_list_item": {
+   "doc_ref": "source/constructclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_retention": {
+   "doc_ref": "source/constructclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_rfi": {
+   "doc_ref": "source/constructclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_safety_cert": {
+   "doc_ref": "source/constructclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_schedule_of_values": {
+   "doc_ref": "source/constructclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_sov_line": {
+   "doc_ref": "source/constructclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_subcontract": {
+   "doc_ref": "source/constructclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_subcontract_line": {
+   "doc_ref": "source/constructclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_submittal": {
+   "doc_ref": "source/constructclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_time_entry": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "constructclaw_toolbox_talk": {
+   "doc_ref": "source/constructclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "constructclaw_warranty": {
+   "accepted_risk": "FINDINGS_2026-07-02.md A1 (domain-standard vertical furniture; concept corpus-silent)",
+   "class": "accepted_risk"
+  },
+  "control_test": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "conversation_context": {
+   "doc_ref": "internal/completed/2026/sprints/housekeeping_march_9.md",
+   "class": "direct"
+  },
+  "correlation": {
+   "doc_ref": "internal/completed/2026/sprints/housekeeping_march_9.md",
+   "class": "direct"
+  },
+  "cost_center": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_1_SPRINT_PLAN_2026-06-10.md",
+   "class": "direct"
+  },
+  "crm_activity": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_1B_SPRINT_PLAN_2026-06-15.md",
+   "class": "direct"
+  },
+  "crm_company": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_1B_SPRINT_PLAN_2026-06-15.md",
+   "class": "direct"
+  },
+  "crm_contact": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_1B_SPRINT_PLAN_2026-06-15.md",
+   "class": "direct"
+  },
+  "crm_contact_role": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_1B_SPRINT_PLAN_2026-06-15.md",
+   "class": "direct"
+  },
+  "crm_pipeline": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_1B_SPRINT_PLAN_2026-06-15.md",
+   "class": "direct"
+  },
+  "crm_pipeline_stage": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_1B_SPRINT_PLAN_2026-06-15.md",
+   "class": "direct"
+  },
+  "crm_saved_view": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_1B_SPRINT_PLAN_2026-06-15.md",
+   "class": "direct"
+  },
+  "crm_task": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_1B_SPRINT_PLAN_2026-06-15.md",
+   "class": "direct"
+  },
+  "crm_task_link": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_1B_SPRINT_PLAN_2026-06-15.md",
+   "class": "direct"
+  },
+  "crmadv_automation_workflow": {
+   "doc_ref": "internal/legacy-erp/OVERVIEW_2026-05-28.md",
+   "class": "direct"
+  },
+  "crmadv_campaign_event": {
+   "doc_ref": "internal/legacy-erp/WAVE_0_PLATFORM_ENABLERS_2026-05-28.md",
+   "class": "direct"
+  },
+  "crmadv_campaign_template": {
+   "doc_ref": "internal/legacy-erp/WAVE_0_PLATFORM_ENABLERS_2026-05-28.md",
+   "class": "direct"
+  },
+  "crmadv_contract": {
+   "doc_ref": "internal/legacy-erp/OVERVIEW_2026-05-28.md",
+   "class": "direct"
+  },
+  "crmadv_contract_obligation": {
+   "doc_ref": "internal/legacy-erp/OVERVIEW_2026-05-28.md",
+   "class": "direct"
+  },
+  "crmadv_drip_enrollment": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-growth/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "crmadv_drip_sequence": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-growth/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "crmadv_drip_sequence_step": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-growth/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "crmadv_email_campaign": {
+   "doc_ref": "internal/legacy-erp/WAVE_0_PLATFORM_ENABLERS_2026-05-28.md",
+   "class": "direct"
+  },
+  "crmadv_lead_score_rule": {
+   "doc_ref": "internal/legacy-erp/OVERVIEW_2026-05-28.md",
+   "class": "direct"
+  },
+  "crmadv_nurture_sequence": {
+   "doc_ref": "internal/legacy-erp/OVERVIEW_2026-05-28.md",
+   "class": "direct"
+  },
+  "crmadv_recipient_list": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-growth/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "crmadv_territory": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-growth/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "crmadv_territory_assignment": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-growth/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "crmadv_territory_quota": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-growth/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "currency": {
+   "doc_ref": "ARCHITECTURE.md",
+   "class": "direct"
+  },
+  "custom_field": {
+   "doc_ref": "internal/completed/2026/sprints/FINDING-003_customer_email_PLAN_2026-06-05.md",
+   "class": "direct"
+  },
+  "custom_field_value": {
+   "doc_ref": "internal/legacy-erp/MIGRATION_SCHEMA_AUDIT_2026-05-31.md",
+   "class": "direct"
+  },
+  "customer": {
+   "doc_ref": "ARCHITECTURE.md",
+   "class": "direct"
+  },
+  "cwip_cost_accumulation": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_1_SPRINT_PLAN_2026-06-10.md",
+   "class": "direct"
+  },
+  "delivery_note": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_2_SPRINT_PLAN_2026-06-19.md",
+   "class": "direct"
+  },
+  "delivery_note_item": {
+   "parent_concept": "delivery_note",
+   "doc_ref": "internal/completed/2026/sprints/WAVE_2_SPRINT_PLAN_2026-06-19.md",
+   "class": "child_of_traced"
+  },
+  "department": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_1_SPRINT_PLAN_2026-06-10.md",
+   "class": "direct"
+  },
+  "depreciation_schedule": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "designation": {
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_phase1_marketplace_listings.md",
+   "class": "direct"
+  },
+  "dimension_registry": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_1_SPRINT_PLAN_2026-06-10.md",
+   "class": "direct"
+  },
+  "document": {
+   "doc_ref": "ARCHITECTURE.md",
+   "class": "direct"
+  },
+  "document_link": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "document_tag": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "document_template": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "document_version": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "downtime_record": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "dunning_level": {
+   "doc_ref": "ARCHITECTURE.md",
+   "class": "direct"
+  },
+  "dunning_run": {
+   "doc_ref": "internal/legacy-erp/OVERVIEW_2026-05-28.md",
+   "class": "direct"
+  },
+  "educlaw_academic_term": {
+   "doc_ref": "source/educlaw/educlaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_academic_year": {
+   "doc_ref": "source/educlaw/educlaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_activity": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "educlaw_activity_enrollment": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "educlaw_announcement": {
+   "doc_ref": "source/educlaw/educlaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_assessment": {
+   "doc_ref": "source/educlaw/educlaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_assessment_category": {
+   "doc_ref": "source/educlaw/educlaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_assessment_plan": {
+   "doc_ref": "source/educlaw/educlaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_assessment_result": {
+   "doc_ref": "source/educlaw/educlaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_bell_period": {
+   "accepted_risk": "FINDINGS_2026-07-02.md A1 (domain-standard vertical furniture; concept corpus-silent)",
+   "class": "accepted_risk"
+  },
+  "educlaw_bus_route": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "educlaw_bus_stop": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "educlaw_circulation": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "educlaw_consent_record": {
+   "doc_ref": "source/educlaw/educlaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_course": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "educlaw_course_enrollment": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "educlaw_course_prerequisite": {
+   "parent_concept": "educlaw_course",
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "child_of_traced"
+  },
+  "educlaw_course_request": {
+   "parent_concept": "educlaw_course",
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "child_of_traced"
+  },
+  "educlaw_daily_meal_count": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "educlaw_data_access_log": {
+   "doc_ref": "source/educlaw/educlaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_day_type": {
+   "accepted_risk": "FINDINGS_2026-07-02.md A1 (domain-standard vertical furniture; concept corpus-silent)",
+   "class": "accepted_risk"
+  },
+  "educlaw_fee_category": {
+   "doc_ref": "source/educlaw/educlaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_fee_structure": {
+   "doc_ref": "source/educlaw/educlaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_fee_structure_item": {
+   "doc_ref": "source/educlaw/educlaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_grade_amendment": {
+   "doc_ref": "source/educlaw/educlaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_grading_scale": {
+   "doc_ref": "source/educlaw/educlaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_grading_scale_entry": {
+   "doc_ref": "source/educlaw/educlaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_guardian": {
+   "doc_ref": "internal/completed/2026/sprints/erpforge_os_simulation_os_and_user.md",
+   "class": "direct"
+  },
+  "educlaw_housing_assignment": {
+   "doc_ref": "source/educlaw/educlaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_housing_unit": {
+   "doc_ref": "source/educlaw/educlaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_instructor": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "educlaw_instructor_constraint": {
+   "parent_concept": "educlaw_instructor",
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "child_of_traced"
+  },
+  "educlaw_k12_504_plan": {
+   "doc_ref": "source/educlaw/educlaw-k12/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_k12_discipline_action": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "educlaw_k12_discipline_incident": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "educlaw_k12_discipline_student": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "educlaw_k12_health_profile": {
+   "doc_ref": "source/educlaw/educlaw-k12/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_k12_health_visit": {
+   "doc_ref": "source/educlaw/educlaw-k12/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_k12_iep": {
+   "doc_ref": "internal/completed/2026/sprints/housekeeping_march_9.md",
+   "class": "direct"
+  },
+  "educlaw_k12_iep_goal": {
+   "doc_ref": "internal/completed/2026/sprints/housekeeping_march_9.md",
+   "class": "direct"
+  },
+  "educlaw_k12_iep_progress": {
+   "parent_concept": "educlaw_k12_iep",
+   "doc_ref": "internal/completed/2026/sprints/housekeeping_march_9.md",
+   "class": "child_of_traced"
+  },
+  "educlaw_k12_iep_service": {
+   "doc_ref": "internal/completed/2026/sprints/housekeeping_march_9.md",
+   "class": "direct"
+  },
+  "educlaw_k12_iep_service_log": {
+   "doc_ref": "internal/completed/2026/sprints/housekeeping_march_9.md",
+   "class": "direct"
+  },
+  "educlaw_k12_iep_team_member": {
+   "parent_concept": "educlaw_k12_iep",
+   "doc_ref": "internal/completed/2026/sprints/housekeeping_march_9.md",
+   "class": "child_of_traced"
+  },
+  "educlaw_k12_immunization": {
+   "doc_ref": "source/educlaw/educlaw-k12/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_k12_immunization_waiver": {
+   "doc_ref": "source/educlaw/educlaw-k12/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_k12_intervention_plan": {
+   "doc_ref": "source/educlaw/educlaw-k12/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_k12_manifestation_review": {
+   "doc_ref": "source/educlaw/educlaw-k12/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_k12_medication_log": {
+   "doc_ref": "source/educlaw/educlaw-k12/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_k12_promotion_decision": {
+   "doc_ref": "source/educlaw/educlaw-k12/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_k12_promotion_review": {
+   "doc_ref": "source/educlaw/educlaw-k12/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_k12_sped_eligibility": {
+   "doc_ref": "source/educlaw/educlaw-k12/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_k12_sped_evaluation": {
+   "doc_ref": "source/educlaw/educlaw-k12/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_k12_sped_referral": {
+   "doc_ref": "source/educlaw/educlaw-k12/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_k12_student_medication": {
+   "doc_ref": "source/educlaw/educlaw-k12/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_library_item": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "educlaw_lms_assignment_mapping": {
+   "doc_ref": "source/educlaw/educlaw-lms/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_lms_connection": {
+   "doc_ref": "source/educlaw/educlaw-lms/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_lms_course_mapping": {
+   "doc_ref": "source/educlaw/educlaw-lms/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_lms_course_material": {
+   "doc_ref": "source/educlaw/educlaw-lms/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_lms_grade_sync": {
+   "doc_ref": "source/educlaw/educlaw-lms/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_lms_sync_log": {
+   "doc_ref": "source/educlaw/educlaw-lms/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_lms_user_mapping": {
+   "doc_ref": "source/educlaw/educlaw-lms/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_master_schedule": {
+   "doc_ref": "source/educlaw/educlaw-scheduling/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_meal_plan": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "educlaw_notification": {
+   "doc_ref": "source/educlaw/educlaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_payment_method": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "educlaw_pd_credit": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "educlaw_program": {
+   "doc_ref": "source/educlaw/educlaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_program_enrollment": {
+   "doc_ref": "source/educlaw/educlaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_program_requirement": {
+   "doc_ref": "source/educlaw/educlaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_room": {
+   "doc_ref": "source/educlaw/educlaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_room_booking": {
+   "doc_ref": "source/educlaw/educlaw-scheduling/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_schedule_conflict": {
+   "doc_ref": "source/educlaw/educlaw-scheduling/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_schedule_pattern": {
+   "doc_ref": "source/educlaw/educlaw-scheduling/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "educlaw_scholarship": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "educlaw_section": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "educlaw_section_meeting": {
+   "parent_concept": "educlaw_section",
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "child_of_traced"
+  },
+  "educlaw_student": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "educlaw_student_applicant": {
+   "parent_concept": "educlaw_student",
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "child_of_traced"
+  },
+  "educlaw_student_attendance": {
+   "parent_concept": "educlaw_student",
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "child_of_traced"
+  },
+  "educlaw_student_guardian": {
+   "doc_ref": "internal/completed/2026/sprints/erpforge_os_simulation_os_and_user.md",
+   "class": "direct"
+  },
+  "educlaw_student_meal_record": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "educlaw_student_transport": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "educlaw_waitlist": {
+   "doc_ref": "source/educlaw/educlaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "elimination_entry": {
+   "doc_ref": "internal/completed/2026/sprints/housekeeping_march_9.md",
+   "class": "direct"
+  },
+  "elimination_rule": {
+   "doc_ref": "internal/completed/2026/sprints/housekeeping_march_9.md",
+   "class": "direct"
+  },
+  "email_account": {
+   "doc_ref": "internal/legacy-erp/WAVE_0_PLATFORM_ENABLERS_2026-05-28.md",
+   "class": "direct"
+  },
+  "email_log": {
+   "doc_ref": "internal/legacy-erp/WAVE_0_PLATFORM_ENABLERS_2026-05-28.md",
+   "class": "direct"
+  },
+  "email_outbox": {
+   "doc_ref": "internal/legacy-erp/WAVE_0_PLATFORM_ENABLERS_2026-05-28.md",
+   "class": "direct"
+  },
+  "email_template": {
+   "doc_ref": "internal/legacy-erp/WAVE_0_PLATFORM_ENABLERS_2026-05-28.md",
+   "class": "direct"
+  },
+  "employee": {
+   "doc_ref": "ARCHITECTURE.md",
+   "class": "direct"
+  },
+  "employee_bank_account": {
+   "doc_ref": "internal/completed/2026/sprints/test_plans_V410_TEST_PLAN_2026-05-04.md",
+   "class": "direct"
+  },
+  "employee_document": {
+   "parent_concept": "employee",
+   "doc_ref": "ARCHITECTURE.md",
+   "class": "child_of_traced"
+  },
+  "employee_grade": {
+   "doc_ref": "internal/legacy-erp/MIGRATION_SCHEMA_AUDIT_2026-05-31.md",
+   "class": "direct"
+  },
+  "employee_lifecycle_event": {
+   "doc_ref": "internal/legacy-erp/WAVE_4_HR_BI_2026-05-28.md",
+   "class": "direct"
+  },
+  "employee_state_config": {
+   "parent_concept": "employee",
+   "doc_ref": "ARCHITECTURE.md",
+   "class": "child_of_traced"
+  },
+  "engineering_change_order": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "equipment": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_1_SPRINT_PLAN_2026-06-10.md",
+   "class": "direct"
+  },
+  "equipment_reading": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "erp_user": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "erpclaw_audit_finding": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-os-engine/SKILL.md",
+   "class": "runtime_created"
+  },
+  "erpclaw_compliance_period": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-os-engine/SKILL.md",
+   "class": "runtime_created"
+  },
+  "erpclaw_deploy_audit": {
+   "doc_ref": "internal/completed/2026/sprints/erpforge_os_erpclaw_os_implementation.md",
+   "class": "direct"
+  },
+  "erpclaw_dgm_run": {
+   "doc_ref": "internal/completed/2026/sprints/erpforge_os_erpclaw_os_implementation.md",
+   "class": "direct"
+  },
+  "erpclaw_dgm_variant": {
+   "doc_ref": "internal/completed/2026/sprints/erpforge_os_erpclaw_os_implementation.md",
+   "class": "direct"
+  },
+  "erpclaw_improvement_log": {
+   "doc_ref": "internal/completed/2026/sprints/erpforge_os_erpclaw_os_implementation.md",
+   "class": "direct"
+  },
+  "erpclaw_module": {
+   "doc_ref": "internal/completed/2026/sprints/erpforge_os_erpclaw_os_implementation.md",
+   "class": "direct"
+  },
+  "erpclaw_module_action": {
+   "doc_ref": "internal/completed/2026/sprints/erpforge_os_erpclaw_os_implementation.md",
+   "class": "direct"
+  },
+  "erpclaw_schema_migration": {
+   "doc_ref": "internal/decisions/ADR-0028-foundation-upgrade-files-plus-migrations.md",
+   "class": "runtime_ledger"
+  },
+  "erpclaw_semantic_finding": {
+   "doc_ref": "internal/completed/2026/sprints/erpforge_os_erpclaw_os_implementation.md",
+   "class": "direct"
+  },
+  "erpclaw_semantic_rule": {
+   "doc_ref": "internal/completed/2026/sprints/erpforge_os_erpclaw_os_implementation.md",
+   "class": "direct"
+  },
+  "erpclaw_tier_classification": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-os-engine/SKILL.md",
+   "class": "runtime_created"
+  },
+  "esign_signature_event": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-esign/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "esign_signature_request": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-esign/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "exchange_rate": {
+   "doc_ref": "internal/decisions/ADR-0010-multicurrency-consolidation-cta-carveout.md",
+   "class": "direct"
+  },
+  "expense_claim": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "expense_claim_item": {
+   "parent_concept": "expense_claim",
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "child_of_traced"
+  },
+  "fica_config": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "finaid_aid_year": {
+   "doc_ref": "source/educlaw/educlaw-finaid/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "finaid_award": {
+   "doc_ref": "source/educlaw/educlaw-finaid/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "finaid_award_package": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "finaid_cost_of_attendance": {
+   "doc_ref": "source/educlaw/educlaw-finaid/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "finaid_disbursement": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "finaid_fund_allocation": {
+   "doc_ref": "source/educlaw/educlaw-finaid/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "finaid_isir": {
+   "doc_ref": "source/educlaw/educlaw-finaid/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "finaid_isir_cflag": {
+   "doc_ref": "source/educlaw/educlaw-finaid/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "finaid_loan": {
+   "doc_ref": "source/educlaw/educlaw-finaid/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "finaid_pell_schedule": {
+   "doc_ref": "source/educlaw/educlaw-finaid/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "finaid_professional_judgment": {
+   "doc_ref": "source/educlaw/educlaw-finaid/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "finaid_r2t4_calculation": {
+   "doc_ref": "source/educlaw/educlaw-finaid/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "finaid_sap_appeal": {
+   "doc_ref": "source/educlaw/educlaw-finaid/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "finaid_sap_evaluation": {
+   "doc_ref": "source/educlaw/educlaw-finaid/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "finaid_scholarship_application": {
+   "doc_ref": "source/educlaw/educlaw-finaid/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "finaid_scholarship_program": {
+   "doc_ref": "source/educlaw/educlaw-finaid/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "finaid_scholarship_renewal": {
+   "doc_ref": "source/educlaw/educlaw-finaid/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "finaid_verification_document": {
+   "doc_ref": "source/educlaw/educlaw-finaid/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "finaid_verification_request": {
+   "doc_ref": "source/educlaw/educlaw-finaid/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "finaid_work_study_assignment": {
+   "doc_ref": "source/educlaw/educlaw-finaid/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "finaid_work_study_job": {
+   "doc_ref": "source/educlaw/educlaw-finaid/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "finaid_work_study_timesheet": {
+   "doc_ref": "source/educlaw/educlaw-finaid/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "fiscal_year": {
+   "doc_ref": "internal/completed/2026/sprints/FINDING_013_CLOSE_COMPANY_GUARD_PLAN_2026-06-08.md",
+   "class": "direct"
+  },
+  "fleet_fuel_log": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-fleet/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "fleet_vehicle": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-fleet/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "fleet_vehicle_assignment": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-fleet/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "fleet_vehicle_maintenance": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-fleet/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "foodclaw_catering_event": {
+   "doc_ref": "internal/completed/2026/sprints/THREE_VERTICALS_SIMULATION_2026-04-27.md",
+   "class": "direct"
+  },
+  "foodclaw_catering_item": {
+   "doc_ref": "source/foodclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "foodclaw_dietary_requirement": {
+   "doc_ref": "source/foodclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "foodclaw_employee": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "foodclaw_franchise_unit": {
+   "doc_ref": "source/foodclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "foodclaw_haccp_log": {
+   "doc_ref": "source/foodclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "foodclaw_ingredient": {
+   "doc_ref": "source/foodclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "foodclaw_inspection": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "foodclaw_menu": {
+   "doc_ref": "source/foodclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "foodclaw_menu_item": {
+   "doc_ref": "source/foodclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "foodclaw_modifier": {
+   "doc_ref": "source/foodclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "foodclaw_modifier_group": {
+   "doc_ref": "source/foodclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "foodclaw_purchase_order": {
+   "doc_ref": "internal/completed/2026/sprints/THREE_VERTICALS_SIMULATION_2026-04-27.md",
+   "class": "direct"
+  },
+  "foodclaw_recipe": {
+   "doc_ref": "source/foodclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "foodclaw_recipe_ingredient": {
+   "doc_ref": "source/foodclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "foodclaw_royalty_entry": {
+   "doc_ref": "source/foodclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "foodclaw_shift": {
+   "doc_ref": "source/foodclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "foodclaw_stock_count": {
+   "doc_ref": "source/foodclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "foodclaw_temp_reading": {
+   "doc_ref": "source/foodclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "foodclaw_tip_distribution": {
+   "doc_ref": "source/foodclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "foodclaw_waste_log": {
+   "doc_ref": "source/foodclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "forecast": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_brainstorm.md",
+   "class": "direct"
+  },
+  "forecast_line": {
+   "parent_concept": "forecast",
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_brainstorm.md",
+   "class": "child_of_traced"
+  },
+  "futa_suta_config": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "gl_entry": {
+   "doc_ref": "ARCHITECTURE.md",
+   "class": "direct"
+  },
+  "healthclaw_aide_assignment": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_healthclaw-expansion.md",
+   "class": "direct"
+  },
+  "healthclaw_allergy": {
+   "doc_ref": "source/healthclaw/healthclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_animal_patient": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_healthclaw-expansion.md",
+   "class": "direct"
+  },
+  "healthclaw_appointment": {
+   "doc_ref": "internal/legacy-erp/WAVE_3_PRODUCTION_SERVICE_2026-05-28.md",
+   "class": "direct"
+  },
+  "healthclaw_appointment_reminder": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_deepening_strategy.md",
+   "class": "direct"
+  },
+  "healthclaw_assessment": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_healthclaw-expansion.md",
+   "class": "direct"
+  },
+  "healthclaw_auth_usage": {
+   "doc_ref": "source/healthclaw/healthclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_baa": {
+   "doc_ref": "source/healthclaw/healthclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_boarding": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_healthclaw-expansion.md",
+   "class": "direct"
+  },
+  "healthclaw_breach_incident": {
+   "doc_ref": "source/healthclaw/healthclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_care_plan": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_healthclaw-expansion.md",
+   "class": "direct"
+  },
+  "healthclaw_care_team": {
+   "doc_ref": "source/healthclaw/healthclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_charge": {
+   "doc_ref": "internal/completed/2026/sprints/housekeeping_march_9.md",
+   "class": "direct"
+  },
+  "healthclaw_claim": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "healthclaw_claim_line": {
+   "parent_concept": "healthclaw_claim",
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "child_of_traced"
+  },
+  "healthclaw_clinical_note": {
+   "doc_ref": "source/healthclaw/healthclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_consent": {
+   "accepted_risk": "FINDINGS_2026-07-02.md A1 (domain-standard vertical furniture; concept corpus-silent)",
+   "class": "accepted_risk"
+  },
+  "healthclaw_controlled_substance_log": {
+   "doc_ref": "source/healthclaw/healthclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_crossover_claim": {
+   "doc_ref": "source/healthclaw/healthclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_dental_procedure": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_healthclaw-expansion.md",
+   "class": "direct"
+  },
+  "healthclaw_diagnosis": {
+   "doc_ref": "source/healthclaw/healthclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_dispense_log": {
+   "doc_ref": "source/healthclaw/healthclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_dispensing": {
+   "doc_ref": "source/healthclaw/healthclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_drug_interaction": {
+   "doc_ref": "internal/legacy-erp/MIGRATION_SCHEMA_AUDIT_2026-05-31.md",
+   "class": "direct"
+  },
+  "healthclaw_eligibility_check": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "healthclaw_encounter": {
+   "doc_ref": "source/healthclaw/healthclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_era_claim_detail": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "healthclaw_era_file": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "healthclaw_fee_schedule": {
+   "doc_ref": "internal/completed/2026/sprints/erpforge_os_simulation_os_and_user.md",
+   "class": "direct"
+  },
+  "healthclaw_fee_schedule_item": {
+   "parent_concept": "healthclaw_fee_schedule",
+   "doc_ref": "internal/completed/2026/sprints/erpforge_os_simulation_os_and_user.md",
+   "class": "child_of_traced"
+  },
+  "healthclaw_formulary": {
+   "doc_ref": "source/healthclaw/healthclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_formulary_item": {
+   "doc_ref": "source/healthclaw/healthclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_good_faith_estimate": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "healthclaw_group_session": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_healthclaw-expansion.md",
+   "class": "direct"
+  },
+  "healthclaw_home_visit": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_healthclaw-expansion.md",
+   "class": "direct"
+  },
+  "healthclaw_imaging_order": {
+   "doc_ref": "source/healthclaw/healthclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_imaging_result": {
+   "doc_ref": "source/healthclaw/healthclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_immunization": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "healthclaw_lab_order": {
+   "doc_ref": "internal/completed/2026/sprints/housekeeping_march_9.md",
+   "class": "direct"
+  },
+  "healthclaw_lab_result": {
+   "doc_ref": "internal/completed/2026/sprints/housekeeping_march_9.md",
+   "class": "direct"
+  },
+  "healthclaw_lab_test": {
+   "doc_ref": "internal/completed/2026/sprints/housekeeping_march_9.md",
+   "class": "direct"
+  },
+  "healthclaw_med_reconciliation": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "healthclaw_medical_history": {
+   "doc_ref": "source/healthclaw/healthclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_medication": {
+   "doc_ref": "source/healthclaw/healthclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_oasis_assessment": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_healthclaw-expansion.md",
+   "class": "direct"
+  },
+  "healthclaw_order": {
+   "doc_ref": "source/healthclaw/healthclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_owner_link": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_healthclaw-expansion.md",
+   "class": "direct"
+  },
+  "healthclaw_patient": {
+   "doc_ref": "internal/completed/2026/sprints/POST_CLAWHUB_REPUBLISH_SMOKE_PLAN_2026-05-10.md",
+   "class": "direct"
+  },
+  "healthclaw_patient_contact": {
+   "parent_concept": "healthclaw_patient",
+   "doc_ref": "internal/completed/2026/sprints/POST_CLAWHUB_REPUBLISH_SMOKE_PLAN_2026-05-10.md",
+   "class": "child_of_traced"
+  },
+  "healthclaw_patient_insurance": {
+   "doc_ref": "internal/completed/2026/sprints/erpforge_os_simulation_os_and_user.md",
+   "class": "direct"
+  },
+  "healthclaw_patient_statement": {
+   "parent_concept": "healthclaw_patient",
+   "doc_ref": "internal/completed/2026/sprints/POST_CLAWHUB_REPUBLISH_SMOKE_PLAN_2026-05-10.md",
+   "class": "child_of_traced"
+  },
+  "healthclaw_payer": {
+   "doc_ref": "internal/completed/2026/sprints/erpforge_os_simulation_os_and_user.md",
+   "class": "direct"
+  },
+  "healthclaw_payer_enrollment": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "healthclaw_payment_plan": {
+   "doc_ref": "source/healthclaw/healthclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_payment_posting": {
+   "doc_ref": "internal/completed/2026/sprints/housekeeping_march_9.md",
+   "class": "direct"
+  },
+  "healthclaw_perio_exam": {
+   "doc_ref": "source/healthclaw/healthclaw-dental/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_phi_access_log": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "healthclaw_prescription": {
+   "doc_ref": "internal/completed/2026/sprints/housekeeping_march_9.md",
+   "class": "direct"
+  },
+  "healthclaw_prior_auth": {
+   "doc_ref": "source/healthclaw/healthclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_procedure": {
+   "doc_ref": "source/healthclaw/healthclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_procedure_code": {
+   "doc_ref": "source/healthclaw/healthclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_provider_credential": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "healthclaw_provider_schedule": {
+   "doc_ref": "internal/legacy-erp/WAVE_3_PRODUCTION_SERVICE_2026-05-28.md",
+   "class": "direct"
+  },
+  "healthclaw_quality_measure": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "healthclaw_quality_measure_result": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "healthclaw_referral": {
+   "accepted_risk": "FINDINGS_2026-07-02.md A1 (domain-standard vertical furniture; concept corpus-silent)",
+   "class": "accepted_risk"
+  },
+  "healthclaw_schedule_block": {
+   "doc_ref": "source/healthclaw/healthclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_scheduling_rule": {
+   "doc_ref": "source/healthclaw/healthclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_therapy_session": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_healthclaw-expansion.md",
+   "class": "direct"
+  },
+  "healthclaw_tooth_chart": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_healthclaw-expansion.md",
+   "class": "direct"
+  },
+  "healthclaw_treatment_goal": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_healthclaw-expansion.md",
+   "class": "direct"
+  },
+  "healthclaw_treatment_plan": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_healthclaw-expansion.md",
+   "class": "direct"
+  },
+  "healthclaw_vitals": {
+   "doc_ref": "internal/legacy-erp/MIGRATION_SCHEMA_AUDIT_2026-05-31.md",
+   "class": "direct"
+  },
+  "healthclaw_waitlist": {
+   "doc_ref": "source/healthclaw/healthclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "healthclaw_weight_dosing": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_healthclaw-expansion.md",
+   "class": "direct"
+  },
+  "highered_admission_decision": {
+   "doc_ref": "source/educlaw/educlaw-highered/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "highered_alumni_event": {
+   "doc_ref": "source/educlaw/educlaw-highered/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "highered_alumnus": {
+   "doc_ref": "source/educlaw/educlaw-highered/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "highered_application": {
+   "doc_ref": "source/educlaw/educlaw-highered/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "highered_course_assignment": {
+   "doc_ref": "source/educlaw/educlaw-highered/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "highered_degree_program": {
+   "doc_ref": "source/educlaw/educlaw-highered/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "highered_disbursement": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "highered_giving_record": {
+   "doc_ref": "source/educlaw/educlaw-highered/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "highered_hold": {
+   "doc_ref": "source/educlaw/educlaw-highered/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "highered_research_grant": {
+   "doc_ref": "source/educlaw/educlaw-highered/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "holiday": {
+   "doc_ref": "internal/completed/2026/sprints/test_plans_large_testing_mar_7.md",
+   "class": "direct"
+  },
+  "holiday_list": {
+   "parent_concept": "holiday",
+   "doc_ref": "internal/completed/2026/sprints/test_plans_large_testing_mar_7.md",
+   "class": "child_of_traced"
+  },
+  "hospitalityclaw_amenity": {
+   "doc_ref": "source/hospitalityclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "hospitalityclaw_folio_charge": {
+   "doc_ref": "internal/completed/2026/sprints/THREE_VERTICALS_SIMULATION_2026-04-27.md",
+   "class": "direct"
+  },
+  "hospitalityclaw_group_block": {
+   "doc_ref": "internal/completed/2026/sprints/THREE_VERTICALS_SIMULATION_2026-04-27.md",
+   "class": "direct"
+  },
+  "hospitalityclaw_guest_ext": {
+   "doc_ref": "internal/completed/2026/sprints/THREE_VERTICALS_SIMULATION_2026-04-27.md",
+   "class": "direct"
+  },
+  "hospitalityclaw_guest_preference": {
+   "doc_ref": "source/hospitalityclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "hospitalityclaw_guest_request": {
+   "doc_ref": "source/hospitalityclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "hospitalityclaw_housekeeping_task": {
+   "doc_ref": "source/hospitalityclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "hospitalityclaw_inspection": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "hospitalityclaw_minibar_consumption": {
+   "doc_ref": "source/hospitalityclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "hospitalityclaw_outlet": {
+   "doc_ref": "source/hospitalityclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "hospitalityclaw_rate_adjustment": {
+   "doc_ref": "source/hospitalityclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "hospitalityclaw_rate_plan": {
+   "doc_ref": "source/hospitalityclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "hospitalityclaw_reservation": {
+   "doc_ref": "internal/completed/2026/sprints/THREE_VERTICALS_SIMULATION_2026-04-27.md",
+   "class": "direct"
+  },
+  "hospitalityclaw_room": {
+   "doc_ref": "internal/completed/2026/sprints/THREE_VERTICALS_SIMULATION_2026-04-27.md",
+   "class": "direct"
+  },
+  "hospitalityclaw_room_amenity": {
+   "parent_concept": "hospitalityclaw_room",
+   "doc_ref": "internal/completed/2026/sprints/THREE_VERTICALS_SIMULATION_2026-04-27.md",
+   "class": "child_of_traced"
+  },
+  "hospitalityclaw_room_service_order": {
+   "parent_concept": "hospitalityclaw_room",
+   "doc_ref": "internal/completed/2026/sprints/THREE_VERTICALS_SIMULATION_2026-04-27.md",
+   "class": "child_of_traced"
+  },
+  "hospitalityclaw_room_type": {
+   "parent_concept": "hospitalityclaw_room",
+   "doc_ref": "internal/completed/2026/sprints/THREE_VERTICALS_SIMULATION_2026-04-27.md",
+   "class": "child_of_traced"
+  },
+  "income_tax_slab": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "income_tax_slab_rate": {
+   "parent_concept": "income_tax_slab",
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "child_of_traced"
+  },
+  "integration_connector": {
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_erpclaw_shopify_module_plan-implementation.md",
+   "class": "direct"
+  },
+  "integration_credential": {
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_erpclaw_shopify_module_plan-implementation.md",
+   "class": "direct"
+  },
+  "integration_entity_map": {
+   "doc_ref": "internal/completed/2026/sprints/shopify_app_architecture.md",
+   "class": "direct"
+  },
+  "integration_field_mapping": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-integrations/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "integration_sync": {
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_erpclaw_shopify_module_plan-implementation.md",
+   "class": "direct"
+  },
+  "integration_sync_error": {
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_erpclaw_shopify_module_plan-implementation.md",
+   "class": "direct"
+  },
+  "integration_sync_schedule": {
+   "parent_concept": "integration_sync",
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_erpclaw_shopify_module_plan-implementation.md",
+   "class": "child_of_traced"
+  },
+  "integration_transform_rule": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-integrations/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "integration_webhook": {
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_erpclaw_shopify_module_plan-implementation.md",
+   "class": "direct"
+  },
+  "inter_company_transfer": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "investment": {
+   "doc_ref": "internal/completed/2026/sprints/erpforge_os_improving-erpclaw-os-march-19.md",
+   "class": "direct"
+  },
+  "investment_transaction": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "issue": {
+   "doc_ref": "internal/completed/2026/sprints/C6_PAPERCLIP_NLQA_PLAN_2026-06-08.md",
+   "class": "direct"
+  },
+  "issue_comment": {
+   "parent_concept": "issue",
+   "doc_ref": "internal/completed/2026/sprints/C6_PAPERCLIP_NLQA_PLAN_2026-06-08.md",
+   "class": "child_of_traced"
+  },
+  "item": {
+   "doc_ref": "ARCHITECTURE.md",
+   "class": "direct"
+  },
+  "item_alternative": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_2_SPRINT_PLAN_2026-06-19.md",
+   "class": "direct"
+  },
+  "item_attribute": {
+   "doc_ref": "internal/completed/2026/sprints/erpforge_os_improving-erpclaw-os-march-19.md",
+   "class": "direct"
+  },
+  "item_group": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_2_SPRINT_PLAN_2026-06-19.md",
+   "class": "direct"
+  },
+  "item_price": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "item_supplier": {
+   "parent_concept": "item",
+   "doc_ref": "ARCHITECTURE.md",
+   "class": "child_of_traced"
+  },
+  "item_tax_template": {
+   "parent_concept": "item",
+   "doc_ref": "ARCHITECTURE.md",
+   "class": "child_of_traced"
+  },
+  "job_card": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "journal_entry": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "journal_entry_line": {
+   "parent_concept": "journal_entry",
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "child_of_traced"
+  },
+  "landed_cost_charge": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "landed_cost_item": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "landed_cost_voucher": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "lead": {
+   "doc_ref": "internal/completed/2026/sprints/C6_PAPERCLIP_NLQA_PLAN_2026-06-08.md",
+   "class": "direct"
+  },
+  "lead_source": {
+   "doc_ref": "internal/completed/2026/sprints/pre-analysis-issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "leave_allocation": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "leave_application": {
+   "doc_ref": "internal/completed/2026/sprints/test_plans_test_results_mar_7.md",
+   "class": "direct"
+  },
+  "leave_type": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "legalclaw_bar_admission": {
+   "doc_ref": "source/legalclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "legalclaw_calendar_event": {
+   "doc_ref": "source/legalclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "legalclaw_cle_record": {
+   "doc_ref": "source/legalclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "legalclaw_client_ext": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "legalclaw_communication": {
+   "doc_ref": "internal/legacy-erp/MIGRATION_SCHEMA_AUDIT_2026-05-31.md",
+   "class": "direct"
+  },
+  "legalclaw_conflict_check": {
+   "doc_ref": "source/legalclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "legalclaw_conflict_waiver": {
+   "doc_ref": "source/legalclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "legalclaw_deadline": {
+   "doc_ref": "source/legalclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "legalclaw_document": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "legalclaw_expense": {
+   "doc_ref": "source/legalclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "legalclaw_intake": {
+   "doc_ref": "source/legalclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "legalclaw_invoice": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "legalclaw_matter": {
+   "doc_ref": "internal/completed/2026/sprints/pre-analysis-issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "legalclaw_matter_party": {
+   "parent_concept": "legalclaw_matter",
+   "doc_ref": "internal/completed/2026/sprints/pre-analysis-issues_fixing_march_9.md",
+   "class": "child_of_traced"
+  },
+  "legalclaw_settlement": {
+   "doc_ref": "source/legalclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "legalclaw_task_template": {
+   "doc_ref": "source/legalclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "legalclaw_task_template_item": {
+   "doc_ref": "source/legalclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "legalclaw_time_entry": {
+   "doc_ref": "source/legalclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "legalclaw_trust_account": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "legalclaw_trust_transaction": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "loan": {
+   "doc_ref": "ARCHITECTURE.md",
+   "class": "direct"
+  },
+  "loan_application": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "loan_repayment": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "loan_repayment_schedule": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "loan_write_off": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "logistics_carrier": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "logistics_carrier_invoice": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "logistics_carrier_rate": {
+   "parent_concept": "logistics_carrier",
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "child_of_traced"
+  },
+  "logistics_freight_charge": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-logistics/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "logistics_route": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-logistics/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "logistics_route_stop": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-logistics/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "logistics_shipment": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-logistics/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "logistics_tracking_event": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-logistics/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "maintenance_checklist": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "maintenance_checklist_item": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "maintenance_plan": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "maintenance_plan_item": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "maintenance_schedule": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "maintenance_visit": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "maintenance_work_order": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "maintenance_work_order_item": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "material_request": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "material_request_item": {
+   "parent_concept": "material_request",
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "child_of_traced"
+  },
+  "meter": {
+   "doc_ref": "internal/completed/2026/sprints/erpforge_os_improving-erpclaw-os-march-19.md",
+   "class": "direct"
+  },
+  "meter_reading": {
+   "doc_ref": "internal/completed/2026/sprints/erpforge_os_improving-erpclaw-os-march-19.md",
+   "class": "direct"
+  },
+  "milestone": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "naming_series": {
+   "doc_ref": "internal/completed/2026/sprints/bug_fix_plan_march_7.md",
+   "class": "direct"
+  },
+  "non_conformance": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "nonprofitclaw_campaign": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "nonprofitclaw_donation": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "nonprofitclaw_donor_ext": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "nonprofitclaw_fund": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "nonprofitclaw_fund_transfer": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "nonprofitclaw_grant": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "nonprofitclaw_grant_expense": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "nonprofitclaw_pledge": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "nonprofitclaw_program": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "nonprofitclaw_tax_receipt": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "nonprofitclaw_volunteer": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "nonprofitclaw_volunteer_shift": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "notification_channel": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "operation": {
+   "doc_ref": "ARCHITECTURE.md",
+   "class": "direct"
+  },
+  "opportunity": {
+   "doc_ref": "internal/completed/2026/sprints/EPIC2_TESTING_REORG_DRY_RUN_2026-05-14.md",
+   "class": "direct"
+  },
+  "overtime_policy": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "packing_slip": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "packing_slip_item": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "party_type_registry": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "payment_allocation": {
+   "doc_ref": "internal/completed/2026/sprints/FINDING-005_AR_AP_payment_clearing_PLAN_2026-06-05.md",
+   "class": "direct"
+  },
+  "payment_deduction": {
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_erpclaw_stripe_module_plan-implementation.md",
+   "class": "direct"
+  },
+  "payment_entry": {
+   "doc_ref": "internal/completed/2026/sprints/FINDING-005_AR_AP_payment_clearing_PLAN_2026-06-05.md",
+   "class": "direct"
+  },
+  "payment_ledger_entry": {
+   "doc_ref": "internal/completed/2026/sprints/FINDING-005_AR_AP_payment_clearing_PLAN_2026-06-05.md",
+   "class": "direct"
+  },
+  "payment_terms": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "payroll_run": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "pending_decision": {
+   "doc_ref": "internal/completed/2026/sprints/housekeeping_march_9.md",
+   "class": "direct"
+  },
+  "period_closing_voucher": {
+   "doc_ref": "internal/completed/2026/sprints/FINDING_013_CLOSE_COMPANY_GUARD_PLAN_2026-06-08.md",
+   "class": "direct"
+  },
+  "pick_list": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_2_SPRINT_PLAN_2026-06-19.md",
+   "class": "direct"
+  },
+  "pick_list_item": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_2_SPRINT_PLAN_2026-06-19.md",
+   "class": "direct"
+  },
+  "planning_scenario": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-planning/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "planning_scenario_line": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-planning/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "policy": {
+   "doc_ref": "ARCHITECTURE.md",
+   "class": "direct"
+  },
+  "policy_acknowledgment": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "pos_payment": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "pos_profile": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "pos_session": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "pos_transaction": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "pos_transaction_item": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "prepaid_credit_balance": {
+   "doc_ref": "internal/legacy-erp/PREFLIGHT_FINDINGS_2026-05-30.md",
+   "class": "direct"
+  },
+  "price_list": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "pricing_rule": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "process_recipe": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "production_plan": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "production_plan_item": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "production_plan_material": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "project": {
+   "doc_ref": "ARCHITECTURE.md",
+   "class": "direct"
+  },
+  "propertyclaw_adverse_action": {
+   "doc_ref": "source/propertyclaw/propertyclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "propertyclaw_amenity": {
+   "doc_ref": "source/propertyclaw/propertyclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "propertyclaw_announcement": {
+   "doc_ref": "source/propertyclaw/propertyclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "propertyclaw_application": {
+   "doc_ref": "source/propertyclaw/propertyclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "propertyclaw_deposit_deduction": {
+   "doc_ref": "source/propertyclaw/propertyclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "propertyclaw_inspection": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "propertyclaw_inspection_item": {
+   "parent_concept": "propertyclaw_inspection",
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "child_of_traced"
+  },
+  "propertyclaw_late_fee_rule": {
+   "doc_ref": "source/propertyclaw/propertyclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "propertyclaw_lease": {
+   "doc_ref": "internal/completed/2026/sprints/erpforge_os_erpforge_plan.md",
+   "class": "direct"
+  },
+  "propertyclaw_lease_charge": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "propertyclaw_lease_renewal": {
+   "parent_concept": "propertyclaw_lease",
+   "doc_ref": "internal/completed/2026/sprints/erpforge_os_erpforge_plan.md",
+   "class": "child_of_traced"
+  },
+  "propertyclaw_listing": {
+   "accepted_risk": "FINDINGS_2026-07-02.md A1 (domain-standard vertical furniture; concept corpus-silent)",
+   "class": "accepted_risk"
+  },
+  "propertyclaw_owner_statement": {
+   "doc_ref": "source/propertyclaw/propertyclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "propertyclaw_payment_method": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "propertyclaw_property": {
+   "doc_ref": "internal/completed/2026/sprints/test_plans_test_results_mar_7.md",
+   "class": "direct"
+  },
+  "propertyclaw_property_photo": {
+   "parent_concept": "propertyclaw_property",
+   "doc_ref": "internal/completed/2026/sprints/test_plans_test_results_mar_7.md",
+   "class": "child_of_traced"
+  },
+  "propertyclaw_rent_schedule": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "propertyclaw_screening_request": {
+   "doc_ref": "source/propertyclaw/propertyclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "propertyclaw_security_deposit": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "propertyclaw_tax_1099": {
+   "doc_ref": "source/propertyclaw/propertyclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "propertyclaw_tenant_document": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "propertyclaw_trust_account": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_vertical_implementation_plan.md",
+   "class": "direct"
+  },
+  "propertyclaw_trust_reconciliation": {
+   "doc_ref": "source/propertyclaw/propertyclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "propertyclaw_unit": {
+   "doc_ref": "source/propertyclaw/propertyclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "propertyclaw_vendor_assignment": {
+   "doc_ref": "source/propertyclaw/propertyclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "propertyclaw_vendor_bid": {
+   "doc_ref": "source/propertyclaw/propertyclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "propertyclaw_work_order": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "propertyclaw_work_order_item": {
+   "parent_concept": "propertyclaw_work_order",
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "child_of_traced"
+  },
+  "purchase_invoice": {
+   "doc_ref": "internal/completed/2026/sprints/FINDING-005_AR_AP_payment_clearing_PLAN_2026-06-05.md",
+   "class": "direct"
+  },
+  "purchase_invoice_item": {
+   "parent_concept": "purchase_invoice",
+   "doc_ref": "internal/completed/2026/sprints/FINDING-005_AR_AP_payment_clearing_PLAN_2026-06-05.md",
+   "class": "child_of_traced"
+  },
+  "purchase_order": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "purchase_order_item": {
+   "doc_ref": "internal/completed/2026/sprints/webclaw_webclaw-whitepaper-feb-19-technical.md",
+   "class": "direct"
+  },
+  "purchase_receipt": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_2_SPRINT_PLAN_2026-06-19.md",
+   "class": "direct"
+  },
+  "purchase_receipt_item": {
+   "parent_concept": "purchase_receipt",
+   "doc_ref": "internal/completed/2026/sprints/WAVE_2_SPRINT_PLAN_2026-06-19.md",
+   "class": "child_of_traced"
+  },
+  "putaway_rule": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_2_SPRINT_PLAN_2026-06-19.md",
+   "class": "direct"
+  },
+  "quality_goal": {
+   "doc_ref": "internal/legacy-erp/WAVE_4_HR_BI_2026-05-28.md",
+   "class": "direct"
+  },
+  "quality_inspection": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "quality_inspection_parameter": {
+   "parent_concept": "quality_inspection",
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "child_of_traced"
+  },
+  "quality_inspection_reading": {
+   "parent_concept": "quality_inspection",
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "child_of_traced"
+  },
+  "quality_inspection_template": {
+   "parent_concept": "quality_inspection",
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "child_of_traced"
+  },
+  "quotation": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_1B_SPRINT_PLAN_2026-06-15.md",
+   "class": "direct"
+  },
+  "quotation_item": {
+   "parent_concept": "quotation",
+   "doc_ref": "internal/completed/2026/sprints/WAVE_1B_SPRINT_PLAN_2026-06-15.md",
+   "class": "child_of_traced"
+  },
+  "rate_plan": {
+   "doc_ref": "internal/legacy-erp/OVERVIEW_2026-05-28.md",
+   "class": "direct"
+  },
+  "rate_tier": {
+   "doc_ref": "internal/legacy-erp/WAVE_F_BILLING_FOUNDATION_2026-05-28.md",
+   "class": "direct"
+  },
+  "recipe_ingredient": {
+   "doc_ref": "internal/legacy-erp/WAVE_3_PRODUCTION_SERVICE_2026-05-28.md",
+   "class": "direct"
+  },
+  "recurring_bill_template": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "recurring_bill_template_item": {
+   "doc_ref": "internal/legacy-erp/MIGRATION_SCHEMA_AUDIT_2026-05-31.md",
+   "class": "direct"
+  },
+  "recurring_invoice_template": {
+   "doc_ref": "internal/completed/2026/sprints/fixes_for_march_10.md",
+   "class": "direct"
+  },
+  "recurring_invoice_template_item": {
+   "doc_ref": "internal/legacy-erp/MIGRATION_SCHEMA_AUDIT_2026-05-31.md",
+   "class": "direct"
+  },
+  "recurring_journal_template": {
+   "doc_ref": "internal/legacy-erp/OVERVIEW_2026-05-28.md",
+   "class": "direct"
+  },
+  "regional_settings": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "relationship_score": {
+   "doc_ref": "internal/completed/2026/sprints/housekeeping_march_9.md",
+   "class": "direct"
+  },
+  "request_for_quotation": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "retailclaw_category": {
+   "doc_ref": "source/retailclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "retailclaw_coupon": {
+   "doc_ref": "internal/legacy-erp/OVERVIEW_2026-05-28.md",
+   "class": "direct"
+  },
+  "retailclaw_exchange": {
+   "doc_ref": "source/retailclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "retailclaw_gift_card": {
+   "doc_ref": "internal/completed/2026/sprints/THREE_VERTICALS_SIMULATION_2026-04-27.md",
+   "class": "direct"
+  },
+  "retailclaw_loyalty_member": {
+   "doc_ref": "internal/completed/2026/sprints/THREE_VERTICALS_SIMULATION_2026-04-27.md",
+   "class": "direct"
+  },
+  "retailclaw_loyalty_program": {
+   "doc_ref": "internal/completed/2026/sprints/THREE_VERTICALS_SIMULATION_2026-04-27.md",
+   "class": "direct"
+  },
+  "retailclaw_loyalty_transaction": {
+   "doc_ref": "internal/legacy-erp/WAVE_4_HR_BI_2026-05-28.md",
+   "class": "direct"
+  },
+  "retailclaw_planogram": {
+   "doc_ref": "source/retailclaw/migrations/001_drop_dead_display_table.py",
+   "class": "direct"
+  },
+  "retailclaw_planogram_item": {
+   "doc_ref": "source/retailclaw/migrations/001_drop_dead_display_table.py",
+   "class": "direct"
+  },
+  "retailclaw_price_list": {
+   "doc_ref": "source/retailclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "retailclaw_price_list_item": {
+   "doc_ref": "source/retailclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "retailclaw_promotion": {
+   "doc_ref": "internal/completed/2026/sprints/THREE_VERTICALS_SIMULATION_2026-04-27.md",
+   "class": "direct"
+  },
+  "retailclaw_return_authorization": {
+   "doc_ref": "source/retailclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "retailclaw_return_item": {
+   "doc_ref": "source/retailclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "retailclaw_shrinkage": {
+   "doc_ref": "source/retailclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "retailclaw_store_credit": {
+   "doc_ref": "source/retailclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "retailclaw_store_location": {
+   "doc_ref": "internal/completed/2026/sprints/THREE_VERTICALS_SIMULATION_2026-04-27.md",
+   "class": "direct"
+  },
+  "retailclaw_wholesale_customer": {
+   "doc_ref": "internal/completed/2026/sprints/THREE_VERTICALS_SIMULATION_2026-04-27.md",
+   "class": "direct"
+  },
+  "retailclaw_wholesale_order": {
+   "doc_ref": "source/retailclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "retailclaw_wholesale_order_item": {
+   "doc_ref": "source/retailclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "retailclaw_wholesale_price": {
+   "doc_ref": "source/retailclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "retro_pay_adjustment": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "rfq_item": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "rfq_supplier": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "risk_assessment": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "risk_register": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "role": {
+   "doc_ref": "internal/completed/2026/sprints/C6_PAPERCLIP_NLQA_PLAN_2026-06-08.md",
+   "class": "direct"
+  },
+  "role_permission": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "routing": {
+   "doc_ref": "internal/completed/2026/sprints/CLAWHUB_REPUBLISH_PLAN_2026-06-11.md",
+   "class": "direct"
+  },
+  "routing_operation": {
+   "parent_concept": "routing",
+   "doc_ref": "internal/completed/2026/sprints/CLAWHUB_REPUBLISH_PLAN_2026-06-11.md",
+   "class": "child_of_traced"
+  },
+  "salary_assignment": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "salary_component": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "salary_slip": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_REGION_INDIA_DESIGN.md",
+   "class": "direct"
+  },
+  "salary_slip_detail": {
+   "parent_concept": "salary_slip",
+   "doc_ref": "internal/completed/2026/sprints/expansion_REGION_INDIA_DESIGN.md",
+   "class": "child_of_traced"
+  },
+  "salary_structure": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "salary_structure_detail": {
+   "parent_concept": "salary_structure",
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "child_of_traced"
+  },
+  "sales_invoice": {
+   "doc_ref": "internal/completed/2026/sprints/CLAWHUB_REPUBLISH_PLAN_2026-06-11.md",
+   "class": "direct"
+  },
+  "sales_invoice_item": {
+   "doc_ref": "internal/completed/2026/sprints/THREE_VERTICALS_PLAN_2026-04-27.md",
+   "class": "direct"
+  },
+  "sales_order": {
+   "doc_ref": "internal/completed/2026/sprints/FINDING_012_CROSS_SESSION_GROUNDING_PLAN_2026-06-08.md",
+   "class": "direct"
+  },
+  "sales_order_item": {
+   "parent_concept": "sales_order",
+   "doc_ref": "internal/completed/2026/sprints/FINDING_012_CROSS_SESSION_GROUNDING_PLAN_2026-06-08.md",
+   "class": "child_of_traced"
+  },
+  "sales_partner": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "scenario": {
+   "doc_ref": "ARCHITECTURE.md",
+   "class": "direct"
+  },
+  "schema_version": {
+   "doc_ref": "internal/legacy-erp/MIGRATION_SCHEMA_AUDIT_2026-05-31.md",
+   "class": "direct"
+  },
+  "selfservice_activity_log": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-selfservice/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "selfservice_permission_profile": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-selfservice/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "selfservice_portal_config": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-selfservice/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "selfservice_profile_assignment": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-selfservice/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "selfservice_session": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-selfservice/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "serial_number": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "service_level_agreement": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "shift_assignment": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "shift_type": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "shop_floor_entry": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "shopify_account": {
+   "doc_ref": "internal/completed/2026/sprints/shopify_app_architecture.md",
+   "class": "direct"
+  },
+  "shopify_dispute": {
+   "doc_ref": "internal/completed/2026/sprints/shopify_app_architecture.md",
+   "class": "direct"
+  },
+  "shopify_gl_rule": {
+   "doc_ref": "internal/completed/2026/sprints/shopify_app_architecture.md",
+   "class": "direct"
+  },
+  "shopify_order": {
+   "doc_ref": "internal/completed/2026/sprints/shopify_app_architecture.md",
+   "class": "direct"
+  },
+  "shopify_order_line_item": {
+   "doc_ref": "internal/completed/2026/sprints/shopify_app_architecture.md",
+   "class": "direct"
+  },
+  "shopify_payout": {
+   "doc_ref": "internal/completed/2026/sprints/shopify_app_architecture.md",
+   "class": "direct"
+  },
+  "shopify_payout_transaction": {
+   "doc_ref": "internal/completed/2026/sprints/shopify_app_architecture.md",
+   "class": "direct"
+  },
+  "shopify_reconciliation_run": {
+   "doc_ref": "internal/completed/2026/sprints/shopify_app_architecture.md",
+   "class": "direct"
+  },
+  "shopify_refund": {
+   "doc_ref": "internal/completed/2026/sprints/shopify_app_architecture.md",
+   "class": "direct"
+  },
+  "shopify_refund_line_item": {
+   "doc_ref": "internal/completed/2026/sprints/shopify_app_architecture.md",
+   "class": "direct"
+  },
+  "shopify_sync_job": {
+   "doc_ref": "internal/completed/2026/sprints/shopify_app_architecture.md",
+   "class": "direct"
+  },
+  "sr_collection_window": {
+   "doc_ref": "source/educlaw/educlaw-statereport/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "sr_edfi_config": {
+   "doc_ref": "source/educlaw/educlaw-statereport/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "sr_edfi_descriptor_map": {
+   "doc_ref": "source/educlaw/educlaw-statereport/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "sr_edfi_sync_log": {
+   "doc_ref": "source/educlaw/educlaw-statereport/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "sr_el_program": {
+   "doc_ref": "source/educlaw/educlaw-statereport/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "sr_org_mapping": {
+   "doc_ref": "source/educlaw/educlaw-statereport/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "sr_snapshot": {
+   "doc_ref": "source/educlaw/educlaw-statereport/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "sr_snapshot_record": {
+   "doc_ref": "source/educlaw/educlaw-statereport/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "sr_sped_placement": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "sr_sped_service": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "sr_student_supplement": {
+   "doc_ref": "source/educlaw/educlaw-statereport/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "sr_submission": {
+   "doc_ref": "source/educlaw/educlaw-statereport/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "sr_submission_error": {
+   "doc_ref": "source/educlaw/educlaw-statereport/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "sr_validation_result": {
+   "doc_ref": "source/educlaw/educlaw-statereport/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "sr_validation_rule": {
+   "doc_ref": "source/educlaw/educlaw-statereport/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "state_tax_slab": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "stock_entry": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_2_SPRINT_PLAN_2026-06-19.md",
+   "class": "direct"
+  },
+  "stock_entry_item": {
+   "parent_concept": "stock_entry",
+   "doc_ref": "internal/completed/2026/sprints/WAVE_2_SPRINT_PLAN_2026-06-19.md",
+   "class": "child_of_traced"
+  },
+  "stock_fifo_layer": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "stock_ledger_entry": {
+   "doc_ref": "ARCHITECTURE.md",
+   "class": "direct"
+  },
+  "stock_reconciliation": {
+   "doc_ref": "internal/legacy-erp/MIGRATION_SCHEMA_AUDIT_2026-05-31.md",
+   "class": "direct"
+  },
+  "stock_reconciliation_item": {
+   "parent_concept": "stock_reconciliation",
+   "doc_ref": "internal/legacy-erp/MIGRATION_SCHEMA_AUDIT_2026-05-31.md",
+   "class": "child_of_traced"
+  },
+  "stock_reservation_entry": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_2_SPRINT_PLAN_2026-06-19.md",
+   "class": "direct"
+  },
+  "stock_revaluation": {
+   "doc_ref": "internal/legacy-erp/MIGRATION_SCHEMA_AUDIT_2026-05-31.md",
+   "class": "direct"
+  },
+  "stripe_account": {
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_erpclaw_stripe_module_plan-implementation.md",
+   "class": "direct"
+  },
+  "stripe_application_fee": {
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_erpclaw_stripe_module_plan-implementation.md",
+   "class": "direct"
+  },
+  "stripe_balance_transaction": {
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_erpclaw_stripe_module_plan-implementation.md",
+   "class": "direct"
+  },
+  "stripe_charge": {
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_erpclaw_stripe_module_plan-implementation.md",
+   "class": "direct"
+  },
+  "stripe_credit_note": {
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_erpclaw_stripe_module_plan-implementation.md",
+   "class": "direct"
+  },
+  "stripe_customer_map": {
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_erpclaw_stripe_module_plan-implementation.md",
+   "class": "direct"
+  },
+  "stripe_deep_webhook_event": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-integrations-stripe/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "stripe_dispute": {
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_erpclaw_stripe_module_plan-implementation.md",
+   "class": "direct"
+  },
+  "stripe_fee_detail": {
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_erpclaw_stripe_module_plan-implementation.md",
+   "class": "direct"
+  },
+  "stripe_gl_rule": {
+   "doc_ref": "source/erpclaw-addons/erpclaw-integrations-stripe/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "stripe_invoice": {
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_erpclaw_stripe_module_plan-implementation.md",
+   "class": "direct"
+  },
+  "stripe_payout": {
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_erpclaw_stripe_module_plan-implementation.md",
+   "class": "direct"
+  },
+  "stripe_reconciliation_run": {
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_erpclaw_stripe_module_plan-implementation.md",
+   "class": "direct"
+  },
+  "stripe_refund": {
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_erpclaw_stripe_module_plan-implementation.md",
+   "class": "direct"
+  },
+  "stripe_subscription": {
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_erpclaw_stripe_module_plan-implementation.md",
+   "class": "direct"
+  },
+  "stripe_sync_job": {
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_erpclaw_stripe_module_plan-implementation.md",
+   "class": "direct"
+  },
+  "stripe_transfer": {
+   "doc_ref": "internal/completed/2026/sprints/stripe_shopify_erpclaw_stripe_module_plan-implementation.md",
+   "class": "direct"
+  },
+  "subcontracting_order": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_2_SPRINT_PLAN_2026-06-19.md",
+   "class": "direct"
+  },
+  "supplier": {
+   "doc_ref": "internal/completed/2026/sprints/FINDING-003_customer_email_PLAN_2026-06-05.md",
+   "class": "direct"
+  },
+  "supplier_quotation": {
+   "parent_concept": "supplier",
+   "doc_ref": "internal/completed/2026/sprints/FINDING-003_customer_email_PLAN_2026-06-05.md",
+   "class": "child_of_traced"
+  },
+  "supplier_quotation_item": {
+   "parent_concept": "supplier",
+   "doc_ref": "internal/completed/2026/sprints/FINDING-003_customer_email_PLAN_2026-06-05.md",
+   "class": "child_of_traced"
+  },
+  "task": {
+   "doc_ref": "internal/completed/2026/sprints/FINDING_001_MULTI_COMPANY_PLAN_2026-06-07.md",
+   "class": "direct"
+  },
+  "tax_category": {
+   "doc_ref": "internal/legacy-erp/MIGRATION_SCHEMA_AUDIT_2026-05-31.md",
+   "class": "direct"
+  },
+  "tax_rule": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "tax_template": {
+   "doc_ref": "internal/completed/2026/sprints/THREE_VERTICALS_PLAN_2026-04-27.md",
+   "class": "direct"
+  },
+  "tax_template_line": {
+   "parent_concept": "tax_template",
+   "doc_ref": "internal/completed/2026/sprints/THREE_VERTICALS_PLAN_2026-04-27.md",
+   "class": "child_of_traced"
+  },
+  "tax_withholding_category": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "tax_withholding_entry": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "tax_withholding_group": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "timesheet": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "timesheet_detail": {
+   "parent_concept": "timesheet",
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "child_of_traced"
+  },
+  "tool": {
+   "doc_ref": "ARCHITECTURE.md",
+   "class": "direct"
+  },
+  "tool_usage": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_plan.md",
+   "class": "direct"
+  },
+  "uom": {
+   "doc_ref": "internal/completed/2026/sprints/SUITE_B_SLUG_LEAKAGE_SIMULATION_2026-05-04.md",
+   "class": "direct"
+  },
+  "uom_conversion": {
+   "doc_ref": "internal/completed/2026/sprints/erpforge_os_improving-erpclaw-os-march-19.md",
+   "class": "direct"
+  },
+  "usage_event": {
+   "doc_ref": "internal/completed/2026/sprints/housekeeping_march_9.md",
+   "class": "direct"
+  },
+  "user_role": {
+   "doc_ref": "internal/legacy-erp/MIGRATION_SCHEMA_AUDIT_2026-05-31.md",
+   "class": "direct"
+  },
+  "voucher_type_registry": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_1_SPRINT_PLAN_2026-06-10.md",
+   "class": "direct"
+  },
+  "wage_garnishment": {
+   "doc_ref": "source/erpclaw/SKILL.md",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "warehouse": {
+   "doc_ref": "internal/completed/2026/sprints/NL_HARNESS_MULTI_COMPANY_PLAN_2026-06-07.md",
+   "class": "direct"
+  },
+  "warranty_claim": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  },
+  "work_order": {
+   "doc_ref": "internal/completed/2026/sprints/WAVE_2_SPRINT_PLAN_2026-06-19.md",
+   "class": "direct"
+  },
+  "work_order_item": {
+   "doc_ref": "internal/completed/2026/sprints/expansion_expansion_dev_plan.md",
+   "class": "direct"
+  },
+  "workstation": {
+   "doc_ref": "internal/completed/2026/sprints/issues_fixing_march_9.md",
+   "class": "direct"
+  }
+ }
+}

@@ -2,6 +2,19 @@
 
 All notable changes to the ERPClaw foundation skill.
 
+## [4.12.0] — 2026-07-05 — M31 foundation-hygiene mini-wave
+
+### Fixed
+- **33 shipped actions are now actually reachable through the router (M31 H1).** The meta-router `ACTION_MAP` gained every action defined in the per-domain sub-scripts that it previously could not dispatch — most importantly `migrate` (the documented upgrade path), the whole custom-fields cluster (`add-custom-field` / `list-custom-fields` / `remove-custom-field` / `set-custom-field-value` / `get-custom-field-values`), and credit control (`place-customer-on-hold` and the dunning cycle). Previously these returned "Unknown action" via the router despite being fully built and tested. `hr-status` / `payroll-status` now route via ALIASES to each domain's `status`. A new L0 dispatchability gate (defined ⇒ routable, all modules) makes this bug class structurally unable to ship again.
+- **`update-foundation` now converges files AND schema (ADR-0028).** A confirmed apply-path reconcile applies pending foundation migrations after the file sync (idempotent; loud, per-migration-ledgered failure; explicit skip on uninitialized DBs) — an upgrade can no longer silently skip schema migrations, including on the in-sync retry path. `rollback-foundation` restores files only, never schema (migrations are forward-only). `migrate` joined `DANGEROUS_ACTIONS` beside its `schema-*` siblings.
+
+### Schema
+- **3 dead tables dropped (M31 H2, migration `028_drop_dead_orphan_tables_2.py`):** `communication`, `erpclaw_module_validation`, `erpclaw_table_ownership` — all verified zero-writer/zero-reader/zero-FK (necessity audit, adversarially QA-confirmed); dialect-aware + idempotent; PostgreSQL-rehearsed at close. Fresh-install table count 776.
+- **Table provenance manifest (`scripts/table_provenance.json`, M31 H3 G1):** every table now declares why it exists (doc ref / parent concept / explicit accepted-risk); a diff-aware L0 gate blocks any NEW provenance-less table — adding a table is now a governance event.
+
+### Added
+- **Shared integration lib modules (M31 H6):** `erpclaw_lib/action_validators.py` (the validators previously duplicated across integration addons), `erpclaw_lib/integration_secrets.py` (AES-256-GCM field crypto with transparent legacy-format read-back), `erpclaw_lib/integration_actions.py` (shared sync-job/GL-rule/reconciliation action bodies; table writes stay with owning modules).
+
 ## [4.11.0] — 2026-07-01 — Wave 2 (inventory + warehouse depth)
 
 ### Added

@@ -526,7 +526,8 @@ ACTION_MAP = {
     "update-expense-claim-status": "erpclaw-hr",
     "list-expense-claims": "erpclaw-hr",
     "record-lifecycle-event": "erpclaw-hr",
-    "hr-status": "erpclaw-hr",
+    # hr-status routed via ALIASES (-> erpclaw-hr 'status'); a bare ACTION_MAP
+    # entry forwarded the literal 'hr-status', which erpclaw-hr rejects.
     "add-shift-type": "erpclaw-hr",
     "list-shift-types": "erpclaw-hr",
     "update-shift-type": "erpclaw-hr",
@@ -561,7 +562,8 @@ ACTION_MAP = {
     "update-garnishment": "erpclaw-payroll",
     "list-garnishments": "erpclaw-payroll",
     "get-garnishment": "erpclaw-payroll",
-    "payroll-status": "erpclaw-payroll",
+    # payroll-status routed via ALIASES (-> erpclaw-payroll 'status'); a bare
+    # ACTION_MAP entry forwarded the literal 'payroll-status', which is rejected.
     "add-state-tax-slab": "erpclaw-payroll",
     "update-employee-state-config": "erpclaw-payroll",
     "add-overtime-policy": "erpclaw-payroll",
@@ -614,6 +616,50 @@ ACTION_MAP = {
     "list-feature-matrix": "erpclaw-os",
     "research-business-rule": "erpclaw-os",
     "get-implementation-guide": "erpclaw-os",
+
+    # === M31 router union (2026-07-02) ===
+    # These 27 actions were defined + tested in their domain sub-script ACTIONS
+    # dicts but were missing from this map, so the NL router returned
+    # "Unknown action" for shipped, SKILL-documented features. Derived
+    # mechanically as (union of every foundation sub-script ACTIONS dict) minus
+    # (ACTION_MAP ∪ ALIASES ∪ MODULE_ACTIONS ∪ ONBOARDING_ACTIONS); zero
+    # cross-domain collisions. Each resolves to the single domain whose ACTIONS
+    # dict owns it. The L0 dispatchability gate
+    # (testing/unit/constitution/test_router_dispatchability.py) now guards
+    # against this class of drift: defined ⇒ routable.
+    # Setup — account-type / voucher-type / custom-field registries, advance
+    # account config, schema migrate, registry completeness check.
+    "add-account-type": "erpclaw-setup",
+    "deactivate-account-type": "erpclaw-setup",
+    "list-account-types": "erpclaw-setup",
+    "add-voucher-type": "erpclaw-setup",
+    "deactivate-voucher-type": "erpclaw-setup",
+    "list-voucher-types": "erpclaw-setup",
+    "add-custom-field": "erpclaw-setup",
+    "remove-custom-field": "erpclaw-setup",
+    "list-custom-fields": "erpclaw-setup",
+    "set-custom-field-value": "erpclaw-setup",
+    "get-custom-field-values": "erpclaw-setup",
+    "set-advance-account": "erpclaw-setup",
+    "migrate": "erpclaw-setup",
+    "validate-registry-completeness": "erpclaw-setup",
+    # GL — accounting dimensions CRUD.
+    "add-dimension": "erpclaw-gl",
+    "update-dimension": "erpclaw-gl",
+    "deactivate-dimension": "erpclaw-gl",
+    "list-dimensions": "erpclaw-gl",
+    # Selling — credit control + dunning.
+    "check-credit-limit": "erpclaw-selling",
+    "place-customer-on-hold": "erpclaw-selling",
+    "add-dunning-level": "erpclaw-selling",
+    "run-dunning-cycle": "erpclaw-selling",
+    "list-dunning-runs": "erpclaw-selling",
+    # Payments — advance handling.
+    "apply-advance-to-invoice": "erpclaw-payments",
+    "list-open-advances": "erpclaw-payments",
+    # Reports — multi-dimensional reporting.
+    "multi-dim-trial-balance": "erpclaw-reports",
+    "dimension-balance-report": "erpclaw-reports",
 }
 
 # Aliases: actions that need to be forwarded with a different --action name
@@ -630,6 +676,11 @@ ALIASES = {
     "inventory-status": ("erpclaw-inventory", "status"),
     "billing-status": ("erpclaw-billing", "status"),
     "accounting-adv-status": ("erpclaw-accounting-adv", "status"),
+    # hr / payroll status: were bare ACTION_MAP entries that forwarded the
+    # literal name (rejected by the sub-script, whose action is `status`). Moved
+    # here to match the 10 sibling domain-status aliases so they actually route.
+    "hr-status": ("erpclaw-hr", "status"),
+    "payroll-status": ("erpclaw-payroll", "status"),
     # Selling recurring template aliases (journals owns the base names)
     "add-recurring-invoice-template": ("erpclaw-selling", "add-recurring-template"),
     "update-recurring-invoice-template": ("erpclaw-selling", "update-recurring-template"),
@@ -729,6 +780,9 @@ DANGEROUS_ACTIONS = frozenset({
     "update-foundation", "rollback-foundation",
     # Schema migrations
     "schema-apply", "schema-rollback",
+    # Foundation migration runner (DDL-executing; gated like its schema-* siblings
+    # — ADR-0028 / BDFL checkpoint-② condition c, M31 H1)
+    "migrate",
     # Initialize-database --force
     "initialize-database",
 })

@@ -68,14 +68,25 @@ LAST_SYNC_MARKER = os.path.join(install_state_dir(), ".last_sync")
 NO_AUTOSYNC_MARKER = os.path.join(install_state_dir(), ".no_autosync")
 SYNC_LOG_PATH = os.path.join(install_state_dir(), "logs", "sync.log")
 
-# Skip filters (must match install_module's full-tree verification block)
-SYNC_SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", "node_modules", "dist", "build"}
+# Skip filters (must match install_module's full-tree verification block).
+# `.clawhub` is the ClawHub CLI's per-skill metadata directory (CLI v0.12.3
+# installs by FILE EXTRACTION into the skill dir, then writes its own tracking
+# metadata under `.clawhub/` and a top-level `_meta.json`). Neither is part of
+# the ed25519-signed foundation manifest, so the reconcile walk must exclude
+# them — otherwise `update-foundation`'s orphan-cleanup (ADR-0028: files +
+# migrations converge) would flag CLI-owned metadata as "orphaned" and delete
+# it, corrupting ClawHub's own upgrade tracking on the next `clawhub update`.
+SYNC_SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", "node_modules", "dist", "build", ".clawhub"}
 SYNC_SKIP_SUFFIXES = (".pyc", ".pyo", ".bak", ".tmp", ".DS_Store")
 SYNC_SKIP_RELPATHS_FOUNDATION = {
     "scripts/module_registry.json",
     "scripts/module_registry.json.sig",
     "scripts/signing_log.txt",
 }
+# ClawHub-owned metadata filenames excluded at ANY depth (basename match),
+# mirroring erpclaw_lib.skip_filters.SKIP_FILE_EXACT's handling of the sibling
+# `.clawhubignore`. See the SYNC_SKIP_DIRS note above for the ADR-0028 rationale.
+SYNC_SKIP_BASENAMES_FOUNDATION = {"_meta.json"}
 
 
 def _now_iso():
@@ -1112,6 +1123,78 @@ def _run_module_migrations(module_name, install_path):
     return res.get("applied", [])
 
 
+def _run_foundation_migrations():
+    """Apply pending foundation (erpclaw-setup) migrations after a successful
+    update-foundation reconcile (M31 H1 / FINDINGS B1). Mirrors
+    _run_module_migrations but targets the foundation's own migrations/ dir, so a
+    reconcile that lands new DDL-bearing migration files also runs them instead of
+    silently shipping schema the DB never applied.
+
+    Returns a JSON-safe dict (never raises — a runner problem must not mask the
+    file reconcile the caller already completed):
+      - {"ran": False, "reason": ...}                       migrations/runner absent
+      - {"ran": True, "ok": True,  "applied": [...], ...}    all pending applied
+      - {"ran": True, "ok": False, "failed": stem, ...}      a migration raised; the
+        runner recorded ledger state ('failed' + each 'applied') and left the DB at
+        the last good migration. The caller surfaces this loudly and exits non-zero.
+    """
+    migrations_dir = os.path.join(SCRIPT_DIR, "erpclaw-setup", "migrations")
+    runner_path = os.path.join(SCRIPT_DIR, "erpclaw-setup", "migration_runner.py")
+    if not os.path.isdir(migrations_dir) or not os.path.isfile(runner_path):
+        return {"ran": False, "reason": "no foundation migrations dir / runner present"}
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("migration_runner", runner_path)
+    runner = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(runner)
+    except Exception as e:  # noqa: BLE001 — surface, never mask the reconcile
+        return {"ran": True, "ok": False, "failed": "<runner-import>", "applied": [],
+                "error": str(e), "detail": "migration_runner failed to import"}
+
+    db_path = db_default()
+    # Migrations UPGRADE an already-initialized foundation DB (fresh installs get
+    # the current schema from init_schema). Running ALTERs against an absent or
+    # schema-less DB is nonsensical, so skip cleanly when the core schema is not
+    # present — dialect-agnostic via the runner's own _connect.
+    if not _foundation_db_initialized(runner, db_path):
+        return {"ran": False, "reason": "foundation DB not initialized (nothing to migrate)"}
+
+    try:
+        res = runner.run_pending(
+            db_path, migrations_dir=migrations_dir, module_name="erpclaw-setup")
+    except Exception as e:  # noqa: BLE001 — surface, never mask the reconcile
+        return {"ran": True, "ok": False, "failed": "<runner>", "applied": [],
+                "error": str(e), "detail": "migration_runner failed to execute"}
+    res["ran"] = True
+    return res
+
+
+def _foundation_db_initialized(runner, db_path):
+    """True if ``db_path`` is an initialized foundation DB (has the core schema).
+
+    Dialect-agnostic: uses the runner's own ``_connect`` so SQLite and Postgres
+    both work, and probes a core table (``company``). Any error — absent DB,
+    missing table, connect failure — means "not initialized" → skip migrations.
+    A non-existent SQLite path short-circuits so we never create a stray empty DB.
+    """
+    if "://" not in str(db_path) and not os.path.isfile(db_path):
+        return False
+    try:
+        conn, _ = runner._connect(db_path)
+    except Exception:  # noqa: BLE001
+        return False
+    try:
+        conn.cursor().execute("SELECT 1 FROM company LIMIT 1")
+        return True
+    except Exception:  # noqa: BLE001 — missing table / uninitialized
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _mark_failed(conn, module_name, error_msg):
     """Mark a module installation as failed."""
     conn.execute(
@@ -1725,6 +1808,8 @@ def _walk_foundation_tree():
         for fname in files:
             if any(fname.endswith(s) for s in SYNC_SKIP_SUFFIXES):
                 continue
+            if fname in SYNC_SKIP_BASENAMES_FOUNDATION:
+                continue
             rel = os.path.relpath(os.path.join(root, fname), FOUNDATION_INSTALL_ROOT)
             if rel in SYNC_SKIP_RELPATHS_FOUNDATION:
                 continue
@@ -1818,19 +1903,26 @@ def _is_dev_source_tree(path):
     """True if `path` is a developer's git checkout, not a clawhub-installed skill.
 
     Reconciliation must never overwrite a developer's source checkout of the
-    foundation. We can't simply test "is SKILL.md tracked by some git repo"
-    because clawhub-installed skills ARE git clones (clawhub install does a
-    git clone of avansaber/erpclaw); their SKILL.md is always tracked.
+    foundation.
 
-    Distinguishing signal: the git remote URL.
-      - ClawHub install: single `origin` pointing at github.com/avansaber/erpclaw
+    ClawHub CLI v0.12.3 installs a skill by FILE EXTRACTION (it unpacks the
+    published package into the skill dir); the install is NOT a git repository,
+    so `git ls-files SKILL.md` returns non-zero and this function returns False
+    — correctly classifying an extracted install as reconcilable, not a dev
+    tree. (Older CLI builds git-cloned avansaber/erpclaw; the remote heuristic
+    below keeps those safe to reconcile too.)
+
+    We therefore can't classify by "is SKILL.md tracked by some git repo" alone,
+    because a legacy clawhub git-clone's SKILL.md IS tracked. Distinguishing
+    signal for the tracked case: the git remote URL.
+      - Legacy ClawHub git-clone: single `origin` at github.com/avansaber/erpclaw
       - Dev checkout: remote points at the private monorepo, a fork, or has
         no remote, or has multiple remotes that include a non-avansaber one.
 
     A path is "dev tree" only when SKILL.md is tracked AND the remote set is
-    NOT exclusively the canonical avansaber/erpclaw upstream. That keeps
-    clawhub deployments safe to reconcile while still refusing to stomp on
-    any developer's working copy.
+    NOT exclusively the canonical avansaber/erpclaw upstream. That keeps both
+    extracted and legacy-clone clawhub deployments safe to reconcile while still
+    refusing to stomp on any developer's working copy.
     """
     skill_md = os.path.join(path, "SKILL.md")
     if not os.path.isfile(skill_md):
@@ -1930,12 +2022,36 @@ def update_foundation_action(args):
                     f.write(_now_iso())
             except OSError:
                 pass
-            print(json.dumps({
+            result = {
                 "status": "ok",
                 "version": foundation.get("version"),
                 "in_sync": True,
                 "modified": [], "missing": [], "orphaned": [],
-            }))
+            }
+            # ADR-0028 / BDFL checkpoint ② condition (b): a confirmed apply-path
+            # run converges files AND schema — the in-sync early return must not
+            # silently skip pending migrations. Without this, the retry after a
+            # files-ok/migration-failed run reports "ok, in_sync" while pending
+            # DDL sits unapplied (the exact FINDINGS B1 silent-skip class this
+            # wiring exists to kill). Idempotent no-op when nothing is pending.
+            # NOTE the dry-run check sits BELOW this block, so guard explicitly:
+            # previews must stay read-only.
+            if not getattr(args, "dry_run", False):
+                migrations = _run_foundation_migrations()
+                _sync_log(f"foundation migrations (in-sync path): {migrations}")
+                result["migrations"] = migrations
+                if migrations.get("ran") and migrations.get("ok") is False:
+                    result["status"] = "error"
+                    result["message"] = (
+                        f"Foundation files already in sync at "
+                        f"{foundation.get('version')}, but migration "
+                        f"'{migrations.get('failed')}' FAILED: "
+                        f"{migrations.get('error')}. {migrations.get('detail', '')} "
+                        f"Applied before failure: {migrations.get('applied', [])}."
+                    )
+                    print(json.dumps(result, indent=2))
+                    sys.exit(1)
+            print(json.dumps(result))
             return
 
         if getattr(args, "dry_run", False):
@@ -1997,13 +2113,39 @@ def update_foundation_action(args):
             f"version={foundation.get('version')}"
         )
 
-        print(json.dumps({
+        # M31 H1 / FINDINGS B1 (BDFL checkpoint ②): a reconcile can land new
+        # DDL-bearing migration files, so apply pending foundation migrations
+        # here — an upgrade can never silently ship schema it never ran. This
+        # runs only on the apply path (dry-run + in-sync returned above) and
+        # inherits the reconcile's --user-confirmed dangerous-action gate, so it
+        # is never triggered by a preview or an unconfirmed call. Loud on failure.
+        migrations = _run_foundation_migrations()
+        _sync_log(f"foundation migrations: {migrations}")
+
+        result = {
             "status": "ok",
             "version": foundation.get("version"),
             "in_sync": True,
             "replaced": replaced,
             "deleted": deleted,
-        }))
+            "migrations": migrations,
+        }
+        if migrations.get("ran") and migrations.get("ok") is False:
+            # Files reconciled, but a migration failed. Do NOT claim success: the
+            # runner recorded ledger state (the failed stem + each applied one)
+            # and left the DB at the last good migration. Surface loudly + exit 1
+            # so operators and CI see the half-applied upgrade and re-run.
+            result["status"] = "error"
+            result["message"] = (
+                f"Foundation files reconciled to {foundation.get('version')}, but "
+                f"migration '{migrations.get('failed')}' FAILED: "
+                f"{migrations.get('error')}. {migrations.get('detail', '')} "
+                f"Applied before failure: {migrations.get('applied', [])}."
+            )
+            print(json.dumps(result, indent=2))
+            sys.exit(1)
+
+        print(json.dumps(result))
     finally:
         _release_sync_lock(lock)
 

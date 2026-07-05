@@ -207,13 +207,24 @@ def test_remove_item_alternative_unknown_id(conn, env):
 
 # ── manufacturing cross-module fallback ─────────────────────────────────────
 
+# The fallback tests below reach across the monorepo into the erpclaw-ops addon
+# (erpclaw-manufacturing lives in a different published repo). In a standalone
+# `avansaber/erpclaw` checkout that sibling tree is absent, so these two tests
+# skip rather than fail. In the monorepo the path resolves and they run.
+_MFG_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))))),  # repo source/
+    "erpclaw-addons", "erpclaw-ops", "scripts",
+    "erpclaw-manufacturing", "db_query.py")
+_MFG_ABSENT = not os.path.exists(_MFG_PATH)
+_MFG_SKIP_REASON = (
+    "erpclaw-manufacturing (erpclaw-ops addon) not present — cross-repo "
+    "fallback test only runs in the monorepo checkout")
+
+
 def _load_manufacturing():
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.dirname(os.path.abspath(__file__))))))  # repo source/
-    mfg_path = os.path.join(
-        root, "erpclaw-addons", "erpclaw-ops", "scripts",
-        "erpclaw-manufacturing", "db_query.py")
-    spec = importlib.util.spec_from_file_location("db_query_manufacturing", mfg_path)
+    spec = importlib.util.spec_from_file_location(
+        "db_query_manufacturing", _MFG_PATH)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -235,6 +246,7 @@ def _seed_bom_with_line(conn, env, primary_item_id):
     return bom_item_id
 
 
+@pytest.mark.skipif(_MFG_ABSENT, reason=_MFG_SKIP_REASON)
 def test_manufacturing_falls_back_to_item_alternative(conn, env):
     """add-bom-substitute on a BOM line that has NO substitute of its own must
     surface the item-global alternatives (item_alternative) for the line's
@@ -267,6 +279,7 @@ def test_manufacturing_falls_back_to_item_alternative(conn, env):
     assert cnt == 1
 
 
+@pytest.mark.skipif(_MFG_ABSENT, reason=_MFG_SKIP_REASON)
 def test_manufacturing_no_fallback_when_line_already_has_substitute(conn, env):
     """When the BOM line already has a substitute, a second add does NOT surface
     the item-global fallback (the line is already substitute-aware)."""

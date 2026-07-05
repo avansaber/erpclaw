@@ -14,7 +14,9 @@ jobs:
         with:
           python-version: '3.10'
       - name: Install pytest
-        run: pip install pytest pypika pyyaml
+        # cryptography: payroll NACHA encrypts employee bank-account numbers via
+        # erpclaw_lib.crypto → the `cryptography` package (test_nacha_ach.py).
+        run: pip install pytest pypika pyyaml cryptography
       - name: Setup erpclaw_lib
         run: |
           mkdir -p ~/.openclaw/erpclaw/lib
