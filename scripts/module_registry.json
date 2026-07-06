@@ -442,7 +442,7 @@
       "files_sha256": {
         "CHANGELOG.md": "6d70f0c2e314cdc5061f26e7503fec61d1da7d0647aaacbc43037f600416214f",
         "LICENSE.txt": "7bb0c0eb1db8b40884cd154315e459fadacd2bff10190df3516639282608ed0c",
-        "README.md": "acf11655b2208414d4741f48b425a8e9638c5345b61a070bd3df4993508d94d7",
+        "README.md": "ddf15b7dc09b0347f9eb1953ebe64b10aec82a00329cf3d0f37846fda20b76be",
         "SKILL.md": "4363e9a15eae7aa0ffa49b64c09963318a5d24ddbb7d67e8e572b6b8db208a49",
         "UI.yaml": "7c7062cdbc7877a3daa5b22dc6b4e296ce0b1dad7cdf615fd0ddcf0f278b581c",
         "assets/demo.svg": "a54a4d95a3bc98d4408c9f952899f1f37dd22b7a5d18b4b5a8b17a79acaa784f",
@@ -1943,8 +1943,8 @@
       "version": "1.1.0"
     }
   },
-  "registry_version": 70,
-  "signed_at": "2026-07-06T06:34:02Z",
+  "registry_version": 71,
+  "signed_at": "2026-07-06T06:44:40Z",
   "total_actions": 3226,
   "version": "4.12.2"
 }
