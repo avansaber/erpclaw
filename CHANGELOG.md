@@ -2,6 +2,12 @@
 
 All notable changes to the ERPClaw foundation skill.
 
+## [4.12.3] — 2026-07-21 — SKILL guidance steers (M34 F6/F8)
+
+### Changed
+- **Receiving guidance tightened (M34 F8).** The procure-to-pay receiving note previously permitted a standalone `material_receipt` for purchased goods "unless you restate the unit cost" — but a cost-stated standalone receipt still leaves the purchase order un-received, so a later bill/receipt flow receives the goods again and double-counts stock (reproduced end-to-end via live agent testing: one 100-unit delivery became 200 units on hand). The steer now says NEVER for purchased goods, and instructs checking `list-purchase-orders` before any bare "receive stock" request. The stock-entries catalog row carries the same warning at the point of use. Guidance-only; no action, schema, or GL change. A product-level guard (warn/link when receiving an item with an open PO line) is tracked separately as a build decision.
+- **Catalog-pricing guidance added (M34 F6).** The pricing catalog row now states that an item's default selling price is `add-item`/`update-item --standard-rate`, and that `add-item-price` rows (named price lists) are NOT automatically consulted at invoice time — previously nothing steered between the two overlapping surfaces, and live agent testing showed "set the selling price to X" landing in the unconsulted `item_price` table. Guidance-only.
+
 ## [4.12.2] — 2026-07-06 — documentation hygiene
 
 ### Changed

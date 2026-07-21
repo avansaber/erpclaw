@@ -1,5 +1,5 @@
 {
-  "generated": "2026-07-06",
+  "generated": "2026-07-21",
   "modules": {
     "agricultureclaw": {
       "action_count": 67,
@@ -440,10 +440,10 @@
       "description": "Complete ERP foundation: accounting, inventory, selling, buying, billing, payments, tax, journals, GL, HR, payroll, reports, and setup. 475 actions across 14 domains.",
       "display_name": "ERPClaw Core",
       "files_sha256": {
-        "CHANGELOG.md": "6d70f0c2e314cdc5061f26e7503fec61d1da7d0647aaacbc43037f600416214f",
+        "CHANGELOG.md": "cac40fc9340dc6790ffbfa2a5757e22be118027515f9a1b888ae574ef3fbe2de",
         "LICENSE.txt": "7bb0c0eb1db8b40884cd154315e459fadacd2bff10190df3516639282608ed0c",
         "README.md": "ddf15b7dc09b0347f9eb1953ebe64b10aec82a00329cf3d0f37846fda20b76be",
-        "SKILL.md": "4363e9a15eae7aa0ffa49b64c09963318a5d24ddbb7d67e8e572b6b8db208a49",
+        "SKILL.md": "35f005d4d8fb600ba0b97f91085eb6b4d3bec63d25ba0ca080d981300c299e75",
         "UI.yaml": "7c7062cdbc7877a3daa5b22dc6b4e296ce0b1dad7cdf615fd0ddcf0f278b581c",
         "assets/demo.svg": "a54a4d95a3bc98d4408c9f952899f1f37dd22b7a5d18b4b5a8b17a79acaa784f",
         "assets/logo.svg": "dd36f8427bfaa377aad2d037bd97d502055428477fe6f90afabb3a54ca0496da",
@@ -593,7 +593,7 @@
         "user",
         "rbac"
       ],
-      "version": "4.12.2"
+      "version": "4.12.3"
     },
     "erpclaw-alerts": {
       "action_count": 21,
@@ -1943,8 +1943,8 @@
       "version": "1.1.0"
     }
   },
-  "registry_version": 71,
-  "signed_at": "2026-07-06T06:44:40Z",
+  "registry_version": 75,
+  "signed_at": "2026-07-21T14:02:31Z",
   "total_actions": 3226,
-  "version": "4.12.2"
+  "version": "4.12.3"
 }
