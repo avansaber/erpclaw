@@ -4358,6 +4358,11 @@ VOUCHER_TYPE_REGISTRY_SEED = [
     ("exchange_rate_revaluation", "erpclaw-gl", "Exchange Rate Revaluation", "gl_entry"),
     ("stock_revaluation", "erpclaw-inventory", "Stock Revaluation", "gl_entry"),
     ("elimination_entry", "erpclaw-gl", "Elimination Entry", "gl_entry"),
+    # landed_cost_voucher (gl_entry) added by migration 029 (2026-07-22, D1): its GL
+    # post (DR Stock-in-Hand / CR expense) went through insert_gl_entries but the type
+    # was never seeded, so the post always failed the registry gate. Kept here for
+    # fresh installs; existing DBs get it from migration 029.
+    ("landed_cost_voucher", "erpclaw-buying", "Landed Cost Voucher", "gl_entry"),
     # target_table = stock_ledger_entry
     ("stock_entry", "erpclaw-inventory", "Stock Entry", "stock_ledger_entry"),
     ("purchase_receipt", "erpclaw-buying", "Purchase Receipt", "stock_ledger_entry"),
@@ -4369,6 +4374,11 @@ VOUCHER_TYPE_REGISTRY_SEED = [
     ("purchase_invoice", "erpclaw-buying", "Purchase Invoice", "stock_ledger_entry"),
     ("debit_note", "erpclaw-buying", "Debit Note", "stock_ledger_entry"),
     ("stock_revaluation", "erpclaw-inventory", "Stock Revaluation", "stock_ledger_entry"),
+    # landed_cost_voucher writes zero-qty valuation SLE rows (D1, 2026-07-22); the
+    # repricing helper inserts them directly (bypassing insert_sle_entries' registry
+    # gate, like revalue-stock), but the registry stays honest about who writes the
+    # table. Added by migration 029 for existing DBs.
+    ("landed_cost_voucher", "erpclaw-buying", "Landed Cost Voucher", "stock_ledger_entry"),
     # target_table = payment_allocation
     ("sales_invoice", "erpclaw-selling", "Sales Invoice", "payment_allocation"),
     ("purchase_invoice", "erpclaw-buying", "Purchase Invoice", "payment_allocation"),

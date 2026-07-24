@@ -16,8 +16,21 @@ from hr_helpers import (
     call_action, ns, is_error, is_ok, load_db_query,
     seed_company, build_hr_env,
 )
+from erpclaw_lib.govid_shape import CAUTION_MESSAGE, mask_text
 
 mod = load_db_query()
+
+
+def _shaped_id():
+    """A government-ID-shaped value assembled at runtime (no literal in source)."""
+    return "-".join(("123", "45", "6789"))
+
+
+def _audit_blob(conn):
+    rows = conn.execute(
+        "SELECT old_values, new_values, description FROM audit_log"
+    ).fetchall()
+    return " ".join(str(v) for r in rows for v in dict(r).values() if v)
 
 
 def _seed_employee(conn, company_id, first_name="Jane", last_name="Smith"):
@@ -300,3 +313,78 @@ class TestCheckExpiringDocuments:
         assert result["count"] == 1
         assert result["expiring_documents"][0]["document_type"] == "visa"
         assert result["expiring_documents"][0]["days_until_expiry"] == 10
+
+
+# ── M30: PII warn (layer A) + output masking (layer C) on employee documents ──
+
+class TestDocumentPiiDefense:
+    def test_warn_on_shaped_notes_no_audit_leak(self, conn, env):
+        emp_id = _seed_employee(conn, env["company_id"])
+        shaped = _shaped_id()
+        res = call_action(mod.add_employee_document, conn, ns(
+            employee_id=emp_id, document_type="contract",
+            document_name="Employment Contract", expiry_date=None,
+            notes="Reference " + shaped, status=None,
+        ))
+        # Warn never blocks the write.
+        assert is_ok(res)
+        assert res.get("caution") == CAUTION_MESSAGE
+        # notes is not part of the add-document audit payload — no shaped leak.
+        assert shaped not in _audit_blob(conn)
+        # DB keeps the value as-is (masking is display-only).
+        row = conn.execute(
+            "SELECT notes FROM employee_document WHERE id = ?",
+            (res["employee_document_id"],),
+        ).fetchone()
+        assert shaped in row["notes"]
+
+    def test_warn_on_shaped_document_name(self, conn, env):
+        emp_id = _seed_employee(conn, env["company_id"])
+        res = call_action(mod.add_employee_document, conn, ns(
+            employee_id=emp_id, document_type="other",
+            document_name="ID " + _shaped_id(), expiry_date=None,
+            notes=None, status=None,
+        ))
+        assert is_ok(res)
+        assert res.get("caution") == CAUTION_MESSAGE
+
+    def test_clean_document_produces_no_caution(self, conn, env):
+        emp_id = _seed_employee(conn, env["company_id"])
+        res = call_action(mod.add_employee_document, conn, ns(
+            employee_id=emp_id, document_type="offer_letter",
+            document_name="Offer Letter", expiry_date=None,
+            notes="Signed 2026-01", status=None,
+        ))
+        assert is_ok(res)
+        assert "caution" not in res
+
+    def test_get_document_masks_notes(self, conn, env):
+        emp_id = _seed_employee(conn, env["company_id"])
+        shaped = _shaped_id()
+        add = call_action(mod.add_employee_document, conn, ns(
+            employee_id=emp_id, document_type="contract",
+            document_name="Employment Contract", expiry_date=None,
+            notes="On file: " + shaped, status=None,
+        ))
+        got = call_action(mod.get_employee_document, conn, ns(
+            document_id=add["employee_document_id"],
+        ))
+        assert is_ok(got)
+        assert shaped not in got["notes"]
+        assert mask_text(shaped) in got["notes"]
+
+    def test_list_documents_masks_notes(self, conn, env):
+        emp_id = _seed_employee(conn, env["company_id"])
+        shaped = _shaped_id()
+        call_action(mod.add_employee_document, conn, ns(
+            employee_id=emp_id, document_type="contract",
+            document_name="Employment Contract", expiry_date=None,
+            notes="On file: " + shaped, status=None,
+        ))
+        result = call_action(mod.list_employee_documents, conn, ns(
+            employee_id=emp_id, document_type=None, status=None,
+        ))
+        assert is_ok(result)
+        blob = json.dumps(result["documents"])
+        assert shaped not in blob
+        assert mask_text(shaped) in blob

@@ -33,7 +33,9 @@ from uuid import uuid4
 # With ERPCLAW_HOME unset this equals os.path.expanduser("~/.openclaw/erpclaw/lib").
 sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
 from erpclaw_lib.db import get_connection
-from erpclaw_lib.paths import db_default, install_state_dir, lib_dir, modules_dir
+from erpclaw_lib.paths import (
+    db_default, erpclaw_home, install_state_dir, lib_dir, modules_dir,
+)
 from erpclaw_lib.response import ok, err, rows_to_list, row_to_dict
 
 # ---------------------------------------------------------------------------
@@ -52,6 +54,27 @@ MODULES_DIR = modules_dir()
 OPENCLAW_WORKSPACE_SKILLS_DIR = os.path.expanduser(
     "~/.openclaw/workspace/skills"
 )
+
+# The canonical OpenClaw install root. The workspace/skills publish + un-publish
+# steps below only touch ~/.openclaw/workspace/skills when the *resolved*
+# ERPCLAW_HOME (ADR-0017 point of truth) equals this — i.e. we are actually
+# managing an OpenClaw install. Under a Hermes/other-runtime home (ERPCLAW_HOME
+# pointed elsewhere), writing into ~/.openclaw/workspace/skills would silently
+# desync the OTHER runtime's live skill dir on any version skew (F10, ADR-0029;
+# the M23-class cross-runtime-write miss found by the M34 Lane-B validation).
+OPENCLAW_DEFAULT_HOME = os.path.expanduser("~/.openclaw/erpclaw")
+
+
+def _is_openclaw_default_home():
+    """True when the resolved ERPCLAW_HOME is the OpenClaw default home.
+
+    Only then may install/uninstall touch ~/.openclaw/workspace/skills. Reads
+    the environment live (via erpclaw_home()) so the decision follows the active
+    ERPCLAW_HOME, not an import-time snapshot. ERPCLAW_HOME unset ⇒ the default
+    home ⇒ True (byte-identical to pre-F10 behavior)."""
+    return os.path.normpath(erpclaw_home()) == os.path.normpath(OPENCLAW_DEFAULT_HOME)
+
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REGISTRY_PATH = os.path.join(SCRIPT_DIR, "module_registry.json")
 REMOTE_REGISTRY_URL = "https://raw.githubusercontent.com/avansaber/erpclaw/main/scripts/module_registry.json"
@@ -955,6 +978,14 @@ def _install_module_inner(args, conn, modules_by_name, depth=0):
     init_db_path = os.path.join(install_path, "init_db.py")
     tables_created = 0
     if os.path.isfile(init_db_path):
+        # Snapshot the DB's table set BEFORE running init_db so tables_created
+        # reflects the honest count of tables THIS module creates, name-agnostic
+        # (F11, ADR-0029). The prior heuristic counted
+        # `sqlite_master … name LIKE 'module_name_%'` and reported 0 for every
+        # grouped module whose tables don't carry the module-name prefix — e.g.
+        # erpclaw-growth creates 35 tables named crm_*/crmadv_*/analytics_*,
+        # none starting with 'erpclaw_growth_'. The sqlite_master delta is exact.
+        tables_before = _snapshot_data_tables()
         try:
             # Set PYTHONPATH so init_db.py can find erpclaw_lib
             env = os.environ.copy()
@@ -976,33 +1007,25 @@ def _install_module_inner(args, conn, modules_by_name, depth=0):
             _mark_failed(conn, module_name, "init_db.py timed out after 60s")
             err(f"init_db.py timed out for {module_name}")
 
-        # Authoritative table count: query the DB after init_db.py finishes.
+        # Authoritative table count: sqlite_master delta across the init_db run.
         # Parsing init_db.py output is unreliable across modules (some print to
-        # stderr, some use "Tables: N" rather than "N tables", JSON is rare),
-        # and the historical regex `(\d+)\s+tables?` silently missed
-        # healthclaw/constructclaw/foundation outputs — install_module would
-        # report tables_created=0 even when 59 tables were just created.
-        # Commit any pending registry writes first so the fresh connection
-        # below sees a consistent DB snapshot.
+        # stderr, some use "Tables: N" rather than "N tables", JSON is rare) and
+        # the module-name prefix heuristic missed every grouped module (F11).
+        # Commit any pending registry writes first so the after-snapshot below
+        # sees a consistent DB state.
         try:
             conn.commit()
         except sqlite3.Error:
             pass
-        try:
-            data_db = db_default()
-            if os.path.isfile(data_db):
-                dconn = sqlite3.connect(data_db)
-                prefix = module_name.replace("-", "_") + "_"
-                cursor = dconn.execute(
-                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE ?",
-                    (prefix + "%",))
-                tables_created = cursor.fetchone()[0]
-                dconn.close()
-        except sqlite3.Error as e:
-            # Surface the failure instead of burying it (this was a silent
-            # swallow in the prior implementation; install would report 0 with
-            # no indication anything went wrong).
-            print(f"WARN: install_module could not count {module_name} tables: {e}", file=sys.stderr)
+        tables_after = _snapshot_data_tables()
+        if tables_before is not None and tables_after is not None:
+            # New tables (by name) that appeared across the init_db run. On a
+            # fresh install this is every table the module owns; on a re-run
+            # where they already exist (CREATE TABLE IF NOT EXISTS) it is 0,
+            # which is honest for that run. install_module short-circuits an
+            # already-'installed' module upstream, so the reaching path is the
+            # fresh install.
+            tables_created = len(tables_after - tables_before)
 
     # Apply the module's own migrations (P1 — additive/alter changes init_db can't make)
     try:
@@ -1055,9 +1078,10 @@ def _install_module_inner(args, conn, modules_by_name, depth=0):
 
     # Publish to OpenClaw's workspace skills dir so the agent can find it.
     # See OPENCLAW_WORKSPACE_SKILLS_DIR comment at the top of this file.
-    workspace_published = _publish_to_openclaw_skills(install_path, module_name)
+    workspace_published, workspace_note = _publish_to_openclaw_skills(
+        install_path, module_name)
 
-    return {
+    result = {
         "module": module_name,
         "display_name": display_name,
         "version": version,
@@ -1068,6 +1092,41 @@ def _install_module_inner(args, conn, modules_by_name, depth=0):
         "git_commit": git_commit,
         "installed_at": now,
     }
+    # F10: only annotate when we deliberately skipped the cross-runtime write
+    # (non-default ERPCLAW_HOME). On the OpenClaw default home workspace_note is
+    # None, so the response stays byte-identical to the pre-F10 shape.
+    if workspace_note is not None:
+        result["workspace_skill_note"] = workspace_note
+    return result
+
+
+def _snapshot_data_tables():
+    """Return the set of user-table names in the shared data DB.
+
+    Empty set when the DB file doesn't exist yet (e.g. the very first module
+    install creates it). Returns None on a sqlite error so the caller can tell
+    "no tables" apart from "couldn't read" and avoid reporting a bogus delta.
+    Name-agnostic basis for install_module's honest tables_created count
+    (F11, ADR-0029): the module-name prefix heuristic it replaces missed every
+    grouped module whose tables aren't prefixed with the module name.
+    """
+    data_db = db_default()
+    if not os.path.isfile(data_db):
+        return set()
+    try:
+        dconn = sqlite3.connect(data_db)
+        try:
+            rows = dconn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+            return {r[0] for r in rows}
+        finally:
+            dconn.close()
+    except sqlite3.Error as e:
+        print(f"WARN: install_module could not snapshot data tables: {e}",
+              file=sys.stderr)
+        return None
 
 
 def _publish_to_openclaw_skills(install_path, module_name):
@@ -1075,25 +1134,42 @@ def _publish_to_openclaw_skills(install_path, module_name):
 
     OpenClaw's agent only sees skills under workspace/skills, not under
     erpclaw/modules. We mirror each install into both so the agent can
-    invoke module actions (e.g., shopify-status). Best-effort: returns
-    the published path on success, None if OpenClaw isn't installed
-    (workspace dir missing) or if the copy fails. We never raise, since
-    the module install itself was already successful.
+    invoke module actions (e.g., shopify-status). Best-effort: never raises,
+    since the module install itself was already successful.
+
+    Returns a ``(published_path, note)`` tuple:
+      * ``(dest, None)``  — copied into OpenClaw's workspace/skills.
+      * ``(None, None)``  — OpenClaw not installed here, or the copy failed
+        (byte-identical to the pre-F10 "return None" outcome).
+      * ``(None, reason)`` — F10: the resolved ERPCLAW_HOME is NOT the OpenClaw
+        default, so this is a Hermes/other-runtime install; we refuse to write
+        into OpenClaw's live workspace/skills dir (cross-runtime desync risk)
+        and surface the reason (ADR-0029).
     """
+    if not _is_openclaw_default_home():
+        # F10: a non-default ERPCLAW_HOME means another runtime owns this
+        # install. Writing into ~/.openclaw/workspace/skills would silently
+        # rewrite OpenClaw's copy of the skill (M23-class cross-runtime write).
+        return None, (
+            "skipped workspace-skill publish: ERPCLAW_HOME resolves to "
+            f"{erpclaw_home()!r}, not the OpenClaw default "
+            f"{OPENCLAW_DEFAULT_HOME!r}; refusing to write into another "
+            "runtime's workspace/skills (F10, ADR-0029)"
+        )
     if not os.path.isdir(os.path.dirname(OPENCLAW_WORKSPACE_SKILLS_DIR)):
         # OpenClaw not installed on this host. Nothing to do.
-        return None
+        return None, None
     try:
         os.makedirs(OPENCLAW_WORKSPACE_SKILLS_DIR, exist_ok=True)
         dest = os.path.join(OPENCLAW_WORKSPACE_SKILLS_DIR, module_name)
         if os.path.isdir(dest):
             shutil.rmtree(dest)
         shutil.copytree(install_path, dest)
-        return dest
+        return dest, None
     except (OSError, shutil.Error):
         # Don't fail the whole install over this. Surface via the
         # returned None so callers + tests can react if they want.
-        return None
+        return None, None
 
 
 def _run_module_migrations(module_name, install_path):
@@ -1344,10 +1420,14 @@ def remove_module(args):
     if install_path and os.path.isdir(install_path):
         shutil.rmtree(install_path, ignore_errors=True)
 
-    # Also remove the workspace-skills mirror so OpenClaw stops listing it.
-    workspace_dest = os.path.join(OPENCLAW_WORKSPACE_SKILLS_DIR, module_name)
-    if os.path.isdir(workspace_dest):
-        shutil.rmtree(workspace_dest, ignore_errors=True)
+    # Also remove the workspace-skills mirror so OpenClaw stops listing it —
+    # but only when we own that dir. Under a non-default ERPCLAW_HOME
+    # (Hermes/other runtime) we never wrote it, and deleting OpenClaw's copy
+    # would be the same cross-runtime mutation F10 forbids on the install side.
+    if _is_openclaw_default_home():
+        workspace_dest = os.path.join(OPENCLAW_WORKSPACE_SKILLS_DIR, module_name)
+        if os.path.isdir(workspace_dest):
+            shutil.rmtree(workspace_dest, ignore_errors=True)
 
     # Regenerate SKILL.md without removed module
     _regenerate_skill_md(conn)

@@ -497,25 +497,17 @@ class TestCalculateRetroPay:
         ))
         assert is_error(result)
 
-    def test_retro_pay_records_adjustments(self, conn, env):
-        """Retro pay should create retro_pay_adjustment records."""
+    # -- Applied-lifecycle helpers (Feature #22c wire-up) ------------------
+
+    def _retro_scenario(self, conn, env):
+        """Jan run at $4000, raise to $5000 effective Feb, retro calculated.
+
+        Leaves exactly one pending retro_pay_adjustment row ($1000 for Jan).
+        """
         setup = _setup_payroll_ready(conn, env, base_amount="4000.00")
 
-        # Create Jan payroll
-        run1 = call_action(mod.create_payroll_run, conn, ns(
-            company_id=env["company_id"],
-            period_start="2026-01-01",
-            period_end="2026-01-31",
-            department_id=None,
-            payroll_frequency="monthly",
-        ))
-        assert is_ok(run1)
-        gen1 = call_action(mod.generate_salary_slips, conn, ns(
-            payroll_run_id=run1["payroll_run_id"],
-        ))
-        assert is_ok(gen1)
+        run1_id = self._make_run(conn, env, "2026-01-01", "2026-01-31")
 
-        # Add raise to $5000 effective Feb
         sa2 = call_action(mod.add_salary_assignment, conn, ns(
             employee_id=env["employee_id"],
             salary_structure_id=setup["structure_id"],
@@ -530,18 +522,196 @@ class TestCalculateRetroPay:
             from_date=None, to_date=None,
         ))
         assert is_ok(result)
+        assert result["periods_affected"] == 1
+        assert Decimal(result["total_retro_amount"]) == Decimal("1000.00")
+        return {"setup": setup, "run1_id": run1_id}
 
-        # Verify retro_pay_adjustment record in DB
-        rows = conn.execute(
-            "SELECT * FROM retro_pay_adjustment WHERE employee_id = ?",
+    def _make_run(self, conn, env, period_start, period_end):
+        """Create a payroll run for the period and generate its slips."""
+        run = call_action(mod.create_payroll_run, conn, ns(
+            company_id=env["company_id"],
+            period_start=period_start,
+            period_end=period_end,
+            department_id=None,
+            payroll_frequency="monthly",
+        ))
+        assert is_ok(run)
+        gen = call_action(mod.generate_salary_slips, conn, ns(
+            payroll_run_id=run["payroll_run_id"],
+        ))
+        assert is_ok(gen)
+        return run["payroll_run_id"]
+
+    def _retro_rows(self, conn, env):
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM retro_pay_adjustment WHERE employee_id = ? "
+            "ORDER BY period_from",
             (env["employee_id"],),
-        ).fetchall()
-        assert len(rows) >= 1
-        adj = dict(rows[0])
+        ).fetchall()]
+
+    def _slip_retro_lines(self, conn, run_id):
+        """Return the 'Retro Pay Adjustment' earning-line amounts for a run."""
+        return [r["amount"] for r in conn.execute(
+            """SELECT d.amount
+               FROM salary_slip_detail d
+               JOIN salary_slip s ON s.id = d.salary_slip_id
+               JOIN salary_component c ON c.id = d.salary_component_id
+               WHERE s.payroll_run_id = ? AND d.component_type = 'earning'
+                 AND c.name = 'Retro Pay Adjustment'""",
+            (run_id,),
+        ).fetchall()]
+
+    def test_retro_pay_records_adjustments(self, conn, env):
+        """Retro rows live the full lifecycle: pending -> applied on submit."""
+        self._retro_scenario(conn, env)
+
+        rows = self._retro_rows(conn, env)
+        assert len(rows) == 1
+        adj = rows[0]
         assert adj["status"] == "pending"
         assert adj["old_rate"] == "4000.00"
         assert adj["new_rate"] == "5000.00"
         assert adj["adjustment_amount"] == "1000.00"
+
+        # Feb run consumes the pending row into an earning line; the row
+        # stays pending while the slip is a draft...
+        run2_id = self._make_run(conn, env, "2026-02-01", "2026-02-28")
+        assert self._retro_rows(conn, env)[0]["status"] == "pending"
+
+        # ...and flips to applied when the run is submitted.
+        sub = call_action(mod.submit_payroll_run, conn, ns(
+            payroll_run_id=run2_id,
+            cost_center_id=env["cost_center_id"],
+        ))
+        assert is_ok(sub)
+        assert sub["retro_adjustments_applied"] == 1
+
+        rows = self._retro_rows(conn, env)
+        assert len(rows) == 1
+        assert rows[0]["status"] == "applied"
+        assert rows[0]["adjustment_amount"] == "1000.00"
+
+    def test_retro_pay_recalc_idempotent(self, conn, env):
+        """Re-running calculate-retro-pay never duplicates pending/applied rows."""
+        self._retro_scenario(conn, env)
+
+        # Second calc: same employee+period combo -> skipped, no new row.
+        recalc = call_action(mod.calculate_retro_pay, conn, ns(
+            employee_id=env["employee_id"],
+            from_date=None, to_date=None,
+        ))
+        assert is_ok(recalc)
+        assert recalc["periods_affected"] == 0
+        assert recalc["total_retro_amount"] == "0.00"
+        assert recalc["periods_skipped"] == 1
+        assert recalc["skipped"][0]["existing_status"] == "pending"
+        assert len(self._retro_rows(conn, env)) == 1
+
+        # Consume + submit, then re-calc again: applied rows also skip.
+        run2_id = self._make_run(conn, env, "2026-02-01", "2026-02-28")
+        sub = call_action(mod.submit_payroll_run, conn, ns(
+            payroll_run_id=run2_id,
+            cost_center_id=env["cost_center_id"],
+        ))
+        assert is_ok(sub)
+
+        recalc2 = call_action(mod.calculate_retro_pay, conn, ns(
+            employee_id=env["employee_id"],
+            from_date=None, to_date=None,
+        ))
+        assert is_ok(recalc2)
+        assert recalc2["periods_affected"] == 0
+        assert recalc2["skipped"][0]["existing_status"] == "applied"
+        assert len(self._retro_rows(conn, env)) == 1
+
+    def test_retro_pay_slip_consumes_exact_earning_line(self, conn, env):
+        """The consuming slip carries an exact-Decimal retro earning line."""
+        self._retro_scenario(conn, env)
+
+        run2_id = self._make_run(conn, env, "2026-02-01", "2026-02-28")
+
+        lines = self._slip_retro_lines(conn, run2_id)
+        assert len(lines) == 1
+        assert Decimal(lines[0]) == Decimal("1000.00")
+
+        # Slip gross = structure base 4000.00 + retro 1000.00, exactly.
+        slip = conn.execute(
+            "SELECT gross_pay FROM salary_slip WHERE payroll_run_id = ?",
+            (run2_id,),
+        ).fetchone()
+        assert Decimal(slip["gross_pay"]) == Decimal("5000.00")
+
+        # Regenerating the draft run does not duplicate the line (rows are
+        # still pending, drafts are rebuilt from scratch).
+        gen_again = call_action(mod.generate_salary_slips, conn, ns(
+            payroll_run_id=run2_id,
+        ))
+        assert is_ok(gen_again)
+        lines = self._slip_retro_lines(conn, run2_id)
+        assert len(lines) == 1
+        assert Decimal(lines[0]) == Decimal("1000.00")
+
+    def test_retro_pay_cancel_reverts_to_pending(self, conn, env):
+        """Cancelling the consuming run flips its applied rows back to pending."""
+        self._retro_scenario(conn, env)
+
+        run2_id = self._make_run(conn, env, "2026-02-01", "2026-02-28")
+        sub = call_action(mod.submit_payroll_run, conn, ns(
+            payroll_run_id=run2_id,
+            cost_center_id=env["cost_center_id"],
+        ))
+        assert is_ok(sub)
+        assert self._retro_rows(conn, env)[0]["status"] == "applied"
+
+        cancel = call_action(mod.cancel_payroll_run, conn, ns(
+            payroll_run_id=run2_id,
+        ))
+        assert is_ok(cancel)
+        assert cancel["retro_adjustments_reverted"] == 1
+
+        rows = self._retro_rows(conn, env)
+        assert len(rows) == 1
+        assert rows[0]["status"] == "pending"
+
+        # A replacement run consumes the reverted row again, exactly once.
+        run3_id = self._make_run(conn, env, "2026-02-01", "2026-02-28")
+        lines = self._slip_retro_lines(conn, run3_id)
+        assert len(lines) == 1
+        assert Decimal(lines[0]) == Decimal("1000.00")
+
+    def test_retro_pay_no_double_consume_after_applied(self, conn, env):
+        """A later slip generation must not re-consume applied rows."""
+        self._retro_scenario(conn, env)
+
+        run2_id = self._make_run(conn, env, "2026-02-01", "2026-02-28")
+        sub = call_action(mod.submit_payroll_run, conn, ns(
+            payroll_run_id=run2_id,
+            cost_center_id=env["cost_center_id"],
+        ))
+        assert is_ok(sub)
+        assert sub["retro_adjustments_applied"] == 1
+
+        # March run: no retro line, gross is base only, row stays applied.
+        run3_id = self._make_run(conn, env, "2026-03-01", "2026-03-31")
+        assert self._slip_retro_lines(conn, run3_id) == []
+        slip = conn.execute(
+            "SELECT gross_pay FROM salary_slip WHERE payroll_run_id = ?",
+            (run3_id,),
+        ).fetchone()
+        assert Decimal(slip["gross_pay"]) == Decimal("4000.00")
+
+        rows = self._retro_rows(conn, env)
+        assert len(rows) == 1
+        assert rows[0]["status"] == "applied"
+
+        # Submitting the March run applies nothing further.
+        sub3 = call_action(mod.submit_payroll_run, conn, ns(
+            payroll_run_id=run3_id,
+            cost_center_id=env["cost_center_id"],
+        ))
+        assert is_ok(sub3)
+        assert sub3["retro_adjustments_applied"] == 0
+        assert self._retro_rows(conn, env)[0]["status"] == "applied"
 
 
 # ==============================================================================

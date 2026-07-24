@@ -1158,10 +1158,6 @@
    "class": "module_spec",
    "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
   },
-  "educlaw_meal_plan": {
-   "doc_ref": "prov:internal:f36843c3",
-   "class": "direct"
-  },
   "educlaw_notification": {
    "doc_ref": "prov:module-spec:educlaw",
    "class": "module_spec",

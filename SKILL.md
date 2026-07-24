@@ -1,6 +1,6 @@
 ---
 name: erpclaw
-version: 4.12.3
+version: 4.13.0
 description: >
   AI-native ERP system. Full accounting, invoicing, inventory, purchasing,
   tax, billing, HR, payroll, advanced accounting (ASC 606/842, intercompany, consolidation),
@@ -148,7 +148,7 @@ Re-confirm a second time ONLY for the small destructive set, where a mistake is 
 ### Payments (15)
 | Action | Description |
 |--------|-------------|
-| `add-payment` / `update-payment` / `get-payment` / `list-payments` / `submit-payment` / `cancel-payment` / `delete-payment` | Payment CRUD & lifecycle |
+| `add-payment` / `update-payment` / `get-payment` / `list-payments` / `submit-payment` / `cancel-payment` / `delete-payment` | Payment CRUD & lifecycle. `add-payment --deductions` (JSON array of `{account_id, amount, type}`; type = tds/commission/early_payment_discount/other) records short-pays: submit posts the deduction GL legs and the deducted total clears the allocated invoices ($980 wire + $20 discount fully clears a $1,000 invoice); cancel reverses them |
 | `create-payment-ledger-entry` / `get-outstanding` / `get-unallocated-payments` / `allocate-payment` / `reconcile-payments` / `bank-reconciliation` | Reconciliation |
 | `list-open-advances` / `apply-advance-to-invoice` | Advances (S2): SAP Business One vocabulary aliases for `get-unallocated-payments` / `allocate-payment` (same semantics) |
 
@@ -171,7 +171,7 @@ Re-confirm a second time ONLY for the small destructive set, where a mistake is 
 ### Selling (57)
 | Action | Description |
 |--------|-------------|
-| `add-customer` / `update-customer` / `get-customer` / `list-customers` / `import-customers` | Customer CRUD (add/update accept `--email` / `--phone` — dedicated structured columns) |
+| `add-customer` / `update-customer` / `get-customer` / `list-customers` / `import-customers` | Customer CRUD (add/update accept `--email` / `--phone` — dedicated structured columns; `--default-price-list-id` sets the customer's default selling price list, consulted first when a line has no explicit rate) |
 | `add-quotation` / `update-quotation` / `get-quotation` / `list-quotations` / `submit-quotation` / `convert-quotation-to-so` | Quotations |
 | `add-sales-order` / `update-sales-order` / `get-sales-order` / `list-sales-orders` / `submit-sales-order` / `cancel-sales-order` / `amend-sales-order` / `close-sales-order` | Sales orders |
 | `add-blanket-order` / `get-blanket-order` / `list-blanket-orders` / `submit-blanket-order` / `create-so-from-blanket` | Blanket orders |
@@ -184,17 +184,17 @@ Re-confirm a second time ONLY for the small destructive set, where a mistake is 
 | `check-credit-limit` / `place-customer-on-hold` | Credit control: compute available credit (limit minus outstanding AR); place customer on hold / suspend / restore active |
 | `add-dunning-level` / `run-dunning-cycle` / `list-dunning-runs` | Dunning: configure escalation levels (at N days overdue → email / call / hold / suspend); run a cycle that matches overdue invoices to their highest applicable level and applies the configured action — `email` levels enqueue a dunning email via the erpclaw-alerts send-email action and record the outbox id on `dunning_run.generated_email_id` (missing customer email or template skips-with-note, never failing the cycle); view run history |
 
-### Buying (43)
+### Buying (48)
 | Action | Description |
 |--------|-------------|
 | `add-supplier` / `update-supplier` / `get-supplier` / `list-suppliers` / `import-suppliers` | Supplier CRUD (add/update accept `--email` / `--phone` — dedicated structured columns) |
-| `add-material-request` / `submit-material-request` / `list-material-requests` | Material requests |
+| `add-material-request` / `submit-material-request` / `list-material-requests` / `get-material-request` / `create-po-from-material-request` | Material requests. `create-po-from-material-request --material-request-id MR --supplier-id S` copies the remaining unordered lines onto a draft PO (rate = item's last purchase rate, else standard rate; per-line overrides via `--items` JSON, qty 0 skips a line), bumps each line's ordered_qty, and rolls the request status to partially_ordered/ordered — call again to order the remainder |
 | `add-rfq` / `submit-rfq` / `list-rfqs` / `add-supplier-quotation` / `list-supplier-quotations` / `compare-supplier-quotations` | RFQs & quotes |
 | `add-purchase-order` / `update-purchase-order` / `get-purchase-order` / `list-purchase-orders` / `submit-purchase-order` / `cancel-purchase-order` / `close-purchase-order` | Purchase orders |
 | `add-blanket-po` / `get-blanket-po` / `list-blanket-pos` / `submit-blanket-po` / `create-po-from-blanket` / `create-po-from-so` / `create-drop-ship-order` | Blanket POs & drop ship |
 | `create-purchase-receipt` / `get-purchase-receipt` / `list-purchase-receipts` / `submit-purchase-receipt` / `cancel-purchase-receipt` | Receipts |
 | `create-purchase-invoice` / `update-purchase-invoice` / `get-purchase-invoice` / `list-purchase-invoices` / `submit-purchase-invoice` / `cancel-purchase-invoice` | Purchase invoices. `create-purchase-invoice --cwip-asset-id <A>` (standalone cost bill) routes the expense GL to the asset's CWIP account + records a cost accumulation on submit (S3) |
-| `create-debit-note` / `add-landed-cost-voucher` / `update-receipt-tolerance` / `update-three-way-match-policy` | Adjustments |
+| `create-debit-note` / `add-landed-cost-voucher` / `list-landed-cost-vouchers` / `get-landed-cost-voucher` / `cancel-landed-cost-voucher` / `update-receipt-tolerance` / `update-three-way-match-policy` | Adjustments. Landed cost (freight/duty/insurance on received stock): `add-landed-cost-voucher` posts the GL AND reprices SLE valuation + FIFO layers in one step; `cancel-landed-cost-voucher` reverses both halves (cancel = reverse, never edit) |
 
 **Receiving purchased stock — flow:** to bring purchased goods into inventory, receive them against their source document so valuation carries automatically. Canonical flow: `submit-purchase-order` (confirms the order + rate) → `create-purchase-receipt --purchase-order-id <PO>` then `submit-purchase-receipt` (this values the stock at the PO rate and posts inventory GL) → `create-purchase-invoice` + `submit-purchase-invoice` for the bill (leave stock update off — the receipt already moved it) → pay. NEVER use a standalone `add-stock-entry` `material_receipt` for purchased goods — even with the cost stated, it does not mark the purchase order received, so the later bill/receipt flow will receive the goods AGAIN and double-count stock. Before any bare "receive stock" request, run `list-purchase-orders` for an open order covering the item; if one exists, receive via `create-purchase-receipt --purchase-order-id`. (A rate-less standalone receipt cannot be valued and will be refused regardless.)
 
@@ -205,14 +205,14 @@ Re-confirm a second time ONLY for the small destructive set, where a mistake is 
 | `add-item-attribute` / `create-item-variant` / `generate-item-variants` / `list-item-variants` | Item variants |
 | `add-item-supplier` / `list-item-suppliers` / `set-item-purchase-uom` | Item suppliers |
 | `add-warehouse` / `update-warehouse` / `list-warehouses` | Warehouses |
-| `add-stock-entry` / `add-repack-stock-entry` / `add-material-consumption` / `get-stock-entry` / `list-stock-entries` / `submit-stock-entry` / `cancel-stock-entry` | Stock entries. `--entry-type` accepts receive / issue / transfer / manufacture / repack / subcontract / consume. A `material_receipt` requires a stated rate or the item's standard cost (non-purchase adjustments ONLY — check `list-purchase-orders` first: receiving PO-backed goods here leaves the PO un-received and the Buying flow will double-count the stock later; purchased goods go through the procure-to-pay flow). `repack` consumes input lines and produces output lines in one warehouse with input value == output value (cost-balanced within $0.01); `add-repack-stock-entry --warehouse W --from-item-id I1 --from-qty Q1 --to-item-id I2 --to-qty Q2 [--standard-rate R]` is the one-in/one-out shortcut. `subcontract` (`send_to_subcontractor`) transfers stock out to a `--supplier-warehouse-id` (a transit/production warehouse). `consume` (`material_consumption`) issues raw material against an active `--work-order-id`; `add-material-consumption --warehouse W --work-order-id WO --item-id I --qty Q` is the shortcut |
+| `add-stock-entry` / `add-repack-stock-entry` / `add-material-consumption` / `get-stock-entry` / `list-stock-entries` / `submit-stock-entry` / `cancel-stock-entry` | Stock entries. `--entry-type` accepts receive / issue / transfer / manufacture / repack / subcontract / consume. A `material_receipt` requires a stated rate or the item's standard cost (non-purchase adjustments ONLY — check `list-purchase-orders` first: receiving PO-backed goods here leaves the PO un-received and the Buying flow will double-count the stock later; purchased goods go through the procure-to-pay flow). `repack` consumes input lines and produces output lines in one warehouse with input value == output value (cost-balanced within $0.01); `add-repack-stock-entry --warehouse W --from-item-id I1 --from-qty Q1 --to-item-id I2 --to-qty Q2 [--standard-rate R]` is the one-in/one-out shortcut. `subcontract` (`send_to_subcontractor`) transfers stock out to a `--supplier-warehouse-id` (a transit/production warehouse). `consume` (`material_consumption`) issues raw material against an active `--work-order-id`; `add-material-consumption --warehouse W --work-order-id WO --item-id I --qty Q` is the shortcut. Product-layer guard: a `material_receipt` for an item on an open purchase-order line, or a `material_issue` for an item on an open sales-order line, is refused at add and submit with a pointer to the order-backed flow (`create-purchase-receipt` / `create-delivery-note`) |
 | `create-stock-ledger-entries` / `reverse-stock-ledger-entries` | Stock ledger |
 | `get-stock-balance` / `stock-balance` / `stock-balance-report` / `stock-ledger-report` / `get-projected-qty` | Stock reports. `get-projected-qty`'s `reserved_qty` reads persisted active reservations (M5); falls back to open sales-order lines when none exist |
 | `add-putaway-rule` / `list-putaway-rules` / `update-putaway-rule` / `delete-putaway-rule` / `apply-putaway-on-receipt` | Putaway (M5, warehouse-level). Route received stock to a target warehouse by item or item-group match (`--match-item I` beats `--match-item-group G`, then `--priority` ASC). `delete-putaway-rule` soft-disables. `apply-putaway-on-receipt --stock-entry SE` computes the deterministic routing for a `material_receipt` |
 | `create-pick-list` / `add-pick-list-item` / `submit-pick-list` / `mark-picked` / `complete-pick-list` / `cancel-pick-list` | Pick lists (M5). `create-pick-list --from-sales-order SO` drafts a pick from open SO lines; `submit-pick-list` reserves the qty (hard); `mark-picked --pick-list P --item I --picked-qty Q` records actuals (full pick → `picked`); `complete-pick-list` consumes the reservations and generates a delivery note; `cancel-pick-list` releases them |
 | `add-reservation` / `release-reservation` / `list-reservations` | Hard stock reservations (M5, ADR-0026). `add-reservation --voucher-type T --item I --warehouse W --qty Q` holds stock and is refused if it would exceed available (`actual − active reserved`); a `material_issue` that would breach active reservations is blocked. `release-reservation --id I` frees it |
 | `add-item-alternative` / `list-item-alternatives` / `get-best-alternative-for-item` / `remove-item-alternative` | Item-global substitutes (S7, directional). `add-item-alternative --item I --alternative A [--priority P --conversion-factor C --notes "..."]` (lower priority = preferred; self-ref rejected; pair (a,b) unique but (b,a) is a distinct valid row). `get-best-alternative-for-item --item I [--required-qty Q --warehouse W]` returns the highest-priority active alternative with enough stock at W (ties by available qty); no match is a clean empty result. `remove-item-alternative --id I` soft-disables. Manufacturing BOM substitutes inherit from these when a BOM line has none of its own |
-| `add-batch` / `list-batches` / `add-serial-number` / `list-serial-numbers` / `add-price-list` / `add-item-price` / `get-item-price` / `add-pricing-rule` | Batch & serial; NAMED price lists (customer/currency tiers). An item's default catalog selling price is `add-item`/`update-item --standard-rate` — invoicing does NOT automatically consult `item_price` rows, so "set the selling price to X" on a plain item means `--standard-rate X`, not `add-item-price` |
+| `add-batch` / `list-batches` / `add-serial-number` / `list-serial-numbers` / `add-price-list` / `add-item-price` / `get-item-price` / `add-pricing-rule` | Batch & serial; NAMED price lists (customer/currency tiers). Rate resolution at document entry (quotation / sales order / standalone invoice) for a line with no explicit rate follows the order: explicit `--items` rate (respected even at 0) > `item_price` (the customer's `--default-price-list-id` if set, else any enabled selling list, honoring min-qty + valid-from/to window) > `item.standard_rate` > 0. An item's default catalog price is still `add-item`/`update-item --standard-rate`; use `add-item-price` for customer/tier/date-specific selling prices |
 | `add-stock-reconciliation` / `submit-stock-reconciliation` / `revalue-stock` / `list-stock-revaluations` / `get-stock-revaluation` / `cancel-stock-revaluation` / `check-reorder` | Reconciliation, revaluation & reorder |
 
 ### Billing & Metering (24)
@@ -246,7 +246,7 @@ Re-confirm a second time ONLY for the small destructive set, where a mistake is 
 ### HR & Payroll (68)
 | Action | Description |
 |--------|-------------|
-| `add-employee` / `update-employee` / `get-employee` / `list-employees` / `record-lifecycle-event` | Employee CRUD |
+| `add-employee` / `update-employee` / `get-employee` / `list-employees` / `record-lifecycle-event` | Employee CRUD; `--ssn` stored encrypted, returned as last-4 only |
 | `add-employee-bank-account` / `list-employee-bank-accounts` / `add-employee-document` / `get-employee-document` / `list-employee-documents` / `check-expiring-documents` | Employee details |
 | `add-department` / `list-departments` / `add-designation` / `list-designations` | Org structure |
 | `add-leave-type` / `list-leave-types` / `add-leave-allocation` / `get-leave-balance` | Leave config |
@@ -257,8 +257,8 @@ Re-confirm a second time ONLY for the small destructive set, where a mistake is 
 | `add-expense-claim` / `submit-expense-claim` / `approve-expense-claim` / `reject-expense-claim` / `update-expense-claim-status` / `list-expense-claims` | Expenses |
 | `add-salary-component` / `list-salary-components` / `add-salary-structure` / `get-salary-structure` / `list-salary-structures` | Salary config |
 | `add-salary-assignment` / `list-salary-assignments` / `add-income-tax-slab` / `add-state-tax-slab` / `update-employee-state-config` | Payroll config |
-| `update-fica-config` / `update-futa-suta-config` / `add-overtime-policy` / `calculate-overtime` / `calculate-retro-pay` | Tax & overtime |
-| `create-payroll-run` / `generate-salary-slips` / `get-salary-slip` / `list-salary-slips` / `submit-payroll-run` / `cancel-payroll-run` | Payroll processing |
+| `update-fica-config` / `update-futa-suta-config` / `add-overtime-policy` / `calculate-overtime` / `calculate-retro-pay` | Tax & overtime; retro calc is idempotent (skips periods already pending/applied) |
+| `create-payroll-run` / `generate-salary-slips` / `get-salary-slip` / `list-salary-slips` / `submit-payroll-run` / `cancel-payroll-run` | Payroll processing; slips auto-include pending retro pay as an earning line (applied on submit, reverted on cancel) |
 | `generate-w2-data` / `generate-nacha-file` / `add-garnishment` / `update-garnishment` / `get-garnishment` / `list-garnishments` | W-2, NACHA, garnishments |
 | `get-amendment-history` | Amendment tracking |
 

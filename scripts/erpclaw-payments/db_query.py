@@ -129,6 +129,149 @@ def _insert_allocations(conn, payment_entry_id: str, allocations: list[dict]):
 
 INVOICE_VOUCHER_TYPES = ("sales_invoice", "purchase_invoice")
 
+# WS2 D3: mirrors the payment_deduction.type CHECK enum in init_schema.py.
+# Validated here so a bad type errors with clean JSON, never a raw IntegrityError.
+VALID_DEDUCTION_TYPES = ("tds", "commission", "early_payment_discount", "other")
+
+
+def _get_deductions(conn, payment_entry_id: str) -> list[dict]:
+    """Fetch deduction rows for a payment entry (stable created_at, id order)."""
+    q = (Q.from_(PD).select(PD.star)
+         .where(PD.payment_entry_id == P())
+         .orderby(PD.created_at).orderby(PD.id))
+    rows = conn.execute(q.get_sql(), (payment_entry_id,)).fetchall()
+    return [row_to_dict(r) for r in rows]
+
+
+def _insert_deductions(conn, payment_entry_id: str, payment_type: str,
+                       deductions_arg) -> Decimal:
+    """Validate + insert payment_deduction rows (WS2 D3). Returns total deducted.
+
+    Each entry: {"account_id", "amount", "type", "description"?}. Deductions are
+    the non-cash slice of paid_amount (discount given, TDS withheld, processor
+    commission, write-off): paid_amount = allocations + deductions + unallocated.
+    """
+    if payment_type == "internal_transfer":
+        err("--deductions is not supported for internal_transfer payments")
+    try:
+        deds = json.loads(deductions_arg) if isinstance(deductions_arg, str) else deductions_arg
+    except json.JSONDecodeError:
+        err("Invalid JSON format in --deductions")
+    if not isinstance(deds, list) or not deds or \
+            not all(isinstance(d, dict) for d in deds):
+        err("--deductions must be a non-empty JSON array of objects")
+    qa = Q.from_(ACCOUNT).select(ACCOUNT.id).where(ACCOUNT.id == P())
+    sql, _ = insert_row("payment_deduction", {
+        "id": P(), "payment_entry_id": P(), "account_id": P(),
+        "amount": P(), "type": P(), "description": P(),
+    })
+    total = Decimal("0")
+    for d in deds:
+        acct_id = d.get("account_id")
+        if not acct_id or not conn.execute(qa.get_sql(), (acct_id,)).fetchone():
+            err(f"Deduction account {acct_id} not found")
+        dtype = d.get("type")
+        if dtype not in VALID_DEDUCTION_TYPES:
+            err(f"Invalid deduction type '{dtype}'. Valid: {VALID_DEDUCTION_TYPES}")
+        try:
+            amount = round_currency(to_decimal(d.get("amount", "0")))
+        except (TypeError, ValueError, InvalidOperation):
+            err(f"Invalid deduction amount {d.get('amount')!r} "
+                "(pass money as a string, e.g. \"20.00\", never a float)")
+        if amount <= 0:
+            err("Deduction amounts must be > 0")
+        total += amount
+        conn.execute(sql, (str(uuid.uuid4()), payment_entry_id, acct_id,
+                           str(amount), dtype, d.get("description")))
+    return total
+
+
+def _deduction_shares(allocations, total_deductions) -> dict:
+    """Pro-rata split of the deduction total across invoice-type allocations.
+
+    Each non-final share is rounded; the final invoice allocation absorbs the
+    residue so the shares sum EXACTLY to total_deductions. Returns
+    {allocation_id: Decimal}. Empty when there is nothing to distribute (no
+    deductions, or no invoice allocations — an on-account deduction stays at
+    party level and never clears a document).
+    """
+    shares = {}
+    if total_deductions <= 0:
+        return shares
+    inv_allocs = [a for a in allocations
+                  if canonical_voucher_type(a["voucher_type"]) in INVOICE_VOUCHER_TYPES]
+    if not inv_allocs:
+        return shares
+    alloc_sum = sum((to_decimal(a["allocated_amount"]) for a in inv_allocs),
+                    Decimal("0"))
+    if alloc_sum <= 0:
+        return shares
+    remaining = total_deductions
+    for a in inv_allocs[:-1]:
+        share = round_currency(
+            total_deductions * to_decimal(a["allocated_amount"]) / alloc_sum)
+        if share > remaining:
+            share = remaining
+        shares[a["id"]] = share
+        remaining -= share
+    shares[inv_allocs[-1]["id"]] = round_currency(remaining)
+    return shares
+
+
+def _default_cost_center(conn, company_id: str):
+    """Company default cost center, else the first non-group CC, else None."""
+    row = conn.execute(
+        Q.from_(COMPANY).select(COMPANY.default_cost_center_id)
+        .where(COMPANY.id == P()).get_sql(), (company_id,)).fetchone()
+    if row and row["default_cost_center_id"]:
+        return row["default_cost_center_id"]
+    qc = (Q.from_(CC).select(CC.id)
+          .where(CC.company_id == P()).where(CC.is_group == P()))
+    cc = conn.execute(qc.get_sql() + " LIMIT 1", (company_id, 0)).fetchone()
+    return cc["id"] if cc else None
+
+
+def _apply_deduction_legs(conn, pe, gl_entries, deductions, total_deductions):
+    """Mutate gl_entries for WS2 D3: shrink the cash leg by total_deductions and
+    append one same-side leg per deduction row (DR for receive, CR for pay).
+
+    The party control leg keeps the FULL paid_amount, so the invoice-clearing
+    credit/debit legs are unchanged and debits still equal credits:
+      receive: DR bank (paid − deductions) + DR deduction accts / CR AR paid
+      pay:     DR AP paid / CR bank (paid − deductions) + CR deduction accts
+    P&L deduction accounts get the default cost center (12-step Step 6). The
+    caller runs the FULL validate_gl_entries pass on the mutated list — the
+    deduction legs go through the same 12-step gate as every other leg.
+    """
+    if pe["payment_type"] == "receive":
+        cash_acct, side = pe["paid_to_account"], "debit"
+    else:  # pay
+        cash_acct, side = pe["paid_from_account"], "credit"
+    for e in gl_entries:
+        if e["account_id"] == cash_acct and to_decimal(e.get(side, "0")) > 0:
+            cur = to_decimal(e[side])
+            if total_deductions > cur:
+                err(f"Deductions total ({total_deductions}) exceeds the "
+                    f"cash leg ({cur})")
+            e[side] = str(round_currency(cur - total_deductions))
+            break
+    else:
+        err("Cash leg not found for deduction posting")
+    default_cc = None
+    for d in deductions:
+        leg = {"account_id": d["account_id"], "debit": "0", "credit": "0",
+               "party_type": None, "party_id": None}
+        leg[side] = d["amount"]
+        acct = conn.execute(
+            Q.from_(ACCOUNT).select(ACCOUNT.root_type)
+            .where(ACCOUNT.id == P()).get_sql(), (d["account_id"],)).fetchone()
+        if acct and acct["root_type"] in ("income", "expense"):
+            if default_cc is None:
+                default_cc = _default_cost_center(conn, pe["company_id"]) or ""
+            if default_cc:
+                leg["cost_center_id"] = default_cc
+        gl_entries.append(leg)
+
 
 def _post_allocation_ple(conn, pe, voucher_type, voucher_id, allocated_amount):
     """Insert a per-allocation PLE row that offsets an invoice's voucher PLE.
@@ -199,7 +342,12 @@ def _clear_invoice_allocation(conn, pe, voucher_type, voucher_id, allocated_amou
 
 
 def _recalc_unallocated(conn, payment_entry_id: str):
-    """Recalculate and update unallocated_amount on a payment entry."""
+    """Recalculate and update unallocated_amount on a payment entry.
+
+    WS2 D3 invariant: paid_amount = allocations + deductions + unallocated.
+    Deductions are non-cash consumption of the payment (discount/TDS/commission)
+    and reduce the allocatable remainder exactly like allocations do.
+    """
     q = Q.from_(PE).select(PE.paid_amount).where(PE.id == P())
     pe = conn.execute(q.get_sql(), (payment_entry_id,)).fetchone()
     if not pe:
@@ -210,7 +358,12 @@ def _recalc_unallocated(conn, payment_entry_id: str):
           .where(PA.payment_entry_id == P()))
     row = conn.execute(q2.get_sql(), (payment_entry_id,)).fetchone()
     allocated = to_decimal(str(row["total"]))
-    unallocated = round_currency(paid - allocated)
+    q3 = (Q.from_(PD)
+          .select(fn.Coalesce(DecimalSum(PD.amount), ValueWrapper("0")).as_("total"))
+          .where(PD.payment_entry_id == P()))
+    drow = conn.execute(q3.get_sql(), (payment_entry_id,)).fetchone()
+    deducted = to_decimal(str(drow["total"]))
+    unallocated = round_currency(paid - allocated - deducted)
     sql = update_row("payment_entry",
                      data={"unallocated_amount": P(), "updated_at": now()},
                      where={"id": P()})
@@ -346,7 +499,25 @@ def add_payment(conn, args):
         except json.JSONDecodeError as e:
             err("Invalid JSON format in --allocations")
         _insert_allocations(conn, pe_id, allocs)
+
+    # WS2 D3: insert deductions if provided (the non-cash slice of paid_amount).
+    # getattr: older callers build Namespaces without the flag.
+    deductions_arg = getattr(args, "deductions", None)
+    total_deducted = Decimal("0")
+    if deductions_arg:
+        total_deducted = _insert_deductions(conn, pe_id, payment_type, deductions_arg)
+
+    if args.allocations or deductions_arg:
         _recalc_unallocated(conn, pe_id)
+
+    # A deduction must never push the remainder negative: enforce
+    # paid_amount = allocations + deductions + unallocated with unallocated >= 0.
+    if total_deducted > 0:
+        qu = Q.from_(PE).select(PE.unallocated_amount).where(PE.id == P())
+        urow = conn.execute(qu.get_sql(), (pe_id,)).fetchone()
+        if to_decimal(urow["unallocated_amount"]) < 0:
+            err("Allocations plus deductions exceed --paid-amount "
+                "(paid_amount = allocations + deductions + unallocated)")
 
     audit(conn, "erpclaw-payments", "add-payment", "payment_entry", pe_id,
            new_values={"naming_series": naming, "payment_type": payment_type,
@@ -432,6 +603,7 @@ def get_payment(conn, args):
 
     pe = _get_pe_or_err(conn, pe_id)
     allocs = _get_allocations(conn, pe_id)
+    deds = _get_deductions(conn, pe_id)
 
     formatted_allocs = [{
         "id": a["id"],
@@ -440,6 +612,13 @@ def get_payment(conn, args):
         "allocated_amount": a["allocated_amount"],
         "exchange_gain_loss": a.get("exchange_gain_loss", "0"),
     } for a in allocs]
+    formatted_deds = [{
+        "id": d["id"],
+        "account_id": d["account_id"],
+        "amount": d["amount"],
+        "type": d["type"],
+        "description": d.get("description"),
+    } for d in deds]
 
     ok({
         "id": pe["id"],
@@ -460,6 +639,7 @@ def get_payment(conn, args):
         "unallocated_amount": pe["unallocated_amount"],
         "company_id": pe["company_id"],
         "allocations": formatted_allocs,
+        "deductions": formatted_deds,
     })
 
 
@@ -729,6 +909,20 @@ def submit_payment(conn, args):
     paid_amount = to_decimal(pe["paid_amount"])
     allocations = _get_allocations(conn, pe_id)
 
+    # WS2 D3: deductions (non-cash slice of paid_amount). Re-validated here in
+    # case rows landed via a path that skipped add-payment's guard.
+    deductions = _get_deductions(conn, pe_id)
+    total_deductions = sum((to_decimal(d["amount"]) for d in deductions),
+                           Decimal("0"))
+    if total_deductions > 0:
+        if pe["payment_type"] == "internal_transfer":
+            err("--deductions is not supported for internal_transfer payments")
+        total_allocated = sum((to_decimal(a["allocated_amount"])
+                               for a in allocations), Decimal("0"))
+        if paid_amount - total_allocated - total_deductions < 0:
+            err("Allocations plus deductions exceed paid amount "
+                "(paid_amount = allocations + deductions + unallocated)")
+
     # Multi-currency rule (2026-04-27): invoice currency must equal payment
     # currency. Reject any cross-currency allocation up front before any GL
     # writes happen. ERPClaw does not convert.
@@ -767,6 +961,14 @@ def submit_payment(conn, args):
             {"account_id": pe["paid_from_account"], "debit": "0", "credit": str(paid_amount),
              "party_type": pe["party_type"], "party_id": pe["party_id"]},
         ]
+
+    # WS2 D3: deduction legs. The cash leg shrinks by the deducted total while
+    # the party control leg keeps the FULL paid_amount (invoice-clearing legs
+    # unchanged), so debits still equal credits and the 12-step validation below
+    # sees the final set. Independent of the S2 advance routing that follows —
+    # deductions touch the CASH leg, advance routing touches the CONTROL leg.
+    if total_deductions > 0:
+        _apply_deduction_legs(conn, pe, gl_entries, deductions, total_deductions)
 
     # S2: route the unallocated (advance) portion of the party control leg to a
     # dedicated advance sub-account if the company configured one. The advance is
@@ -898,6 +1100,12 @@ def submit_payment(conn, args):
     # invoice's voucher PLE (INV-22). Allocations created LATER via
     # allocate-payment / reconcile-payments are cleared at those sites — each
     # allocation is processed exactly once.
+    # WS2 D3: deductions ride the invoice clearing. The control leg was posted
+    # for the FULL paid_amount, so each invoice must be cleared by its allocation
+    # PLUS its pro-rata deduction share or AR/AP GL and the subledger diverge
+    # (a $980 wire + $20 discount clears a $1,000 invoice completely). Shares
+    # distribute over the submit-time invoice allocations only.
+    ded_shares = _deduction_shares(allocations, total_deductions)
     docs_cleared = 0
     invoice_allocations = 0
     try:
@@ -907,9 +1115,12 @@ def submit_payment(conn, args):
             vt = canonical_voucher_type(alloc["voucher_type"])
             if vt in INVOICE_VOUCHER_TYPES:
                 invoice_allocations += 1
+            effective = round_currency(
+                to_decimal(alloc["allocated_amount"])
+                + ded_shares.get(alloc["id"], Decimal("0")))
             if _clear_invoice_allocation(
                     conn, pe, alloc["voucher_type"], alloc["voucher_id"],
-                    alloc["allocated_amount"]):
+                    effective):
                 docs_cleared += 1
     except ValueError as e:
         conn.rollback()
@@ -936,6 +1147,11 @@ def submit_payment(conn, args):
             "discount_amount": str(discount_amount),
             "bank_amount": str(bank_amount),
             "details": discount_details,
+        }
+    if total_deductions > 0:
+        result["deductions"] = {
+            "total": str(round_currency(total_deductions)),
+            "count": len(deductions),
         }
     if fx_gain_loss_total != 0:
         result["exchange_gain_loss"] = str(round_currency(fx_gain_loss_total))
@@ -974,14 +1190,31 @@ def cancel_payment(conn, args):
         sys.stderr.write(f"[erpclaw-payments] {e}\n")
         err(f"GL reversal failed: {e}")
 
-    # Undo document clearing (Part 1): restore each allocated invoice's
-    # outstanding + status. Read grand_total per doc so the helper stays
-    # table-shape-agnostic. An invoice still partially paid by OTHER payments
-    # stays partially_paid; one fully un-paid returns to submitted.
-    for alloc in _get_allocations(conn, pe_id):
-        # Defensive canonicalization for any pre-existing label-form row.
-        vt, vid = canonical_voucher_type(alloc["voucher_type"]), alloc["voucher_id"]
-        if vt not in INVOICE_VOUCHER_TYPES:
+    # Undo document clearing (Part 1): restore each cleared invoice's
+    # outstanding + status. Amounts come from the per-allocation PLE rows, NOT
+    # the allocation rows — the PLE records EXACTLY what was applied per invoice
+    # (allocation + any deduction share, WS2 D3) across submit/allocate/
+    # reconcile, so deduction legs ride the same voucher reversal. An invoice
+    # still partially paid by OTHER payments stays partially_paid; one fully
+    # un-paid returns to submitted.
+    q_applied = (Q.from_(PLE)
+                 .select(PLE.against_voucher_type, PLE.against_voucher_id,
+                         PLE.amount)
+                 .where(PLE.voucher_type == P())
+                 .where(PLE.voucher_id == P())
+                 .where(PLE.delinked == P())
+                 .orderby(PLE.created_at).orderby(PLE.id))
+    applied_by_doc = {}
+    for row in conn.execute(q_applied.get_sql(), ("payment_entry", pe_id, 0)):
+        avt = canonical_voucher_type(row["against_voucher_type"])
+        avid = row["against_voucher_id"]
+        if avt not in INVOICE_VOUCHER_TYPES or not avid:
+            continue
+        applied_by_doc[(avt, avid)] = (
+            applied_by_doc.get((avt, avid), Decimal("0"))
+            - to_decimal(row["amount"]))  # PLE rows are negative → negate
+    for (vt, vid), applied in applied_by_doc.items():
+        if applied <= 0:
             continue
         doc_t = SI if vt == "sales_invoice" else PI
         gt_q = Q.from_(doc_t).select(doc_t.grand_total).where(doc_t.id == P())
@@ -989,7 +1222,7 @@ def cancel_payment(conn, args):
         if gt_row is None:
             continue
         reverse_payment_on_document(
-            conn, vt, vid, alloc["allocated_amount"], gt_row["grand_total"])
+            conn, vt, vid, str(round_currency(applied)), gt_row["grand_total"])
 
     # Reverse PLE: mark existing as delinked, create offsetting entry. This
     # selects ALL non-delinked PLE rows for this payment — the party-level row
@@ -1595,6 +1828,9 @@ def main():
     parser.add_argument("--reference-number")
     parser.add_argument("--reference-date")
     parser.add_argument("--allocations")
+    # WS2 D3: JSON array of {account_id, amount, type, description?};
+    # type ∈ tds|commission|early_payment_discount|other
+    parser.add_argument("--deductions")
 
     # Allocation
     parser.add_argument("--voucher-type")

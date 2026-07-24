@@ -202,6 +202,26 @@ class TestCreditPolicyHook:
         with pytest.raises(SystemExit):
             mod._enforce_credit_policy(conn, env["customer"], Decimal("1000"))
 
+    def test_on_hold_message_names_real_remedy(self, conn, env, capsys):
+        """R3 (stabilization WS1 D7): the on-hold block message must name the
+        real remedy (release the hold via place-customer-on-hold) and must NOT
+        promise a --user-confirmed override — no module code reads that flag
+        (the router strips it before dispatch)."""
+        conn.execute(
+            "UPDATE customer SET credit_status='on_hold' WHERE id=?",
+            (env["customer"],),
+        )
+        with pytest.raises(SystemExit):
+            mod._enforce_credit_policy(conn, env["customer"], Decimal("1000"))
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["status"] == "error"
+        assert payload["message"] == (
+            "Customer credit is on hold; cannot submit new invoice. Release "
+            "the hold first (place-customer-on-hold --credit-status active), "
+            "then resubmit."
+        )
+        assert "--user-confirmed" not in payload["message"]
+
     def test_limit_not_exceeded(self, conn, env):
         conn.execute(
             "UPDATE customer SET credit_limit='5000', credit_status='active' WHERE id=?",

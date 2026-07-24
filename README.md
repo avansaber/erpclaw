@@ -11,7 +11,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/license-GPL--3.0-green" alt="License: GPL-3.0">
   <!-- version badge auto-synced by release/scripts/sync_facts.py (badge URL pattern) -->
-  <img src="https://img.shields.io/badge/version-v4.12.3-0d9488" alt="Version v4.12.3">
+  <img src="https://img.shields.io/badge/version-v4.13.0-0d9488" alt="Version v4.13.0">
   <img src="https://img.shields.io/badge/OpenClaw-skill-14b8a6" alt="OpenClaw Skill">
   <img src="https://img.shields.io/badge/database-SQLite%20%7C%20PostgreSQL-0d9488" alt="SQLite or PostgreSQL">
   <a href="https://www.erpclaw.ai"><img src="https://img.shields.io/badge/website-erpclaw.ai-14b8a6" alt="Website erpclaw.ai"></a>
@@ -146,7 +146,7 @@ module-generation or auto-deploy code paths.
 
 <sub>Current build:
 <!-- SYNC:facts:start -->
-ERPClaw v4.12.3 | 46 modules (46 active + 0 preview) | 3,226 actions
+ERPClaw v4.13.0 | 46 modules (46 active + 0 preview) | 3,226 actions
 <!-- SYNC:facts:end -->
 </sub>
 

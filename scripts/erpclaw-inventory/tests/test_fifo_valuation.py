@@ -332,3 +332,76 @@ class TestFifoVsMovingAverageDifferentRates:
         assert ma_rate == Decimal("60.00"), f"MA rate {ma_rate} != 60.00"
         # They should be different
         assert fifo_rate != ma_rate
+
+
+class TestRevalueFifoLayers:
+    """R1 (ADR-0030): revalue-stock must reset OPEN FIFO layer rates so future
+    issues consume at the revalued cost (previously FIFO stock kept consuming
+    at stale layer costs)."""
+
+    def test_revalue_resets_open_layer_rates(self, conn, fifo_env):
+        env = fifo_env
+        _stock_entry_receive(conn, env, env["fifo_item"], 10, "50.00",
+                             posting_date="2026-06-10")
+        _stock_entry_receive(conn, env, env["fifo_item"], 10, "70.00",
+                             posting_date="2026-06-12")
+
+        result = call_action(mod.revalue_stock, conn, ns(
+            item_id=env["fifo_item"], warehouse_id=env["warehouse"],
+            new_rate="65.00", posting_date="2026-06-15",
+            company_id=env["company_id"], reason="R1 layer reprice",
+        ))
+        assert is_ok(result), f"Revalue failed: {result}"
+
+        layers = conn.execute(
+            "SELECT * FROM stock_fifo_layer WHERE item_id = ? "
+            "ORDER BY posting_date, created_at",
+            (env["fifo_item"],)
+        ).fetchall()
+        assert len(layers) == 2
+        for layer in layers:
+            assert Decimal(layer["rate"]) == Decimal("65.00"), (
+                f"Open layer kept stale rate {layer['rate']}"
+            )
+            assert Decimal(layer["remaining_qty"]) == Decimal("10")
+
+        # Future issues consume at the revalued cost: 15 units * 65.00 = 975.00
+        _stock_entry_issue(conn, env, env["fifo_item"], 15,
+                           posting_date="2026-06-16")
+        issue_sle = conn.execute(
+            """SELECT stock_value_difference FROM stock_ledger_entry
+               WHERE item_id = ? AND is_cancelled = 0
+               AND CAST(actual_qty AS REAL) < 0
+               ORDER BY rowid DESC LIMIT 1""",
+            (env["fifo_item"],)
+        ).fetchone()
+        assert Decimal(issue_sle["stock_value_difference"]) == Decimal("-975.00")
+
+    def test_revalue_skips_depleted_layers(self, conn, fifo_env):
+        env = fifo_env
+        _stock_entry_receive(conn, env, env["fifo_item"], 10, "50.00",
+                             posting_date="2026-06-10")
+        _stock_entry_issue(conn, env, env["fifo_item"], 10,
+                          posting_date="2026-06-11")
+        _stock_entry_receive(conn, env, env["fifo_item"], 10, "80.00",
+                             posting_date="2026-06-12")
+
+        result = call_action(mod.revalue_stock, conn, ns(
+            item_id=env["fifo_item"], warehouse_id=env["warehouse"],
+            new_rate="60.00", posting_date="2026-06-15",
+            company_id=env["company_id"], reason="R1 depleted-layer guard",
+        ))
+        assert is_ok(result), f"Revalue failed: {result}"
+
+        layers = conn.execute(
+            "SELECT * FROM stock_fifo_layer WHERE item_id = ? "
+            "ORDER BY posting_date, created_at",
+            (env["fifo_item"],)
+        ).fetchall()
+        assert len(layers) == 2
+        depleted, open_layer = layers[0], layers[1]
+        assert Decimal(depleted["remaining_qty"]) == Decimal("0")
+        # Depleted (historical) layer must keep its original rate...
+        assert Decimal(depleted["rate"]) == Decimal("50.00")
+        # ...while the open layer takes the new uniform rate.
+        assert Decimal(open_layer["rate"]) == Decimal("60.00")

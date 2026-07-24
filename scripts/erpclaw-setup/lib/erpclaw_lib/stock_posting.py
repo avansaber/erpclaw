@@ -244,6 +244,160 @@ def get_fifo_valuation_rate(
 
 
 # ---------------------------------------------------------------------------
+# Valuation Repricing (shared by revalue-stock and landed-cost-voucher)
+# ---------------------------------------------------------------------------
+
+def reprice_stock_valuation(
+    conn: sqlite3.Connection,
+    item_id: str,
+    warehouse_id: str,
+    *,
+    voucher_type: str,
+    voucher_id: str,
+    posting_date: str,
+    value_delta: Optional[str] = None,
+    new_rate: Optional[str] = None,
+    fiscal_year: Optional[str] = None,
+    posting_time: Optional[str] = None,
+    fifo_source_voucher_ids: Optional[list[str]] = None,
+    fifo_source_voucher_type: str = "purchase_receipt",
+) -> dict:
+    """Reprice an item's stock valuation without changing quantity.
+
+    This is the ONE shared idiom behind both ``revalue-stock`` and the
+    ``add-landed-cost-voucher`` valuation half (D1 / R1, ADR-0030). It:
+
+    1. Inserts a single zero-qty (``actual_qty='0'``) stock_ledger_entry row
+       carrying the new valuation_rate/stock_value and a
+       ``stock_value_difference`` equal to the value change — the same
+       revaluation idiom ``revalue-stock`` has always used. This is the SLE
+       side of the stock-account GL ≡ SLE valuation reconciliation (INV-24):
+       the GL debit to the Stock-in-Hand account is mirrored here as the SLE
+       value delta.
+    2. For FIFO items, updates ``stock_fifo_layer.rate`` so future issues
+       consume at the repriced cost (moving-average items keep no layers, so
+       step 2 is a no-op for them — behaviour there is unchanged):
+         - **landed cost** (``value_delta`` + ``fifo_source_voucher_ids``):
+           bump the layers sourced from the given voucher(s) by the per-unit
+           charge (``value_delta`` spread over their received qty).
+         - **revaluation** (``new_rate``, no source vouchers): set every open
+           layer for the item/warehouse to the new rate, so the layer-based
+           value matches the new SLE stock_value.
+
+    Exactly one of ``value_delta`` (signed change to stock value) or
+    ``new_rate`` (target valuation rate) must be supplied. The reversal of a
+    landed-cost voucher calls this with a NEGATED ``value_delta`` (and the same
+    ``fifo_source_voucher_ids``), which restores both the SLE value and the
+    layer rates — cancel = reverse, never edit.
+
+    NEVER commits — the caller owns the transaction. All money is TEXT Decimal
+    rounded ROUND_HALF_UP via round_currency().
+
+    Returns:
+        {"sle_id", "value_delta", "new_rate", "new_stock_value",
+         "qty_after", "fifo_layers_updated"}.
+
+    Raises:
+        ValueError if neither / both of value_delta and new_rate are given.
+    """
+    if (value_delta is None) == (new_rate is None):
+        raise ValueError(
+            "reprice_stock_valuation requires exactly one of value_delta or new_rate"
+        )
+
+    balance = get_stock_balance(conn, item_id, warehouse_id)
+    current_qty = to_decimal(balance["qty"])
+    current_value = to_decimal(balance["stock_value"])
+    current_rate = to_decimal(balance["valuation_rate"])
+
+    if new_rate is not None:
+        new_rate_d = round_currency(to_decimal(new_rate))
+        new_value = round_currency(current_qty * new_rate_d)
+        delta = round_currency(new_value - current_value)
+    else:
+        delta = round_currency(to_decimal(value_delta))
+        new_value = round_currency(current_value + delta)
+        # A value change over unchanged qty gives the new per-unit rate; with no
+        # qty on hand the rate is left at the prior rate (the value delta still
+        # rides on stock_value_difference so INV-24 stays balanced).
+        new_rate_d = round_currency(new_value / current_qty) if current_qty > 0 else current_rate
+
+    sle_id = str(uuid.uuid4())
+    # Zero-qty valuation row — mirrors the revalue-stock idiom exactly:
+    # actual_qty='0', qty_after unchanged, is_cancelled=0 (an active revaluation,
+    # not a cancelled/audit row). Kept as raw SQL for the mixed literal pattern.
+    conn.execute(
+        """
+        INSERT INTO stock_ledger_entry (
+            id, posting_date, posting_time, item_id, warehouse_id,
+            actual_qty, qty_after_transaction, valuation_rate,
+            stock_value, stock_value_difference,
+            voucher_type, voucher_id, batch_id, serial_number,
+            incoming_rate, is_cancelled, fiscal_year, created_at
+        ) VALUES (?, ?, ?, ?, ?, '0', ?, ?, ?, ?, ?, ?, NULL, NULL, '0', 0, ?,
+                  CAST(CURRENT_TIMESTAMP AS TEXT))
+        """,
+        (
+            sle_id, posting_date, posting_time, item_id, warehouse_id,
+            str(round_currency(current_qty)),
+            str(new_rate_d),
+            str(new_value),
+            str(delta),
+            voucher_type, voucher_id,
+            fiscal_year,
+        ),
+    )
+
+    fifo_layers_updated = 0
+    if _get_item_valuation_method(conn, item_id) == "fifo":
+        if fifo_source_voucher_ids:
+            # Landed-cost mode: bump only the layers sourced from the receipt(s)
+            # for this item/warehouse by the per-unit share of the value delta.
+            placeholders = ",".join("?" for _ in fifo_source_voucher_ids)
+            layers = conn.execute(
+                f"""
+                SELECT id, qty, rate FROM stock_fifo_layer
+                WHERE item_id = ? AND warehouse_id = ?
+                  AND source_voucher_type = ?
+                  AND source_voucher_id IN ({placeholders})
+                """,
+                (item_id, warehouse_id, fifo_source_voucher_type,
+                 *fifo_source_voucher_ids),
+            ).fetchall()
+            total_layer_qty = sum((to_decimal(lyr["qty"]) for lyr in layers), Decimal("0"))
+            if total_layer_qty > 0:
+                per_unit = round_currency(delta / total_layer_qty)
+                for lyr in layers:
+                    new_layer_rate = round_currency(to_decimal(lyr["rate"]) + per_unit)
+                    conn.execute(
+                        "UPDATE stock_fifo_layer SET rate = ? WHERE id = ?",
+                        (str(new_layer_rate), lyr["id"]),
+                    )
+                    fifo_layers_updated += 1
+        elif new_rate is not None:
+            # Revaluation mode: every open layer takes the new uniform rate, so
+            # the sum of (remaining_qty * rate) tracks the new SLE stock_value.
+            cur = conn.execute(
+                """
+                UPDATE stock_fifo_layer SET rate = ?
+                WHERE item_id = ? AND warehouse_id = ?
+                  AND CAST(remaining_qty AS REAL) > 0
+                """,
+                (str(new_rate_d), item_id, warehouse_id),
+            )
+            fifo_layers_updated = cur.rowcount if cur.rowcount is not None else 0
+
+    return {
+        "sle_id": sle_id,
+        "value_delta": str(delta),
+        "new_rate": str(new_rate_d),
+        "new_stock_value": str(new_value),
+        "qty_after": str(round_currency(current_qty)),
+        "fifo_layers_updated": fifo_layers_updated,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
 

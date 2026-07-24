@@ -32,6 +32,7 @@ try:
                                     DecimalSum, DecimalAbs, insert_row, update_row, dynamic_update, now)
     from erpclaw_lib.vendor.pypika.terms import LiteralValue, ValueWrapper
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
+    from erpclaw_lib.govid_shape import caution_for
 except ImportError:
     import json as _json
     print(_json.dumps({"status": "error", "error": "ERPClaw foundation not installed. Install erpclaw-setup first: clawhub install erpclaw-setup", "suggestion": "clawhub install erpclaw-setup"}))
@@ -1265,7 +1266,13 @@ def add_garnishment(conn, args):
            new_values={"employee_id": employee_id, "type": garnishment_type,
                        "amount": amount_or_pct})
     conn.commit()
-    ok({"garnishment_id": g_id, "priority": priority})
+    resp = {"garnishment_id": g_id, "priority": priority}
+    # Layer A (warn-only): non-blocking caution if the order number looks like it
+    # carries a government-ID number. Never blocks; never logs the matched value.
+    caution = caution_for(order_number)
+    if caution:
+        resp["caution"] = caution
+    ok(resp)
 
 
 def update_garnishment(conn, args):
@@ -2076,7 +2083,8 @@ def generate_salary_slips(conn: sqlite3.Connection, args) -> None:
         3. For each eligible employee:
            a. Find active salary assignment effective during the period.
            b. Calculate working days and payment days.
-           c. Calculate earnings (fixed or percentage-based, with proration).
+           c. Calculate earnings (fixed or percentage-based, with proration;
+              plus overtime and any pending retro-pay adjustments).
            d. Calculate pre-tax deductions (401k, HSA).
            e. Calculate taxable income and federal income tax.
            f. Calculate FICA (Social Security + Medicare + Additional Medicare).
@@ -2324,6 +2332,31 @@ def generate_salary_slips(conn: sqlite3.Connection, args) -> None:
                     conn, "Overtime Pay", "earning", is_statutory=0
                 )
                 earnings_details.append((ot_comp_id, "Overtime Pay", ot_amount))
+
+        # Step 2c: Retroactive pay consumption (Feature #22c wire-up).
+        # Pending retro_pay_adjustment rows are paid out as a dedicated
+        # earning line on the slip (flows through taxes like other earnings).
+        # Rows stay 'pending' while the slip is a draft so regeneration is
+        # naturally idempotent; submit_payroll_run flips them to 'applied'
+        # and cancel_payroll_run reverts them to 'pending'.
+        rpa_rows = conn.execute(
+            """SELECT adjustment_amount FROM retro_pay_adjustment
+               WHERE employee_id = ? AND status = 'pending'
+               ORDER BY period_from, created_at""",
+            (employee_id,),
+        ).fetchall()
+        retro_total = Decimal("0")
+        for rpa in rpa_rows:
+            retro_total += to_decimal(row_to_dict(rpa)["adjustment_amount"])
+        if retro_total > 0:
+            retro_total = round_currency(retro_total)
+            gross += retro_total
+
+            retro_comp_id = _get_or_create_statutory_component(
+                conn, "Retro Pay Adjustment", "earning", is_statutory=0
+            )
+            earnings_details.append(
+                (retro_comp_id, "Retro Pay Adjustment", retro_total))
 
         # Step 3: Pre-tax deductions (from employee record)
         pretax_401k = Decimal("0")
@@ -2866,9 +2899,13 @@ def submit_payroll_run(conn: sqlite3.Connection, args) -> None:
            - CR SUTA Payable: employer SUTA (if applicable).
         3. Post GL via insert_gl_entries().
         4. Update payroll_run status = 'submitted'.
+        5. Flip consumed retro_pay_adjustment rows 'pending' -> 'applied'
+           (after validating each slip's retro line still matches the
+           employee's pending total).
 
     Returns:
-        {"status":"ok", "payroll_run_id":"...", "gl_entries":N}
+        {"status":"ok", "payroll_run_id":"...", "gl_entries":N,
+         "retro_adjustments_applied":N}
     """
     payroll_run_id = args.payroll_run_id
     cost_center_id = getattr(args, "cost_center_id", None)
@@ -2899,6 +2936,48 @@ def submit_payroll_run(conn: sqlite3.Connection, args) -> None:
         err("Payroll run has no draft salary slips. Generate slips first.")
 
     slips = [row_to_dict(s) for s in slips]
+
+    # --- Retro-pay consistency check (Feature #22c wire-up) ---
+    # Each slip's 'Retro Pay Adjustment' earning line was computed from the
+    # employee's pending retro_pay_adjustment rows at generation time. Those
+    # same rows flip to 'applied' in this transaction, so the pending total
+    # must still equal the slip line; a mismatch means adjustments changed
+    # after generation and the run must be regenerated.
+    retro_consume = {}  # employee_id -> [retro_pay_adjustment.id, ...]
+    for slip in slips:
+        slip_emp_id = slip["employee_id"]
+        line_rows = conn.execute(
+            """SELECT d.amount
+               FROM salary_slip_detail d
+               JOIN salary_component c ON c.id = d.salary_component_id
+               WHERE d.salary_slip_id = ? AND d.component_type = 'earning'
+                 AND c.name = 'Retro Pay Adjustment'""",
+            (slip["id"],),
+        ).fetchall()
+        line_total = Decimal("0")
+        for lr in line_rows:
+            line_total += to_decimal(row_to_dict(lr)["amount"])
+
+        pending_rows = conn.execute(
+            """SELECT id, adjustment_amount FROM retro_pay_adjustment
+               WHERE employee_id = ? AND status = 'pending'""",
+            (slip_emp_id,),
+        ).fetchall()
+        pending_total = Decimal("0")
+        pending_ids = []
+        for pr_row in pending_rows:
+            prd = row_to_dict(pr_row)
+            pending_total += to_decimal(prd["adjustment_amount"])
+            pending_ids.append(prd["id"])
+
+        if round_currency(pending_total) != round_currency(line_total):
+            err(f"Retro pay adjustments changed for employee {slip_emp_id} "
+                f"after slips were generated (slip line "
+                f"{round_currency(line_total)}, pending "
+                f"{round_currency(pending_total)}). "
+                "Regenerate salary slips before submitting.")
+        if pending_ids:
+            retro_consume[slip_emp_id] = pending_ids
 
     # --- Find GL accounts ---
     try:
@@ -3279,25 +3358,43 @@ def submit_payroll_run(conn: sqlite3.Connection, args) -> None:
         err(f"GL posting failed: {e}")
 
     # --- Mark all slips as submitted ---
+    # One timestamp is captured once and stamped on the slips, the run, AND
+    # the consumed retro rows: cancel_payroll_run uses run.updated_at as the
+    # correlator to revert exactly this run's applied retro batch.
     # raw SQL — uses CAST(CURRENT_TIMESTAMP AS TEXT) SQLite function
+    submit_ts = conn.execute(
+        "SELECT CAST(CURRENT_TIMESTAMP AS TEXT) AS ts"
+    ).fetchone()["ts"]
     conn.execute(
         """UPDATE salary_slip
-           SET status = 'submitted', updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
+           SET status = 'submitted', updated_at = ?
            WHERE payroll_run_id = ? AND status = 'draft'""",
-        (payroll_run_id,),
+        (submit_ts, payroll_run_id),
     )
 
+    # --- Flip consumed retro-pay adjustments to 'applied' (Feature #22c) ---
+    retro_applied = 0
+    for pending_ids in retro_consume.values():
+        for rpa_id in pending_ids:
+            cur = conn.execute(
+                """UPDATE retro_pay_adjustment
+                   SET status = 'applied', updated_at = ?
+                   WHERE id = ? AND status = 'pending'""",
+                (submit_ts, rpa_id),
+            )
+            retro_applied += cur.rowcount
+
     # --- Update payroll_run status ---
-    # raw SQL — uses CAST(CURRENT_TIMESTAMP AS TEXT) SQLite function
     conn.execute(
         """UPDATE payroll_run
-           SET status = 'submitted', updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
+           SET status = 'submitted', updated_at = ?
            WHERE id = ?""",
-        (payroll_run_id,),
+        (submit_ts, payroll_run_id),
     )
 
     audit(conn, "erpclaw-payroll", "submit-payroll-run", "payroll_run", payroll_run_id,
-           new_values={"status": "submitted", "gl_entries": len(gl_ids)},
+           new_values={"status": "submitted", "gl_entries": len(gl_ids),
+                       "retro_adjustments_applied": retro_applied},
            description=f"Submitted payroll run with {len(gl_ids)} GL entries")
 
     conn.commit()
@@ -3308,6 +3405,7 @@ def submit_payroll_run(conn: sqlite3.Connection, args) -> None:
         "total_gross": str(total_gross),
         "total_net": str(total_net),
         "total_employer_tax": str(round_currency(total_employer_tax)),
+        "retro_adjustments_applied": retro_applied,
     })
 
 
@@ -3326,11 +3424,14 @@ def cancel_payroll_run(conn: sqlite3.Connection, args) -> None:
 
     In a SINGLE transaction:
         1. Reverse GL entries via reverse_gl_entries().
-        2. Mark all salary slips as 'cancelled'.
-        3. Update payroll_run status = 'cancelled'.
+        2. Revert retro_pay_adjustment rows applied by this run's submit
+           back to 'pending' (cancel = reverse).
+        3. Mark all salary slips as 'cancelled'.
+        4. Update payroll_run status = 'cancelled'.
 
     Returns:
-        {"status":"ok", "payroll_run_id":"...", "reversed_entries":N}
+        {"status":"ok", "payroll_run_id":"...", "reversed_entries":N,
+         "retro_adjustments_reverted":N}
     """
     payroll_run_id = args.payroll_run_id
 
@@ -3364,6 +3465,23 @@ def cancel_payroll_run(conn: sqlite3.Connection, args) -> None:
         sys.stderr.write(f"[erpclaw-payroll] {e}\n")
         err(f"GL reversal failed: {e}")
 
+    # --- Revert retro-pay adjustments applied by this run (Feature #22c) ---
+    # submit_payroll_run stamped the consumed rows with the run's submit
+    # timestamp (still in run.updated_at here); cancel = reverse, so exactly
+    # that batch flips back to 'pending' for the next slip to consume.
+    # raw SQL — uses CAST(CURRENT_TIMESTAMP AS TEXT) SQLite function
+    retro_reverted = conn.execute(
+        """UPDATE retro_pay_adjustment
+           SET status = 'pending', updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
+           WHERE status = 'applied'
+             AND updated_at = ?
+             AND employee_id IN (
+                 SELECT employee_id FROM salary_slip
+                 WHERE payroll_run_id = ? AND status = 'submitted'
+             )""",
+        (run["updated_at"], payroll_run_id),
+    ).rowcount
+
     # --- Mark all slips as cancelled ---
     # raw SQL — uses CAST(CURRENT_TIMESTAMP AS TEXT) SQLite function
     conn.execute(
@@ -3384,7 +3502,8 @@ def cancel_payroll_run(conn: sqlite3.Connection, args) -> None:
 
     audit(conn, "erpclaw-payroll", "cancel-payroll-run", "payroll_run", payroll_run_id,
            old_values={"status": "submitted"},
-           new_values={"status": "cancelled"},
+           new_values={"status": "cancelled",
+                       "retro_adjustments_reverted": retro_reverted},
            description=f"Cancelled payroll run, reversed {len(reversal_ids)} GL entries")
 
     conn.commit()
@@ -3392,6 +3511,7 @@ def cancel_payroll_run(conn: sqlite3.Connection, args) -> None:
         "payroll_run_id": payroll_run_id,
         "naming_series": run.get("naming_series"),
         "reversed_entries": len(reversal_ids),
+        "retro_adjustments_reverted": retro_reverted,
     })
 
 
@@ -3992,7 +4112,11 @@ def calculate_retro_pay(conn, args):
     Required: --employee-id
     Optional: --from-date, --to-date (defaults to entire history)
 
-    Returns: {employee_id, periods_affected, total_retro_amount, details}
+    Idempotent: employee+period combos that already have a pending or
+    applied retro_pay_adjustment row are skipped (reported in "skipped").
+
+    Returns: {employee_id, periods_affected, total_retro_amount, details,
+              skipped, periods_skipped}
     """
     if not args.employee_id:
         err("--employee-id is required")
@@ -4063,36 +4187,57 @@ def calculate_retro_pay(conn, args):
     ).fetchall()
 
     details = []
+    skipped = []
     total_retro = Decimal("0")
     now = datetime.now(timezone.utc).isoformat()
 
     rate_diff = current_rate - old_rate
 
+    def _record_adjustment(period_from: str, period_to: str) -> None:
+        """Insert one pending adjustment unless the employee+period combo
+        already has a pending or applied row (idempotency guard: re-running
+        the calculation must not create duplicate payable adjustments)."""
+        nonlocal total_retro
+        existing = conn.execute(
+            """SELECT status FROM retro_pay_adjustment
+               WHERE employee_id = ? AND period_from = ? AND period_to = ?
+                 AND status IN ('pending', 'applied')""",
+            (employee_id, period_from, period_to),
+        ).fetchone()
+        if existing:
+            skipped.append({
+                "period_from": period_from,
+                "period_to": period_to,
+                "existing_status": existing["status"],
+            })
+            return
+
+        # The difference per period is simply rate_diff (base monthly difference)
+        adjustment = round_currency(rate_diff)
+        total_retro += adjustment
+
+        adj_id = str(uuid.uuid4())
+        conn.execute(
+            """INSERT INTO retro_pay_adjustment
+               (id, employee_id, period_from, period_to, old_rate, new_rate,
+                adjustment_amount, status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
+            (adj_id, employee_id, period_from, period_to,
+             str(old_rate), str(current_rate), str(adjustment), now, now)
+        )
+
+        details.append({
+            "period_from": period_from,
+            "period_to": period_to,
+            "old_rate": str(old_rate),
+            "new_rate": str(current_rate),
+            "adjustment_amount": str(adjustment),
+        })
+
     if slips:
         for slip in slips:
             s = row_to_dict(slip)
-            # The difference per period is simply rate_diff (base monthly difference)
-            adjustment = round_currency(rate_diff)
-            total_retro += adjustment
-
-            # Record the adjustment
-            adj_id = str(uuid.uuid4())
-            conn.execute(
-                """INSERT INTO retro_pay_adjustment
-                   (id, employee_id, period_from, period_to, old_rate, new_rate,
-                    adjustment_amount, status, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
-                (adj_id, employee_id, s["period_start"], s["period_end"],
-                 str(old_rate), str(current_rate), str(adjustment), now, now)
-            )
-
-            details.append({
-                "period_from": s["period_start"],
-                "period_to": s["period_end"],
-                "old_rate": str(old_rate),
-                "new_rate": str(current_rate),
-                "adjustment_amount": str(adjustment),
-            })
+            _record_adjustment(s["period_start"], s["period_end"])
     else:
         # No slips found, calculate based on monthly periods
         start_dt = datetime.strptime(retro_start, "%Y-%m-%d")
@@ -4107,26 +4252,7 @@ def calculate_retro_pay(conn, args):
                 next_dt = end_dt
             period_to = next_dt.strftime("%Y-%m-%d")
 
-            adjustment = round_currency(rate_diff)
-            total_retro += adjustment
-
-            adj_id = str(uuid.uuid4())
-            conn.execute(
-                """INSERT INTO retro_pay_adjustment
-                   (id, employee_id, period_from, period_to, old_rate, new_rate,
-                    adjustment_amount, status, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
-                (adj_id, employee_id, period_from, period_to,
-                 str(old_rate), str(current_rate), str(adjustment), now, now)
-            )
-
-            details.append({
-                "period_from": period_from,
-                "period_to": period_to,
-                "old_rate": str(old_rate),
-                "new_rate": str(current_rate),
-                "adjustment_amount": str(adjustment),
-            })
+            _record_adjustment(period_from, period_to)
             current_dt = next_dt
 
     conn.commit()
@@ -4136,6 +4262,8 @@ def calculate_retro_pay(conn, args):
         "periods_affected": len(details),
         "total_retro_amount": str(round_currency(total_retro)),
         "details": details,
+        "skipped": skipped,
+        "periods_skipped": len(skipped),
     })
 
 

@@ -15,8 +15,21 @@ from payroll_helpers import (
     call_action, ns, is_error, is_ok,
     seed_company, seed_employee, load_db_query,
 )
+from erpclaw_lib.govid_shape import CAUTION_MESSAGE
 
 mod = load_db_query()
+
+
+def _shaped_id():
+    """A government-ID-shaped value assembled at runtime (no literal in source)."""
+    return "-".join(("123", "45", "6789"))
+
+
+def _audit_blob(conn):
+    rows = conn.execute(
+        "SELECT old_values, new_values, description FROM audit_log"
+    ).fetchall()
+    return " ".join(str(v) for r in rows for v in dict(r).values() if v)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -273,3 +286,47 @@ class TestGetGarnishment:
         assert result["creditor_name"] == "Credit Corp"
         assert result["garnishment_type"] == "creditor"
         assert result["is_percentage"] == 1
+
+
+# ── M30: PII warn (layer A) on wage-garnishment order numbers ──
+
+class TestGarnishmentOrderNumberPiiDefense:
+    def test_warn_on_shaped_order_number_no_audit_leak(self, conn, env):
+        shaped = _shaped_id()
+        res = call_action(mod.add_garnishment, conn, ns(
+            employee_id=env["employee_id"],
+            order_number=shaped,
+            creditor_name="County Clerk",
+            garnishment_type="creditor",
+            amount_or_percentage="100",
+            is_percentage=False,
+            total_owed="1000",
+            start_date="2026-01-01",
+            end_date=None,
+        ))
+        # Warn never blocks the write.
+        assert is_ok(res)
+        assert res.get("caution") == CAUTION_MESSAGE
+        # order_number is not part of the add-garnishment audit payload.
+        assert shaped not in _audit_blob(conn)
+        # DB keeps the value as-is (warn does not mutate).
+        row = conn.execute(
+            "SELECT order_number FROM wage_garnishment WHERE id = ?",
+            (res["garnishment_id"],),
+        ).fetchone()
+        assert row["order_number"] == shaped
+
+    def test_clean_order_number_produces_no_caution(self, conn, env):
+        res = call_action(mod.add_garnishment, conn, ns(
+            employee_id=env["employee_id"],
+            order_number="CR-2026-777",
+            creditor_name="County Clerk",
+            garnishment_type="creditor",
+            amount_or_percentage="100",
+            is_percentage=False,
+            total_owed="1000",
+            start_date="2026-01-01",
+            end_date=None,
+        ))
+        assert is_ok(res)
+        assert "caution" not in res

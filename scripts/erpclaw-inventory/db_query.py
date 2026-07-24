@@ -31,6 +31,7 @@ try:
         get_stock_balance,
         get_valuation_rate,
         create_perpetual_inventory_gl,
+        reprice_stock_valuation,
     )
     from erpclaw_lib.gl_posting import insert_gl_entries, reverse_gl_entries
     from erpclaw_lib.voucher_types import canonical_voucher_type
@@ -741,6 +742,68 @@ def list_warehouses(conn, args):
 # 10. add-stock-entry
 # ---------------------------------------------------------------------------
 
+def _guard_open_order_line(conn, entry_type, company_id, item_id):
+    """Product-layer open-order guard (F8, stabilization WS1 D7).
+
+    A standalone material_receipt for an item with an open purchase-order line
+    would leave the PO un-received, so the Buying flow receives the goods AGAIN
+    later and double-COUNTS stock. Symmetrically, a standalone material_issue
+    for an item with an open sales-order line double-SUBTRACTS: the ad-hoc
+    issue takes the stock out now and the delivery-note flow subtracts it
+    again at delivery, understating inventory.
+
+    Hard-block-with-guidance in the _enforce_credit_policy shape: refuse via
+    err() BEFORE any write, naming the open order and pointing at the
+    order-backed flow. READ-only on buying/selling-owned tables (any module
+    may READ any table). Same-company scoping; an order whose line for this
+    item is already fully received/delivered does not block, and neither do
+    draft/closed/cancelled orders ("open" matches the create-purchase-receipt
+    / create-delivery-note gates: confirmed or partially_received/delivered).
+    """
+    if entry_type == "material_receipt":
+        # raw SQL — JOIN + CAST comparison on TEXT qty columns
+        row = conn.execute(
+            """SELECT po.id, po.naming_series
+               FROM purchase_order po
+               JOIN purchase_order_item poi ON poi.purchase_order_id = po.id
+               WHERE po.company_id = ?
+                 AND po.status IN ('confirmed', 'partially_received')
+                 AND poi.item_id = ?
+                 AND CAST(poi.quantity AS NUMERIC) > CAST(poi.received_qty AS NUMERIC)
+               LIMIT 1""",
+            (company_id, item_id),
+        ).fetchone()
+        if row:
+            ref = row["naming_series"] or row["id"]
+            err(f"Cannot receive item {item_id} as a standalone stock entry: "
+                f"open purchase order {ref} still has this item waiting to be "
+                f"received. Receive it against the order instead "
+                f"(create-purchase-receipt --purchase-order-id {row['id']}, "
+                f"then submit-purchase-receipt) so the order is marked "
+                f"received and the stock is not counted twice.")
+    elif entry_type == "material_issue":
+        # raw SQL — JOIN + CAST comparison on TEXT qty columns
+        row = conn.execute(
+            """SELECT so.id, so.naming_series
+               FROM sales_order so
+               JOIN sales_order_item soi ON soi.sales_order_id = so.id
+               WHERE so.company_id = ?
+                 AND so.status IN ('confirmed', 'partially_delivered')
+                 AND soi.item_id = ?
+                 AND CAST(soi.quantity AS NUMERIC) > CAST(soi.delivered_qty AS NUMERIC)
+               LIMIT 1""",
+            (company_id, item_id),
+        ).fetchone()
+        if row:
+            ref = row["naming_series"] or row["id"]
+            err(f"Cannot issue item {item_id} as a standalone stock entry: "
+                f"open sales order {ref} still has this item waiting to be "
+                f"delivered. Deliver it against the order instead "
+                f"(create-delivery-note --sales-order-id {row['id']}, "
+                f"then submit-delivery-note) so the order is marked "
+                f"delivered and the stock is not subtracted twice.")
+
+
 def add_stock_entry(conn, args):
     """Create a stock entry in draft."""
     if not args.entry_type:
@@ -832,6 +895,11 @@ def add_stock_entry(conn, args):
         item_row = conn.execute(item_q.get_sql(), (item_id,)).fetchone()
         if not item_row:
             err(f"Item {i}: item {item_id} not found")
+
+        # Open-order guard (F8): refuse a standalone receipt/issue that would
+        # bypass an open PO/SO line for this item. Blocks BEFORE any write.
+        if entry_type in ("material_receipt", "material_issue"):
+            _guard_open_order_line(conn, entry_type, args.company_id, item_id)
 
         qty = to_decimal(item.get("qty", "0"))
         if qty <= 0:
@@ -1163,6 +1231,14 @@ def submit_stock_entry(conn, args):
     items = conn.execute(sei_q.get_sql(), (args.stock_entry_id,)).fetchall()
     if not items:
         err("Stock entry has no items")
+
+    # Open-order guard (F8): re-checked at submit because an order may have
+    # been confirmed after the draft was created. Blocks BEFORE any SLE/GL
+    # write (nothing below is written until insert_sle_entries).
+    if entry_type in ("material_receipt", "material_issue"):
+        for item_row in items:
+            _guard_open_order_line(conn, entry_type, company_id,
+                                   item_row["item_id"])
 
     # Find fiscal year for the posting date
     fiscal_year = _get_fiscal_year(conn, posting_date)
@@ -2340,36 +2416,24 @@ def revalue_stock(conn, args):
 
     # Generate IDs
     reval_id = str(uuid.uuid4())
-    sle_id = str(uuid.uuid4())
 
     # Naming series
     naming = get_next_name(conn, "stock_revaluation", company_id=company_id)
 
     # --- Single atomic transaction ---
 
-    # 1. Insert SLE with actual_qty=0 but new valuation and value difference
-    # Uses CAST(CURRENT_TIMESTAMP AS TEXT) as LiteralValue and mixed literal/param values
-    # Kept as raw SQL for clarity with the mixed NULL/literal/param pattern
-    conn.execute(
-        """
-        INSERT INTO stock_ledger_entry (
-            id, posting_date, posting_time, item_id, warehouse_id,
-            actual_qty, qty_after_transaction, valuation_rate,
-            stock_value, stock_value_difference,
-            voucher_type, voucher_id, batch_id, serial_number,
-            incoming_rate, is_cancelled, fiscal_year, created_at
-        ) VALUES (?, ?, NULL, ?, ?, '0', ?, ?, ?, ?, 'stock_revaluation', ?,
-                  NULL, NULL, '0', 0, ?, CAST(CURRENT_TIMESTAMP AS TEXT))
-        """,
-        (
-            sle_id, posting_date, item_id, warehouse_id,
-            str(round_currency(current_qty)),
-            str(round_currency(new_rate_d)),
-            str(new_value),
-            str(adjustment),
-            reval_id,
-            fiscal_year,
-        ),
+    # 1. Insert the zero-qty valuation SLE row through the shared repricing helper.
+    # For moving-average items this is byte-identical to the historical inline
+    # INSERT; for FIFO items the helper ALSO resets the open layer rates to the new
+    # rate (R1: revaluation previously skipped FIFO layers, so FIFO stock kept
+    # consuming at stale costs). The GL side is unchanged and posted below.
+    reprice_stock_valuation(
+        conn, item_id, warehouse_id,
+        voucher_type="stock_revaluation",
+        voucher_id=reval_id,
+        posting_date=posting_date,
+        new_rate=str(new_rate_d),
+        fiscal_year=fiscal_year,
     )
 
     # 2. Create GL entries for the value adjustment

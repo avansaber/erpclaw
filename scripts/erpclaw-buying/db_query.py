@@ -31,6 +31,7 @@ try:
         get_stock_balance,
         get_valuation_rate,
         create_perpetual_inventory_gl,
+        reprice_stock_valuation,
     )
     from erpclaw_lib.gl_posting import insert_gl_entries, reverse_gl_entries
     from erpclaw_lib.cwip_posting import (
@@ -484,6 +485,36 @@ def list_material_requests(conn, args):
     ok({"material_requests": [row_to_dict(r) for r in rows],
          "total_count": total_count, "limit": limit, "offset": offset,
          "has_more": offset + limit < total_count})
+
+
+# ---------------------------------------------------------------------------
+# get-material-request (WS2/D2)
+# ---------------------------------------------------------------------------
+
+def get_material_request(conn, args):
+    """Get a material request with its items."""
+    if not args.material_request_id:
+        err("--material-request-id is required")
+
+    mr_t = Table("material_request")
+    q = Q.from_(mr_t).select(mr_t.star).where(mr_t.id == P())
+    mr = conn.execute(q.get_sql(), (args.material_request_id,)).fetchone()
+    if not mr:
+        err(f"Material request {args.material_request_id} not found")
+
+    data = row_to_dict(mr)
+
+    mri = Table("material_request_item").as_("mri")
+    i_t = Table("item").as_("i")
+    q = (Q.from_(mri)
+         .left_join(i_t).on(i_t.id == mri.item_id)
+         .select(mri.star, i_t.item_code, i_t.item_name)
+         .where(mri.material_request_id == P())
+         .orderby(line_order(mri)))
+    items = conn.execute(q.get_sql(), (args.material_request_id,)).fetchall()
+    data["items"] = [row_to_dict(r) for r in items]
+
+    ok(data)
 
 
 # ---------------------------------------------------------------------------
@@ -3064,6 +3095,14 @@ def add_landed_cost_voucher(conn, args):
             err(f"Charge {c_idx}: amount must be > 0")
         alloc_method = charge.get("allocation_method", "value")
         expense_account_id = charge.get("expense_account_id")
+        # D1 / ADR-0030: every charge is capitalised into stock via the GL AND
+        # mirrored in the SLE valuation half. A charge without a credit-side
+        # account would silently skip the GL while the SLE delta still posts,
+        # guaranteeing an INV-24 (stock GL ≡ SLE valuation) violation — so the
+        # account is mandatory, not optional.
+        if not expense_account_id:
+            err(f"Charge {c_idx}: expense_account_id is required "
+                "(landed cost capitalisation must credit an expense/clearing account)")
 
         total_landed_cost += charge_amount
 
@@ -3118,31 +3157,35 @@ def add_landed_cost_voucher(conn, args):
                  str(final_rate)))
 
         # GL: DR Stock In Hand / CR Expense account for this charge
-        if expense_account_id:
-            # Find stock account
-            acct_t = Table("account")
-            q = (Q.from_(acct_t).select(acct_t.id)
-                 .where(acct_t.account_type == ValueWrapper("stock"))
-                 .where(acct_t.company_id == P())
-                 .where(acct_t.is_group == 0)
-                 .limit(1))
-            stock_acct = conn.execute(q.get_sql(), (args.company_id,)).fetchone()
-            stock_acct_id = stock_acct["id"] if stock_acct else None
+        # Find stock account
+        acct_t = Table("account")
+        q = (Q.from_(acct_t).select(acct_t.id)
+             .where(acct_t.account_type == ValueWrapper("stock"))
+             .where(acct_t.company_id == P())
+             .where(acct_t.is_group == 0)
+             .limit(1))
+        stock_acct = conn.execute(q.get_sql(), (args.company_id,)).fetchone()
+        stock_acct_id = stock_acct["id"] if stock_acct else None
 
-            if stock_acct_id:
-                gl_entries.append({
-                    "account_id": stock_acct_id,
-                    "debit": str(round_currency(charge_amount)),
-                    "credit": "0",
-                    "fiscal_year": fiscal_year,
-                })
-                gl_entries.append({
-                    "account_id": expense_account_id,
-                    "debit": "0",
-                    "credit": str(round_currency(charge_amount)),
-                    "cost_center_id": cost_center_id,
-                    "fiscal_year": fiscal_year,
-                })
+        # Same INV-24 rule as expense_account_id above: silently skipping the
+        # GL debit while the SLE valuation half posts would desync the books.
+        if not stock_acct_id:
+            err(f"No Stock-in-Hand account (account_type='stock') found for "
+                f"company {args.company_id}; cannot capitalise landed cost")
+
+        gl_entries.append({
+            "account_id": stock_acct_id,
+            "debit": str(round_currency(charge_amount)),
+            "credit": "0",
+            "fiscal_year": fiscal_year,
+        })
+        gl_entries.append({
+            "account_id": expense_account_id,
+            "debit": "0",
+            "credit": str(round_currency(charge_amount)),
+            "cost_center_id": cost_center_id,
+            "fiscal_year": fiscal_year,
+        })
 
     # Update total
     q = (Q.update(lcv_t)
@@ -3166,13 +3209,210 @@ def add_landed_cost_voucher(conn, args):
             sys.stderr.write(f"[erpclaw-buying] {e}\n")
             err(f"GL posting failed: {e}")
 
+    # --- Valuation half (D1 / ADR-0030): reprice the stock subledger so the GL
+    # Stock-in-Hand debit is mirrored in the SLE (INV-24). Aggregate the per-item
+    # applicable charges by (item, warehouse) and post one zero-qty valuation SLE
+    # per group; for FIFO items the helper also bumps the receipt-sourced layer
+    # rates so future issues consume at the landed-cost-inclusive cost. Every
+    # allocated dollar is capitalised (the GL debits the full charge to stock), so
+    # the SLE deltas sum to total_landed_cost by construction.
+    reprice_count = _reprice_landed_cost(conn, lcv_id, args.company_id,
+                                         posting_date, fiscal_year)
+
     audit(conn, "erpclaw-buying", "add-landed-cost-voucher", "landed_cost_voucher", lcv_id,
            new_values={"total_landed_cost": str(round_currency(total_landed_cost)),
-                       "receipt_count": len(pr_ids)})
+                       "receipt_count": len(pr_ids),
+                       "sle_repricings": reprice_count})
     conn.commit()
     ok({"landed_cost_voucher_id": lcv_id,
          "total_landed_cost": str(round_currency(total_landed_cost)),
-         "gl_entries_created": len(gl_ids)})
+         "gl_entries_created": len(gl_ids),
+         "sle_repricings": reprice_count})
+
+
+def _reprice_landed_cost(conn, lcv_id, company_id, posting_date, fiscal_year, negate=False):
+    """Post the SLE valuation half of a landed-cost voucher (or its reversal).
+
+    Groups the voucher's landed_cost_items by (item, resolved warehouse), sums the
+    applicable charges, and calls reprice_stock_valuation once per group. On the
+    forward post the value delta is the positive charge; on cancel (negate=True)
+    it is negated so both the SLE stock_value and any FIFO layer rate bumps are
+    restored. Returns the number of (item, warehouse) groups repriced.
+
+    Warehouse resolution mirrors submit-purchase-receipt: a receipt line with no
+    warehouse posted its stock to the company default, so that is where it must be
+    repriced. A group with no resolvable warehouse is skipped (INV-24 would then
+    correctly flag the residual GL-vs-SLE gap rather than it being hidden).
+    """
+    co_row = conn.execute(
+        "SELECT default_warehouse_id FROM company WHERE id = ?", (company_id,)
+    ).fetchone()
+    default_wh = co_row["default_warehouse_id"] if co_row else None
+
+    rows = conn.execute(
+        """
+        SELECT pri.item_id AS item_id, pri.warehouse_id AS warehouse_id,
+               lci.applicable_charges AS applicable_charges,
+               lci.purchase_receipt_id AS pr_id
+        FROM landed_cost_item lci
+        JOIN purchase_receipt_item pri ON lci.purchase_receipt_item_id = pri.id
+        WHERE lci.landed_cost_voucher_id = ?
+        """,
+        (lcv_id,),
+    ).fetchall()
+
+    groups = {}  # (item_id, warehouse_id) -> {"delta": Decimal, "pr_ids": set}
+    for r in rows:
+        wh_id = r["warehouse_id"] or default_wh
+        if not wh_id:
+            continue
+        key = (r["item_id"], wh_id)
+        g = groups.setdefault(key, {"delta": Decimal("0"), "pr_ids": set()})
+        g["delta"] += to_decimal(r["applicable_charges"])
+        if r["pr_id"]:
+            g["pr_ids"].add(r["pr_id"])
+
+    repriced = 0
+    for (item_id, wh_id), g in groups.items():
+        delta = round_currency(g["delta"])
+        if negate:
+            delta = round_currency(-delta)
+        if delta == 0:
+            continue
+        reprice_stock_valuation(
+            conn, item_id, wh_id,
+            voucher_type="landed_cost_voucher",
+            voucher_id=lcv_id,
+            posting_date=posting_date,
+            value_delta=str(delta),
+            fiscal_year=fiscal_year,
+            fifo_source_voucher_ids=sorted(g["pr_ids"]),
+            fifo_source_voucher_type="purchase_receipt",
+        )
+        repriced += 1
+    return repriced
+
+
+# ---------------------------------------------------------------------------
+# 33b. list / get / cancel landed-cost-voucher (lifecycle)
+# ---------------------------------------------------------------------------
+
+def list_landed_cost_vouchers(conn, args):
+    """List landed cost vouchers for a company (newest first)."""
+    if not args.company_id:
+        err("--company-id is required")
+
+    limit = int(args.limit or "20")
+    offset = int(args.offset or "0")
+
+    lcv_t = Table("landed_cost_voucher")
+    q = (Q.from_(lcv_t)
+         .select(lcv_t.id, lcv_t.naming_series, lcv_t.posting_date,
+                 lcv_t.total_landed_cost, lcv_t.status)
+         .where(lcv_t.company_id == P()))
+    params = [args.company_id]
+    if getattr(args, "lcv_status", None):
+        q = q.where(lcv_t.status == P())
+        params.append(args.lcv_status)
+    q = q.orderby(lcv_t.posting_date, order=Order.desc).limit(limit).offset(offset)
+    rows = conn.execute(q.get_sql(), tuple(params)).fetchall()
+
+    count_q = (Q.from_(lcv_t).select(fn.Count("*").as_("cnt"))
+               .where(lcv_t.company_id == P()))
+    cparams = [args.company_id]
+    if getattr(args, "lcv_status", None):
+        count_q = count_q.where(lcv_t.status == P())
+        cparams.append(args.lcv_status)
+    total = conn.execute(count_q.get_sql(), tuple(cparams)).fetchone()["cnt"]
+
+    ok({"landed_cost_vouchers": [row_to_dict(r) for r in rows],
+        "total_count": total})
+
+
+def get_landed_cost_voucher(conn, args):
+    """Return a landed cost voucher with its charges and repriced items."""
+    if not args.landed_cost_voucher_id:
+        err("--landed-cost-voucher-id is required")
+
+    lcv_t = Table("landed_cost_voucher")
+    q = Q.from_(lcv_t).select(lcv_t.star).where(lcv_t.id == P())
+    lcv = conn.execute(q.get_sql(), (args.landed_cost_voucher_id,)).fetchone()
+    if not lcv:
+        err(f"Landed cost voucher {args.landed_cost_voucher_id} not found")
+
+    lcc_t = Table("landed_cost_charge")
+    cq = (Q.from_(lcc_t).select(lcc_t.star)
+          .where(lcc_t.landed_cost_voucher_id == P()))
+    charges = conn.execute(cq.get_sql(), (args.landed_cost_voucher_id,)).fetchall()
+
+    lci_t = Table("landed_cost_item")
+    iq = (Q.from_(lci_t).select(lci_t.star)
+          .where(lci_t.landed_cost_voucher_id == P()))
+    items = conn.execute(iq.get_sql(), (args.landed_cost_voucher_id,)).fetchall()
+
+    result = row_to_dict(lcv)
+    result["charges"] = [row_to_dict(r) for r in charges]
+    result["items"] = [row_to_dict(r) for r in items]
+    ok(result)
+
+
+def cancel_landed_cost_voucher(conn, args):
+    """Cancel a submitted landed cost voucher: reverse the GL AND the SLE valuation.
+
+    Cancel = reverse, never edit. Reverses the constitutional GL posting
+    (reverse_gl_entries → active mirror rows, originals flagged is_cancelled=1)
+    and reverses the valuation half through the shared repricing helper with a
+    negated delta (which also restores any FIFO layer rate bumps). INV-24 stays
+    green because both the GL stock movement and the SLE value delta net to zero.
+    Refuses if the voucher is already cancelled.
+    """
+    if not args.landed_cost_voucher_id:
+        err("--landed-cost-voucher-id is required")
+
+    lcv_t = Table("landed_cost_voucher")
+    q = Q.from_(lcv_t).select(lcv_t.star).where(lcv_t.id == P())
+    lcv = conn.execute(q.get_sql(), (args.landed_cost_voucher_id,)).fetchone()
+    if not lcv:
+        err(f"Landed cost voucher {args.landed_cost_voucher_id} not found")
+    if lcv["status"] == "cancelled":
+        err("Cannot cancel: landed cost voucher is already cancelled")
+
+    lcv_dict = row_to_dict(lcv)
+    company_id = lcv_dict["company_id"]
+    posting_date = lcv_dict["posting_date"]
+    fiscal_year = _get_fiscal_year(conn, posting_date)
+
+    # Reverse the SLE valuation half (negated delta + FIFO layer restore).
+    reprice_count = _reprice_landed_cost(conn, args.landed_cost_voucher_id,
+                                         company_id, posting_date, fiscal_year,
+                                         negate=True)
+
+    # Reverse the GL (constitutional helper: active mirror rows, originals flagged).
+    try:
+        reversal_gl_ids = reverse_gl_entries(
+            conn,
+            voucher_type="landed_cost_voucher",
+            voucher_id=args.landed_cost_voucher_id,
+            posting_date=posting_date,
+        )
+    except ValueError:
+        reversal_gl_ids = []
+
+    q = (Q.update(lcv_t)
+         .set(lcv_t.status, ValueWrapper("cancelled"))
+         .set(lcv_t.updated_at, now())
+         .where(lcv_t.id == P()))
+    conn.execute(q.get_sql(), (args.landed_cost_voucher_id,))
+
+    audit(conn, "erpclaw-buying", "cancel-landed-cost-voucher", "landed_cost_voucher",
+          args.landed_cost_voucher_id,
+          new_values={"reversed": True, "sle_repricings": reprice_count,
+                      "gl_reversals": len(reversal_gl_ids)})
+    conn.commit()
+    ok({"landed_cost_voucher_id": args.landed_cost_voucher_id,
+        "status": "cancelled",
+        "sle_repricings": reprice_count,
+        "gl_reversals": len(reversal_gl_ids)})
 
 
 # ---------------------------------------------------------------------------
@@ -3903,6 +4143,237 @@ def create_po_from_so(conn, args):
 
 
 # ---------------------------------------------------------------------------
+# create-po-from-material-request (WS2/D2: MR -> PO)
+# ---------------------------------------------------------------------------
+
+def create_po_from_material_request(conn, args):
+    """Create a draft purchase order from a submitted material request.
+
+    Copies each line's remaining unordered quantity (quantity - ordered_qty)
+    onto a new draft PO for --supplier-id, bumps ordered_qty on the consumed
+    lines, and rolls the parent status to partially_ordered/ordered.
+
+    Optional --items JSON = per-line overrides, keyed by
+    material_request_item_id or item_id:
+      {"item_id": ..., "qty": ..., "rate": ..., "warehouse_id": ...,
+       "uom": ..., "required_date": ..., "discount_percentage": ...}
+    An override qty of 0 skips the line (partial ordering — a later call
+    orders the remainder). Rate resolution mirrors add-purchase-order's
+    rate-must-be-positive contract: explicit override, else the item's
+    last_purchase_rate, else its standard_rate, else refuse.
+    """
+    if not args.material_request_id:
+        err("--material-request-id is required")
+    if not args.supplier_id:
+        err("--supplier-id is required")
+
+    mr_t = Table("material_request")
+    q = Q.from_(mr_t).select(mr_t.star).where(mr_t.id == P())
+    mr = conn.execute(q.get_sql(), (args.material_request_id,)).fetchone()
+    if not mr:
+        err(f"Material request {args.material_request_id} not found")
+    if mr["status"] == "draft":
+        err("Cannot create PO: material request is 'draft' (must be submitted first)",
+            suggestion="Run submit-material-request, then retry.")
+    if mr["status"] not in ("submitted", "partially_ordered"):
+        err(f"Cannot create PO: material request is '{mr['status']}' "
+            "(must be 'submitted' or 'partially_ordered')")
+    if mr["request_type"] != "purchase":
+        err(f"Cannot create PO: request type is '{mr['request_type']}' "
+            "(only purchase-type material requests convert to purchase orders)")
+
+    # Supplier — mirror add-purchase-order (id-or-name lookup, must be active)
+    sup_t = Table("supplier")
+    q = (Q.from_(sup_t).select(sup_t.star)
+         .where((sup_t.id == P()) | (sup_t.name == P())))
+    supplier = conn.execute(q.get_sql(),
+                            (args.supplier_id, args.supplier_id)).fetchone()
+    if not supplier:
+        err(f"Supplier {args.supplier_id} not found")
+    supplier_id = supplier["id"]
+    if supplier["status"] != "active":
+        err(f"Supplier {supplier['name']} is {supplier['status']}")
+
+    mri_t = Table("material_request_item")
+    q = (Q.from_(mri_t).select(mri_t.star)
+         .where(mri_t.material_request_id == P())
+         .orderby(line_order(mri_t)))
+    mr_items = conn.execute(q.get_sql(), (args.material_request_id,)).fetchall()
+    if not mr_items:
+        err("Material request has no items")
+
+    # Optional per-line overrides
+    overrides_by_line = {}
+    overrides_by_item = {}
+    if args.items:
+        overrides = _parse_json_arg(args.items, "items")
+        if not isinstance(overrides, list):
+            err("--items must be a JSON array of per-line overrides")
+        for i, ov in enumerate(overrides):
+            if not isinstance(ov, dict):
+                err(f"Override {i}: must be a JSON object")
+            if ov.get("material_request_item_id"):
+                overrides_by_line[ov["material_request_item_id"]] = ov
+            elif ov.get("item_id"):
+                if ov["item_id"] in overrides_by_item:
+                    err(f"Override {i}: duplicate override for item {ov['item_id']}")
+                overrides_by_item[ov["item_id"]] = ov
+            else:
+                err(f"Override {i}: material_request_item_id or item_id is required")
+
+    known_line_ids = {r["id"] for r in mr_items}
+    for line_id in overrides_by_line:
+        if line_id not in known_line_ids:
+            err(f"Override line {line_id} is not on this material request")
+    mr_item_ids = [r["item_id"] for r in mr_items]
+    for item_id in overrides_by_item:
+        if item_id not in mr_item_ids:
+            err(f"Override item {item_id} is not on this material request")
+        if mr_item_ids.count(item_id) > 1:
+            err(f"Item {item_id} appears on multiple request lines — "
+                "key the override by material_request_item_id instead")
+
+    item_t = Table("item")
+    item_sql = (Q.from_(item_t).select(item_t.star)
+                .where(item_t.id == P())).get_sql()
+
+    po_id = str(uuid.uuid4())
+    posting_date = args.posting_date or _today()
+    total_amount = Decimal("0")
+    po_item_rows = []
+    line_updates = []          # (mri_id, new ordered_qty TEXT)
+    ordered_lines = []         # response detail
+    total_requested = Decimal("0")
+    total_ordered_after = Decimal("0")
+
+    for mri_row in mr_items:
+        line = row_to_dict(mri_row)
+        requested = to_decimal(str(line["quantity"]))
+        already = to_decimal(str(line["ordered_qty"] or "0"))
+        remaining = requested - already
+        total_requested += requested
+
+        ov = (overrides_by_line.get(line["id"])
+              or overrides_by_item.get(line["item_id"]) or {})
+        qty = to_decimal(str(ov["qty"])) if "qty" in ov else remaining
+        if qty < 0:
+            err(f"Item {line['item_id']}: qty must be >= 0")
+        if qty > remaining:
+            err(f"Item {line['item_id']}: ordering {qty} would exceed the "
+                f"remaining unordered quantity {remaining} "
+                f"(requested {requested}, already ordered {already})")
+        if qty == 0:
+            total_ordered_after += already
+            continue
+
+        item = conn.execute(item_sql, (line["item_id"],)).fetchone()
+        if not item:
+            err(f"Item {line['item_id']} not found")
+
+        rate = None
+        if "rate" in ov:
+            rate = to_decimal(str(ov["rate"]))
+        else:
+            for source in ("last_purchase_rate", "standard_rate"):
+                candidate = to_decimal(str(item[source] or "0"))
+                if candidate > 0:
+                    rate = candidate
+                    break
+        if rate is None or rate <= 0:
+            err(f"Item {line['item_id']}: rate must be > 0 — the item has no "
+                "last purchase rate or standard rate; pass a rate override "
+                "in --items")
+
+        discount_pct = to_decimal(str(ov.get("discount_percentage", "0")))
+        amount = round_currency(qty * rate)
+        net_amount = round_currency(
+            amount * (Decimal("1") - discount_pct / Decimal("100")))
+        total_amount += net_amount
+
+        po_item_rows.append((
+            str(uuid.uuid4()), po_id, line["item_id"],
+            str(round_currency(qty)),
+            ov.get("uom") or line["uom"] or item["stock_uom"],
+            str(round_currency(rate)), str(amount),
+            str(round_currency(discount_pct)), str(net_amount),
+            ov.get("warehouse_id") or line["warehouse_id"],
+            ov.get("required_date") or line["required_date"] or mr["required_date"],
+        ))
+        new_ordered = already + qty
+        line_updates.append((line["id"], str(round_currency(new_ordered))))
+        total_ordered_after += new_ordered
+        ordered_lines.append({
+            "material_request_item_id": line["id"],
+            "item_id": line["item_id"],
+            "quantity": str(round_currency(qty)),
+            "rate": str(round_currency(rate)),
+            "net_amount": str(net_amount),
+        })
+
+    if not po_item_rows:
+        err("Nothing to order: every line is either fully ordered "
+            "or skipped by overrides")
+
+    tax_amount, _ = _calculate_tax(conn, args.tax_template_id, total_amount)
+    grand_total = round_currency(total_amount + tax_amount)
+
+    # Insert PO parent + items (same shape as add-purchase-order)
+    po_t = Table("purchase_order")
+    q = (Q.into(po_t)
+         .columns("id", "supplier_id", "order_date", "total_amount",
+                  "tax_amount", "grand_total", "tax_template_id", "status",
+                  "company_id")
+         .insert(P(), P(), P(), P(), P(), P(), P(), ValueWrapper("draft"), P()))
+    conn.execute(q.get_sql(),
+        (po_id, supplier_id, posting_date,
+         str(round_currency(total_amount)), str(round_currency(tax_amount)),
+         str(grand_total), args.tax_template_id, mr["company_id"]))
+
+    poi_t = Table("purchase_order_item")
+    poi_q = (Q.into(poi_t)
+             .columns("id", "purchase_order_id", "item_id", "quantity", "uom",
+                      "rate", "amount", "discount_percentage", "net_amount",
+                      "warehouse_id", "required_date")
+             .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(), P(), P()))
+    poi_sql = poi_q.get_sql()
+    for row_params in po_item_rows:
+        conn.execute(poi_sql, row_params)
+
+    # Consume the request lines
+    upd_sql = (Q.update(mri_t)
+               .set(mri_t.ordered_qty, P())
+               .where(mri_t.id == P())).get_sql()
+    for mri_id, new_qty in line_updates:
+        conn.execute(upd_sql, (new_qty, mri_id))
+
+    # Roll up parent status from the post-update totals
+    new_status = ("ordered" if total_ordered_after >= total_requested
+                  else "partially_ordered")
+    q = (Q.update(mr_t)
+         .set(mr_t.status, P())
+         .set(mr_t.updated_at, now())
+         .where(mr_t.id == P()))
+    conn.execute(q.get_sql(), (new_status, args.material_request_id))
+
+    audit(conn, "erpclaw-buying", "create-po-from-material-request",
+           "purchase_order", po_id,
+           new_values={"material_request_id": args.material_request_id,
+                       "supplier_id": supplier_id,
+                       "grand_total": str(grand_total),
+                       "material_request_status": new_status})
+    conn.commit()
+    ok({"purchase_order_id": po_id,
+         "material_request_id": args.material_request_id,
+         "supplier_id": supplier_id,
+         "items_ordered": len(po_item_rows),
+         "items": ordered_lines,
+         "total_amount": str(round_currency(total_amount)),
+         "tax_amount": str(round_currency(tax_amount)),
+         "grand_total": str(grand_total),
+         "material_request_status": new_status})
+
+
+# ---------------------------------------------------------------------------
 # add-recurring-bill-template
 # ---------------------------------------------------------------------------
 
@@ -4372,6 +4843,8 @@ ACTIONS = {
     "add-material-request": add_material_request,
     "submit-material-request": submit_material_request,
     "list-material-requests": list_material_requests,
+    "get-material-request": get_material_request,
+    "create-po-from-material-request": create_po_from_material_request,
     "add-rfq": add_rfq,
     "submit-rfq": submit_rfq,
     "list-rfqs": list_rfqs,
@@ -4399,6 +4872,9 @@ ACTIONS = {
     "create-debit-note": create_debit_note,
     "update-invoice-outstanding": update_invoice_outstanding,
     "add-landed-cost-voucher": add_landed_cost_voucher,
+    "list-landed-cost-vouchers": list_landed_cost_vouchers,
+    "get-landed-cost-voucher": get_landed_cost_voucher,
+    "cancel-landed-cost-voucher": cancel_landed_cost_voucher,
     "import-suppliers": import_suppliers,
     "update-receipt-tolerance": update_receipt_tolerance,
     "update-three-way-match-policy": update_three_way_match_policy,
@@ -4482,6 +4958,8 @@ def main():
 
     # Landed cost
     parser.add_argument("--charges")  # JSON
+    parser.add_argument("--landed-cost-voucher-id")
+    parser.add_argument("--lcv-status", dest="lcv_status")
 
     # GRN tolerance & 3-way match policy
     parser.add_argument("--tolerance-pct")

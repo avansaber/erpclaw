@@ -16,8 +16,21 @@ from decimal import Decimal
 from hr_helpers import (
     call_action, ns, is_error, is_ok, load_db_query,
 )
+from erpclaw_lib.govid_shape import CAUTION_MESSAGE, mask_text
 
 mod = load_db_query()
+
+
+def _shaped_id():
+    """A government-ID-shaped value assembled at runtime (no literal in source)."""
+    return "-".join(("123", "45", "6789"))
+
+
+def _audit_blob(conn):
+    rows = conn.execute(
+        "SELECT old_values, new_values, description FROM audit_log"
+    ).fetchall()
+    return " ".join(str(v) for r in rows for v in dict(r).values() if v)
 
 
 def _add_employee_ns(**overrides):
@@ -295,3 +308,63 @@ class TestListLeaveApplications:
         assert is_ok(result)
         assert result["total_count"] >= 1
         assert len(result["leave_applications"]) >= 1
+
+
+# ── M30: PII warn (layer A) + output masking (layer C) on leave applications ──
+
+class TestLeaveReasonPiiDefense:
+    def _setup(self, conn, env):
+        emp_id = _create_employee(conn, env, "PiiLeaveEmp")
+        lt_id = _create_leave_type(conn, "Pii Leave", "20")
+        _create_allocation(conn, emp_id, lt_id, "20", env["fiscal_year_name"])
+        return emp_id, lt_id
+
+    def test_warn_on_shaped_reason_no_audit_leak(self, conn, env):
+        emp_id, lt_id = self._setup(conn, env)
+        shaped = _shaped_id()
+        res = call_action(mod.add_leave_application, conn, ns(
+            employee_id=emp_id, leave_type_id=lt_id,
+            from_date="2026-04-06", to_date="2026-04-08",
+            half_day=None, half_day_date=None,
+            reason="Court order " + shaped,
+        ))
+        # Warn never blocks the write.
+        assert is_ok(res)
+        assert res.get("caution") == CAUTION_MESSAGE
+        # reason is not part of the add-leave audit payload — no shaped leak.
+        assert shaped not in _audit_blob(conn)
+        # DB keeps the value as-is (masking is display-only).
+        row = conn.execute(
+            "SELECT reason FROM leave_application WHERE id = ?",
+            (res["leave_application_id"],),
+        ).fetchone()
+        assert shaped in row["reason"]
+
+    def test_clean_reason_produces_no_caution(self, conn, env):
+        emp_id, lt_id = self._setup(conn, env)
+        res = call_action(mod.add_leave_application, conn, ns(
+            employee_id=emp_id, leave_type_id=lt_id,
+            from_date="2026-04-06", to_date="2026-04-08",
+            half_day=None, half_day_date=None,
+            reason="Family holiday",
+        ))
+        assert is_ok(res)
+        assert "caution" not in res
+
+    def test_list_masks_reason(self, conn, env):
+        emp_id, lt_id = self._setup(conn, env)
+        shaped = _shaped_id()
+        call_action(mod.add_leave_application, conn, ns(
+            employee_id=emp_id, leave_type_id=lt_id,
+            from_date="2026-05-04", to_date="2026-05-06",
+            half_day=None, half_day_date=None,
+            reason="Ref " + shaped,
+        ))
+        result = call_action(mod.list_leave_applications, conn, ns(
+            employee_id=emp_id, status=None, from_date=None, to_date=None,
+            leave_type_id=None, limit=None, offset=None,
+        ))
+        assert is_ok(result)
+        blob = json.dumps(result["leave_applications"])
+        assert shaped not in blob
+        assert mask_text(shaped) in blob

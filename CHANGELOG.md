@@ -2,6 +2,27 @@
 
 All notable changes to the ERPClaw foundation skill.
 
+## [4.13.0] — 2026-07-23 — foundation hardening (v4.13.0 stabilization milestone)
+
+Every known books-integrity gap surfaced by the M34 live-agent testing program, closed and machine-guarded. All items shipped behind independent adversarial QA.
+
+### Fixed — books integrity
+- **Landed costs now reprice inventory valuation (and post GL at all).** `add-landed-cost-voucher` had been silently broken since the 2026-05-31 voucher-type registry displacement (migration 004): its `voucher_type` was never registered, so every landed-cost GL post failed the registry gate — masked because the feature had no tests. Migration 029 registers the type, and the action now writes zero-quantity stock-ledger valuation rows and updates FIFO layer rates so the goods carry their true landed cost, not just the base receipt rate. `list/get/cancel-landed-cost-voucher` added (cancel = reverse, both GL and valuation).
+- **New constitutional invariant INV-24: stock-account GL ≡ stock-ledger valuation.** For each company, the sum over stock-type GL accounts must equal the sum of stock-ledger valuation movements (reversal-inclusive, exact TEXT-decimal). Any posting path that moves one side without the other now reddens the gate. Fills the long-standing stock-subledger blind spot (the AR/AP subledgers already had this check). See ADR-0030.
+- **`revalue-stock` now updates FIFO layer rates.** Previously it repriced only the moving-average valuation, leaving FIFO items to consume at stale layer rates after a revaluation.
+- **Rate-less invoice/order lines no longer silently price at $0.** Line rate now resolves in order: explicit rate, then the customer's default price list, then any enabled selling price list, then the item's standard rate. `--default-price-list-id` added to `add-customer`/`update-customer` (the previously-unused customer price-list link is now live).
+
+### Added — feature completion
+- **Open-order receiving/issuing guards.** A standalone `material_receipt` for an item with an open purchase order is refused with guidance to receive against the order (prevents the double-count where the later bill re-receives the goods); the symmetric guard blocks a standalone `material_issue` when an open sales order covers the item.
+- **Material request → purchase order.** `create-po-from-material-request` copies requested lines into a PO, updates ordered quantities, and rolls the request status; `get-material-request` returns the request with its lines.
+- **Payment deductions.** `add-payment --deductions` records withholding / early-payment-discount / commission legs; `submit-payment` posts them to their GL accounts under full validation; cancel reverses them. Previously the table and its UI existed but no action could ever write a row.
+- **Retroactive pay flows into salary slips.** `calculate-retro-pay` is now idempotent, and generated salary slips consume pending retro adjustments as an earning line (applied on submit, reverted on cancel) instead of leaving them permanently stuck.
+- **HR government-ID protection.** Free-text HR fields are scanned and a non-blocking caution is returned when a value looks like a government ID; those fields are masked to last-4 on read; `add-employee`/`update-employee` now accept `--ssn` (encrypted at rest, last-4 on read).
+
+### Fixed — infrastructure
+- `install-module` no longer writes into the OpenClaw workspace when installed under a non-default `ERPCLAW_HOME` (a Hermes-home install had been touching the other runtime's skill directory), and its response now reports the real created-table count instead of zero.
+- Credit-hold refusal message no longer claims a `--user-confirmed` override that the module layer never honored; it now names the real release path.
+
 ## [4.12.3] — 2026-07-21 — SKILL guidance steers (M34 F6/F8)
 
 ### Changed

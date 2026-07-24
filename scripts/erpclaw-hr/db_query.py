@@ -34,6 +34,8 @@ try:
     )
     from erpclaw_lib.vendor.pypika.terms import LiteralValue, ValueWrapper
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
+    from erpclaw_lib.encrypted_columns import encrypt_for_column, decrypt_for_column
+    from erpclaw_lib.govid_shape import caution_for, mask_text, mask_value
 except ImportError:
     import json as _json
     print(_json.dumps({"status": "error", "error": "ERPClaw foundation not installed. Install erpclaw-setup first: clawhub install erpclaw-setup", "suggestion": "clawhub install erpclaw-setup"}))
@@ -74,6 +76,31 @@ def _parse_json_arg(value, name):
         return json.loads(value)
     except (json.JSONDecodeError, TypeError):
         err(f"Invalid JSON for --{name}: {value}")
+
+
+# --ssn (T1): validated, encrypted at rest, read back as last-4 only.
+_SSN_RE = re.compile(r"^(?:\d{3}-\d{2}-\d{4}|\d{9})$")
+
+
+def _validate_ssn(value):
+    """Validate a Social Security Number shape and return it stripped.
+
+    Accepts 9 digits, optionally dashed as XXX-XX-XXXX. Errors otherwise.
+    The value is never echoed back to the caller by any read path.
+    """
+    v = (value or "").strip()
+    if not _SSN_RE.match(v):
+        err("Invalid --ssn format. Use 9 digits, optionally as XXX-XX-XXXX.")
+    return v
+
+
+def _mask_document_fields(doc):
+    """Layer C: mask government-ID shapes in an employee_document's free-text
+    fields for display. Display-layer only — the stored row is never changed."""
+    for field in ("document_name", "notes"):
+        if doc.get(field):
+            doc[field] = mask_text(doc[field])
+    return doc
 
 
 def _get_fiscal_year(conn, target_date: str) -> str | None:
@@ -278,6 +305,7 @@ def add_employee(conn, args):
               --department-id, --designation-id, --employee-grade-id,
               --branch, --reporting-to, --company-email, --personal-email,
               --cell-phone, --emergency-contact (JSON), --bank-details (JSON),
+              --ssn (encrypted at rest, read back as last-4 only),
               --federal-filing-status, --w4-allowances, --holiday-list-id,
               --payroll-cost-center-id
     """
@@ -354,6 +382,15 @@ def add_employee(conn, args):
     emergency_contact = _parse_json_arg(args.emergency_contact, "emergency-contact")
     bank_details = _parse_json_arg(args.bank_details, "bank-details")
 
+    # T1: validate + encrypt SSN if provided (stored as ciphertext at rest).
+    ssn_ciphertext = None
+    if getattr(args, "ssn", None):
+        ssn_ciphertext = encrypt_for_column(_validate_ssn(args.ssn), "employee", "ssn")
+
+    # Layer A (warn-only): surface a non-blocking caution if a government-ID
+    # shape landed in a free-text blob. Never blocks; never logs the value.
+    caution = caution_for(emergency_contact, bank_details)
+
     # Generate naming series
     employee_id = str(uuid.uuid4())
     naming_series = get_next_name(conn, "employee", company_id=args.company_id)
@@ -367,7 +404,7 @@ def add_employee(conn, args):
         "department_id": P(), "designation_id": P(), "employee_grade_id": P(),
         "branch": P(), "reporting_to": P(), "company_id": P(),
         "company_email": P(), "personal_email": P(), "cell_phone": P(),
-        "emergency_contact": P(), "bank_details": P(),
+        "emergency_contact": P(), "bank_details": P(), "ssn": P(),
         "federal_filing_status": P(), "w4_allowances": P(),
         "holiday_list_id": P(), "payroll_cost_center_id": P(),
         "created_at": P(), "updated_at": P(),
@@ -382,6 +419,7 @@ def add_employee(conn, args):
         args.cell_phone,
         json.dumps(emergency_contact) if emergency_contact else None,
         json.dumps(bank_details) if bank_details else None,
+        ssn_ciphertext,
         args.federal_filing_status,
         int(args.w4_allowances) if args.w4_allowances else 0,
         args.holiday_list_id, args.payroll_cost_center_id,
@@ -413,12 +451,15 @@ def add_employee(conn, args):
 
     conn.commit()
 
-    ok({
+    resp = {
         "employee_id": employee_id,
         "naming_series": naming_series,
         "full_name": full_name,
         "message": f"Employee '{full_name}' created successfully",
-    })
+    }
+    if caution:
+        resp["caution"] = caution
+    ok(resp)
 
 
 # ---------------------------------------------------------------------------
@@ -434,6 +475,7 @@ def update_employee(conn, args):
               --department-id, --designation-id, --employee-grade-id,
               --branch, --reporting-to, --company-email, --personal-email,
               --cell-phone, --emergency-contact (JSON), --bank-details (JSON),
+              --ssn (encrypted; empty value clears it),
               --federal-filing-status, --w4-allowances,
               --w4-additional-withholding, --state-filing-status,
               --state-withholding-allowances, --employee-401k-rate,
@@ -562,12 +604,22 @@ def update_employee(conn, args):
         updates["cell_phone"] = args.cell_phone or None
 
     # JSON fields
+    warn_targets = []
     if args.emergency_contact is not None:
         ec = _parse_json_arg(args.emergency_contact, "emergency-contact")
         updates["emergency_contact"] = json.dumps(ec) if ec else None
+        warn_targets.append(ec)
     if args.bank_details is not None:
         bd = _parse_json_arg(args.bank_details, "bank-details")
         updates["bank_details"] = json.dumps(bd) if bd else None
+        warn_targets.append(bd)
+
+    # T1: validate + (re)encrypt SSN on write; empty --ssn clears it.
+    if getattr(args, "ssn", None) is not None:
+        if args.ssn:
+            updates["ssn"] = encrypt_for_column(_validate_ssn(args.ssn), "employee", "ssn")
+        else:
+            updates["ssn"] = None
 
     # Tax / payroll fields
     if args.federal_filing_status is not None:
@@ -619,11 +671,15 @@ def update_employee(conn, args):
 
     conn.commit()
 
-    ok({
+    resp = {
         "employee_id": args.employee_id,
         "updated_fields": list(changed.keys()),
         "message": f"Employee {args.employee_id} updated successfully",
-    })
+    }
+    caution = caution_for(*warn_targets) if warn_targets else None
+    if caution:
+        resp["caution"] = caution
+    ok(resp)
 
 
 # ---------------------------------------------------------------------------
@@ -664,15 +720,21 @@ def get_employee(conn, args):
 
     employee = row_to_dict(row)
 
-    # Parse JSON fields for readability
+    # T1: never return the raw/decrypted SSN; expose last-4 only.
+    ssn_ct = employee.pop("ssn", None)
+    ssn_pt = decrypt_for_column(ssn_ct, "employee", "ssn")
+    employee["ssn_last_four"] = ssn_pt[-4:] if ssn_pt else None
+
+    # Parse JSON fields for readability; Layer C masks any government-ID shape
+    # in the free-text values (display-layer only — the stored row is untouched).
     if employee.get("emergency_contact"):
         try:
-            employee["emergency_contact"] = json.loads(employee["emergency_contact"])
+            employee["emergency_contact"] = mask_value(json.loads(employee["emergency_contact"]))
         except (json.JSONDecodeError, TypeError):
             pass
     if employee.get("bank_details"):
         try:
-            employee["bank_details"] = json.loads(employee["bank_details"])
+            employee["bank_details"] = mask_value(json.loads(employee["bank_details"]))
         except (json.JSONDecodeError, TypeError):
             pass
 
@@ -1552,7 +1614,7 @@ def add_leave_application(conn, args):
 
     conn.commit()
 
-    ok({
+    resp = {
         "leave_application_id": app_id,
         "naming_series": naming_series,
         "employee_id": args.employee_id,
@@ -1564,7 +1626,13 @@ def add_leave_application(conn, args):
         "status": "draft",
         "holidays_excluded": len(holidays),
         "message": f"Leave application created: {total_days} days of {lt['name']}",
-    })
+    }
+    # Layer A (warn-only): non-blocking caution if the reason text looks like
+    # it carries a government-ID number. Never blocks; never logs the value.
+    caution = caution_for(args.reason)
+    if caution:
+        resp["caution"] = caution
+    ok(resp)
 
 
 # ---------------------------------------------------------------------------
@@ -1819,8 +1887,14 @@ def list_leave_applications(conn, args):
     list_params = params + [limit, offset]
     rows = conn.execute(list_q.get_sql(), list_params).fetchall()
 
+    # Layer C: mask any government-ID shape in the free-text reason (display only).
+    apps = [row_to_dict(r) for r in rows]
+    for a in apps:
+        if a.get("reason"):
+            a["reason"] = mask_text(a["reason"])
+
     ok({
-        "leave_applications": [row_to_dict(r) for r in rows],
+        "leave_applications": apps,
         "total_count": total_count,
         "limit": limit, "offset": offset,
         "has_more": offset + limit < total_count,
@@ -3472,7 +3546,7 @@ def add_employee_document(conn, args):
                       "document_name": args.document_name})
     conn.commit()
 
-    ok({
+    resp = {
         "employee_document_id": doc_id,
         "employee_id": args.employee_id,
         "employee_name": emp["full_name"],
@@ -3480,7 +3554,13 @@ def add_employee_document(conn, args):
         "document_name": args.document_name.strip(),
         "expiry_date": expiry_date,
         "message": "Employee document added",
-    })
+    }
+    # Layer A (warn-only): non-blocking caution if the name/notes look like they
+    # carry a government-ID number. Never blocks; never logs the matched value.
+    caution = caution_for(args.document_name, args.notes)
+    if caution:
+        resp["caution"] = caution
+    ok(resp)
 
 
 def list_employee_documents(conn, args):
@@ -3508,7 +3588,9 @@ def list_employee_documents(conn, args):
     q = q.orderby(ed_t.created_at)
     rows = conn.execute(q.get_sql(), params).fetchall()
 
-    ok({"documents": [row_to_dict(r) for r in rows], "count": len(rows)})
+    # Layer C: mask any government-ID shape in the free-text fields (display only).
+    docs = [_mask_document_fields(row_to_dict(r)) for r in rows]
+    ok({"documents": docs, "count": len(docs)})
 
 
 def get_employee_document(conn, args):
@@ -3525,7 +3607,8 @@ def get_employee_document(conn, args):
     if not row:
         err(f"Employee document {args.document_id} not found")
 
-    ok(row_to_dict(row))
+    # Layer C: mask any government-ID shape in the free-text fields (display only).
+    ok(_mask_document_fields(row_to_dict(row)))
 
 
 def check_expiring_documents(conn, args):
@@ -3669,6 +3752,7 @@ def main():
     parser.add_argument("--cell-phone")
     parser.add_argument("--emergency-contact")
     parser.add_argument("--bank-details")
+    parser.add_argument("--ssn")
 
     # Tax / payroll fields
     parser.add_argument("--federal-filing-status")

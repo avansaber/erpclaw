@@ -79,6 +79,7 @@ _t_payment_terms = Table("payment_terms")
 _t_tax_template_line = Table("tax_template_line")
 _t_stock_ledger = Table("stock_ledger_entry")
 _t_pricing_rule = Table("pricing_rule")
+_t_price_list = Table("price_list")
 _t_ic_account_map = Table("intercompany_account_map")
 _t_purchase_invoice = Table("purchase_invoice")
 _t_purchase_invoice_item = Table("purchase_invoice_item")
@@ -271,6 +272,65 @@ def _apply_pricing_rule(conn, item_id: str, customer_id: str,
     return row_to_dict(row) if row else None
 
 
+def _lookup_item_price(conn, item_id: str, price_list_id: str,
+                       qty: Decimal, eff_date: str):
+    """Best item_price rate (Decimal) for an item within one price list.
+
+    Mirrors get-item-price's resolution: honors min_qty and the
+    valid_from/valid_to window, picking the most specific (highest min_qty)
+    tier as of eff_date. Returns None when nothing matches. Raw SQL kept for
+    the IS NULL / NUMERIC-cast comparisons (same idiom as get-item-price).
+    """
+    row = conn.execute(
+        """SELECT rate FROM item_price
+           WHERE item_id = ? AND price_list_id = ?
+             AND CAST(min_qty AS NUMERIC) <= CAST(? AS NUMERIC)
+             AND (valid_from IS NULL OR valid_from <= ?)
+             AND (valid_to IS NULL OR valid_to >= ?)
+           ORDER BY CAST(min_qty AS NUMERIC) DESC
+           LIMIT 1""",
+        (item_id, price_list_id, str(qty), eff_date, eff_date),
+    ).fetchone()
+    return to_decimal(row["rate"]) if row else None
+
+
+def _resolve_price_list_rate(conn, item_id: str, qty: Decimal,
+                             customer_id, posting_date):
+    """Resolve a selling rate from item_price for a rate-less line (F7).
+
+    Consults the customer's default price list when one is set (that list
+    only — a configured default is authoritative); otherwise any enabled
+    selling price list. Returns Decimal, or None when no item_price row
+    matches so the caller falls back to the item's standard_rate.
+    """
+    eff_date = posting_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    # (b.1) Customer's configured default price list wins when present.
+    if customer_id:
+        crow = conn.execute(
+            "SELECT default_price_list_id FROM customer WHERE id = ?",
+            (customer_id,),
+        ).fetchone()
+        if crow and crow["default_price_list_id"]:
+            return _lookup_item_price(
+                conn, item_id, crow["default_price_list_id"], qty, eff_date)
+
+    # (b.2) No customer default — any enabled selling price list. Raw SQL for
+    # the JOIN plus IS NULL / NUMERIC-cast window comparisons.
+    row = conn.execute(
+        """SELECT ip.rate FROM item_price ip
+           JOIN price_list pl ON pl.id = ip.price_list_id
+           WHERE ip.item_id = ? AND pl.selling = 1 AND pl.enabled = 1
+             AND CAST(ip.min_qty AS NUMERIC) <= CAST(? AS NUMERIC)
+             AND (ip.valid_from IS NULL OR ip.valid_from <= ?)
+             AND (ip.valid_to IS NULL OR ip.valid_to >= ?)
+           ORDER BY CAST(ip.min_qty AS NUMERIC) DESC, ip.created_at DESC
+           LIMIT 1""",
+        (item_id, str(qty), eff_date, eff_date),
+    ).fetchone()
+    return to_decimal(row["rate"]) if row else None
+
+
 def _calculate_line_items(conn, items_json, company_id: str,
                           customer_id: str = None, posting_date: str = None,
                           apply_pricing: bool = False):
@@ -290,7 +350,8 @@ def _calculate_line_items(conn, items_json, company_id: str,
             err(f"Item {i}: item_id is required")
 
         q = (Q.from_(_t_item)
-             .select(_t_item.id, _t_item.item_name, _t_item.stock_uom)
+             .select(_t_item.id, _t_item.item_name, _t_item.stock_uom,
+                     _t_item.standard_rate)
              .where(_t_item.id == P()))
         item_row = conn.execute(q.get_sql(), (item_id,)).fetchone()
         if not item_row:
@@ -300,7 +361,22 @@ def _calculate_line_items(conn, items_json, company_id: str,
         if qty <= 0:
             err(f"Item {i}: qty must be > 0")
 
-        rate = to_decimal(item.get("rate", "0"))
+        # Rate resolution (F7). An explicit rate in --items always wins and is
+        # respected even when it is 0 (a deliberate zero-price line). When the
+        # rate key is absent (or null), resolve in order: item_price (customer
+        # default price list, else any enabled selling list — honoring min_qty
+        # and the valid_from/valid_to window) -> item.standard_rate. standard_rate
+        # DEFAULTs to '0', so a genuinely unpriced item still resolves to 0 and
+        # nothing that priced before this change prices differently.
+        if "rate" in item and item.get("rate") is not None:
+            rate = to_decimal(item.get("rate"))
+        else:
+            resolved = _resolve_price_list_rate(
+                conn, item_id, qty, customer_id, posting_date)
+            if resolved is not None:
+                rate = resolved
+            else:
+                rate = to_decimal(item_row["standard_rate"])
         discount_pct = to_decimal(item.get("discount_percentage", "0"))
         warehouse_id = item.get("warehouse_id")
         pricing_rule_id = None
@@ -395,6 +471,13 @@ def add_customer(conn, args):
         if not conn.execute(q.get_sql(), (args.payment_terms_id,)).fetchone():
             err(f"Payment terms {args.payment_terms_id} not found")
 
+    default_price_list_id = getattr(args, "default_price_list_id", None)
+    if default_price_list_id:
+        plq = (Q.from_(_t_price_list).select(_t_price_list.id)
+               .where(_t_price_list.id == P()))
+        if not conn.execute(plq.get_sql(), (default_price_list_id,)).fetchone():
+            err(f"Price list {default_price_list_id} not found")
+
     credit_limit = str(round_currency(to_decimal(args.credit_limit or "0")))
     exempt = int(args.exempt_from_sales_tax) if args.exempt_from_sales_tax else 0
 
@@ -407,15 +490,16 @@ def add_customer(conn, args):
              .columns("id", "name", "customer_type", "customer_group",
                        "payment_terms_id", "credit_limit", "tax_id",
                        "exempt_from_sales_tax", "primary_address",
-                       "primary_contact", "email", "phone", "status", "company_id")
+                       "primary_contact", "email", "phone",
+                       "default_price_list_id", "status", "company_id")
              .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(), P(),
-                     P(), P(), ValueWrapper("active"), P()))
+                     P(), P(), P(), ValueWrapper("active"), P()))
         conn.execute(q.get_sql(),
             (cust_id, args.name, customer_type, args.customer_group,
              args.payment_terms_id, credit_limit, args.tax_id, exempt,
              primary_address, primary_contact,
              getattr(args, "email", None), getattr(args, "phone", None),
-             args.company_id),
+             default_price_list_id, args.company_id),
         )
     except sqlite3.IntegrityError as e:
         sys.stderr.write(f"[erpclaw-selling] {e}\n")
@@ -477,6 +561,17 @@ def update_customer(conn, args):
     if getattr(args, "phone", None) is not None:
         data["phone"] = args.phone
         updated_fields.append("phone")
+    default_price_list_id = getattr(args, "default_price_list_id", None)
+    if default_price_list_id is not None:
+        if default_price_list_id:
+            plq = (Q.from_(_t_price_list).select(_t_price_list.id)
+                   .where(_t_price_list.id == P()))
+            if not conn.execute(plq.get_sql(), (default_price_list_id,)).fetchone():
+                err(f"Price list {default_price_list_id} not found")
+            data["default_price_list_id"] = default_price_list_id
+        else:
+            data["default_price_list_id"] = None  # explicit clear
+        updated_fields.append("default_price_list_id")
 
     if not updated_fields:
         err("No fields to update")
@@ -2001,8 +2096,11 @@ def create_sales_invoice(conn, args):
         customer_id = cust_chk["id"]  # normalize to id
 
         items = _parse_json_arg(args.items, "items")
+        # Pass pricing context so the F7 rate fallback (item_price / standard_rate)
+        # and pricing_rule both fire on standalone invoices, matching the SO path.
         total_amount, item_rows = _calculate_line_items(
-            conn, items, company_id, customer_id, posting_date)
+            conn, items, company_id, customer_id, posting_date,
+            apply_pricing=True)
 
         si_items_data = []
         for row in item_rows:
@@ -2636,7 +2734,11 @@ def _enforce_credit_policy(conn, customer_id: str, new_invoice_amount: Decimal):
     if cstatus == "suspended":
         err(f"Customer credit is suspended; cannot submit new invoice")
     if cstatus == "on_hold":
-        err(f"Customer credit is on hold; cannot submit new invoice. Use --user-confirmed override or place-customer-on-hold to release.")
+        # R3 (stabilization WS1 D7): no override flag exists at module level —
+        # the only real remedy is releasing the hold on the customer record.
+        err("Customer credit is on hold; cannot submit new invoice. Release "
+            "the hold first (place-customer-on-hold --credit-status active), "
+            "then resubmit.")
     credit_limit_raw = cust_d.get("credit_limit") or "0"
     try:
         credit_limit = to_decimal(credit_limit_raw)
@@ -5312,6 +5414,7 @@ def main():
     parser.add_argument("--primary-contact")
     parser.add_argument("--email")
     parser.add_argument("--phone")
+    parser.add_argument("--default-price-list-id")
 
     # Dunning / credit policy fields (S1).
     # --template-id, --limit already declared elsewhere; reused.
