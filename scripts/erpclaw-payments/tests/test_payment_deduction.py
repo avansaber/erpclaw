@@ -47,19 +47,34 @@ def _find_repo_root(start):
         cur = parent
 
 
-_INV_PATH = os.path.join(_find_repo_root(_TESTS_DIR), "testing", "invariant_engine.py")
-_spec = importlib.util.spec_from_file_location("invariant_engine_pd", _INV_PATH)
-inv_engine = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(inv_engine)
+# The invariant engine lives in the monorepo test harness (testing/), which is NOT
+# part of the published skill tree. In the published-repo CI it is absent, so load it
+# defensively and skip the invariant-backed assertions there; the full monorepo CI runs
+# them. (Root-find can also fail when the tree lacks CLAUDE.md/.git, e.g. a shallow CI
+# checkout — treat that as "harness absent" too.)
+try:
+    _INV_PATH = os.path.join(_find_repo_root(_TESTS_DIR), "testing", "invariant_engine.py")
+except RuntimeError:
+    _INV_PATH = ""
+if _INV_PATH and os.path.exists(_INV_PATH):
+    _spec = importlib.util.spec_from_file_location("invariant_engine_pd", _INV_PATH)
+    inv_engine = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(inv_engine)
+else:
+    inv_engine = None
 
 
 def _invariants_green(conn):
     """run_invariants raises InvariantViolation on any failure; green = no raise."""
+    if inv_engine is None:
+        pytest.skip("invariant_engine harness not present (published skill tree)")
     inv_engine.run_invariants(conn)
 
 
 def _inv24(conn):
     """INV-24 directly; None = GREEN (stock subledger untouched by payments)."""
+    if inv_engine is None:
+        pytest.skip("invariant_engine harness not present (published skill tree)")
     return inv_engine._check_inv24_stock_account_gl_matches_ledger(conn)
 
 

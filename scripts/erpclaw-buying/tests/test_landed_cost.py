@@ -26,14 +26,23 @@ mod = load_db_query()
 # ── INV-24: import the check straight from testing/invariant_engine.py ──────
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.abspath(os.path.join(_TESTS_DIR, "..", "..", "..", "..", ".."))
+# The invariant engine lives in the monorepo test harness (testing/), which is NOT part
+# of the published skill tree. Load it defensively so this file collects in the published-
+# repo CI (where testing/ is absent) and skips the INV-24 assertions there; the full
+# monorepo CI runs them.
 _INV_PATH = os.path.join(_REPO_ROOT, "testing", "invariant_engine.py")
-_spec = importlib.util.spec_from_file_location("invariant_engine_lcv", _INV_PATH)
-inv_engine = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(inv_engine)
+if os.path.exists(_INV_PATH):
+    _spec = importlib.util.spec_from_file_location("invariant_engine_lcv", _INV_PATH)
+    inv_engine = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(inv_engine)
+else:
+    inv_engine = None
 
 
 def _inv24(conn):
     """Run INV-24 directly; None = GREEN, violation string = RED."""
+    if inv_engine is None:
+        pytest.skip("invariant_engine harness not present (published skill tree)")
     return inv_engine._check_inv24_stock_account_gl_matches_ledger(conn)
 
 
