@@ -525,6 +525,8 @@ class TestInv24NegativeControl:
         assert "divergence" in violation
 
     def test_inv24_registered_in_engine(self, conn, env):
+        if inv_engine is None:
+            pytest.skip("invariant_engine harness not present (published skill tree)")
         entries = [c for c in inv_engine.INVARIANT_CHECKS if c[0] == "INV-24"]
         assert len(entries) == 1
         assert entries[0][2] is inv_engine._check_inv24_stock_account_gl_matches_ledger
