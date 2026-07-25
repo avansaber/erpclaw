@@ -105,20 +105,33 @@ One install, one shared database, every major business function:
 ERPClaw runs on OpenClaw (primary). Experimental support for the Hermes Agent runtime.
 
 - **OpenClaw** (primary): `clawhub install erpclaw`. Everything above.
-- **Hermes Agent** (experimental, best-effort). Manual install until registry
-  publishing lands:
+- **Hermes Agent** (experimental, best-effort). Install from the tap:
+
+  ```bash
+  hermes skills tap add avansaber/hermes-skills
+  hermes skills install avansaber/hermes-skills/skills/erpclaw --force
+  export ERPCLAW_HOME=~/.hermes/erpclaw-home    # blank = ~/.openclaw/erpclaw
+  python3 ~/.hermes/skills/erpclaw/scripts/erpclaw-setup/db_query.py --action initialize-database
+  ```
+
+  `--force` acknowledges the Hermes security audit's "caution" rating: ERPClaw's
+  accounting engine runs local commands by design (every action is local Python
+  through a command router; nothing leaves your machine). Prefer no `--force`?
+  The manual install works identically:
 
   ```bash
   git clone https://github.com/avansaber/erpclaw ~/.hermes/skills/erp/erpclaw
-  export ERPCLAW_HOME=~/.hermes/erpclaw-home    # blank = ~/.openclaw/erpclaw
+  export ERPCLAW_HOME=~/.hermes/erpclaw-home
   python3 ~/.hermes/skills/erp/erpclaw/scripts/erpclaw-setup/db_query.py --action initialize-database
   ```
 
   Then talk to it (keep `ERPCLAW_HOME` exported):
   `hermes chat -s erpclaw --yolo -q "Set up my company"`. Recommended:
   `hermes curator pin erpclaw` so the skill stays exactly as installed.
-  Credential and encrypted-backup features are outside the experimental Hermes
-  scope (no sandbox); avoid them there for now.
+  Credential values never pass through the agent on any runtime: lookups return
+  existence plus a redacted preview only, and high-impact actions (restores,
+  credential changes, master-key operations) always require an explicit
+  confirmation flag.
 
 ### Built to be trusted with money
 
