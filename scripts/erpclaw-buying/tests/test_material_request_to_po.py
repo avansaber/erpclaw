@@ -273,6 +273,105 @@ class TestRefusals:
         assert "not on this material request" in res["message"]
 
 
+class TestDeviationBehaviorPins:
+    """WS2/D2 QA-advisory pins (STABILIZATION_V4_13 carried advisory, landed
+    Wave F sprint 1 S1.8): Part A pins for the per-line override DEVIATION
+    behaviors of create-po-from-material-request. Behavior pins only — no
+    production change rides these tests."""
+
+    def test_negative_qty_override_refused(self, conn, env):
+        """qty < 0 is refused and nothing is written."""
+        _set_item_rates(conn, env["item1"], last_purchase_rate="10.00")
+        mr_id = _add_mr(conn, env, [("item1", "5", True)])
+        _submit_mr(conn, mr_id)
+
+        res = _create_po_from_mr(conn, env, mr_id, overrides=[
+            {"item_id": env["item1"], "qty": "-1"}])
+        assert is_error(res)
+        assert ">= 0" in res["message"]
+        assert Decimal(_mr_items(conn, mr_id)[0]["ordered_qty"]) == Decimal("0")
+        assert conn.execute(
+            "SELECT COUNT(*) FROM purchase_order").fetchone()[0] == 0
+        assert _mr_row(conn, mr_id)["status"] == "submitted"
+
+    def test_zero_rate_override_refused(self, conn, env):
+        """An EXPLICIT rate override of 0 is refused by the rate>0 contract
+        (pins the current behavior; the advisory's message-wording nit stays a
+        board note). Nothing is written."""
+        _set_item_rates(conn, env["item1"], last_purchase_rate="10.00")
+        mr_id = _add_mr(conn, env, [("item1", "5", True)])
+        _submit_mr(conn, mr_id)
+
+        res = _create_po_from_mr(conn, env, mr_id, overrides=[
+            {"item_id": env["item1"], "rate": "0"}])
+        assert is_error(res)
+        assert "rate" in res["message"]
+        assert conn.execute(
+            "SELECT COUNT(*) FROM purchase_order").fetchone()[0] == 0
+
+        # Negative override rides the same contract.
+        res = _create_po_from_mr(conn, env, mr_id, overrides=[
+            {"item_id": env["item1"], "rate": "-5"}])
+        assert is_error(res)
+        assert "rate" in res["message"]
+        assert Decimal(_mr_items(conn, mr_id)[0]["ordered_qty"]) == Decimal("0")
+
+    def test_all_lines_skipped_refused(self, conn, env):
+        """Every line skipped by qty-0 overrides -> 'Nothing to order' error;
+        MR status and ordered_qty untouched."""
+        _set_item_rates(conn, env["item1"], last_purchase_rate="10.00")
+        _set_item_rates(conn, env["item2"], last_purchase_rate="20.00")
+        mr_id = _add_mr(conn, env, [("item1", "5", True), ("item2", "3", True)])
+        _submit_mr(conn, mr_id)
+
+        res = _create_po_from_mr(conn, env, mr_id, overrides=[
+            {"item_id": env["item1"], "qty": "0"},
+            {"item_id": env["item2"], "qty": "0"},
+        ])
+        assert is_error(res)
+        assert "Nothing to order" in res["message"]
+        assert _mr_row(conn, mr_id)["status"] == "submitted"
+        for line in _mr_items(conn, mr_id):
+            assert Decimal(line["ordered_qty"]) == Decimal("0")
+        assert conn.execute(
+            "SELECT COUNT(*) FROM purchase_order").fetchone()[0] == 0
+
+    def test_duplicate_item_override_refused(self, conn, env):
+        """Two overrides keyed to the same item_id are ambiguous -> refused."""
+        _set_item_rates(conn, env["item1"], last_purchase_rate="10.00")
+        mr_id = _add_mr(conn, env, [("item1", "5", True)])
+        _submit_mr(conn, mr_id)
+
+        res = _create_po_from_mr(conn, env, mr_id, overrides=[
+            {"item_id": env["item1"], "qty": "1"},
+            {"item_id": env["item1"], "qty": "2"},
+        ])
+        assert is_error(res)
+        assert "duplicate" in res["message"]
+
+    def test_override_keyed_by_line_id(self, conn, env):
+        """Overrides keyed by material_request_item_id hit exactly that line
+        (the disambiguating form the item-keyed path points to); an unknown
+        line id is refused."""
+        _set_item_rates(conn, env["item1"], last_purchase_rate="10.00")
+        mr_id = _add_mr(conn, env, [("item1", "10", True)])
+        _submit_mr(conn, mr_id)
+        line_id = _mr_items(conn, mr_id)[0]["id"]
+
+        res = _create_po_from_mr(conn, env, mr_id, overrides=[
+            {"material_request_item_id": line_id, "qty": "4", "rate": "12.50"}])
+        assert is_ok(res), res
+        assert res["items_ordered"] == 1
+        assert Decimal(res["total_amount"]) == Decimal("50.00")   # 4 x 12.50
+        assert res["material_request_status"] == "partially_ordered"
+        assert Decimal(_mr_items(conn, mr_id)[0]["ordered_qty"]) == Decimal("4.00")
+
+        res = _create_po_from_mr(conn, env, mr_id, overrides=[
+            {"material_request_item_id": "no-such-line", "qty": "1"}])
+        assert is_error(res)
+        assert "not on this material request" in res["message"]
+
+
 class TestGetMaterialRequest:
     def test_get_returns_parent_and_items(self, conn, env):
         mr_id = _add_mr(conn, env, [("item1", "10", True), ("item2", "6", False)])

@@ -1209,103 +1209,206 @@ def process_recurring(conn, args):
     Idempotent: only generates JEs where next_run_date <= as_of_date.
     After generating, advances next_run_date by one frequency period.
     If end_date is reached, marks template as 'completed'.
+
+    S1.3 (Wave F): orchestrated by the crash-safe billing_run registry.
+    Each due template is a billing_run_target processed in its OWN
+    transaction — JE insert + GL + next_run_date advance + target status
+    commit atomically, so a crash mid-run resumes (`--resume-run-id` /
+    `resume-billing-run`) with ZERO duplicate journal entries, and one
+    bad template (e.g. garbage lines JSON) no longer aborts the run.
     """
     company_id = args.company_id
     if not company_id:
         err("--company-id is required")
 
-    as_of_date_str = args.as_of_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    from erpclaw_lib import billing_run as billing_run_lib
 
-    # Find all due templates
-    q_due = (Q.from_(_t_rjt).select(_t_rjt.star)
-             .where(_t_rjt.company_id == P())
-             .where(_t_rjt.status == "active")
-             .where(_t_rjt.next_run_date <= P())
-             .orderby(_t_rjt.next_run_date, order=Order.asc))
-    due_templates = conn.execute(q_due.get_sql(), (company_id, as_of_date_str)).fetchall()
+    resume_run_id = getattr(args, "resume_run_id", None)
+    if resume_run_id:
+        run = billing_run_lib.load_run(conn, resume_run_id)
+        if run is None:
+            err(f"Billing run not found: {resume_run_id}")
+        if run["run_type"] != "recurring_journals":
+            err(f"Billing run {resume_run_id} has run_type "
+                 f"'{run['run_type']}', expected 'recurring_journals'")
+        if run["status"] == "completed":
+            err(f"Billing run {resume_run_id} is completed; nothing to resume")
+        run_id = resume_run_id
+        as_of_date_str = run["as_of_date"]
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        conn.execute(
+            "UPDATE billing_run SET status = 'running', finished_at = NULL, "
+            "updated_at = ? WHERE id = ?", (ts, run_id))
+        conn.commit()
+        targets = billing_run_lib.list_targets(
+            conn, run_id, statuses=billing_run_lib.RESUMABLE_TARGET_STATUSES)
+    else:
+        as_of_date_str = args.as_of_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        # Find all due templates
+        q_due = (Q.from_(_t_rjt).select(_t_rjt.id)
+                 .where(_t_rjt.company_id == P())
+                 .where(_t_rjt.status == "active")
+                 .where(_t_rjt.next_run_date <= P())
+                 .orderby(_t_rjt.next_run_date, order=Order.asc))
+        due_templates = conn.execute(
+            q_due.get_sql(), (company_id, as_of_date_str)).fetchall()
+        if not due_templates:
+            # Same shape as the normal path (QA S1.3 round 1 advisory): a
+            # consumer reading run_status after a no-op must not KeyError.
+            # No billing_run row is created for zero targets.
+            ok({"generated": 0, "results": [], "errors": [], "skipped": 0,
+                 "billing_run_id": None, "run_status": "no_work"})
+        run_id = billing_run_lib.start(
+            conn, "recurring_journals", as_of_date_str,
+            [("recurring_journal_template", t["id"]) for t in due_templates],
+            company_id=company_id)
+        targets = billing_run_lib.list_targets(conn, run_id,
+                                               statuses=("pending",))
 
     results = []
+    errors = []
+    skipped = 0
 
-    for row in due_templates:
-        tmpl = row_to_dict(row)
-        template_id = tmpl["id"]
-        lines = json.loads(tmpl["lines"])
-        posting_date = tmpl["next_run_date"]
+    def _callback(cb_conn, target):
+        return _process_one_recurring_template(
+            cb_conn, target["target_id"], company_id, as_of_date_str)
 
-        # Create the journal entry
-        je_id = str(uuid.uuid4())
-        naming = get_next_name(conn, "journal_entry", company_id=company_id)
+    for target in targets:
+        outcome = billing_run_lib.process_target(conn, run_id, target, _callback)
+        if outcome["status"] == "done":
+            results.append(outcome["result"]["entry"])
+        elif outcome["status"] == "failed":
+            errors.append({"template_id": target["target_id"],
+                           "error": outcome["error"]})
+        elif outcome["status"] == "skipped":
+            skipped += 1
 
-        total_debit = sum(to_decimal(l.get("debit", "0")) for l in lines)
-        total_credit = sum(to_decimal(l.get("credit", "0")) for l in lines)
-        total_debit = round_currency(total_debit)
-        total_credit = round_currency(total_credit)
+    summary = billing_run_lib.finalize(conn, run_id)
+    audit(conn, "erpclaw-journals", "process-recurring",
+          "recurring_journal_template", company_id,
+          new_values={"generated": len(results),
+                      "billing_run_id": run_id})
+    conn.commit()
 
-        remark = tmpl.get("remark") or f"Auto-generated from {tmpl['naming_series'] or tmpl['name']}"
+    ok({"generated": len(results), "results": results,
+         "errors": errors, "skipped": skipped,
+         "billing_run_id": run_id, "run_status": summary["status"]})
 
-        conn.execute(
-            """INSERT INTO journal_entry
-               (id, naming_series, posting_date, entry_type, total_debit, total_credit,
-                remark, status, company_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?)""",
-            (je_id, naming, posting_date, tmpl["entry_type"],
-             str(total_debit), str(total_credit), remark, company_id),
-        )
-        _insert_lines(conn, je_id, lines)
 
-        je_status = "draft"
+def _process_one_recurring_template(conn, template_id, company_id, as_of_date_str):
+    """Generate ONE template's JE inside the caller's per-target transaction.
 
-        # Auto-submit if configured
-        if tmpl["auto_submit"]:
-            try:
-                is_opening = tmpl["entry_type"] in ("opening",)
-                gl_entries = [{
-                    "account_id": l["account_id"],
-                    "debit": l.get("debit", "0"),
-                    "credit": l.get("credit", "0"),
-                    "party_type": l.get("party_type"),
-                    "party_id": l.get("party_id"),
-                    "cost_center_id": l.get("cost_center_id"),
-                } for l in lines]
+    JE + lines + GL (insert_gl_entries, never commits) + the CAS-guarded
+    next_run_date advance commit atomically with the target's 'done'
+    status. Auto-submit failure keeps its legacy semantic: the JE stays a
+    draft and the target still succeeds. Raises on data errors; raises
+    billing_run.SkipTarget when the template is no longer due.
+    """
+    from erpclaw_lib import billing_run as billing_run_lib
 
-                validate_gl_entries(
-                    conn, gl_entries, company_id, posting_date,
-                    is_opening=is_opening, voucher_type="journal_entry",
-                )
-                insert_gl_entries(
-                    conn, gl_entries,
-                    voucher_type="journal_entry", voucher_id=je_id,
-                    posting_date=posting_date, company_id=company_id,
-                    remarks=remark, is_opening=is_opening,
-                )
-                conn.execute(
-                    "UPDATE journal_entry SET status = 'submitted', updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?",
-                    (je_id,),
-                )
-                je_status = "submitted"
-            except (ValueError, Exception) as e:
-                sys.stderr.write(f"[erpclaw-journals] Auto-submit failed for {naming}: {e}\n")
-                # JE remains as draft
+    row = conn.execute(
+        "SELECT * FROM recurring_journal_template WHERE id = ?",
+        (template_id,)).fetchone()
+    if not row:
+        raise ValueError(f"Template not found: {template_id}")
+    tmpl = row_to_dict(row)
 
-        # Advance next_run_date
-        current_next = date.fromisoformat(tmpl["next_run_date"])
-        new_next = _advance_date(current_next, tmpl["frequency"])
-        new_next_str = new_next.isoformat()
+    # In-transaction eligibility re-read (resume / concurrent-run safety)
+    if tmpl["status"] != "active":
+        raise billing_run_lib.SkipTarget(
+            f"Template {template_id} is no longer active "
+            f"(status '{tmpl['status']}')")
+    if tmpl["next_run_date"] > as_of_date_str:
+        raise billing_run_lib.SkipTarget(
+            f"Template {template_id} is no longer due "
+            f"(next_run_date {tmpl['next_run_date']} > as-of {as_of_date_str})")
 
-        # Check if end_date is reached
-        new_status = "active"
-        if tmpl["end_date"] and new_next_str > tmpl["end_date"]:
-            new_status = "completed"
+    lines = json.loads(tmpl["lines"])
+    posting_date = tmpl["next_run_date"]
 
-        conn.execute(
-            """UPDATE recurring_journal_template
-               SET next_run_date = ?, last_generated_date = ?,
-                   status = ?, updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
-               WHERE id = ?""",
-            (new_next_str, posting_date, new_status, template_id),
-        )
+    # Create the journal entry
+    je_id = str(uuid.uuid4())
+    naming = get_next_name(conn, "journal_entry", company_id=company_id)
 
-        results.append({
+    total_debit = sum(to_decimal(l.get("debit", "0")) for l in lines)
+    total_credit = sum(to_decimal(l.get("credit", "0")) for l in lines)
+    total_debit = round_currency(total_debit)
+    total_credit = round_currency(total_credit)
+
+    remark = tmpl.get("remark") or f"Auto-generated from {tmpl['naming_series'] or tmpl['name']}"
+
+    conn.execute(
+        """INSERT INTO journal_entry
+           (id, naming_series, posting_date, entry_type, total_debit, total_credit,
+            remark, status, company_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?)""",
+        (je_id, naming, posting_date, tmpl["entry_type"],
+         str(total_debit), str(total_credit), remark, company_id),
+    )
+    _insert_lines(conn, je_id, lines)
+
+    je_status = "draft"
+
+    # Auto-submit if configured
+    if tmpl["auto_submit"]:
+        try:
+            is_opening = tmpl["entry_type"] in ("opening",)
+            gl_entries = [{
+                "account_id": l["account_id"],
+                "debit": l.get("debit", "0"),
+                "credit": l.get("credit", "0"),
+                "party_type": l.get("party_type"),
+                "party_id": l.get("party_id"),
+                "cost_center_id": l.get("cost_center_id"),
+            } for l in lines]
+
+            validate_gl_entries(
+                conn, gl_entries, company_id, posting_date,
+                is_opening=is_opening, voucher_type="journal_entry",
+            )
+            insert_gl_entries(
+                conn, gl_entries,
+                voucher_type="journal_entry", voucher_id=je_id,
+                posting_date=posting_date, company_id=company_id,
+                remarks=remark, is_opening=is_opening,
+            )
+            conn.execute(
+                "UPDATE journal_entry SET status = 'submitted', updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?",
+                (je_id,),
+            )
+            je_status = "submitted"
+        except (ValueError, Exception) as e:
+            sys.stderr.write(f"[erpclaw-journals] Auto-submit failed for {naming}: {e}\n")
+            # JE remains as draft (legacy semantic — the target still succeeds)
+
+    # Advance next_run_date — CAS-guarded on the value we read so a
+    # concurrent advance rolls THIS template back instead of double-posting
+    current_next = date.fromisoformat(tmpl["next_run_date"])
+    new_next = _advance_date(current_next, tmpl["frequency"])
+    new_next_str = new_next.isoformat()
+
+    # Check if end_date is reached
+    new_status = "active"
+    if tmpl["end_date"] and new_next_str > tmpl["end_date"]:
+        new_status = "completed"
+
+    cur = conn.execute(
+        """UPDATE recurring_journal_template
+           SET next_run_date = ?, last_generated_date = ?,
+               status = ?, updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
+           WHERE id = ? AND next_run_date = ?""",
+        (new_next_str, posting_date, new_status, template_id,
+         tmpl["next_run_date"]),
+    )
+    if cur.rowcount != 1:
+        raise ValueError(
+            f"Template {template_id} advanced concurrently "
+            f"(next_run_date moved past {tmpl['next_run_date']}); rolled "
+            f"back without posting")
+
+    return {
+        "voucher_id": je_id,
+        "entry": {
             "template_id": template_id,
             "template_name": tmpl["name"],
             "journal_entry_id": je_id,
@@ -1314,14 +1417,8 @@ def process_recurring(conn, args):
             "je_status": je_status,
             "next_run_date": new_next_str if new_status == "active" else None,
             "template_status": new_status,
-        })
-
-    audit(conn, "erpclaw-journals", "process-recurring",
-          "recurring_journal_template", company_id,
-          new_values={"generated": len(results)})
-    conn.commit()
-
-    ok({"generated": len(results), "results": results})
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1440,6 +1537,7 @@ def main():
     parser.add_argument("--end-date")
     parser.add_argument("--auto-submit", action="store_true", default=None)
     parser.add_argument("--as-of-date")
+    parser.add_argument("--resume-run-id")  # S1.3: resume a crashed billing_run
     parser.add_argument("--template-status")
 
     # List filters

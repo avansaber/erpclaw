@@ -21,7 +21,15 @@ MODULE_DIR = os.path.dirname(TESTS_DIR)
 SETUP_DIR = os.path.join(os.path.dirname(MODULE_DIR), "erpclaw-setup")
 INIT_SCHEMA_PATH = os.path.join(SETUP_DIR, "init_schema.py")
 
-ERPCLAW_LIB = os.path.expanduser("~/.openclaw/erpclaw/lib")
+# Bind erpclaw_lib to THIS TREE's lib, not the deployed ~/.openclaw symlink
+# (S1.3 SIM S11): the symlink can point at another worktree/branch, which
+# would make these tests exercise foreign lib code (or miss new lib modules
+# entirely). The deployed path stays as a fallback for non-repo layouts.
+_IN_TREE_LIB = os.path.abspath(
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                 "..", "erpclaw-setup", "lib"))
+ERPCLAW_LIB = (_IN_TREE_LIB if os.path.isdir(os.path.join(_IN_TREE_LIB, "erpclaw_lib"))
+               else os.path.expanduser("~/.openclaw/erpclaw/lib"))
 if ERPCLAW_LIB not in sys.path:
     sys.path.insert(0, ERPCLAW_LIB)
 

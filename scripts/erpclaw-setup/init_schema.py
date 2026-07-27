@@ -2073,6 +2073,62 @@ CREATE TABLE IF NOT EXISTS prepaid_credit_balance (
 );
 
 CREATE INDEX IF NOT EXISTS idx_prepaid_customer ON prepaid_credit_balance(customer_id);
+
+-- Crash-safe batch-orchestration registry (Wave F S1.3, F-debt.3). One row per
+-- cron-like invocation; billing_run_target records every per-item attempt so a
+-- crashed run resumes with ZERO duplicate documents. Written ONLY through
+-- erpclaw_lib.billing_run (the owning library); the status / run_type /
+-- target_type CHECKs are literal by design: internal orchestration state
+-- machine, not an extensible voucher-class domain (ADR-0031 scar-tissue rule).
+
+CREATE TABLE IF NOT EXISTS billing_run (
+    id              TEXT PRIMARY KEY,
+    run_type        TEXT NOT NULL CHECK(run_type IN (
+                        'recurring_invoices','recurring_journals',
+                        'usage_billing','combined'
+                    )),
+    company_id      TEXT REFERENCES company(id) ON DELETE RESTRICT,
+    as_of_date      TEXT NOT NULL,
+    params_json     TEXT,  -- original run parameters, replayed verbatim on resume
+    status          TEXT NOT NULL DEFAULT 'pending'
+                    CHECK(status IN ('pending','running','completed',
+                                     'failed','partially_completed')),
+    started_at      TEXT,
+    finished_at     TEXT,
+    total_targets   INTEGER NOT NULL DEFAULT 0,
+    targets_processed INTEGER NOT NULL DEFAULT 0,
+    targets_succeeded INTEGER NOT NULL DEFAULT 0,
+    targets_failed  INTEGER NOT NULL DEFAULT 0,
+    error_summary_json TEXT,
+    created_by_user_id TEXT,
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_billing_run_status ON billing_run(status);
+CREATE INDEX IF NOT EXISTS idx_billing_run_type ON billing_run(run_type);
+
+CREATE TABLE IF NOT EXISTS billing_run_target (
+    id              TEXT PRIMARY KEY,
+    billing_run_id  TEXT NOT NULL REFERENCES billing_run(id) ON DELETE CASCADE,
+    target_type     TEXT NOT NULL CHECK(target_type IN (
+                        'recurring_invoice_template',
+                        'recurring_journal_template','meter'
+                    )),
+    target_id       TEXT NOT NULL,
+    attempt_at      TEXT,
+    status          TEXT NOT NULL DEFAULT 'pending'
+                    CHECK(status IN ('pending','processing','done',
+                                     'failed','skipped')),
+    result_voucher_id TEXT,  -- polymorphic (invoice / JE / billing_period), no FK
+    error_message   TEXT,
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(billing_run_id, target_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_brt_run ON billing_run_target(billing_run_id);
+CREATE INDEX IF NOT EXISTS idx_brt_run_status ON billing_run_target(billing_run_id, status);
 """
 
 

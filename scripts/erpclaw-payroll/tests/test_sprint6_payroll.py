@@ -679,6 +679,64 @@ class TestCalculateRetroPay:
         assert len(lines) == 1
         assert Decimal(lines[0]) == Decimal("1000.00")
 
+    def test_retro_race_guard_error_path(self, conn, env):
+        """WS3/D4 QA-advisory pin (Wave F S1.8): the generate/submit race
+        guard's ERROR path. If retro_pay_adjustment rows change AFTER slips
+        were generated (so the slip's retro line no longer equals the pending
+        total), submit-payroll-run must refuse with the regenerate message and
+        write NOTHING: run stays draft, rows stay pending, zero GL. Behavior
+        pin only — no production change rides this test."""
+        self._retro_scenario(conn, env)
+        run2_id = self._make_run(conn, env, "2026-02-01", "2026-02-28")
+        # Slip line generated at 1000.00 from the pending row...
+        assert [Decimal(x) for x in self._slip_retro_lines(conn, run2_id)] == \
+            [Decimal("1000.00")]
+
+        # ...then the adjustment changes between generate and submit (the race).
+        conn.execute(
+            "UPDATE retro_pay_adjustment SET adjustment_amount = '1200.00' "
+            "WHERE employee_id = ? AND status = 'pending'",
+            (env["employee_id"],))
+        conn.commit()
+
+        sub = call_action(mod.submit_payroll_run, conn, ns(
+            payroll_run_id=run2_id,
+            cost_center_id=env["cost_center_id"],
+        ))
+        assert is_error(sub), sub
+        assert "Regenerate salary slips" in sub["message"]
+        # Exact figures surfaced: slip line vs new pending total.
+        assert "1000.00" in sub["message"]
+        assert "1200.00" in sub["message"]
+
+        # Refusal wrote nothing: run still draft, row still pending (and
+        # still 1200.00 — the guard never mutates it), zero GL for the run.
+        run = conn.execute(
+            "SELECT status FROM payroll_run WHERE id = ?",
+            (run2_id,)).fetchone()
+        assert run["status"] == "draft"
+        rows = self._retro_rows(conn, env)
+        assert len(rows) == 1
+        assert rows[0]["status"] == "pending"
+        assert rows[0]["adjustment_amount"] == "1200.00"
+        assert conn.execute(
+            "SELECT COUNT(*) FROM gl_entry WHERE voucher_type = 'payroll_run' "
+            "AND voucher_id = ?", (run2_id,)).fetchone()[0] == 0
+
+        # Recovery path the message prescribes: regenerate, then submit clean.
+        gen = call_action(mod.generate_salary_slips, conn, ns(
+            payroll_run_id=run2_id))
+        assert is_ok(gen)
+        assert [Decimal(x) for x in self._slip_retro_lines(conn, run2_id)] == \
+            [Decimal("1200.00")]
+        sub2 = call_action(mod.submit_payroll_run, conn, ns(
+            payroll_run_id=run2_id,
+            cost_center_id=env["cost_center_id"],
+        ))
+        assert is_ok(sub2), sub2
+        assert sub2["retro_adjustments_applied"] == 1
+        assert self._retro_rows(conn, env)[0]["status"] == "applied"
+
     def test_retro_pay_no_double_consume_after_applied(self, conn, env):
         """A later slip generation must not re-consume applied rows."""
         self._retro_scenario(conn, env)

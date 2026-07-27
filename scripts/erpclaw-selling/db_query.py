@@ -3437,6 +3437,25 @@ def update_invoice_outstanding(conn, args):
     if payment_amount <= 0:
         err("--amount must be > 0")
 
+    # Summary ≡ detail (INV-25, ADR-0031): this action moves the SUMMARY
+    # (outstanding_amount), so it must move the DETAIL (payment_ledger_entry)
+    # in the SAME transaction — sweep W6 re-disposition, QA round-1 DEFECT 1.
+    # Reuse the invoice's posting-time PLE row for voucher bucket / account /
+    # currency so the adjustment nets inside INV-25's own-voucher branch and is
+    # swept by the same cancel-delink predicate. Looked up BEFORE any write so
+    # a broken-ledger invoice (no active posting row) errors with zero writes.
+    src_ple = conn.execute(
+        """SELECT voucher_type, account_id, currency FROM payment_ledger_entry
+           WHERE voucher_id = ?
+             AND voucher_type IN ('sales_invoice', 'credit_note')
+             AND delinked = 0
+           ORDER BY created_at LIMIT 1""",
+        (args.sales_invoice_id,)).fetchone()
+    if src_ple is None:
+        err(f"Sales invoice {args.sales_invoice_id} has no active payment "
+            "ledger posting; cannot apply a payment against it (summary and "
+            "detail must move together, INV-25)")
+
     # Delegate compute-and-write to the neutral payment-clearing lib so this
     # action and erpclaw-payments share ONE canonical clearing rule (no drift).
     # The clearable-status guard + over-payment REJECT live in the helper.
@@ -3447,15 +3466,36 @@ def update_invoice_outstanding(conn, args):
     except ValueError as e:
         err(str(e))
 
+    # Adjustment PLE row (−applied) in the invoice's own voucher bucket, same
+    # transaction as the outstanding write. raw SQL — mirrors the submit-time
+    # PLE insert idiom above ('customer' literal); all values bound params.
+    adj_ple_id = str(uuid.uuid4())
+    adj_amount = str(round_currency(-payment_amount))
+    conn.execute(
+        """INSERT INTO payment_ledger_entry
+           (id, posting_date, account_id, party_type, party_id,
+            voucher_type, voucher_id, amount, amount_in_account_currency,
+            currency, remarks)
+           VALUES (?, ?, ?, 'customer', ?, ?, ?, ?, ?, ?, ?)""",
+        (adj_ple_id, datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+         src_ple["account_id"], si["customer_id"],
+         src_ple["voucher_type"], args.sales_invoice_id,
+         adj_amount, adj_amount, src_ple["currency"],
+         f"Payment applied to sales_invoice {args.sales_invoice_id} "
+         f"via update-invoice-outstanding"),
+    )
+
     audit(conn, "erpclaw-selling", "update-invoice-outstanding", "sales_invoice",
            args.sales_invoice_id,
            new_values={"payment_amount": str(payment_amount),
                        "new_outstanding": res["outstanding_amount"],
-                       "new_status": res["status"]})
+                       "new_status": res["status"],
+                       "payment_ledger_entry_id": adj_ple_id})
     conn.commit()
     ok({"sales_invoice_id": args.sales_invoice_id,
          "outstanding_amount": res["outstanding_amount"],
-         "status": res["status"]})
+         "status": res["status"],
+         "payment_ledger_entry_id": adj_ple_id})
 
 
 # ---------------------------------------------------------------------------
@@ -3710,221 +3750,326 @@ def list_recurring_templates(conn, args):
 # ---------------------------------------------------------------------------
 
 def generate_recurring_invoices(conn, args):
-    """Cron: auto-generate invoices from due templates."""
+    """Cron: auto-generate invoices from due templates.
+
+    S1.3 (Wave F): orchestrated by the crash-safe billing_run registry.
+    Each due template is a billing_run_target processed in its OWN
+    transaction — invoice insert + GL + PLE + next_invoice_date advance +
+    target status commit atomically, so a crash mid-run rolls the current
+    template back losslessly and `resume-billing-run` (or
+    `--resume-run-id`) re-runs it with ZERO duplicate invoices. One
+    failing template no longer rolls back its predecessors (the pre-S1.3
+    batch model did exactly that on GL failure).
+    """
     if not args.company_id:
         err("--company-id is required")
 
-    as_of_date = args.as_of_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    from erpclaw_lib import billing_run as billing_run_lib
 
-    # raw SQL — OR with IS NULL comparison
-    templates = conn.execute(
-        """SELECT * FROM recurring_invoice_template
-           WHERE status = 'active'
-             AND next_invoice_date <= ?
-             AND company_id = ?
-             AND (end_date IS NULL OR end_date >= ?)""",
-        (as_of_date, args.company_id, as_of_date),
-    ).fetchall()
+    resume_run_id = getattr(args, "resume_run_id", None)
+    if resume_run_id:
+        run = billing_run_lib.load_run(conn, resume_run_id)
+        if run is None:
+            err(f"Billing run not found: {resume_run_id}")
+        if run["run_type"] != "recurring_invoices":
+            err(f"Billing run {resume_run_id} has run_type "
+                 f"'{run['run_type']}', expected 'recurring_invoices'")
+        if run["status"] == "completed":
+            err(f"Billing run {resume_run_id} is completed; nothing to resume")
+        run_id = resume_run_id
+        as_of_date = run["as_of_date"]
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        conn.execute(
+            "UPDATE billing_run SET status = 'running', finished_at = NULL, "
+            "updated_at = ? WHERE id = ?", (ts, run_id))
+        conn.commit()
+        targets = billing_run_lib.list_targets(
+            conn, run_id, statuses=billing_run_lib.RESUMABLE_TARGET_STATUSES)
+    else:
+        as_of_date = args.as_of_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        # raw SQL — OR with IS NULL comparison
+        templates = conn.execute(
+            """SELECT id FROM recurring_invoice_template
+               WHERE status = 'active'
+                 AND next_invoice_date <= ?
+                 AND company_id = ?
+                 AND (end_date IS NULL OR end_date >= ?)""",
+            (as_of_date, args.company_id, as_of_date),
+        ).fetchall()
+        if not templates:
+            # Same shape as the normal path (QA S1.3 round 1 advisory): a
+            # consumer reading run_status after a no-op must not KeyError.
+            # No billing_run row is created for zero targets.
+            ok({"invoices_generated": 0, "templates_processed": 0,
+                 "templates_completed": 0, "invoices": [], "errors": [],
+                 "skipped": 0, "billing_run_id": None,
+                 "run_status": "no_work"})
+        run_id = billing_run_lib.start(
+            conn, "recurring_invoices", as_of_date,
+            [("recurring_invoice_template", t["id"]) for t in templates],
+            company_id=args.company_id)
+        targets = billing_run_lib.list_targets(conn, run_id,
+                                               statuses=("pending",))
 
     invoices_generated = []
     templates_completed = 0
     errors = []
+    skipped = 0
 
-    for tmpl in templates:
-        tmpl_dict = row_to_dict(tmpl)
-        template_id = tmpl_dict["id"]
-        customer_id = tmpl_dict["customer_id"]
-        company_id = tmpl_dict["company_id"]
-        next_date = tmpl_dict["next_invoice_date"]
-        frequency = tmpl_dict["frequency"]
+    def _callback(cb_conn, target):
+        return _invoice_one_template(cb_conn, target["target_id"], as_of_date)
 
-        try:
-            # Fetch template items
-            tiq = (Q.from_(_t_recurring_template_item)
-                   .select(_t_recurring_template_item.star)
-                   .where(_t_recurring_template_item.template_id == P()))
-            tmpl_items = conn.execute(tiq.get_sql(), (template_id,)).fetchall()
-            if not tmpl_items:
-                errors.append({"template_id": template_id,
-                               "error": "Template has no items"})
-                continue
-
-            # Build invoice items
-            total_amount = Decimal("0")
-            si_items_data = []
-            for ti in tmpl_items:
-                ti_dict = row_to_dict(ti)
-                qty = to_decimal(ti_dict["quantity"])
-                rate = to_decimal(ti_dict["rate"])
-                net = round_currency(qty * rate)
-                total_amount += net
-                si_items_data.append({
-                    "item_id": ti_dict["item_id"],
-                    "qty": str(round_currency(qty)),
-                    "uom": ti_dict.get("uom"),
-                    "rate": str(round_currency(rate)),
-                    "amount": str(round_currency(qty * rate)),
-                    "net_amount": str(net),
-                })
-
-            total_amount = round_currency(total_amount)
-            tax_amount, tax_lines = _calculate_tax(
-                conn, total_amount, tmpl_dict.get("tax_template_id"))
-            grand_total = round_currency(total_amount + tax_amount)
-
-            # Calculate due date
-            parts = next_date.split("-")
-            d = date_type(int(parts[0]), int(parts[1]), int(parts[2]))
-            due_date = (d + timedelta(days=30)).isoformat()
-
-            si_id = str(uuid.uuid4())
-
-            # Create draft invoice
-            rsi_ins = (Q.into(_t_sales_invoice)
-                       .columns("id", "customer_id", "posting_date", "due_date",
-                                 "total_amount", "tax_amount", "grand_total",
-                                 "outstanding_amount", "tax_template_id",
-                                 "status", "update_stock", "company_id")
-                       .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(),
-                               ValueWrapper("draft"), 0, P()))
-            conn.execute(rsi_ins.get_sql(),
-                (si_id, customer_id, next_date, due_date,
-                 str(total_amount), str(tax_amount), str(grand_total),
-                 str(grand_total), tmpl_dict.get("tax_template_id"),
-                 company_id),
-            )
-
-            rsii_ins = (Q.into(_t_sales_invoice_item)
-                        .columns("id", "sales_invoice_id", "item_id", "quantity",
-                                  "uom", "rate", "amount", "discount_percentage",
-                                  "net_amount")
-                        .insert(P(), P(), P(), P(), P(), P(), P(),
-                                ValueWrapper("0"), P()))
-            rsii_ins_sql = rsii_ins.get_sql()
-            for row in si_items_data:
-                conn.execute(rsii_ins_sql,
-                    (str(uuid.uuid4()), si_id, row["item_id"], row["qty"],
-                     row["uom"], row["rate"], row["amount"], row["net_amount"]),
-                )
-
-            # Auto-submit the invoice
-            # We need to do this inline since we cannot call argparse again
-            fiscal_year = _get_fiscal_year(conn, next_date)
-            cost_center_id = _get_cost_center(conn, company_id)
-            receivable_account_id = _get_receivable_account(conn, company_id)
-            income_account_id = _get_income_account(conn, company_id)
-
-            if receivable_account_id and income_account_id:
-                gl_entries = [
-                    {
-                        "account_id": receivable_account_id,
-                        "debit": str(round_currency(grand_total)),
-                        "credit": "0",
-                        "party_type": "customer",
-                        "party_id": customer_id,
-                        "fiscal_year": fiscal_year,
-                    },
-                    {
-                        "account_id": income_account_id,
-                        "debit": "0",
-                        "credit": str(round_currency(total_amount)),
-                        "cost_center_id": cost_center_id,
-                        "fiscal_year": fiscal_year,
-                    },
-                ]
-
-                # Add tax GL entries
-                if tax_amount > 0 and tax_lines:
-                    for tl in tax_lines:
-                        amt = abs(tl["amount"])
-                        if amt > 0:
-                            gl_entries.append({
-                                "account_id": tl["account_id"],
-                                "debit": "0",
-                                "credit": str(round_currency(amt)),
-                                "cost_center_id": cost_center_id,
-                                "fiscal_year": fiscal_year,
-                            })
-
-                try:
-                    insert_gl_entries(
-                        conn, gl_entries,
-                        voucher_type="sales_invoice",
-                        voucher_id=si_id,
-                        posting_date=next_date,
-                        company_id=company_id,
-                        remarks=f"Recurring Invoice from template {template_id}",
-                    )
-                except ValueError as e:
-                    sys.stderr.write(f"[erpclaw-selling] {e}\n")
-                    errors.append({"template_id": template_id,
-                                   "error": "GL posting failed"})
-                    conn.rollback()
-                    continue
-
-                # PLE
-                # raw SQL — INSERT with embedded literal strings ('customer', 'sales_invoice', 'USD')
-                ple_id = str(uuid.uuid4())
-                conn.execute(
-                    """INSERT INTO payment_ledger_entry
-                       (id, posting_date, account_id, party_type, party_id,
-                        voucher_type, voucher_id, against_voucher_type,
-                        against_voucher_id, amount, amount_in_account_currency,
-                        currency, remarks)
-                       VALUES (?, ?, ?, 'customer', ?, 'sales_invoice', ?,
-                               'sales_invoice', ?, ?, ?, 'USD', ?)""",
-                    (ple_id, next_date, receivable_account_id, customer_id,
-                     si_id, si_id, str(round_currency(grand_total)),
-                     str(round_currency(grand_total)),
-                     f"Recurring Invoice {si_id}"),
-                )
-
-            # Generate naming and mark as submitted
-            naming = get_next_name(conn, "sales_invoice", company_id=company_id)
-            uq_si = (Q.update(_t_sales_invoice)
-                     .set("status", ValueWrapper("submitted"))
-                     .set("naming_series", P())
-                     .set("updated_at", now())
-                     .where(_t_sales_invoice.id == P()))
-            conn.execute(uq_si.get_sql(), (naming, si_id))
-
-            # Update template dates
-            new_next = _next_invoice_date(next_date, frequency)
-            uq_rt = (Q.update(_t_recurring_template)
-                     .set("last_invoice_date", P())
-                     .set("next_invoice_date", P())
-                     .set("updated_at", now())
-                     .where(_t_recurring_template.id == P()))
-            conn.execute(uq_rt.get_sql(), (next_date, new_next, template_id))
-
-            # Check if template is completed
-            if tmpl_dict.get("end_date") and new_next > tmpl_dict["end_date"]:
-                uq_comp = (Q.update(_t_recurring_template)
-                           .set("status", ValueWrapper("completed"))
-                           .set("updated_at", now())
-                           .where(_t_recurring_template.id == P()))
-                conn.execute(uq_comp.get_sql(), (template_id,))
+    for target in targets:
+        outcome = billing_run_lib.process_target(conn, run_id, target, _callback)
+        if outcome["status"] == "done":
+            res = outcome["result"]
+            invoices_generated.append(res["invoice"])
+            if res.get("template_completed"):
                 templates_completed += 1
+        elif outcome["status"] == "failed":
+            errors.append({"template_id": target["target_id"],
+                           "error": outcome["error"]})
+        elif outcome["status"] == "skipped":
+            skipped += 1
 
-            invoices_generated.append({
-                "template_id": template_id,
-                "invoice_id": si_id,
-                "naming_series": naming,
-                "customer_id": customer_id,
-                "amount": str(grand_total),
-            })
-
-        except Exception as e:
-            errors.append({"template_id": template_id,
-                           "error": str(e)})
-            continue
-
-    conn.commit()
+    summary = billing_run_lib.finalize(conn, run_id)
     ok({"invoices_generated": len(invoices_generated),
-         "templates_processed": len(templates),
+         "templates_processed": len(targets),
          "templates_completed": templates_completed,
          "invoices": invoices_generated,
-         "errors": errors})
+         "errors": errors,
+         "skipped": skipped,
+         "billing_run_id": run_id,
+         "run_status": summary["status"]})
+
+
+def _invoice_one_template(conn, template_id, as_of_date):
+    """Invoice ONE due template inside the caller's per-target transaction.
+
+    The whole per-template unit — invoice + items + GL (via
+    insert_gl_entries, never commits) + PLE + submit + the
+    next_invoice_date advance — either commits together with the target's
+    'done' status or rolls back together. The PLE row rides the SAME
+    transaction as the invoice insert (INV-25 contract: AR summary ≡
+    detail must hold at every commit point). Raises on failure; raises
+    billing_run.SkipTarget when the template is no longer due (already
+    advanced / deactivated — e.g. a resumed run racing a completed one).
+    """
+    from erpclaw_lib import billing_run as billing_run_lib
+
+    tmpl = conn.execute(
+        "SELECT * FROM recurring_invoice_template WHERE id = ?",
+        (template_id,)).fetchone()
+    if not tmpl:
+        raise ValueError(f"Template not found: {template_id}")
+    tmpl_dict = row_to_dict(tmpl)
+    customer_id = tmpl_dict["customer_id"]
+    company_id = tmpl_dict["company_id"]
+    next_date = tmpl_dict["next_invoice_date"]
+    frequency = tmpl_dict["frequency"]
+
+    # In-transaction eligibility re-read: on a fresh run this re-affirms
+    # the driving query; on resume (or a concurrent run) it prevents a
+    # second invoice for a template that already advanced.
+    if tmpl_dict["status"] != "active":
+        raise billing_run_lib.SkipTarget(
+            f"Template {template_id} is no longer active "
+            f"(status '{tmpl_dict['status']}')")
+    if next_date > as_of_date:
+        raise billing_run_lib.SkipTarget(
+            f"Template {template_id} is no longer due "
+            f"(next_invoice_date {next_date} > as-of {as_of_date})")
+    if tmpl_dict.get("end_date") and tmpl_dict["end_date"] < as_of_date:
+        # Mirrors the driving query's (end_date IS NULL OR end_date >= as_of)
+        raise billing_run_lib.SkipTarget(
+            f"Template {template_id} ended {tmpl_dict['end_date']}")
+
+    # Fetch template items
+    tiq = (Q.from_(_t_recurring_template_item)
+           .select(_t_recurring_template_item.star)
+           .where(_t_recurring_template_item.template_id == P()))
+    tmpl_items = conn.execute(tiq.get_sql(), (template_id,)).fetchall()
+    if not tmpl_items:
+        raise ValueError("Template has no items")
+
+    # Build invoice items
+    total_amount = Decimal("0")
+    si_items_data = []
+    for ti in tmpl_items:
+        ti_dict = row_to_dict(ti)
+        qty = to_decimal(ti_dict["quantity"])
+        rate = to_decimal(ti_dict["rate"])
+        net = round_currency(qty * rate)
+        total_amount += net
+        si_items_data.append({
+            "item_id": ti_dict["item_id"],
+            "qty": str(round_currency(qty)),
+            "uom": ti_dict.get("uom"),
+            "rate": str(round_currency(rate)),
+            "amount": str(round_currency(qty * rate)),
+            "net_amount": str(net),
+        })
+
+    total_amount = round_currency(total_amount)
+    tax_amount, tax_lines = _calculate_tax(
+        conn, total_amount, tmpl_dict.get("tax_template_id"))
+    grand_total = round_currency(total_amount + tax_amount)
+
+    # Calculate due date
+    parts = next_date.split("-")
+    d = date_type(int(parts[0]), int(parts[1]), int(parts[2]))
+    due_date = (d + timedelta(days=30)).isoformat()
+
+    si_id = str(uuid.uuid4())
+
+    # Create draft invoice
+    rsi_ins = (Q.into(_t_sales_invoice)
+               .columns("id", "customer_id", "posting_date", "due_date",
+                         "total_amount", "tax_amount", "grand_total",
+                         "outstanding_amount", "tax_template_id",
+                         "status", "update_stock", "company_id")
+               .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(),
+                       ValueWrapper("draft"), 0, P()))
+    conn.execute(rsi_ins.get_sql(),
+        (si_id, customer_id, next_date, due_date,
+         str(total_amount), str(tax_amount), str(grand_total),
+         str(grand_total), tmpl_dict.get("tax_template_id"),
+         company_id),
+    )
+
+    rsii_ins = (Q.into(_t_sales_invoice_item)
+                .columns("id", "sales_invoice_id", "item_id", "quantity",
+                          "uom", "rate", "amount", "discount_percentage",
+                          "net_amount")
+                .insert(P(), P(), P(), P(), P(), P(), P(),
+                        ValueWrapper("0"), P()))
+    rsii_ins_sql = rsii_ins.get_sql()
+    for row in si_items_data:
+        conn.execute(rsii_ins_sql,
+            (str(uuid.uuid4()), si_id, row["item_id"], row["qty"],
+             row["uom"], row["rate"], row["amount"], row["net_amount"]),
+        )
+
+    # Auto-submit the invoice
+    # We need to do this inline since we cannot call argparse again
+    fiscal_year = _get_fiscal_year(conn, next_date)
+    cost_center_id = _get_cost_center(conn, company_id)
+    receivable_account_id = _get_receivable_account(conn, company_id)
+    income_account_id = _get_income_account(conn, company_id)
+
+    if receivable_account_id and income_account_id:
+        gl_entries = [
+            {
+                "account_id": receivable_account_id,
+                "debit": str(round_currency(grand_total)),
+                "credit": "0",
+                "party_type": "customer",
+                "party_id": customer_id,
+                "fiscal_year": fiscal_year,
+            },
+            {
+                "account_id": income_account_id,
+                "debit": "0",
+                "credit": str(round_currency(total_amount)),
+                "cost_center_id": cost_center_id,
+                "fiscal_year": fiscal_year,
+            },
+        ]
+
+        # Add tax GL entries
+        if tax_amount > 0 and tax_lines:
+            for tl in tax_lines:
+                amt = abs(tl["amount"])
+                if amt > 0:
+                    gl_entries.append({
+                        "account_id": tl["account_id"],
+                        "debit": "0",
+                        "credit": str(round_currency(amt)),
+                        "cost_center_id": cost_center_id,
+                        "fiscal_year": fiscal_year,
+                    })
+
+        try:
+            insert_gl_entries(
+                conn, gl_entries,
+                voucher_type="sales_invoice",
+                voucher_id=si_id,
+                posting_date=next_date,
+                company_id=company_id,
+                remarks=f"Recurring Invoice from template {template_id}",
+            )
+        except ValueError as e:
+            sys.stderr.write(f"[erpclaw-selling] {e}\n")
+            # Raise (never a silent per-batch rollback): the billing_run
+            # library rolls back THIS template only and the run continues.
+            raise ValueError(f"GL posting failed: {e}")
+
+        # PLE — SAME transaction as the invoice insert (INV-25 contract)
+        # raw SQL — INSERT with embedded literal strings ('customer', 'sales_invoice', 'USD')
+        ple_id = str(uuid.uuid4())
+        conn.execute(
+            """INSERT INTO payment_ledger_entry
+               (id, posting_date, account_id, party_type, party_id,
+                voucher_type, voucher_id, against_voucher_type,
+                against_voucher_id, amount, amount_in_account_currency,
+                currency, remarks)
+               VALUES (?, ?, ?, 'customer', ?, 'sales_invoice', ?,
+                       'sales_invoice', ?, ?, ?, 'USD', ?)""",
+            (ple_id, next_date, receivable_account_id, customer_id,
+             si_id, si_id, str(round_currency(grand_total)),
+             str(round_currency(grand_total)),
+             f"Recurring Invoice {si_id}"),
+        )
+
+    # Generate naming and mark as submitted
+    naming = get_next_name(conn, "sales_invoice", company_id=company_id)
+    uq_si = (Q.update(_t_sales_invoice)
+             .set("status", ValueWrapper("submitted"))
+             .set("naming_series", P())
+             .set("updated_at", now())
+             .where(_t_sales_invoice.id == P()))
+    conn.execute(uq_si.get_sql(), (naming, si_id))
+
+    # Advance the template cursor INSIDE this transaction, CAS-guarded on
+    # the next_invoice_date we read: a concurrent run that advanced it
+    # first makes this a no-match -> raise -> the library rolls THIS
+    # template back (invoice included) instead of double-billing.
+    new_next = _next_invoice_date(next_date, frequency)
+    uq_rt = (Q.update(_t_recurring_template)
+             .set("last_invoice_date", P())
+             .set("next_invoice_date", P())
+             .set("updated_at", now())
+             .where(_t_recurring_template.id == P())
+             .where(_t_recurring_template.next_invoice_date == P()))
+    cur = conn.execute(uq_rt.get_sql(), (next_date, new_next, template_id,
+                                         next_date))
+    if cur.rowcount != 1:
+        raise ValueError(
+            f"Template {template_id} advanced concurrently "
+            f"(next_invoice_date moved past {next_date}); rolled back "
+            f"without billing")
+
+    # Check if template is completed
+    template_completed = False
+    if tmpl_dict.get("end_date") and new_next > tmpl_dict["end_date"]:
+        uq_comp = (Q.update(_t_recurring_template)
+                   .set("status", ValueWrapper("completed"))
+                   .set("updated_at", now())
+                   .where(_t_recurring_template.id == P()))
+        conn.execute(uq_comp.get_sql(), (template_id,))
+        template_completed = True
+
+    return {
+        "voucher_id": si_id,
+        "template_completed": template_completed,
+        "invoice": {
+            "template_id": template_id,
+            "invoice_id": si_id,
+            "naming_series": naming,
+            "customer_id": customer_id,
+            "amount": str(grand_total),
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -5464,6 +5609,7 @@ def main():
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
     parser.add_argument("--as-of-date")
+    parser.add_argument("--resume-run-id")  # S1.3: resume a crashed billing_run
     parser.add_argument("--template-status", dest="template_status")
 
     # Blanket order fields

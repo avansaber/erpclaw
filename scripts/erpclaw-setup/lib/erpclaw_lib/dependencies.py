@@ -130,16 +130,19 @@ TABLE_TO_SKILL = {
     "warranty_claim": "erpclaw-support",
     "maintenance_schedule": "erpclaw-support",
     "maintenance_visit": "erpclaw-support",
-    # erpclaw-billing
+    # erpclaw-billing (S1.7 hygiene 2026-07-25: dropped the phantom
+    # `billing_period_line` / `prepaid_credit` declarations — neither table
+    # has ever had DDL; the shipped prepaid table is `prepaid_credit_balance`)
     "meter": "erpclaw-billing",
     "meter_reading": "erpclaw-billing",
     "usage_event": "erpclaw-billing",
     "rate_plan": "erpclaw-billing",
     "rate_tier": "erpclaw-billing",
     "billing_period": "erpclaw-billing",
-    "billing_period_line": "erpclaw-billing",
     "billing_adjustment": "erpclaw-billing",
-    "prepaid_credit": "erpclaw-billing",
+    "prepaid_credit_balance": "erpclaw-billing",
+    "billing_run": "erpclaw-billing",
+    "billing_run_target": "erpclaw-billing",
     # erpclaw-ai-engine
     "anomaly": "erpclaw-ai-engine",
     "cash_flow_forecast": "erpclaw-ai-engine",

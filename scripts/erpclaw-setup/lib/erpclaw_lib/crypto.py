@@ -29,12 +29,163 @@ import hashlib
 import hmac
 import os
 import secrets
+import stat
 import struct
+import sys
 from typing import Optional
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
+
+
+# ---------------------------------------------------------------------------
+# Pre-master-key-load environment sanity check (M36 R-b, #7071-class)
+# ---------------------------------------------------------------------------
+#
+# The S0c probe (planning/HERMES_S0_PROBE_RESULTS_2026-06-14.md) established
+# that skill subprocesses inherit the parent interpreter environment by
+# standard subprocess inheritance on every runtime (OpenClaw, Hermes venv —
+# no docker shim in the loop). A #7071-class attack therefore does not need
+# to touch ERPClaw code at all: poisoning PYTHONPATH / PYTHONSTARTUP /
+# sitecustomize with a module in a world-writable or tmp location lets
+# injected code run inside the very process that decrypts the master key.
+# This check inspects the interpreter environment for exactly those
+# indicators BEFORE the key is loaded or a wrapped key is decrypted.
+#
+# Indicator list (derived from the S0c analysis):
+#   1. PYTHONPATH entries that resolve under a shared tmp root (/tmp,
+#      /var/tmp, /dev/shm, $TMPDIR) or into a world-writable directory —
+#      any local user could plant a shadowing module there.
+#   2. PYTHONSTARTUP set at all — arbitrary code at interpreter startup.
+#   3. A sitecustomize/usercustomize module imported from such a path —
+#      the interpreter already ran code from an attacker-writable location.
+#
+# DEFAULT = WARN LOUDLY to stderr and continue; ERPCLAW_STRICT_ENV=1
+# upgrades to refuse (RuntimeError before any key material is touched).
+# Why warn-by-default: ERPClaw is self-hosted and single-user by design —
+# the same person owns the shell and the books, and developers legitimately
+# set PYTHONPATH. A hard fail on a merely-unusual environment would brick
+# every key-backed action (HR --ssn, credentials, encrypted backups) for
+# that legitimate majority; a loud stderr warning preserves the signal
+# without taking the user's own data hostage. Hardened multi-user installs
+# opt into refusal with one environment variable. Runtime-agnostic, stdlib
+# only (os/sys/stat), zero new dependencies.
+
+ERPCLAW_STRICT_ENV_VAR = "ERPCLAW_STRICT_ENV"
+
+_TMP_ROOTS = ("/tmp", "/var/tmp", "/dev/shm")
+
+# Warn once per process (key loads happen per-field in encrypted-column
+# flows; the scan is cheap but the stderr noise would not be).
+_ENV_WARNING_EMITTED = False
+
+
+def _is_world_writable_dir(path: str) -> bool:
+    """True if path is a directory writable by 'other' (mode o+w)."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False
+    return stat.S_ISDIR(st.st_mode) and bool(st.st_mode & stat.S_IWOTH)
+
+
+def _under_tmp_root(path: str) -> bool:
+    """True if path resolves under a shared tmp root (incl. $TMPDIR)."""
+    real = os.path.realpath(path)
+    roots = list(_TMP_ROOTS)
+    tmpdir = os.environ.get("TMPDIR")
+    if tmpdir:
+        roots.append(os.path.realpath(tmpdir))
+    for root in roots:
+        real_root = os.path.realpath(root)
+        if real == real_root or real.startswith(real_root + os.sep):
+            return True
+    return False
+
+
+def scan_environment_injection_indicators() -> list:
+    """Scan the interpreter environment for #7071-class injection indicators.
+
+    Pure inspection — never mutates anything. Returns a list of human-readable
+    finding strings (empty = clean).
+    """
+    findings = []
+
+    # 1. Suspicious PYTHONPATH entries (tmp-rooted or world-writable).
+    pythonpath = os.environ.get("PYTHONPATH", "")
+    for entry in pythonpath.split(os.pathsep):
+        entry = entry.strip()
+        if not entry:
+            continue
+        expanded = os.path.expanduser(entry)
+        if _under_tmp_root(expanded):
+            findings.append(
+                f"PYTHONPATH entry under a shared tmp path: {entry!r} — "
+                "injected modules there can shadow stdlib/erpclaw_lib inside "
+                "the key-decrypting process")
+        elif _is_world_writable_dir(expanded):
+            findings.append(
+                f"PYTHONPATH entry is a world-writable directory: {entry!r} — "
+                "any local user can plant a shadowing module there")
+
+    # 2. PYTHONSTARTUP set (arbitrary code at interpreter startup).
+    startup = os.environ.get("PYTHONSTARTUP")
+    if startup:
+        findings.append(
+            f"PYTHONSTARTUP is set ({startup!r}) — the interpreter may execute "
+            "arbitrary startup code in credential-handling processes")
+
+    # 3. sitecustomize / usercustomize loaded from a tmp / world-writable path.
+    for mod_name in ("sitecustomize", "usercustomize"):
+        mod = sys.modules.get(mod_name)
+        mod_file = getattr(mod, "__file__", None) if mod else None
+        if not mod_file:
+            continue
+        mod_dir = os.path.dirname(os.path.realpath(mod_file))
+        if _under_tmp_root(mod_file) or _is_world_writable_dir(mod_dir):
+            findings.append(
+                f"{mod_name} was imported from a suspicious location "
+                f"({mod_file!r}) — startup-hook code already ran in this "
+                "process")
+
+    return findings
+
+
+def check_environment_before_key_load(strict: Optional[bool] = None) -> list:
+    """Run the #7071-class scan; warn (default) or refuse (strict) on findings.
+
+    Call BEFORE loading, generating, importing, or unwrapping the master key.
+    `strict=None` reads ERPCLAW_STRICT_ENV (value "1"/"true"/"yes" = strict).
+    Returns the findings list. In strict mode any finding raises RuntimeError
+    before key material is touched; in default mode the findings are written
+    to stderr once per process and execution continues (rationale above).
+    """
+    global _ENV_WARNING_EMITTED
+    findings = scan_environment_injection_indicators()
+    if not findings:
+        return findings
+
+    if strict is None:
+        strict = os.environ.get(ERPCLAW_STRICT_ENV_VAR, "").strip().lower() in (
+            "1", "true", "yes")
+
+    if strict:
+        raise RuntimeError(
+            "Refusing to load the ERPClaw master key: suspicious interpreter "
+            "environment (" + "; ".join(findings) + "). Unset "
+            f"{ERPCLAW_STRICT_ENV_VAR} to downgrade this to a warning, or fix "
+            "the environment.")
+
+    if not _ENV_WARNING_EMITTED:
+        print(
+            "WARNING [erpclaw]: suspicious interpreter environment detected "
+            "before master-key load:\n  - " + "\n  - ".join(findings) +
+            f"\n  Continuing (self-hosted default). Set {ERPCLAW_STRICT_ENV_VAR}=1 "
+            "to refuse instead.",
+            file=sys.stderr)
+        _ENV_WARNING_EMITTED = True
+    return findings
 
 
 # ---------------------------------------------------------------------------
@@ -338,7 +489,12 @@ def wrap_master_key(master_key: bytes, passphrase: str) -> bytes:
 
 
 def unwrap_master_key(wrapped: bytes, passphrase: str) -> bytes:
-    """Inverse of wrap_master_key."""
+    """Inverse of wrap_master_key.
+
+    Decrypts master-key material, so the #7071-class environment check runs
+    first (M36 R-b) — see check_environment_before_key_load.
+    """
+    check_environment_before_key_load()
     salt = wrapped[:SALT_LEN]
     nonce = wrapped[SALT_LEN:SALT_LEN + GCM_NONCE_LEN]
     ct = wrapped[SALT_LEN + GCM_NONCE_LEN:]

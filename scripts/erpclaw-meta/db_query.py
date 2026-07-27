@@ -137,7 +137,12 @@ SKILL_TABLES = {
     "erpclaw-quality": ["quality_inspection", "quality_inspection_reading"],
     "erpclaw-crm": ["lead", "opportunity", "campaign"],
     "erpclaw-support": ["support_issue", "support_sla", "warranty_claim"],
-    "erpclaw-billing": ["subscription", "subscription_plan", "billing_invoice"],
+    # S1.7 hygiene 2026-07-25: the previous entries (subscription,
+    # subscription_plan, billing_invoice) were phantoms — no such tables have
+    # ever shipped. These are the live billing tables; F-depth.1 (Wave F
+    # sprint 2+) will introduce the REAL subscription entity, at which point
+    # it joins this list.
+    "erpclaw-billing": ["meter", "rate_plan", "billing_period"],
     "erpclaw-ai-engine": ["ai_anomaly", "ai_forecast"],
     "erpclaw-analytics": ["kpi_definition", "kpi_log"],
     "erpclaw-region-ca": [],

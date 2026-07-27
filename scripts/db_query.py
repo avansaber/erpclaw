@@ -443,6 +443,9 @@ ACTION_MAP = {
     "get-billing-period": "erpclaw-billing",
     "add-prepaid-credit": "erpclaw-billing",
     "get-prepaid-balance": "erpclaw-billing",
+    "list-billing-runs": "erpclaw-billing",
+    "get-billing-run": "erpclaw-billing",
+    "resume-billing-run": "erpclaw-billing",
     "billing-status": "erpclaw-billing",
 
     # === Advanced Accounting — Revenue Recognition / ASC 606 (17 actions) ===
@@ -774,6 +777,9 @@ DANGEROUS_ACTIONS = frozenset({
     "generate-w2-data", "generate-nacha-file",
     # Setup destructive
     "restore-database",
+    # Deletes backup FILES per the retention policy (7 daily / 4 weekly /
+    # 12 monthly) — irreversible, gated like its restore sibling (M36 R-c)
+    "cleanup-backups",
     # RBAC + identity changes
     "set-password", "add-role", "assign-role", "revoke-role", "seed-permissions",
     "update-user",

@@ -1,10 +1,10 @@
 ---
 name: erpclaw
-version: 4.13.0
+version: 4.14.0
 description: >
   AI-native ERP system. Full accounting, invoicing, inventory, purchasing,
   tax, billing, HR, payroll, advanced accounting (ASC 606/842, intercompany, consolidation),
-  and financial reporting (including P&L / trial balance / spend grouped by department, project, cost center, location, or fund). 488 actions across 14 domains, 45 optional expansion modules (user-approved install from GitHub).
+  and financial reporting (including P&L / trial balance / spend grouped by department, project, cost center, location, or fund). 496 actions across 14 domains, 45 optional expansion modules (user-approved install from GitHub).
   Double-entry GL, immutable audit trail, US GAAP compliant. Licensed under GNU GPL v3 (the marketplace "MIT-0" badge is a ClawHub platform default; the LICENSE.txt in the bundle is GPL v3).
 author: AvanSaber
 homepage: https://github.com/avansaber/erpclaw
@@ -120,7 +120,7 @@ Re-confirm a second time ONLY for the small destructive set, where a mistake is 
 | `add-user` / `update-user` / `get-user` / `list-users` / `set-password` | User management |
 | `add-role` / `list-roles` / `assign-role` / `revoke-role` / `seed-permissions` | RBAC & security |
 | `link-telegram-user` / `unlink-telegram-user` / `check-telegram-permission` | Telegram integration |
-| `backup-database` / `list-backups` / `verify-backup` / `restore-database` / `cleanup-backups` | DB backup/restore |
+| `backup-database` / `list-backups` / `verify-backup` / `restore-database` / `cleanup-backups` | DB backup/restore. `cleanup-backups` permanently deletes old backup files per the retention policy (keeps 7 daily / 4 weekly / 12 monthly) and requires `--user-confirmed` like `restore-database` |
 | `set-credential` / `get-credential` / `list-credentials` / `delete-credential` / `migrate-credentials` | Encrypted credential management |
 | `import-master-key-from-backup` | Cross-machine restore: install master key from a backup taken on another machine |
 | `get-audit-log` / `get-schema-version` / `update-regional-settings` / `onboard` | System admin |
@@ -177,14 +177,14 @@ Re-confirm a second time ONLY for the small destructive set, where a mistake is 
 | `add-blanket-order` / `get-blanket-order` / `list-blanket-orders` / `submit-blanket-order` / `create-so-from-blanket` | Blanket orders |
 | `create-delivery-note` / `get-delivery-note` / `list-delivery-notes` / `submit-delivery-note` / `cancel-delivery-note` / `add-packing-slip` / `get-packing-slip` / `list-packing-slips` | Delivery & packing |
 | `create-sales-invoice` / `update-sales-invoice` / `get-sales-invoice` / `list-sales-invoices` / `submit-sales-invoice` / `cancel-sales-invoice` | Invoicing |
-| `create-credit-note` / `list-credit-notes` / `update-invoice-outstanding` | Credit notes |
+| `create-credit-note` / `list-credit-notes` / `update-invoice-outstanding` | Credit notes; `update-invoice-outstanding` (AP twin: `update-purchase-outstanding`) applies a payment amount to an open invoice and posts the matching payment-ledger adjustment row in the same transaction (summary ≡ detail) |
 | `add-sales-partner` / `list-sales-partners` | Sales partners |
 | `add-recurring-template` / `update-recurring-template` / `list-recurring-templates` / `generate-recurring-invoices` | Recurring invoices |
 | `add-intercompany-account-map` / `list-intercompany-account-maps` / `create-intercompany-invoice` / `list-intercompany-invoices` / `cancel-intercompany-invoice` | Intercompany |
 | `check-credit-limit` / `place-customer-on-hold` | Credit control: compute available credit (limit minus outstanding AR); place customer on hold / suspend / restore active |
 | `add-dunning-level` / `run-dunning-cycle` / `list-dunning-runs` | Dunning: configure escalation levels (at N days overdue → email / call / hold / suspend); run a cycle that matches overdue invoices to their highest applicable level and applies the configured action — `email` levels enqueue a dunning email via the erpclaw-alerts send-email action and record the outbox id on `dunning_run.generated_email_id` (missing customer email or template skips-with-note, never failing the cycle); view run history |
 
-### Buying (48)
+### Buying (51)
 | Action | Description |
 |--------|-------------|
 | `add-supplier` / `update-supplier` / `get-supplier` / `list-suppliers` / `import-suppliers` | Supplier CRUD (add/update accept `--email` / `--phone` — dedicated structured columns) |
@@ -195,6 +195,7 @@ Re-confirm a second time ONLY for the small destructive set, where a mistake is 
 | `create-purchase-receipt` / `get-purchase-receipt` / `list-purchase-receipts` / `submit-purchase-receipt` / `cancel-purchase-receipt` | Receipts |
 | `create-purchase-invoice` / `update-purchase-invoice` / `get-purchase-invoice` / `list-purchase-invoices` / `submit-purchase-invoice` / `cancel-purchase-invoice` | Purchase invoices. `create-purchase-invoice --cwip-asset-id <A>` (standalone cost bill) routes the expense GL to the asset's CWIP account + records a cost accumulation on submit (S3) |
 | `create-debit-note` / `add-landed-cost-voucher` / `list-landed-cost-vouchers` / `get-landed-cost-voucher` / `cancel-landed-cost-voucher` / `update-receipt-tolerance` / `update-three-way-match-policy` | Adjustments. Landed cost (freight/duty/insurance on received stock): `add-landed-cost-voucher` posts the GL AND reprices SLE valuation + FIFO layers in one step; `cancel-landed-cost-voucher` reverses both halves (cancel = reverse, never edit) |
+| `add-recurring-bill-template` / `list-recurring-bill-templates` / `generate-recurring-bills` | Recurring AP bills (rent, utilities, subscriptions billed TO you): template drafts a purchase invoice each cycle |
 
 **Receiving purchased stock — flow:** to bring purchased goods into inventory, receive them against their source document so valuation carries automatically. Canonical flow: `submit-purchase-order` (confirms the order + rate) → `create-purchase-receipt --purchase-order-id <PO>` then `submit-purchase-receipt` (this values the stock at the PO rate and posts inventory GL) → `create-purchase-invoice` + `submit-purchase-invoice` for the bill (leave stock update off — the receipt already moved it) → pay. NEVER use a standalone `add-stock-entry` `material_receipt` for purchased goods — even with the cost stated, it does not mark the purchase order received, so the later bill/receipt flow will receive the goods AGAIN and double-count stock. Before any bare "receive stock" request, run `list-purchase-orders` for an open order covering the item; if one exists, receive via `create-purchase-receipt --purchase-order-id`. (A rate-less standalone receipt cannot be valued and will be refused regardless.)
 
@@ -220,10 +221,10 @@ Re-confirm a second time ONLY for the small destructive set, where a mistake is 
 |--------|-------------|
 | `add-meter` / `update-meter` / `get-meter` / `list-meters` / `add-meter-reading` / `list-meter-readings` | Meters |
 | `add-usage-event` / `add-usage-events-batch` | Usage tracking |
-| `add-rate-plan` / `update-rate-plan` / `get-rate-plan` / `list-rate-plans` / `rate-consumption` | Rate plans |
-| `create-billing-period` / `run-billing` / `generate-invoices` / `get-billing-period` / `list-billing-periods` | Billing cycles |
+| `add-rate-plan` / `update-rate-plan` / `get-rate-plan` / `list-rate-plans` / `rate-consumption` | Rate plans. All 7 plan types rate: flat / tiered / volume_discount / time_of_use / demand / prepaid_credit / hybrid. TOU tiers (`time_of_use_period` + `time_of_use_hours` ranges) must cover 24h with no gaps/overlaps (validated at add/update); demand plans need one `demand_type='demand'` tier (optional `energy` tier prices consumption); hybrid plans take `--tier-strategy '{"components": [{"type": ..., "tiers": [...]}]}'` (non-hybrid components only, no prepaid_credit). `rate-consumption` extras: `--usage-by-period '{"peak": "120", ...}'` (TOU), `--peak-demand` (demand), `--customer-id` (prepaid_credit — balance preview only, no deduction) |
+| `create-billing-period` / `run-billing` / `generate-invoices` / `get-billing-period` / `list-billing-periods` | Billing cycles. `run-billing` reports per-meter rating failures in an `errors` list (a bad plan reference or unpartitionable TOU usage is a data error, never a silent skip) and deducts prepaid_credit charges from `prepaid_credit_balance` (insufficient balance = explicit `over_limit` outcome, no deduction). `generate-invoices` marks a period `invoiced` only with a real invoice id; failures leave it `rated` for retry with the reason in `results` |
 | `add-billing-adjustment` / `add-prepaid-credit` / `get-prepaid-balance` | Adjustments & prepaid |
-| `add-recurring-bill-template` / `list-recurring-bill-templates` / `generate-recurring-bills` | Recurring bills |
+| `list-billing-runs` / `get-billing-run` / `resume-billing-run` | Crash-safe batch registry (billing_run). `run-billing`, `generate-recurring-invoices` and `process-recurring` record one target per meter/template, each in its own transaction; `resume-billing-run --run-id R` re-runs a crashed/partial run with zero duplicate documents (completed runs refuse). `list-billing-runs [--status S --run-type T --from-date D --to-date D]`; `get-billing-run --run-id R` returns header + per-target statuses |
 
 ### Advanced Accounting (48)
 | Action | Description |

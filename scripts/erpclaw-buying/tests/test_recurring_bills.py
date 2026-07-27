@@ -220,3 +220,81 @@ class TestGenerateRecurringBills:
         bill = result["bills"][0]
         assert bill["status"] == "submitted"
         assert bill["naming_series"] is not None
+
+    def test_auto_submit_posts_voucher_ple_inv25(self, conn, env):
+        """S1.4 writer-sweep fix W13: an auto-submitted recurring bill must
+        carry the same voucher-level PLE (+grand_total) submit-purchase-invoice
+        posts, so outstanding_amount ≡ PLE net (INV-25) from birth.
+
+        Before the fix the bill went terminal-'submitted' with outstanding =
+        grand_total and a ZERO payment-ledger net — invisible until paid, then
+        an INV-22 red. Exact Decimal assertions; engine import is defensive
+        (harness absent in the published skill tree)."""
+        import importlib.util
+        import os as _os
+        from decimal import Decimal as _D
+
+        items = _items(env, ("item1", "1", "500.00"))
+        tmpl = call_action(mod.add_recurring_bill_template, conn, _common_ns(
+            supplier_id=env["supplier"], company_id=env["company_id"],
+            items=items, frequency="monthly",
+            start_date="2026-01-01", end_date="2026-12-31",
+            auto_submit=True,
+        ))
+        assert is_ok(tmpl)
+        conn.execute(
+            "UPDATE recurring_bill_template SET status = 'active' WHERE id = ?",
+            (tmpl["template_id"],)
+        )
+        conn.commit()
+
+        result = call_action(mod.generate_recurring_bills, conn, _common_ns(
+            company_id=env["company_id"],
+            as_of_date="2026-01-15",
+        ))
+        assert is_ok(result)
+        assert result["bills_generated"] >= 1
+        bill = result["bills"][0]
+        assert bill["status"] == "submitted"
+        pi_id = bill["invoice_id"]
+
+        # The voucher-level PLE exists, +grand_total, supplier party, delinked=0.
+        ple = conn.execute(
+            "SELECT amount, party_type, party_id, against_voucher_type, "
+            " against_voucher_id, delinked FROM payment_ledger_entry "
+            "WHERE voucher_type = 'purchase_invoice' AND voucher_id = ?",
+            (pi_id,)).fetchall()
+        assert len(ple) == 1
+        assert _D(ple[0]["amount"]) == _D("500.00")
+        assert ple[0]["party_type"] == "supplier"
+        assert ple[0]["party_id"] == env["supplier"]
+        assert ple[0]["against_voucher_type"] == "purchase_invoice"
+        assert ple[0]["against_voucher_id"] == pi_id
+        assert ple[0]["delinked"] == 0
+
+        # outstanding ≡ PLE net (the INV-25 equality), exact Decimal.
+        row = conn.execute(
+            "SELECT outstanding_amount FROM purchase_invoice WHERE id = ?",
+            (pi_id,)).fetchone()
+        assert _D(row["outstanding_amount"]) == _D("500.00")
+
+        # INV-25 itself, when the monorepo harness is present.
+        def _find_root(start):
+            cur = _os.path.abspath(start)
+            while True:
+                if _os.path.exists(_os.path.join(cur, "CLAUDE.md")) or \
+                        _os.path.isdir(_os.path.join(cur, ".git")):
+                    return cur
+                parent = _os.path.dirname(cur)
+                if parent == cur:
+                    return None
+                cur = parent
+
+        root = _find_root(_os.path.dirname(_os.path.abspath(__file__)))
+        eng_path = _os.path.join(root, "testing", "invariant_engine.py") if root else ""
+        if eng_path and _os.path.exists(eng_path):
+            spec = importlib.util.spec_from_file_location("inv_engine_rb", eng_path)
+            eng = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(eng)
+            eng._ensure_decimal_sum(conn)
+            assert eng._check_inv25_ar_summary_detail(conn) is None

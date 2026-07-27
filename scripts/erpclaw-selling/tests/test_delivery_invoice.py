@@ -8,7 +8,9 @@ Actions tested:
   - create-credit-note, list-credit-notes
   - update-invoice-outstanding
 """
+import importlib.util
 import json
+import os
 import pytest
 from decimal import Decimal
 from selling_helpers import (
@@ -16,6 +18,44 @@ from selling_helpers import (
 )
 
 mod = load_db_query()
+
+
+def _load_invariant_engine():
+    """Defensive monorepo-harness import (test_inv25_flows.py pattern): the
+    published skill tree has no testing/ dir, so engine-backed pins skip."""
+    cur = os.path.dirname(os.path.abspath(__file__))
+    while True:
+        if os.path.exists(os.path.join(cur, "CLAUDE.md")) or \
+                os.path.isdir(os.path.join(cur, ".git")):
+            break
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return None
+        cur = parent
+    path = os.path.join(cur, "testing", "invariant_engine.py")
+    if not os.path.exists(path):
+        return None
+    spec = importlib.util.spec_from_file_location("invariant_engine_pin_sell", path)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+_inv_engine = _load_invariant_engine()
+
+
+def _inv25(conn):
+    if _inv_engine is None:
+        pytest.skip("invariant_engine harness not present (published skill tree)")
+    _inv_engine._ensure_decimal_sum(conn)
+    return _inv_engine._check_inv25_ar_summary_detail(conn)
+
+
+def _inv22(conn):
+    if _inv_engine is None:
+        pytest.skip("invariant_engine harness not present (published skill tree)")
+    _inv_engine._ensure_decimal_sum(conn)
+    return _inv_engine._check_inv22_payment_invoice_reconciliation(conn)
 
 
 def _items(env, *specs):
@@ -364,3 +404,57 @@ class TestUpdateInvoiceOutstanding:
             (create["sales_invoice_id"],)
         ).fetchone()
         assert Decimal(si["outstanding_amount"]) == Decimal("300.00")
+
+        # QA round-1 DEFECT 1 pin (INV-25 / ADR-0031): the action must post the
+        # matching payment-ledger DETAIL row in the same transaction as the
+        # SUMMARY write — one invocation without it reds INV-25 permanently.
+        assert "payment_ledger_entry_id" in result
+        adj = conn.execute(
+            "SELECT voucher_type, voucher_id, amount, delinked "
+            "FROM payment_ledger_entry WHERE id=?",
+            (result["payment_ledger_entry_id"],)
+        ).fetchone()
+        assert adj is not None
+        assert adj["voucher_type"] == "sales_invoice"
+        assert adj["voucher_id"] == create["sales_invoice_id"]
+        assert adj["delinked"] == 0
+        assert Decimal(adj["amount"]) == Decimal("-200.00")
+        assert _inv25(conn) is None
+
+    def test_full_pay_keeps_inv25_and_inv22_green(self, conn, env):
+        """QA round-1 DEFECT 1 pin, full-clear path: paying an invoice down to
+        zero through update-invoice-outstanding flips it to 'paid' with the
+        detail net at exactly zero — INV-25 (always-on) AND INV-22 (paid-scope)
+        both green."""
+        items = _items(env, ("item1", "5", "100.00"))
+        create = call_action(mod.create_sales_invoice, conn, ns(
+            sales_order_id=None, delivery_note_id=None,
+            customer_id=env["customer"], company_id=env["company_id"],
+            posting_date="2026-06-20", due_date="2026-07-20",
+            items=items, tax_template_id=None,
+            payment_terms_id=None,
+        ))
+        call_action(mod.submit_sales_invoice, conn, ns(
+            sales_invoice_id=create["sales_invoice_id"],
+        ))
+        r1 = call_action(mod.update_invoice_outstanding, conn, ns(
+            sales_invoice_id=create["sales_invoice_id"], amount="200.00"))
+        assert is_ok(r1)
+        r2 = call_action(mod.update_invoice_outstanding, conn, ns(
+            sales_invoice_id=create["sales_invoice_id"], amount="300.00"))
+        assert is_ok(r2)
+        si = conn.execute(
+            "SELECT status, outstanding_amount FROM sales_invoice WHERE id=?",
+            (create["sales_invoice_id"],)
+        ).fetchone()
+        assert si["status"] == "paid"
+        assert si["outstanding_amount"] == "0"
+        rows = conn.execute(
+            "SELECT amount FROM payment_ledger_entry "
+            "WHERE voucher_type='sales_invoice' AND voucher_id=? AND delinked=0",
+            (create["sales_invoice_id"],)
+        ).fetchall()
+        assert len(rows) == 3  # submit +500, adjustments -200 and -300
+        assert sum(Decimal(r["amount"]) for r in rows) == Decimal("0")
+        assert _inv25(conn) is None
+        assert _inv22(conn) is None

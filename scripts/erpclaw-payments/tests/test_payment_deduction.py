@@ -484,6 +484,53 @@ def test_cancel_reverses_all_legs(conn):
     assert _inv24(conn) is None
 
 
+# ── 6b. Draft-delete cleanup pin (WS2/D3 QA advisory, Wave F S1.8) ───────────
+
+def test_draft_delete_cleans_deduction_rows(conn):
+    """QA-advisory pin: deleting a DRAFT payment that carries deductions must
+    remove its payment_deduction (and payment_allocation) child rows along
+    with the payment_entry — no orphan rows survive. Contrast with cancel
+    (test above), where the rows are history and survive. Behavior pin only."""
+    env = build_ar_env(conn)
+    si = seed_sales_invoice(conn, env, "1000")
+    r = _add_receive(conn, env, "1000",
+                     allocations=[{"voucher_type": "sales_invoice",
+                                   "voucher_id": si,
+                                   "allocated_amount": "980"}],
+                     deductions=[{"account_id": env["discount"], "amount": "20",
+                                  "type": "early_payment_discount"}])
+    assert not is_error(r), r
+    pe_id = r["payment_entry_id"]
+    assert _pe(conn, pe_id)["status"] == "draft"
+    assert conn.execute(
+        "SELECT COUNT(*) c FROM payment_deduction WHERE payment_entry_id = ?",
+        (pe_id,)).fetchone()["c"] == 1
+    assert conn.execute(
+        "SELECT COUNT(*) c FROM payment_allocation WHERE payment_entry_id = ?",
+        (pe_id,)).fetchone()["c"] == 1
+
+    d = call_action(mod.delete_payment, conn, ns(payment_entry_id=pe_id))
+    assert not is_error(d), d
+
+    # Parent + BOTH child tables fully cleaned.
+    assert conn.execute(
+        "SELECT COUNT(*) c FROM payment_entry WHERE id = ?",
+        (pe_id,)).fetchone()["c"] == 0
+    assert conn.execute(
+        "SELECT COUNT(*) c FROM payment_deduction WHERE payment_entry_id = ?",
+        (pe_id,)).fetchone()["c"] == 0
+    assert conn.execute(
+        "SELECT COUNT(*) c FROM payment_allocation WHERE payment_entry_id = ?",
+        (pe_id,)).fetchone()["c"] == 0
+
+    # Draft never touched the books: invoice untouched, no GL for the voucher.
+    d2 = _doc(conn, "sales_invoice", si)
+    assert Decimal(d2["outstanding_amount"]) == Decimal("1000")
+    assert d2["status"] == "submitted"
+    assert _gl_rows(conn, pe_id) == []
+    _invariants_green(conn)
+
+
 # ── 7. INV-24 stays green across the whole deduction lifecycle ───────────────
 
 def test_inv24_unaffected_by_deduction_flows(conn):

@@ -14,6 +14,8 @@ import os
 import secrets
 import stat
 
+from .crypto import check_environment_before_key_load
+
 CONFIG_DIR = os.path.expanduser("~/.config/erpclaw")
 MASTER_KEY_PATH = os.path.join(CONFIG_DIR, "master.key")
 
@@ -31,7 +33,12 @@ def get_or_create_master_key() -> bytes:
 
     Idempotent. Subsequent calls return the same key. File mode is forced
     to 0600 every call.
+
+    Runs the #7071-class environment sanity check FIRST (M36 R-b): warn by
+    default, refuse under ERPCLAW_STRICT_ENV=1 — before any key bytes are
+    read or generated.
     """
+    check_environment_before_key_load()
     _ensure_config_dir()
     if os.path.isfile(MASTER_KEY_PATH):
         with open(MASTER_KEY_PATH, "rb") as fh:
@@ -60,7 +67,9 @@ def import_master_key(mk: bytes) -> None:
     """Install a master key (e.g. unwrapped from a backup on another machine).
 
     Refuses to overwrite an existing master key file unless it's identical.
+    Runs the #7071-class environment sanity check first (M36 R-b).
     """
+    check_environment_before_key_load()
     if len(mk) != 32:
         raise ValueError("master key must be exactly 32 bytes")
     _ensure_config_dir()

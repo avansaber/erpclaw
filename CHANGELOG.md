@@ -2,6 +2,17 @@
 
 All notable changes to the ERPClaw foundation skill.
 
+## [4.14.0] — 2026-07-27 — Wave F sprint 1 (F-debt): billing foundation
+
+- **Rating engine complete**: all 7 rate plan types rate to exact Decimal — `time_of_use`, `demand`, `prepaid_credit`, `hybrid` join `flat`/`tiered`/`volume_discount`. TOU tiers validated for 24h coverage; demand plans price peak + optional energy component; prepaid deducts FIFO inside the billing transaction with explicit `over_limit` on insufficient balance; hybrid composes non-hybrid components.
+- **Money write gates**: garbage, non-finite (NaN/Infinity), and finite-but-unrepresentable magnitudes are rejected at every billing write entry point with a named validation error; any value that passes a gate survives currency rounding. Legacy stored garbage is contained as a per-meter/per-row named data error — one bad meter never hides, lies, or aborts a run.
+- **No silent non-billing**: `run-billing` reports per-meter rating failures loud; `generate-invoices` marks a period `invoiced` only with a real invoice id (failures stay `rated` for retry with the reason reported).
+- **Crash-safe billing runs**: new `billing_run` + `billing_run_target` registry (migration 030, both dialects). `run-billing`, `generate-recurring-invoices`, and `process-recurring` process one target per transaction; a crash mid-run resumes via the new `resume-billing-run` with zero duplicate documents; failed targets isolate, healthy targets proceed. New actions: `list-billing-runs`, `get-billing-run`, `resume-billing-run`. Delegated resumes carry the caller's database context.
+- **Truthful period rows**: `run-billing` now stamps `billing_period.rate_plan_id` with the plan that actually priced a re-rated open period.
+- **INV-25 always-on invariant** (ADR-0031 Decision 2): for every open AR/AP invoice, `outstanding_amount` must equal its payment-ledger detail net — checked continuously, not only at paid. `update-invoice-outstanding` / `update-purchase-outstanding` co-post the matching ledger detail row in the same transaction; auto-submitted recurring bills post their ledger row.
+- **Riders**: pre-master-key-load environment sanity check in the crypto layer (warn by default, `ERPCLAW_STRICT_ENV=1` to refuse); `cleanup-backups` now requires confirmation (dangerous-action gate); phantom table declarations removed from the dependency map; billing SKILL section counts and homes corrected.
+- erpclaw-growth 2.10.0 (separate module): Wave-F usage-anomaly detector — `consumption_spike` fires on default sweeps via a meter-local recency split; `rate_plan_mismatch` judges each billing period against the plan that priced it with impossible-charge attribution; garbage data skips rows, never company-wide sweeps (migration 006).
+
 ## [4.13.0] — 2026-07-23 — foundation hardening (v4.13.0 stabilization milestone)
 
 Every known books-integrity gap surfaced by the M34 live-agent testing program, closed and machine-guarded. All items shipped behind independent adversarial QA.
