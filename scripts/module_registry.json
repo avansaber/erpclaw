@@ -443,10 +443,10 @@
       "description": "Complete ERP foundation: accounting, inventory, selling, buying, billing, payments, tax, journals, GL, HR, payroll, reports, and setup. 475 actions across 14 domains.",
       "display_name": "ERPClaw Core",
       "files_sha256": {
-        "CHANGELOG.md": "9d9edb373004b5cb4788154f9dc78f29f646400e84ebd9c8ee01bf45249753f1",
+        "CHANGELOG.md": "8f6337a7a92c8c0dfb2a31f4a4f139e1157cd7d906112d97be63eb7c5dfbcab5",
         "LICENSE.txt": "7bb0c0eb1db8b40884cd154315e459fadacd2bff10190df3516639282608ed0c",
         "README.md": "63196ff0cde4793ed37fff12d8be4afb0d80a66e9fdac87e8e1a973554d20448",
-        "SKILL.md": "d14ed4220ed49b1f7fb0c339330d216d1d9b06a4235ddaa191da2230e2a787a3",
+        "SKILL.md": "7bb1f6c212708e5dc7b99e3a9bf5f859d9aab39322a5bb70588511917f8e1755",
         "UI.yaml": "a75245a5a0bbc39b1f7b656ad2366f1ca80efe51f155e97f0d9e0ded5a62ef9d",
         "assets/demo.svg": "a54a4d95a3bc98d4408c9f952899f1f37dd22b7a5d18b4b5a8b17a79acaa784f",
         "assets/logo.svg": "dd36f8427bfaa377aad2d037bd97d502055428477fe6f90afabb3a54ca0496da",
@@ -2181,8 +2181,8 @@
       "version": "1.1.0"
     }
   },
-  "registry_version": 90,
-  "signed_at": "2026-08-16T02:23:50Z",
+  "registry_version": 91,
+  "signed_at": "2026-08-16T21:12:34Z",
   "total_actions": 3234,
   "version": "4.15.0"
 }
