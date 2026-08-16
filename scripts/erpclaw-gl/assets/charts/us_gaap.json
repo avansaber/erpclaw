@@ -607,7 +607,7 @@
     "name": "Gain on Asset Disposal",
     "parent_number": "4200",
     "root_type": "income",
-    "account_type": "revenue",
+    "account_type": "disposal_gain_loss",
     "is_group": 0,
     "balance_direction": "credit_normal"
   },
@@ -805,7 +805,7 @@
     "name": "Loss on Asset Disposal",
     "parent_number": "5300",
     "root_type": "expense",
-    "account_type": "expense",
+    "account_type": "disposal_gain_loss",
     "is_group": 0,
     "balance_direction": "debit_normal"
   },

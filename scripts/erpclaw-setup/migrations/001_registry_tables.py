@@ -20,6 +20,10 @@ import os
 import sqlite3
 import sys
 
+# M102: seeds the release's fixed registry rows (identical on every install) —
+# nothing a row held before this run is different afterwards.
+MIGRATION_DATA_CLASS = "none"
+
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "data.sqlite")
 
 

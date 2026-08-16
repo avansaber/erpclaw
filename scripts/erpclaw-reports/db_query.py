@@ -12,13 +12,14 @@ import json
 import os
 import sqlite3
 import sys
-import uuid
 from datetime import datetime
 from decimal import Decimal
 
 # Add shared lib to path
 try:
-    sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
+    import importlib.util
+    if importlib.util.find_spec("erpclaw_lib") is None:
+        sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
     from erpclaw_lib.db import get_connection, ensure_db_exists, DEFAULT_DB_PATH
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.validation import check_input_lengths
@@ -27,6 +28,9 @@ try:
     from erpclaw_lib.dependencies import check_required_tables
     from erpclaw_lib.query_helpers import resolve_company_id
     from erpclaw_lib.voucher_types import canonical_voucher_type
+    # Aliased: this module already has a `party_ledger` ACTION function (the
+    # `party-ledger` report at :1049), and a bare import would be shadowed by it.
+    from erpclaw_lib import party_ledger as party_ledger_rules
     from erpclaw_lib.query import Q, P, Table, Field, fn, DecimalSum, DecimalAbs, json_get
     from erpclaw_lib.vendor.pypika import Order
     from erpclaw_lib.vendor.pypika.terms import LiteralValue
@@ -792,6 +796,23 @@ def general_ledger(conn, args):
 _PARTY_TABLE_ALLOWLIST = {"customer": "customer", "supplier": "supplier"}
 
 def _aging_report(conn, args, party_type_label, party_table, party_name_col="name"):
+    """AR/AP aging from the party payment ledger.
+
+    Reads the party ledger through the CANONICAL rules
+    (``erpclaw_lib.party_ledger``, ADR-0032 Decision 2) — reader disposition R1.
+    Both queries below used to filter a flat ``delinked = 0``, which is wrong in
+    two directions at once: it drops a payment's delinked original while keeping
+    its active cancel mirror, so every aging figure was wrong after a
+    ``cancel-payment`` (measured: 1,600.00 where the truth is 1,000.00), and it
+    kept a cancelled invoice's own row alive nowhere. Payment rows are now netted
+    reversal-inclusive; document rows still require ``delinked = 0``.
+
+    The values this report returns changed with Wave G F2 (M38): the party-level
+    double-count is compensated in the ledger itself, so a 1,000.00 invoice paid
+    300.00 now ages 700.00 rather than 400.00. Same output SHAPE, corrected
+    values. A released allocation (an invoice cancelled while cash was applied)
+    legitimately shows as a negative/credit bucket for the payment.
+    """
     if party_table not in _PARTY_TABLE_ALLOWLIST:
         err(f"Invalid party table: {party_table}")
     company_id = resolve_company_id(conn,
@@ -816,7 +837,7 @@ def _aging_report(conn, args, party_type_label, party_table, party_name_col="nam
             fn.Min(ple_t.posting_date).as_("earliest_date"),
         )
         .where(ple_t.party_type == P())
-        .where(ple_t.delinked == 0)
+        .where(party_ledger_rules.live_rows_criterion())
         .where(ple_t.posting_date <= P())
         .groupby(ple_t.party_id)
         .having(
@@ -837,7 +858,7 @@ def _aging_report(conn, args, party_type_label, party_table, party_name_col="nam
         Q.from_(ple_t)
         .select(ple_t.party_id, ple_t.posting_date, ple_t.amount)
         .where(ple_t.party_type == P())
-        .where(ple_t.delinked == 0)
+        .where(party_ledger_rules.live_rows_criterion())
         .where(ple_t.posting_date <= P())
         .orderby(ple_t.party_id)
         .orderby(ple_t.posting_date)
@@ -1442,7 +1463,27 @@ def status_action(conn, args):
 
 
 def check_overdue(conn, args):
-    """Find overdue sales invoices and group them into aging buckets."""
+    """Find overdue sales invoices and group them into aging buckets.
+
+    SCOPE NOTE — F18, the two-truths ruling (ADR-0032 Decision 2). ERPClaw has
+    exactly TWO sources of truth for what is owed, and no reader may invent a
+    third:
+
+      1. PER DOCUMENT: ``sales_invoice`` / ``purchase_invoice``.
+         ``outstanding_amount`` — bound always-on by INV-25.
+      2. PER PARTY: the payment-ledger net under
+         ``erpclaw_lib.party_ledger``'s liveness + attribution rules — bound
+         always-on by INV-27.
+
+    They are equal by INV-25 per document and therefore by summation per party.
+    This report DELIBERATELY keeps reading the document column: it is a
+    per-document, due-date-filtered report, and the due date lives on the
+    invoice, not on the ledger. That is a scope choice, not a third truth —
+    ``ar-aging`` and ``get-outstanding`` read the party ledger for the same
+    numbers at party granularity, and a Part A pin asserts the two agree for the
+    same invoice set. What is forbidden is two readers of the SAME quantity
+    disagreeing on scope or attribution.
+    """
     company_id = resolve_company_id(conn,
                                     getattr(args, 'company_id', None),
                                     getattr(args, 'company_name', None))
@@ -1534,295 +1575,90 @@ def check_overdue(conn, args):
 
 
 # ---------------------------------------------------------------------------
-# Intercompany Elimination
+# Intercompany Elimination — RETIRED (M63-C, 2026-08-12)
+#
+# These four actions drove a second, parallel elimination system: an operator
+# declared account-pair rules in `elimination_rule`, and `run-elimination` posted
+# the resulting "eliminations" straight into live `gl_entry` with raw SQL,
+# bypassing `erpclaw_lib.gl_posting.insert_gl_entries` and its 12-step
+# validation. Three things were wrong with that at once:
+#
+#   1. The pair spanned two companies — DR the source company's income account,
+#      CR the target company's expense account — so neither operating entity's
+#      own trial balance balanced afterwards (measured: the target company came
+#      out 1,000.00 short on a single 1,000.00 elimination). ADR-0010 is explicit
+#      that consolidation-level adjustments affect the GROUP statements only and
+#      leave subsidiary books untouched.
+#   2. Both tables are owned by the erpclaw-growth addon (`init_schema.py` says
+#      so in its own comment); a foundation action wrote them, which the
+#      ownership rule forbids, and on a foundation-only install neither table
+#      exists so the action could not run at all.
+#   3. The real system was already here and behaviorally tested:
+#      erpclaw-accounting-adv keeps eliminations in the consolidation layer
+#      (`advacct_elimination_entry`), where they belong.
+#
+# The action names stay ROUTABLE on purpose. An agent or an old script that asks
+# for an intercompany elimination gets one JSON error naming the flow that does
+# the job, instead of "Unknown action" or a `no such table` traceback. The two
+# tables are dropped by erpclaw-growth migration 007, which archives any rows it
+# finds first. Already-posted elimination GL is left exactly where it is —
+# submitted ledger rows are immutable, and reversing an operator's books from a
+# migration is not ours to do.
+#
+# SIM: planning/simlogs/m63c_SIM_2026-08-12.md
 # ---------------------------------------------------------------------------
+
+# Every step of this is required, and the two approval steps are the reason the
+# sequence is spelled out rather than summarised: `add-ic-transaction` creates a
+# DRAFT, and `generate-elimination-entries` only eliminates transactions whose
+# ic_status is 'posted' (erpclaw-accounting-adv/consolidation.py). A caller who
+# skips approve/post gets {"entries_created": 0, "status": "ok"} — a silent
+# nothing, which is a worse answer than the error this steer replaces.
+_ELIMINATION_STEER = (
+    "Use the consolidation flow: add-consolidation-group -> add-group-entity "
+    "(one per entity) -> add-ic-transaction -> approve-ic-transaction -> "
+    "post-ic-transaction -> generate-elimination-entries -> "
+    "consolidation-trial-balance-report / ic-elimination-report. "
+    "approve- and post- are not optional: generate-elimination-entries only "
+    "eliminates POSTED intercompany transactions, so a draft one is silently "
+    "skipped."
+)
+
+
+def _retired_elimination(action):
+    """Answer a retired elimination action with a steer to the real flow.
+
+    One shared message for all four: four hand-written variants would drift, and
+    the steer is the only thing a caller gets, so it is the part that has to stay
+    correct. Exits 1 with a single JSON object via the standard `err` contract —
+    never a traceback.
+    """
+    err(
+        f"'{action}' has been retired. Intercompany eliminations are no longer "
+        f"posted into the operating companies' books; they belong to the "
+        f"consolidation layer (ADR-0010).",
+        suggestion=_ELIMINATION_STEER,
+    )
 
 
 def add_elimination_rule(conn, args):
-    """Add an intercompany elimination rule."""
-    name = getattr(args, "name", None) or getattr(args, "rule_name", None)
-    source_company_id = args.company_id
-    target_company_id = getattr(args, "target_company_id", None)
-    source_account_id = getattr(args, "source_account_id", None)
-    target_account_id = getattr(args, "target_account_id", None)
-
-    if not name:
-        err("--name is required")
-    if not source_company_id:
-        err("--company-id (source company) is required")
-    if not target_company_id:
-        err("--target-company-id is required")
-    if not source_account_id:
-        err("--source-account-id is required")
-    if not target_account_id:
-        err("--target-account-id is required")
-    if source_company_id == target_company_id:
-        err("Source and target company must be different")
-
-    # Validate companies
-    co_t = Table("company")
-    co_sql = Q.from_(co_t).select(LiteralValue("1")).where(co_t.id == P()).get_sql()
-    for cid, label in [(source_company_id, "Source"), (target_company_id, "Target")]:
-        if not conn.execute(co_sql, (cid,)).fetchone():
-            err(f"{label} company not found: {cid}")
-
-    # Validate accounts
-    acct_t = Table("account")
-    acct_sql = (
-        Q.from_(acct_t)
-        .select(acct_t.id, acct_t.company_id, acct_t.root_type)
-        .where(acct_t.id == P())
-        .get_sql()
-    )
-    src_acct = conn.execute(acct_sql, (source_account_id,)).fetchone()
-    if not src_acct:
-        err(f"Source account not found: {source_account_id}")
-    if src_acct["company_id"] != source_company_id:
-        err("Source account does not belong to source company")
-
-    tgt_acct = conn.execute(acct_sql, (target_account_id,)).fetchone()
-    if not tgt_acct:
-        err(f"Target account not found: {target_account_id}")
-    if tgt_acct["company_id"] != target_company_id:
-        err("Target account does not belong to target company")
-
-    rule_id = str(uuid.uuid4())
-    conn.execute(
-        """INSERT INTO elimination_rule
-           (id, name, source_company_id, target_company_id,
-            source_account_id, target_account_id)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (rule_id, name, source_company_id, target_company_id,
-         source_account_id, target_account_id),
-    )
-    conn.commit()
-    ok({"rule_id": rule_id, "name": name})
+    """RETIRED — see the block above. Steers to the consolidation flow."""
+    _retired_elimination("add-elimination-rule")
 
 
 def list_elimination_rules(conn, args):
-    """List intercompany elimination rules."""
-    r_t = Table("elimination_rule").as_("r")
-    sc_t = Table("company").as_("sc")
-    tc_t = Table("company").as_("tc")
-    sa_t = Table("account").as_("sa")
-    ta_t = Table("account").as_("ta")
-
-    rules_q = (
-        Q.from_(r_t)
-        .join(sc_t).on(sc_t.id == r_t.source_company_id)
-        .join(tc_t).on(tc_t.id == r_t.target_company_id)
-        .join(sa_t).on(sa_t.id == r_t.source_account_id)
-        .join(ta_t).on(ta_t.id == r_t.target_account_id)
-        .select(
-            r_t.id, r_t.name, r_t.status,
-            sc_t.name.as_("source_company"),
-            tc_t.name.as_("target_company"),
-            sa_t.name.as_("source_account"),
-            ta_t.name.as_("target_account"),
-        )
-    )
-    params = []
-    if args.company_id:
-        rules_q = rules_q.where(
-            (r_t.source_company_id == P()) | (r_t.target_company_id == P())
-        )
-        params = [args.company_id, args.company_id]
-
-    rows = conn.execute(rules_q.get_sql(), params).fetchall()
-    ok({"rules": [dict(r) for r in rows], "total": len(rows)})
+    """RETIRED — see the block above. Steers to the consolidation flow."""
+    _retired_elimination("list-elimination-rules")
 
 
 def run_elimination(conn, args):
-    """Run intercompany elimination for a fiscal year.
-
-    Creates GL entries to eliminate IC revenue/expense identified by
-    elimination rules. Each elimination creates a balanced pair of GL entries:
-      - DR source_account (income in source company — reduces revenue)
-      - CR target_account (expense in target company — reduces expense)
-
-    Idempotent: if elimination entries already exist for the rule + FY, skips.
-    """
-    fiscal_year_id = args.fiscal_year_id
-    posting_date = getattr(args, "posting_date", None) or getattr(args, "as_of_date", None)
-
-    if not fiscal_year_id:
-        err("--fiscal-year-id is required")
-    if not posting_date:
-        err("--posting-date or --as-of-date is required")
-
-    # Validate FY
-    fy_t = Table("fiscal_year")
-    fy_sql = Q.from_(fy_t).select(fy_t.star).where(fy_t.id == P()).get_sql()
-    fy = conn.execute(fy_sql, (fiscal_year_id,)).fetchone()
-    if not fy:
-        err(f"Fiscal year not found: {fiscal_year_id}")
-
-    # Get active elimination rules
-    er_t = Table("elimination_rule")
-    rules_sql = (
-        Q.from_(er_t)
-        .select(er_t.star)
-        .where(er_t.status == "active")
-        .get_sql()
-    )
-    rules = conn.execute(rules_sql).fetchall()
-    if not rules:
-        err("No active elimination rules found")
-
-    entries_created = []
-
-    for rule in rules:
-        rule_id = rule["id"]
-        source_account_id = rule["source_account_id"]
-        target_account_id = rule["target_account_id"]
-
-        # Check idempotency: skip if already eliminated for this rule + FY
-        ee_t = Table("elimination_entry")
-        existing_sql = (
-            Q.from_(ee_t)
-            .select(ee_t.id)
-            .where(ee_t.elimination_rule_id == P())
-            .where(ee_t.fiscal_year_id == P())
-            .where(ee_t.status == "posted")
-            .get_sql()
-        )
-        existing = conn.execute(existing_sql, (rule_id, fiscal_year_id)).fetchone()
-        if existing:
-            continue
-
-        # Calculate IC amount: sum of GL credits on source income account
-        # for intercompany sales invoices in this fiscal year period
-        gl_t = Table("gl_entry")
-        ic_sql = (
-            Q.from_(gl_t)
-            .select(
-                fn.Coalesce(DecimalSum(gl_t.credit), "0").as_("total_credit"),
-                fn.Coalesce(DecimalSum(gl_t.debit), "0").as_("total_debit"),
-            )
-            .where(gl_t.account_id == P())
-            .where(gl_t.posting_date >= P())
-            .where(gl_t.posting_date <= P())
-            .where(gl_t.is_cancelled == 0)
-            .where(gl_t.voucher_type != "elimination_entry")
-            .get_sql()
-        )
-        ic_amount_row = conn.execute(
-            ic_sql, (source_account_id, fy["start_date"], fy["end_date"])
-        ).fetchone()
-
-        total_credit = _d(ic_amount_row["total_credit"])
-        total_debit = _d(ic_amount_row["total_debit"])
-        # Net income in this account = credits - debits (for income accounts)
-        elimination_amount = total_credit - total_debit
-
-        if elimination_amount <= Decimal("0"):
-            continue  # Nothing to eliminate
-
-        amount_str = _s(elimination_amount)
-
-        # Create elimination GL entries directly (cross-company, bypass insert_gl_entries)
-        voucher_id = str(uuid.uuid4())
-
-        # DR source account (income) — reduces revenue
-        source_gl_id = str(uuid.uuid4())
-        conn.execute(
-            """INSERT INTO gl_entry
-               (id, posting_date, account_id, debit, credit,
-                debit_base, credit_base, currency, exchange_rate,
-                voucher_type, voucher_id, entry_set,
-                remarks, fiscal_year, is_cancelled)
-               VALUES (?, ?, ?, ?, '0', ?, '0', 'USD', '1',
-                       'elimination_entry', ?, 'primary',
-                       ?, ?, 0)""",
-            (source_gl_id, posting_date, source_account_id,
-             amount_str, amount_str,
-             voucher_id,
-             f"IC elimination: {rule['name']}", fy["name"]),
-        )
-
-        # CR target account (expense) — reduces expense
-        target_gl_id = str(uuid.uuid4())
-        conn.execute(
-            """INSERT INTO gl_entry
-               (id, posting_date, account_id, debit, credit,
-                debit_base, credit_base, currency, exchange_rate,
-                voucher_type, voucher_id, entry_set,
-                remarks, fiscal_year, is_cancelled)
-               VALUES (?, ?, ?, '0', ?, '0', ?, 'USD', '1',
-                       'elimination_entry', ?, 'primary',
-                       ?, ?, 0)""",
-            (target_gl_id, posting_date, target_account_id,
-             amount_str, amount_str,
-             voucher_id,
-             f"IC elimination: {rule['name']}", fy["name"]),
-        )
-
-        # Record elimination entry
-        entry_id = str(uuid.uuid4())
-        conn.execute(
-            """INSERT INTO elimination_entry
-               (id, elimination_rule_id, fiscal_year_id, posting_date,
-                amount, source_gl_entry_id, target_gl_entry_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (entry_id, rule_id, fiscal_year_id, posting_date,
-             amount_str, source_gl_id, target_gl_id),
-        )
-
-        entries_created.append({
-            "rule_name": rule["name"],
-            "amount": amount_str,
-            "source_gl_id": source_gl_id,
-            "target_gl_id": target_gl_id,
-            "entry_id": entry_id,
-        })
-
-    conn.commit()
-    ok({
-        "fiscal_year": fy["name"],
-        "posting_date": posting_date,
-        "eliminations": entries_created,
-        "total_eliminated": len(entries_created),
-    })
+    """RETIRED — see the block above. Steers to the consolidation flow."""
+    _retired_elimination("run-elimination")
 
 
 def list_elimination_entries(conn, args):
-    """List elimination entries for audit trail."""
-    fiscal_year_id = args.fiscal_year_id
-
-    e_t = Table("elimination_entry").as_("e")
-    r_t = Table("elimination_rule").as_("r")
-    sc_t = Table("company").as_("sc")
-    tc_t = Table("company").as_("tc")
-    sa_t = Table("account").as_("sa")
-    ta_t = Table("account").as_("ta")
-    fy_t = Table("fiscal_year").as_("fy")
-
-    entries_q = (
-        Q.from_(e_t)
-        .join(r_t).on(r_t.id == e_t.elimination_rule_id)
-        .join(sc_t).on(sc_t.id == r_t.source_company_id)
-        .join(tc_t).on(tc_t.id == r_t.target_company_id)
-        .join(sa_t).on(sa_t.id == r_t.source_account_id)
-        .join(ta_t).on(ta_t.id == r_t.target_account_id)
-        .join(fy_t).on(fy_t.id == e_t.fiscal_year_id)
-        .select(
-            e_t.id, e_t.posting_date, e_t.amount, e_t.status,
-            r_t.name.as_("rule_name"),
-            sc_t.name.as_("source_company"),
-            tc_t.name.as_("target_company"),
-            sa_t.name.as_("source_account"),
-            ta_t.name.as_("target_account"),
-            fy_t.name.as_("fiscal_year"),
-        )
-    )
-    params = []
-    if fiscal_year_id:
-        entries_q = entries_q.where(e_t.fiscal_year_id == P())
-        params.append(fiscal_year_id)
-
-    entries_q = entries_q.orderby(e_t.posting_date, order=Order.desc)
-    rows = conn.execute(entries_q.get_sql(), params).fetchall()
-    ok({"entries": [dict(r) for r in rows], "total": len(rows)})
+    """RETIRED — see the block above. Steers to the consolidation flow."""
+    _retired_elimination("list-elimination-entries")
 
 
 # ---------------------------------------------------------------------------

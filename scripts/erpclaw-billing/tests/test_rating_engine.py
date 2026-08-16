@@ -512,7 +512,7 @@ class TestGenerateInvoicesHonesty:
             result = call_action(mod.generate_invoices, conn, ns(
                 billing_period_ids=json.dumps([bp_id])))
         assert is_ok(result), result
-        assert result["invoiced"] == 0
+        assert result["generated"] == 0
         assert result["failed"] == 1
         assert "unavailable" in result["results"][0]["error"]
         bp = _get_period(conn, bp_id)
@@ -529,7 +529,7 @@ class TestGenerateInvoicesHonesty:
             result = call_action(mod.generate_invoices, conn, ns(
                 billing_period_ids=json.dumps([bp_id])))
         assert is_ok(result), result
-        assert result["invoiced"] == 0
+        assert result["generated"] == 0
         assert result["failed"] == 1
         assert "exited 1" in result["results"][0]["error"]
         bp = _get_period(conn, bp_id)
@@ -547,25 +547,185 @@ class TestGenerateInvoicesHonesty:
                    return_value=errscript):
             result = call_action(mod.generate_invoices, conn, ns(
                 billing_period_ids=json.dumps([bp_id])))
-        assert result["invoiced"] == 0
+        assert result["generated"] == 0
         assert "no such customer" in result["results"][0]["error"]
         assert _get_period(conn, bp_id)["status"] == "rated"
 
-    def test_real_invoice_id_marks_invoiced(self, conn, env, tmp_path):
+    def test_real_invoice_id_records_link_leaves_rated(self, conn, env, tmp_path):
         bp_id = _rated_period(conn, env)
+        # One fake dispatcher stands in for both subprocess legs generate-
+        # invoices now drives (ADR-0033): add-item -> item_id, then
+        # add-sales-invoice -> sales_invoice_id (the real top-level key). The
+        # honesty claim is unchanged, but the SEMANTICS are N8 (F22): the draft
+        # posts no GL, so the period stays 'rated' with the invoice_id link (the
+        # double-generation guard) and NO invoiced_at. It flips to 'invoiced'
+        # only when the invoice is submitted (see test_billing_period_invoice_state).
         okscript = _fake_script(
             tmp_path, "ok.py",
             "import json; print(json.dumps("
-            "{'status': 'ok', 'sales_invoice': {'id': 'inv-real-1'}}))\n")
+            "{'status': 'ok', 'item_id': 'svc-item-1', "
+            "'sales_invoice_id': 'inv-real-1'}))\n")
         with patch("erpclaw_lib.dependencies.resolve_skill_script",
                    return_value=okscript):
             result = call_action(mod.generate_invoices, conn, ns(
                 billing_period_ids=json.dumps([bp_id])))
-        assert result["invoiced"] == 1
+        assert result["generated"] == 1
         assert result["failed"] == 0
         bp = _get_period(conn, bp_id)
-        assert bp["status"] == "invoiced"
+        assert bp["status"] == "rated"
         assert bp["invoice_id"] == "inv-real-1"
+        assert bp["invoiced_at"] is None
+
+
+# ── F3 (M47): un-mocked end-to-end — a real invoice is produced ─────────────
+#
+# The four TestGenerateInvoicesHonesty tests above pin the failure contract
+# against fake scripts. This one drives the REAL erpclaw dispatcher
+# (erpclaw-selling create-sales-invoice + erpclaw-inventory add-item) with NO
+# resolve_skill_script patch, all the way to a real sales_invoice row. Per
+# ADR-0033, generate-invoices resolves-or-creates one generic company-scoped
+# billing service item and posts a standalone draft invoice for the period.
+
+import billing_helpers as _bh
+
+# <root>/erpclaw/scripts/db_query.py must resolve; MODULE_DIR is
+# <root>/erpclaw/scripts/erpclaw-billing, so OPENCLAW_SKILLS_DIR = <root>.
+_SKILLS_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_bh.MODULE_DIR)))
+
+
+def test_generate_invoices_real_end_to_end(conn, env, db_path, monkeypatch):
+    # Point resolve_skill_script at the real in-tree dispatcher. We do NOT
+    # patch resolve_skill_script itself — that is the honesty tests' job; this
+    # test must exercise the real selling/inventory scripts end to end.
+    monkeypatch.setenv("OPENCLAW_SKILLS_DIR", _SKILLS_ROOT)
+    assert os.path.exists(os.path.join(
+        _SKILLS_ROOT, "erpclaw", "scripts", "db_query.py")), \
+        "real dispatcher not found — check OPENCLAW_SKILLS_DIR derivation"
+
+    bp_id = _rated_period(conn, env)
+    assert Decimal(_get_period(conn, bp_id)["grand_total"]) == Decimal("50.00")
+
+    result = call_action(mod.generate_invoices, conn, ns(
+        billing_period_ids=json.dumps([bp_id]), db_path=db_path))
+    assert is_ok(result), result
+    assert result["generated"] == 1, result
+    assert result["failed"] == 0, result
+    invoice_id = result["results"][0]["invoice_id"]
+
+    # A real sales_invoice row with the right customer, company and total,
+    # posting-dated to the period end (ADR-0033 distinguishability).
+    inv = conn.execute(
+        "SELECT customer_id, company_id, grand_total, status, posting_date "
+        "FROM sales_invoice WHERE id = ?", (invoice_id,)).fetchone()
+    assert inv is not None, "no real sales_invoice row was created"
+    assert inv["customer_id"] == env["customer"]
+    assert inv["company_id"] == env["company_id"]
+    assert Decimal(inv["grand_total"]) == Decimal("50.00")
+    # A freshly generated invoice is a draft — no GL yet (F22).
+    assert inv["status"] == "draft"
+    assert inv["posting_date"] == _get_period(conn, bp_id)["period_end"]
+
+    # The line carries the auto-created generic billing service item.
+    line = conn.execute(
+        "SELECT item_id FROM sales_invoice_item WHERE sales_invoice_id = ?",
+        (invoice_id,)).fetchone()
+    assert line is not None
+    item = conn.execute(
+        "SELECT item_code, item_name, item_type, is_stock_item "
+        "FROM item WHERE id = ?", (line["item_id"],)).fetchone()
+    assert item["item_code"] == f"BILLING-SVC-{env['company_id']}"
+    assert item["item_name"] == "Billing Service"
+    assert item["item_type"] == "service"
+    assert item["is_stock_item"] == 0
+
+    # The period now points at the created draft invoice but stays 'rated'
+    # (the draft posts no GL) — the link is the double-generation guard (F22).
+    bp = _get_period(conn, bp_id)
+    assert bp["status"] == "rated"
+    assert bp["invoice_id"] == invoice_id
+    assert bp["invoiced_at"] is None
+
+
+def test_generate_invoices_reuses_one_service_item_across_periods(
+        conn, env, db_path, monkeypatch):
+    # ADR-0033: one billing service item per company — a second period must
+    # reuse it, never create a duplicate.
+    monkeypatch.setenv("OPENCLAW_SKILLS_DIR", _SKILLS_ROOT)
+    bp1 = _rated_period(conn, env)
+    r1 = call_action(mod.generate_invoices, conn, ns(
+        billing_period_ids=json.dumps([bp1]), db_path=db_path))
+    assert r1["generated"] == 1, r1
+    bp2 = _rated_period(conn, env)
+    r2 = call_action(mod.generate_invoices, conn, ns(
+        billing_period_ids=json.dumps([bp2]), db_path=db_path))
+    assert r2["generated"] == 1, r2
+    n = conn.execute(
+        "SELECT COUNT(*) AS n FROM item WHERE item_code = ?",
+        (f"BILLING-SVC-{env['company_id']}",)).fetchone()["n"]
+    assert n == 1, f"expected exactly one billing service item, found {n}"
+
+
+def _two_leg_script(tmp_path, name, add_item_line, add_sales_invoice_line):
+    """A fake dispatcher that branches on --action, so generate-invoices'
+    two subprocess legs (add-item, then add-sales-invoice) can be stubbed
+    independently. Each *_line is one Python statement run for that action."""
+    return _fake_script(
+        tmp_path, name,
+        "import sys, json\n"
+        "_act = None\n"
+        "for _i, _a in enumerate(sys.argv):\n"
+        "    if _a == '--action' and _i + 1 < len(sys.argv):\n"
+        "        _act = sys.argv[_i + 1]\n"
+        "if _act == 'add-item':\n"
+        f"    {add_item_line}\n"
+        "elif _act == 'add-sales-invoice':\n"
+        f"    {add_sales_invoice_line}\n"
+        "else:\n"
+        "    print(json.dumps({'status': 'error', 'error': 'unexpected action'})); sys.exit(2)\n")
+
+
+def test_generate_invoices_add_sales_invoice_failure_leg_stays_rated(
+        conn, env, tmp_path):
+    # ADR-0033 made generate-invoices drive TWO subprocess legs (add-item,
+    # then add-sales-invoice). The single-script honesty fixtures now fail at
+    # the add-item leg, so they no longer exercise the add-sales-invoice
+    # failure path. This restores that coverage with an action-aware fake:
+    # add-item succeeds, add-sales-invoice fails -> the period must stay
+    # 'rated' with no invoice_id, and the error must name the invoice leg.
+    bp_id = _rated_period(conn, env)
+    two_leg = _two_leg_script(
+        tmp_path, "invoice_leg_fails.py",
+        "print(json.dumps({'status': 'ok', 'item_id': 'svc-item-1'}))",
+        "print('kaboom'); sys.exit(1)")
+    with patch("erpclaw_lib.dependencies.resolve_skill_script",
+               return_value=two_leg):
+        result = call_action(mod.generate_invoices, conn, ns(
+            billing_period_ids=json.dumps([bp_id])))
+    assert is_ok(result), result
+    assert result["generated"] == 0
+    assert result["failed"] == 1
+    assert "add-sales-invoice exited 1" in result["results"][0]["error"]
+    bp = _get_period(conn, bp_id)
+    assert bp["status"] == "rated"
+    assert bp["invoice_id"] is None
+
+
+def test_generate_invoices_add_sales_invoice_error_status_stays_rated(
+        conn, env, tmp_path):
+    # Companion to the above: add-item ok, add-sales-invoice returns a
+    # status:error JSON (exit 0) -> period stays 'rated', error surfaced.
+    bp_id = _rated_period(conn, env)
+    two_leg = _two_leg_script(
+        tmp_path, "invoice_leg_error.py",
+        "print(json.dumps({'status': 'ok', 'item_id': 'svc-item-1'}))",
+        "print(json.dumps({'status': 'error', 'error': 'no such customer'}))")
+    with patch("erpclaw_lib.dependencies.resolve_skill_script",
+               return_value=two_leg):
+        result = call_action(mod.generate_invoices, conn, ns(
+            billing_period_ids=json.dumps([bp_id])))
+    assert result["generated"] == 0
+    assert "no such customer" in result["results"][0]["error"]
+    assert _get_period(conn, bp_id)["status"] == "rated"
 
 
 # ── regression: existing 3 types keep their exact numbers ───────────────────

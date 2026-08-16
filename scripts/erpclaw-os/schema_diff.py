@@ -38,7 +38,121 @@ def parse_init_db_ddl(init_db_path):
     with open(init_db_path, "r") as f:
         content = f.read()
 
-    return parse_ddl_text(content)
+    declared = parse_ddl_text(content)
+
+    # Dual-source for ADR-0034 phase 2. A converted installer declares its schema
+    # as SQLAlchemy metadata and contains no CREATE TABLE text, so a text-only
+    # parse reports it as declaring nothing — and this function feeds the
+    # declared-vs-live drift comparison, which would then report every one of its
+    # live tables as undeclared drift. The tree is a MIX for the whole phase, so
+    # read both. Shared reader, static (no import side effects), so this does not
+    # become a fourth parser alongside the three CREATE-TABLE regexes.
+    try:
+        from erpclaw_lib.seam import declared_schema_in_source
+    except ImportError:
+        return declared
+    for table, spec in declared_schema_in_source(init_db_path).items():
+        declared.setdefault(table, spec)
+    return declared
+
+
+_CREATE_TABLE_HEAD_RE = re.compile(
+    r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s*\(",
+    re.IGNORECASE,
+)
+
+
+def _iter_create_table_blocks(ddl_text):
+    """Yield ``(table_name, body)`` for each CREATE TABLE, matching parens.
+
+    ADR-0034 step 2c (P2-X). The previous pattern anchored on a trailing ``;`` —
+    ``...\\)\\s*;`` — which only **19 of the 40** installers write; the rest use
+    ``conn.execute(\"\"\"CREATE TABLE ... ( ... )\"\"\")`` with none. So this
+    parser, which feeds both the declared-vs-live drift report and
+    ``schema_migrator``, had been blind to 21 modules.
+
+    Dropping the ``;`` from the old regex would have been worse than the bug. The
+    body match is non-greedy, so without that anchor it stops at the FIRST inner
+    ``)`` — and real bodies are full of them: ``CHECK(status IN (...))``,
+    ``DEFAULT (datetime('now'))``. Measured on ``approval_rule``, the naive stop
+    lands 425 characters early and silently drops 2 columns, feeding a TRUNCATED
+    schema into a drift comparison. Blind is safer than wrong; balanced is
+    correct. Hence a scan rather than a regex for the body.
+    """
+    for head in _CREATE_TABLE_HEAD_RE.finditer(ddl_text):
+        start = head.end()
+        depth, i = 1, start
+        while i < len(ddl_text) and depth:
+            ch = ddl_text[i]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+            i += 1
+        if depth:
+            continue  # unterminated block (truncated file) — skip, never guess
+        yield head.group(1), ddl_text[start:i - 1]
+
+
+# Lines inside a CREATE TABLE body that declare something OTHER than a column.
+#
+# ADR-0034 step 2f. These were matched as bare string prefixes —
+# `upper.startswith("CREATE")` and friends — which is a prefix test, not a
+# keyword test, so any column whose NAME began with one of the keywords was
+# discarded as though it were a constraint. `created_at` starts with `CREATE`.
+# Measured across the 40 installers at the time of the fix: **675 columns in 551
+# tables across 39 of the 40 modules** were invisible to this parser, 551 of them
+# `created_at` — that is to say, nearly every table in the product. `created_by`
+# (108), `created_stripe` (11), `constraint_type` / `constraint_value` /
+# `constraint_notes`, `created_by_user_id`, and `foreign_material` completed the
+# set.
+#
+# This parser feeds the declared-vs-live drift report AND `schema_migrator`, so
+# the effect was not cosmetic: a migrator driven by a declared schema missing
+# `created_at` cannot create or reconcile that column.
+#
+# The keywords are therefore anchored on a word boundary, and the two that are
+# only ever written with an argument list keep their paren so a column named
+# `check_digit` or `primary_contact` is not caught by them either.
+_NON_COLUMN_LINE_RE = re.compile(
+    r"""^\s*(?:
+          (?: CREATE | FOREIGN | UNIQUE | CONSTRAINT | INDEX ) \b
+        | CHECK \s* \(
+        | PRIMARY \s+ KEY \s* \(
+        | -- | /\* | \)
+    )""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+# Python implicit string concatenation, as it appears between two adjacent
+# literals: a quote, whitespace or a newline, then the same quote again.
+#
+# The whitespace is REQUIRED, not optional. Written `\s*` this also matches the
+# empty string literal `''`, so `DEFAULT ''` — which several installers use for
+# an empty-string column default — was rewritten to a bare `DEFAULT` and the
+# parsed constraint text lost its value. Real implicit concatenation always has a
+# newline or space between the two literals; `"a""b"` with nothing between them
+# is legal Python but appears nowhere in this corpus and is not worth corrupting
+# every empty-string default to catch.
+_IMPLICIT_CONCAT_RE = re.compile(r"([\"'])\s+\1")
+
+
+def _join_implicit_concat(ddl_text):
+    """Close the seam where a DDL statement is split across two literals.
+
+    ADR-0034 step 2f. A statement written as
+
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_crm_saved_view_name "
+                     "ON crm_saved_view(company_id, owner_user_id, lower(name))")
+
+    is one statement to Python and two literals in the file. The DDL patterns
+    here match `\\s+` between the index name and `ON`, and `\\s` does not match a
+    quote, so the statement was invisible to this parser while executing
+    perfectly at runtime. One index in the corpus is written that way today;
+    nothing stops the next one.
+    """
+    return _IMPLICIT_CONCAT_RE.sub("", ddl_text)
 
 
 def parse_ddl_text(ddl_text):
@@ -47,15 +161,10 @@ def parse_ddl_text(ddl_text):
     Returns dict: {table_name: {columns: [{name, type, is_pk, constraints}], indexes: [...]}}
     """
     tables = {}
+    ddl_text = _join_implicit_concat(ddl_text)
 
     # Extract CREATE TABLE blocks
-    for match in re.finditer(
-        r"CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+(\w+)\s*\((.*?)\)\s*;",
-        ddl_text,
-        re.IGNORECASE | re.DOTALL,
-    ):
-        table_name = match.group(1)
-        body = match.group(2)
+    for table_name, body in _iter_create_table_blocks(ddl_text):
         columns = []
 
         for line in body.split("\n"):
@@ -63,11 +172,7 @@ def parse_ddl_text(ddl_text):
             if not line:
                 continue
 
-            upper = line.upper().lstrip()
-            if any(upper.startswith(kw) for kw in (
-                "CREATE", "FOREIGN", "UNIQUE", "CHECK(", "PRIMARY KEY(",
-                "CONSTRAINT", "--", "/*", ")", "INDEX",
-            )):
+            if _NON_COLUMN_LINE_RE.match(line):
                 continue
 
             col_match = re.match(

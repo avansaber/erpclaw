@@ -18,7 +18,9 @@ from decimal import Decimal, InvalidOperation
 
 # Add shared lib to path
 try:
-    sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
+    import importlib.util
+    if importlib.util.find_spec("erpclaw_lib") is None:
+        sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
     from erpclaw_lib.db import get_connection, ensure_db_exists, DEFAULT_DB_PATH
     from erpclaw_lib.decimal_utils import to_decimal
     from erpclaw_lib.validation import check_input_lengths
@@ -48,6 +50,123 @@ REQUIRED_TABLES = ["company"]
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(SKILL_DIR, "assets")
 CHARTS_DIR = os.path.join(ASSETS_DIR, "charts")
+
+# account_types that must be leaf (posting) accounts, never groups. Shared by
+# add-account and update-account (M94) so a type that cannot be created on a
+# group account cannot be moved onto one either.
+LEAF_ONLY_TYPES = {
+    "receivable", "payable", "bank", "cash", "tax",
+    "cost_of_goods_sold", "stock", "depreciation",
+    "accumulated_depreciation", "round_off",
+}
+
+
+# Which root_type(s) an account_type can coherently sit on (M94 merge-QA rider).
+#
+# The registry answers "is this type legal"; it has no root_type column, so until
+# now nothing answered "legal WHERE". That gap has teeth: a `bank` account retyped
+# to `disposal_gain_loss` keeps root_type='asset', passes the registry check, and
+# silently leaves the `account_type IN ('bank','cash')` population that cash flow
+# is built on, while still holding real cash history. Measured here on a seeded
+# install (14,000.00 in, 5,000.00 out) against the branch's own pre-check HEAD:
+# the retype returns ok with reclassified_gl_entries 2, and cash flow goes
+# closing_balance 9,000.00 -> 0.00, net_change 9,000.00 -> 0.00, operating
+# 9,000.00 -> 0.00. add-account had the same gap; M94's retyping gave it new reach.
+#
+# The map is DERIVED, not invented. Every (account_type, root_type) pair that
+# appears in a shipped chart is accepted by construction — us_gaap (both copies),
+# indian_coa and ca_coa_aspe together supply 21 of the types below, and
+# test_the_coherence_map_accepts_every_pair_our_own_charts_ship re-derives that
+# from the JSON on every run so the map can never refuse a chart we ship. That is
+# the M91 lesson written down: a rule measured against the product's own data
+# before it is enforced on anyone else's. (setup-chart-of-accounts inserts rows
+# directly rather than through add_account, so chart loading is NOT gated by this
+# check — that test is the only thing standing between a chart edit and an install
+# whose own accounts add-account then refuses. It is load-bearing, not decorative.)
+#
+# Where a type is absent from every chart the entry is the unambiguous accounting
+# answer (goodwill is an asset; a revaluation reserve is equity), and where the
+# real world is two-sided the entry is permissive on purpose:
+#   * the difference types (disposal_gain_loss, exchange_gain_loss, rounding,
+#     stock_adjustment) can land on either P&L root — a rounding difference or a
+#     stock adjustment is as often a credit as a debit;
+#   * `expense` also sits on `asset` because prepaid expenses do (us_gaap 1141 /
+#     1142), `tax` on both sides because input credit and tax payable are both
+#     `tax`, `stock_received_not_billed` on both because us_gaap types it asset
+#     and the Indian chart types it liability, `temporary` on three because a
+#     suspense account can be either side and Opening Balance Equity is equity.
+# A type that is registered but absent from this map is UNCONSTRAINED: a module
+# that registers its own type at runtime gets no opinion from us about where it
+# belongs. Refusing what we have not measured is how M91's first draft would have
+# refused the chart we ship.
+#
+# Distinct from erpclaw-os-engine's ACCOUNT_TYPE_ROOT_MAP, which answers a
+# different question — it INFERS one root when a caller supplied none. Every value
+# it infers is accepted here (pinned by the same test).
+ACCOUNT_TYPE_ROOT_TYPES = {
+    "bank": {"asset"},
+    "cash": {"asset"},
+    "receivable": {"asset"},
+    "stock": {"asset"},
+    "fixed_asset": {"asset"},
+    "accumulated_depreciation": {"asset"},
+    "asset_received_not_billed": {"asset"},
+    "capital_work_in_progress": {"asset"},
+    "goodwill": {"asset"},
+    "payable": {"liability"},
+    "payroll_payable": {"liability"},
+    "equity": {"equity"},
+    "revaluation_reserve": {"equity"},
+    "revenue": {"income"},
+    "cost_of_goods_sold": {"expense"},
+    "depreciation": {"expense"},
+    "disposal_gain_loss": {"income", "expense"},
+    "exchange_gain_loss": {"income", "expense"},
+    "rounding": {"income", "expense"},
+    "stock_adjustment": {"income", "expense"},
+    "expense": {"expense", "asset"},
+    "tax": {"asset", "liability"},
+    "stock_received_not_billed": {"asset", "liability"},
+    "temporary": {"asset", "liability", "equity"},
+}
+
+
+def _assert_account_type_registered(conn, account_type):
+    """Refuse an account_type that is not registered and active (M0, 2026-05-30).
+
+    The single validity question for the whole module: add-account asks it at
+    creation and update-account asks it at retyping, so the two surfaces cannot
+    disagree about what a legal type is.
+    """
+    known = conn.execute(
+        "SELECT 1 FROM account_type_registry WHERE account_type = ? AND is_active = 1",
+        (account_type,),
+    ).fetchone()
+    if not known:
+        err(f"account_type '{account_type}' is not a registered, active type. Register it "
+            f"(add-account-type) or run seed-registry-defaults.")
+
+
+def _assert_root_type_coherent(account_type, root_type, account_name, remedy):
+    """Refuse an account_type that cannot sit on this account's root_type (M94 rider).
+
+    Shared by add-account and update-account for the same reason the registry
+    check is: a combination that cannot be created must not be reachable by
+    retyping either. `remedy` is the caller's own way out, because they differ —
+    add-account can change --root-type, update-account cannot (root_type stays
+    non-updatable) and has to send the operator to a different account.
+
+    Unknown types pass: see ACCOUNT_TYPE_ROOT_TYPES on why silence beats a guess.
+    """
+    allowed = ACCOUNT_TYPE_ROOT_TYPES.get(account_type)
+    if not allowed or root_type in allowed:
+        return
+    reads = " or ".join(sorted(allowed))
+    err(f"account_type '{account_type}' belongs on a root_type of {reads}, "
+        f"but '{account_name}' has root_type '{root_type}'. That combination "
+        f"leaves the account on the {root_type} side of the books while every "
+        f"report that filters on account_type reads it as {account_type}.",
+        suggestion=remedy)
 
 
 
@@ -161,12 +280,6 @@ def add_account(conn, args):
     currency = args.currency or "USD"
     is_group = 1 if args.is_group else 0
 
-    # Guard: certain account_types must be leaf (posting) accounts, never groups
-    LEAF_ONLY_TYPES = {
-        "receivable", "payable", "bank", "cash", "tax",
-        "cost_of_goods_sold", "stock", "depreciation",
-        "accumulated_depreciation", "round_off",
-    }
     if is_group and account_type and account_type.lower() in LEAF_ONLY_TYPES:
         err(f"Account type '{account_type}' must be a posting (leaf) account, "
             f"not a group. Remove --is-group to create a postable account.")
@@ -175,13 +288,14 @@ def add_account(conn, args):
     # the hardcoded CHECK on account.account_type was dropped so new types can be
     # registered at runtime. NULL/empty stays allowed (group/structural accounts).
     if account_type:
-        known = conn.execute(
-            "SELECT 1 FROM account_type_registry WHERE account_type = ? AND is_active = 1",
-            (account_type,),
-        ).fetchone()
-        if not known:
-            err(f"account_type '{account_type}' is not a registered, active type. Register it "
-                f"(add-account-type) or run seed-registry-defaults.")
+        _assert_account_type_registered(conn, account_type)
+        # ...and that the type can live on the root the caller asked for. Both
+        # surfaces ask, so a combination add-account refuses cannot be reached by
+        # creating it elsewhere and retyping (M94 merge-QA rider).
+        _assert_root_type_coherent(
+            account_type, root_type, name,
+            remedy=("Pass --root-type from the list above, or pick an "
+                    f"account_type valid for root_type '{root_type}'."))
 
     # Default balance direction
     balance_direction = "debit_normal"
@@ -224,6 +338,25 @@ def add_account(conn, args):
 # ---------------------------------------------------------------------------
 
 def update_account(conn, args):
+    """Update an account's editable fields, including its `account_type` (M94).
+
+    Retyping is a real operation, not a rename: every report that filters on
+    `account_type` re-reads the account's WHOLE history under the new type, so an
+    account that already carries postings is a different safety case from an empty
+    one. An empty account retypes freely (nothing has been classified under the old
+    type, so nothing is restated). An account with non-cancelled GL entries needs
+    `--reclassify-posted`, and the refusal says how many entries and what moves.
+
+    Before M94 `--account-type` was a real flag on the parser and simply absent
+    from `updatable`, so passing it alongside any other field returned
+    `status: ok` and silently discarded the change, and the `has_entries` probe
+    written for this restriction was computed and never read. That probe is now
+    the condition it was written to be. `root_type` remains non-updatable: it
+    flips `balance_direction` and moves an account between the balance sheet and
+    the P&L, which is not this action's job.
+
+    Not one `gl_entry` row is written here. This changes master data only.
+    """
     acct_id = args.account_id
     if not acct_id:
         err("--account-id is required")
@@ -237,18 +370,52 @@ def update_account(conn, args):
         err(f"Account {acct_id} not found",
              suggestion="Use 'list accounts' to see available accounts.")
 
-    # Check if GL entries exist (restricts root_type/account_type changes)
-    q = (Q.from_(t_gl).select(ValueWrapper(1))
+    # How much history a retype would reclassify. Counted, not probed, because the
+    # refusal has to be able to say how many (M94).
+    q = (Q.from_(t_gl).select(fn.Count(ValueWrapper(1)).as_("c"))
          .where(t_gl.account_id == P())
-         .where(t_gl.is_cancelled == 0)
-         .limit(1))
-    has_entries = conn.execute(q.get_sql(), (acct_id,)).fetchone()
+         .where(t_gl.is_cancelled == 0))
+    posted_entries = conn.execute(q.get_sql(), (acct_id,)).fetchone()["c"]
+    has_entries = posted_entries > 0
 
     updatable = {"name": args.name, "account_number": args.account_number,
                  "parent_id": args.parent_id}
     # is_frozen handled by freeze/unfreeze actions, but allow via update too
     if args.is_frozen is not None:
         updatable["is_frozen"] = 1 if args.is_frozen else 0
+
+    # account_type is retypeable (M94). Same registry validity and same group
+    # guard as add-account, so the two surfaces cannot disagree about what a
+    # legal type is or where it may live.
+    new_type = args.account_type
+    if new_type is not None and new_type != old.get("account_type"):
+        _assert_account_type_registered(conn, new_type)
+        # root_type is not updatable, so an incoherent retype is a one-way door:
+        # the account would sit on the wrong side of the books permanently. A
+        # `bank` account retyped to a P&L type keeps root_type='asset' and drops
+        # out of cash flow's ('bank','cash') population while still holding the
+        # cash history — measured, and the reason this check exists (M94 rider).
+        _assert_root_type_coherent(
+            new_type, old.get("root_type"), old.get("name"),
+            remedy=("root_type is not updatable, so retype to a type valid for "
+                    f"root_type '{old.get('root_type')}', or add the account you "
+                    "meant under the right root with add-account and move the "
+                    "balance with a journal entry."))
+        if old.get("is_group") and new_type.lower() in LEAF_ONLY_TYPES:
+            err(f"Account type '{new_type}' must be a posting (leaf) account, "
+                f"not a group. '{old.get('name')}' is a group account.",
+                suggestion="Retype one of its child accounts instead.")
+        if has_entries and not args.reclassify_posted:
+            err(f"Account '{old.get('name')}' carries {posted_entries} posted GL "
+                f"entr{'y' if posted_entries == 1 else 'ies'}. Changing its "
+                f"account_type from '{old.get('account_type') or 'unset'}' to "
+                f"'{new_type}' reclassifies that history: every report that "
+                "filters on account_type will read those entries under the new "
+                "type. No ledger row changes, but the books read differently.",
+                suggestion="Re-run with --reclassify-posted if that is what you "
+                           "mean. To correct a posting instead, reverse it with a "
+                           "journal entry.")
+        updatable["account_type"] = new_type
 
     updates = {k: v for k, v in updatable.items() if v is not None}
     if not updates:
@@ -263,8 +430,12 @@ def update_account(conn, args):
            old_values={k: old.get(k) for k in updates},
            new_values=updates)
     conn.commit()
-    ok({"status": "updated", "account_id": acct_id,
-         "updated_fields": list(updates.keys())})
+    result = {"status": "updated", "account_id": acct_id,
+              "updated_fields": list(updates.keys())}
+    if "account_type" in updates:
+        # Say what the retype did to history, so the answer is not just "ok".
+        result["reclassified_gl_entries"] = posted_entries
+    ok(result)
 
 
 # ---------------------------------------------------------------------------
@@ -1922,6 +2093,9 @@ def main():
     parser.add_argument("--is-frozen", default=None, type=lambda x: x.lower() == "true")
     parser.add_argument("--include-frozen", action="store_true", default=False)
     parser.add_argument("--search", default=None)
+    # update-account: acknowledge that retyping an account which already carries
+    # postings reclassifies that history for every account_type-filtered report.
+    parser.add_argument("--reclassify-posted", action="store_true", default=False)
 
     # GL entries
     parser.add_argument("--voucher-type", default=None)

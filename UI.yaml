@@ -2618,6 +2618,12 @@ entities:
         in_form_view: true
         form_group: details
         form_order: 5
+      delinked:
+        type: integer
+        label: Delinked
+        in_form_view: true
+        form_group: details
+        form_order: 6
     form_groups:
       details:
         label: Details
@@ -9182,14 +9188,6 @@ action_map:
       action: cancel-stock-entry
     success_redirect: get-stock-entry
     success_toast: 'Stock entry cancelled: {sle_reversals} SLE and {gl_reversals} GL reversal entries posted'
-  create-stock-ledger-entries:
-    component: ApiAction
-    hidden: true
-    description: 'Cross-skill: create SLE entries (called by selling/buying skills)'
-  reverse-stock-ledger-entries:
-    component: ApiAction
-    hidden: true
-    description: 'Cross-skill: reverse SLE entries (called by selling/buying skills)'
   get-stock-balance:
     component: DetailView
     entity: item

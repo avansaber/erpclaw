@@ -214,8 +214,55 @@ __all__ = [
 
 
 # ── Dialect detection ──
-import os as _os
-_DIALECT = _os.environ.get("ERPCLAW_DB_DIALECT", "sqlite")
+#
+# Resolved at CALL time, never at import. A module-level constant here used to
+# snapshot ERPCLAW_DB_DIALECT the first time anything imported this module, which
+# made every helper below answer for whichever dialect happened to be set then.
+# In a long-lived process that switches dialect — and in any test process where a
+# SQLite import precedes a PostgreSQL lane — the helpers went on emitting SQLite
+# SQL against a PostgreSQL connection: `datetime('now')`, `ge.rowid`,
+# `INSERT OR IGNORE`. Those either raise on PG or, worse, pass while asserting
+# nothing. Every other dialect consumer in the tree (db.get_dialect, the
+# migrations' _get_dialect, module_manager, init_schema) already reads the env at
+# call time; this module was the lone outlier.
+#
+# SQLite and PostgreSQL. MySQL was removed on 2026-08-11 (Nik's call): the
+# helpers carried MySQL branches that had never run against a MySQL server, and
+# MySQL cannot key or index a TEXT column without a prefix length — ERPClaw's IDs
+# are TEXT UUID4 and its foreign keys are TEXT, so every primary key and most
+# indexes would be rejected. That is a schema-semantics wall, not a missing
+# driver. Engines that speak either supported dialect (PostgreSQL-compatible or
+# SQLite-compatible) need a driver and a test leg, nothing here.
+SUPPORTED_DIALECTS = frozenset({"sqlite", "postgresql"})
+
+# Delegates to erpclaw_lib.db.get_dialect so there is exactly one definition of
+# "which database is running". Imported lazily inside the function, mirroring
+# gl_invariants._table_exists — db.py does not import this module today, and the
+# lazy import keeps it that way if it ever needs to.
+
+
+def _dialect():
+    """The active dialect, resolved fresh on every call.
+
+    Rejects anything outside SUPPORTED_DIALECTS. Until this check existed, an
+    unrecognised value fell through every helper's dialect chain and produced
+    SQLite SQL in silence — so ``ERPCLAW_DB_DIALECT=postgres``, one plausible
+    typo short of the real name, ran SQLite syntax against a PostgreSQL
+    connection and reported nothing. Same failure shape as PG-2: wrong dialect,
+    no error, wrong answer.
+    """
+    from erpclaw_lib.db import get_dialect
+    dialect = get_dialect()
+    if dialect not in SUPPORTED_DIALECTS:
+        raise ValueError(
+            f"ERPCLAW_DB_DIALECT={dialect!r} is not supported. ERPClaw runs on "
+            f"{' and '.join(sorted(SUPPORTED_DIALECTS))}. "
+            "MySQL was ruled out by Nik on 2026-08-11: ERPClaw keys and indexes "
+            "TEXT columns (IDs are TEXT UUID4), and MySQL cannot key or index a "
+            "TEXT column without a prefix length, so support would require "
+            "changing ID types across every table. See the ADR-0034 phase-1 "
+            "handoff.")
+    return dialect
 
 
 # ── Dialect-aware SQL helpers ──
@@ -227,10 +274,8 @@ def now():
 
     Replaces: LiteralValue("datetime('now')")
     """
-    if _DIALECT == "postgresql":
+    if _dialect() == "postgresql":
         return LiteralValue("NOW()::text")
-    if _DIALECT == "mysql":
-        return LiteralValue("NOW()")
     return LiteralValue("datetime('now')")
 
 
@@ -239,10 +284,8 @@ def today():
 
     Replaces: LiteralValue("date('now')")
     """
-    if _DIALECT == "postgresql":
+    if _dialect() == "postgresql":
         return LiteralValue("CURRENT_DATE::text")
-    if _DIALECT == "mysql":
-        return LiteralValue("CURDATE()")
     return LiteralValue("date('now')")
 
 
@@ -252,12 +295,10 @@ def date_format(col, fmt):
     Uses Python-style format codes: %Y, %m, %d, %H, %M, %S.
     Replaces: LiteralValue("strftime('%Y-%m', col)")
     """
-    if _DIALECT == "postgresql":
+    if _dialect() == "postgresql":
         pg_fmt = fmt.replace('%Y', 'YYYY').replace('%m', 'MM').replace('%d', 'DD')
         pg_fmt = pg_fmt.replace('%H', 'HH24').replace('%M', 'MI').replace('%S', 'SS')
         return LiteralValue(f"to_char({col}, '{pg_fmt}')")
-    if _DIALECT == "mysql":
-        return LiteralValue(f"DATE_FORMAT({col}, '{fmt}')")
     return LiteralValue(f"strftime('{fmt}', {col})")
 
 
@@ -305,12 +346,8 @@ def json_get(col, key):
     ``jsonb`` first. The key is a plain object key for ``->>`` (NOT a SQLite
     ``$.key`` JSONPath). Both verified on PostgreSQL 16 (Wave 1 P0 / SIM-0).
     """
-    if _DIALECT == "postgresql":
+    if _dialect() == "postgresql":
         return LiteralValue(f"{col}::jsonb->>{_sql_str_literal(key)}")
-    if _DIALECT == "mysql":
-        return LiteralValue(
-            f"JSON_UNQUOTE(JSON_EXTRACT({col}, {_sql_str_literal('$.' + str(key))}))"
-        )
     return LiteralValue(
         f"json_extract({col}, {_sql_str_literal('$.' + str(key))})"
     )
@@ -321,10 +358,8 @@ def string_agg(col, separator="', '"):
 
     Replaces: LiteralValue("GROUP_CONCAT(col, sep)")
     """
-    if _DIALECT == "postgresql":
+    if _dialect() == "postgresql":
         return LiteralValue(f"STRING_AGG({col}, {separator})")
-    if _DIALECT == "mysql":
-        return LiteralValue(f"GROUP_CONCAT({col} SEPARATOR {separator})")
     return LiteralValue(f"GROUP_CONCAT({col}, {separator})")
 
 
@@ -333,10 +368,8 @@ def days_between(d1, d2):
 
     Replaces: LiteralValue("julianday(d1) - julianday(d2)")
     """
-    if _DIALECT == "postgresql":
+    if _dialect() == "postgresql":
         return LiteralValue(f"EXTRACT(DAY FROM ({d1}::timestamp - {d2}::timestamp))")
-    if _DIALECT == "mysql":
-        return LiteralValue(f"DATEDIFF({d1}, {d2})")
     return LiteralValue(f"julianday({d1}) - julianday({d2})")
 
 
@@ -345,10 +378,8 @@ def hours_between(t1, t2):
 
     Replaces: LiteralValue("(julianday(t1) - julianday(t2)) * 24")
     """
-    if _DIALECT == "postgresql":
+    if _dialect() == "postgresql":
         return LiteralValue(f"EXTRACT(EPOCH FROM ({t1}::timestamp - {t2}::timestamp)) / 3600")
-    if _DIALECT == "mysql":
-        return LiteralValue(f"TIMESTAMPDIFF(HOUR, {t2}, {t1})")
     return LiteralValue(f"(julianday({t1}) - julianday({t2})) * 24")
 
 
@@ -357,10 +388,8 @@ def seconds_between(t1, t2):
 
     Replaces: LiteralValue("(julianday(t1) - julianday(t2)) * 86400")
     """
-    if _DIALECT == "postgresql":
+    if _dialect() == "postgresql":
         return LiteralValue(f"EXTRACT(EPOCH FROM ({t1}::timestamp - {t2}::timestamp))")
-    if _DIALECT == "mysql":
-        return LiteralValue(f"TIMESTAMPDIFF(SECOND, {t2}, {t1})")
     return LiteralValue(f"(julianday({t1}) - julianday({t2})) * 86400")
 
 
@@ -369,10 +398,8 @@ def abs_days_between(d1, d2):
 
     Replaces: ABS(julianday(d1) - julianday(d2))
     """
-    if _DIALECT == "postgresql":
+    if _dialect() == "postgresql":
         return LiteralValue(f"ABS(EXTRACT(DAY FROM ({d1}::timestamp - {d2}::timestamp)))")
-    if _DIALECT == "mysql":
-        return LiteralValue(f"ABS(DATEDIFF({d1}, {d2}))")
     return LiteralValue(f"ABS(julianday({d1}) - julianday({d2}))")
 
 
@@ -389,7 +416,7 @@ def line_order(table=None):
     Pass a PyPika table/alias to scope the column (``"qi"."rowid"``); omit it for a
     bare column on a single-table query.
     """
-    col = "id" if _DIALECT == "postgresql" else "rowid"
+    col = "id" if _dialect() == "postgresql" else "rowid"
     return table.field(col) if table is not None else Field(col)
 
 
@@ -403,7 +430,7 @@ def rowid_col(alias=""):
     Keeping the same seam on both the chain-build (gl_posting) and chain-verify
     (erpclaw-gl) sides keeps the GL hash chain self-consistent per backend.
     """
-    return f"{alias}id" if _DIALECT == "postgresql" else f"{alias}rowid"
+    return f"{alias}id" if _dialect() == "postgresql" else f"{alias}rowid"
 
 
 def insert_or_ignore(sql):
@@ -415,7 +442,7 @@ def insert_or_ignore(sql):
     INSERT string; on Postgres the ``OR IGNORE`` is dropped and the conflict
     clause appended. Values still use ``?`` placeholders as usual.
     """
-    if _DIALECT == "postgresql":
+    if _dialect() == "postgresql":
         return sql.replace("INSERT OR IGNORE", "INSERT", 1).rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
     return sql
 
@@ -430,7 +457,7 @@ def latest_insert_order(alias=""):
     ``alias`` includes the trailing dot, e.g. ``"s2."``.  Every table ordered this
     way (stock_ledger_entry) carries ``created_at``.
     """
-    if _DIALECT == "postgresql":
+    if _dialect() == "postgresql":
         return f"{alias}created_at DESC, {alias}id DESC"
     return f"{alias}rowid DESC"
 
@@ -447,7 +474,7 @@ def scalar_max(*exprs):
     ``MAX(...)`` on SQLite.
     """
     body = ", ".join(exprs)
-    fname = "GREATEST" if _DIALECT == "postgresql" else "MAX"
+    fname = "GREATEST" if _dialect() == "postgresql" else "MAX"
     return f"{fname}({body})"
 
 
@@ -457,9 +484,7 @@ def ddl_now():
     Used in CREATE TABLE: DEFAULT (ddl_now())
     NOT used in queries — use now() for queries.
     """
-    if _DIALECT == "postgresql":
-        return "NOW()"
-    if _DIALECT == "mysql":
+    if _dialect() == "postgresql":
         return "NOW()"
     return "datetime('now')"
 
@@ -469,8 +494,6 @@ def ddl_today():
 
     Used in CREATE TABLE: DEFAULT (ddl_today())
     """
-    if _DIALECT == "postgresql":
+    if _dialect() == "postgresql":
         return "CURRENT_DATE"
-    if _DIALECT == "mysql":
-        return "CURDATE()"
     return "date('now')"

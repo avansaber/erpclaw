@@ -20,7 +20,9 @@ from decimal import Decimal, InvalidOperation
 
 # Add shared lib to path
 try:
-    sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
+    import importlib.util
+    if importlib.util.find_spec("erpclaw_lib") is None:
+        sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
     from erpclaw_lib.db import get_connection, ensure_db_exists, DEFAULT_DB_PATH
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.validation import check_input_lengths
@@ -34,7 +36,12 @@ try:
         reprice_stock_valuation,
     )
     from erpclaw_lib.gl_posting import insert_gl_entries, reverse_gl_entries
-    from erpclaw_lib.voucher_types import canonical_voucher_type
+    # NOTE: canonical_voucher_type is deliberately NOT imported here. Its only two
+    # uses in this module were the M103-de-routed gateways, which were the only
+    # inventory entry points that took a caller-supplied voucher_type. Every
+    # remaining SLE write in this module passes a literal canonical type, and
+    # insert_sle_entries refuses any type the voucher_type_registry does not hold,
+    # so a label form fails loudly at the primitive instead of being normalised.
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.custom_fields import store_from_arg, merge_into_response
@@ -48,9 +55,6 @@ except ImportError:
     import json as _json
     print(_json.dumps({"status": "error", "error": "ERPClaw foundation not installed. Install erpclaw first: clawhub install erpclaw", "suggestion": "clawhub install erpclaw"}))
     sys.exit(1)
-
-# Convenience alias for CAST(CURRENT_TIMESTAMP AS TEXT) SQLite expression
-_NOW = now()
 
 REQUIRED_TABLES = ["company"]
 
@@ -1535,89 +1539,70 @@ def cancel_stock_entry(conn, args):
 
 
 # ---------------------------------------------------------------------------
-# 15. create-stock-ledger-entries (cross-skill)
+# 15/16. create-stock-ledger-entries / reverse-stock-ledger-entries —
+#        RETIRED (M103, 2026-08-13)
+#
+# Both actions wrote stock-ledger rows with NO balancing general-ledger leg: one
+# call on seeded books wrote a row worth 1000.00 and turned INV-24 red. They had
+# zero production callers, and they could never acquire one — the foundation
+# router dispatches with os.execvp, which REPLACES the process, so the
+# selling/buying/manufacturing handlers they were named for cannot invoke them
+# from inside a transaction without abandoning it. That is why every real
+# stock-ledger writer in the tree (this module's submit_stock_entry /
+# cancel_stock_entry, selling, buying, manufacturing) imports
+# erpclaw_lib.stock_posting.insert_sle_entries / reverse_sle_entries directly
+# and posts both legs in the same transaction.
+#
+# The action names stay ROUTABLE on purpose (Nik ruling 2026-08-13: retired
+# actions STEER to their replacement, the M63-C shape — the tree had grown two
+# retirement patterns, and this settles it). An agent or an old script that asks
+# for a raw stock-ledger write gets one JSON error naming the flow that does the
+# job, instead of "Unknown action". The old handler BODIES stay deleted: their
+# control flow was ok()/err(), which print JSON to stdout and sys.exit(), so no
+# in-process caller could ever have used them. If a raw stock-write hook is ever
+# genuinely needed (a historical inventory import, say), build it against the
+# primitive with both legs and a DANGEROUS_ACTIONS gate rather than resurrecting
+# these.
+#
+# SIM: planning/simlogs/m103_SIM_2026-08-12.md
+# Pinned by tests/test_stock_gateways_retired.py (steer + nothing-lands) and
+# testing/unit/constitution/test_stock_entry_ties_to_the_books.py (INV-24 floor).
 # ---------------------------------------------------------------------------
+
+_STOCK_LEDGER_STEER = (
+    "Use the stock-entry flow: add-stock-entry -> submit-stock-entry, which "
+    "posts the stock ledger AND its balancing GL leg in one transaction. "
+    "Reversal is cancel-stock-entry (reverses both sides together). For "
+    "corrections outside a voucher use add-stock-reconciliation or "
+    "revalue-stock — both gated, both post both legs. There is no supported "
+    "way to write the stock ledger without its GL leg."
+)
+
+
+def _retired_stock_ledger(action):
+    """Answer a retired stock-ledger gateway with a steer to the real flow.
+
+    One shared message for both: two hand-written variants would drift, and the
+    steer is the only thing a caller gets, so it is the part that has to stay
+    correct. Exits 1 with a single JSON object via the standard `err` contract —
+    never a traceback.
+    """
+    err(
+        f"'{action}' has been retired. It wrote stock-ledger rows without a "
+        f"balancing general-ledger leg, leaving the stock ledger untied to the "
+        f"books (INV-24).",
+        suggestion=_STOCK_LEDGER_STEER,
+    )
+
 
 def create_stock_ledger_entries(conn, args):
-    """Cross-skill: create SLE entries (called by selling/buying)."""
-    if not args.voucher_type:
-        err("--voucher-type is required")
-    # FINDING-006: canonicalize the doctype voucher_type at the gateway boundary
-    # so stock_ledger_entry.voucher_type is stored snake_case (a label like
-    # "Delivery Note" would otherwise break every downstream filter).
-    voucher_type = canonical_voucher_type(args.voucher_type)
-    if not args.voucher_id:
-        err("--voucher-id is required")
-    if not args.posting_date:
-        err("--posting-date is required")
-    if not args.entries:
-        err("--entries is required (JSON array)")
-    if not args.company_id:
-        err("--company-id is required")
+    """RETIRED — see the block above. Steers to the stock-entry flow."""
+    _retired_stock_ledger("create-stock-ledger-entries")
 
-    entries = _parse_json_arg(args.entries, "entries")
-    if not entries or not isinstance(entries, list):
-        err("--entries must be a non-empty JSON array")
-
-    fiscal_year = _get_fiscal_year(conn, args.posting_date)
-
-    # Add fiscal_year to each entry
-    for entry in entries:
-        entry["fiscal_year"] = fiscal_year
-
-    try:
-        sle_ids = insert_sle_entries(
-            conn, entries,
-            voucher_type=voucher_type,
-            voucher_id=args.voucher_id,
-            posting_date=args.posting_date,
-            company_id=args.company_id,
-        )
-    except ValueError as e:
-        sys.stderr.write(f"[erpclaw-inventory] {e}\n")
-        err(f"SLE posting failed: {e}")
-
-    audit(conn, "erpclaw-inventory", "create-stock-ledger-entries", "stock_ledger_entry",
-           args.voucher_id,
-           new_values={"voucher_type": voucher_type,
-                       "sle_count": len(sle_ids)})
-    conn.commit()
-    ok({"sle_ids": sle_ids, "count": len(sle_ids)})
-
-
-# ---------------------------------------------------------------------------
-# 16. reverse-stock-ledger-entries (cross-skill)
-# ---------------------------------------------------------------------------
 
 def reverse_stock_ledger_entries(conn, args):
-    """Cross-skill: reverse SLE entries (called by selling/buying)."""
-    if not args.voucher_type:
-        err("--voucher-type is required")
-    # FINDING-006: normalize so the reversal lookup matches the canonical
-    # voucher_type the SLE rows were stored under.
-    voucher_type = canonical_voucher_type(args.voucher_type)
-    if not args.voucher_id:
-        err("--voucher-id is required")
-    if not args.posting_date:
-        err("--posting-date is required")
-
-    try:
-        reversal_ids = reverse_sle_entries(
-            conn,
-            voucher_type=voucher_type,
-            voucher_id=args.voucher_id,
-            posting_date=args.posting_date,
-        )
-    except ValueError as e:
-        sys.stderr.write(f"[erpclaw-inventory] {e}\n")
-        err(f"SLE reversal failed: {e}")
-
-    audit(conn, "erpclaw-inventory", "reverse-stock-ledger-entries", "stock_ledger_entry",
-           args.voucher_id,
-           new_values={"voucher_type": voucher_type,
-                       "reversal_count": len(reversal_ids)})
-    conn.commit()
-    ok({"reversal_ids": reversal_ids, "count": len(reversal_ids)})
+    """RETIRED — see the block above. Steers to the stock-entry flow."""
+    _retired_stock_ledger("reverse-stock-ledger-entries")
 
 
 # ---------------------------------------------------------------------------
@@ -3030,7 +3015,7 @@ def add_item_attribute(conn, args):
     # Mark item as template
     q = (Q.update(item_t)
          .set(item_t.has_variants, 1)
-         .set(item_t.updated_at, _NOW)
+         .set(item_t.updated_at, now())
          .where(item_t.id == P()))
     conn.execute(q.get_sql(), (args.item_id,))
 
@@ -4198,6 +4183,8 @@ ACTIONS = {
     "list-stock-entries": list_stock_entries,
     "submit-stock-entry": submit_stock_entry,
     "cancel-stock-entry": cancel_stock_entry,
+    # RETIRED (M103) — routable on purpose; both answer with a steer and write
+    # nothing. See the section-15/16 block.
     "create-stock-ledger-entries": create_stock_ledger_entries,
     "reverse-stock-ledger-entries": reverse_stock_ledger_entries,
     "get-stock-balance": get_stock_balance_action,
@@ -4303,10 +4290,13 @@ def main():
     # Stock entry list filters
     parser.add_argument("--status-filter", dest="se_status")
 
-    # Cross-skill SLE
+    # Reservation binding (M5).
     parser.add_argument("--voucher-type")
     parser.add_argument("--voucher-id")
-    parser.add_argument("--entries")  # JSON
+    # Read by NOTHING since M103 retired the raw SLE gateways. Kept solely so a
+    # legacy invocation — old flags and all — parses and reaches the steer,
+    # instead of dying on an argparse usage error before the JSON contract.
+    parser.add_argument("--entries")
 
     # Batch
     parser.add_argument("--batch-name")

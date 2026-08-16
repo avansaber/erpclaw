@@ -21,19 +21,56 @@ from pathlib import Path
 # PyPika is optional — only available when erpclaw-setup has installed the shared lib.
 # check-installation and install-guide work without it; seed-demo-data uses it for queries.
 try:
-    sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
+    import importlib.util
+    if importlib.util.find_spec("erpclaw_lib") is None:
+        sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
     from erpclaw_lib.query import Q, P, Table, Field, fn, Order
     from erpclaw_lib.args import SafeArgumentParser
     _HAS_PYPIKA = True
 except ImportError:
     _HAS_PYPIKA = False
 
+    class SafeArgumentParser(argparse.ArgumentParser):
+        """Pre-install fallback mirroring erpclaw_lib.args.SafeArgumentParser.
+
+        check-installation and install-guide must run before the shared lib
+        exists, but main() builds the parser unconditionally — without this
+        fallback the whole module died with NameError on a pristine machine,
+        which is the one environment those actions exist for. Same contract
+        as the lib version: JSON error on stdout, exit 1 (minus the
+        valid-flags listing, which needs no lib either but isn't worth
+        duplicating here).
+        """
+
+        def error(self, message):
+            print(json.dumps({"status": "error", "message": message}))
+            sys.exit(1)
+
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-DEFAULT_DB_PATH = os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "data.sqlite")
+# DB location. Every other module leaves ``--db-path`` defaulting to None and
+# lets erpclaw_lib resolve the ERPCLAW_DB_URL / ERPCLAW_DB_PATH chain, with
+# ERPCLAW_HOME supplying the SQLite default underneath. This module cannot
+# import that chain (check-installation and install-guide must work before the
+# shared lib is installed), so it mirrors it here.
+#
+# Resolving ERPCLAW_HOME alone was a real defect: with ERPCLAW_DB_PATH pointed
+# somewhere else, every other module honoured it and this one silently did not
+# — so seed-demo-data created its demo company in the DEFAULT database and then
+# passed that path to every child skill it drives, writing a whole business flow
+# into the wrong DB. That is exactly how the L2 contract layer was polluting the
+# live install (devbox2, 2026-08-09).
+DEFAULT_DB_PATH = (
+    os.environ.get("ERPCLAW_DB_URL")
+    or os.environ.get("ERPCLAW_DB_PATH")
+    or os.path.join(
+        os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")),
+        "data.sqlite",
+    )
+)
 SKILLS_DIR = os.path.expanduser("~/clawd/skills")
 SHARED_LIB_PATH = os.path.join(
     os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")),

@@ -55,8 +55,6 @@ from erpclaw_lib import custom_fields as cf
 from erpclaw_lib.vendor.pypika import Order
 from erpclaw_lib.vendor.pypika.terms import LiteralValue
 
-# Convenience alias for CAST(CURRENT_TIMESTAMP AS TEXT) SQLite expression
-_NOW = now()
 
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(SKILL_DIR, "assets")
@@ -334,7 +332,7 @@ def update_company(conn, args):
     qu = Q.update(tc)
     for k in updates:
         qu = qu.set(Field(k), P())
-    qu = qu.set(Field("updated_at"), _NOW)
+    qu = qu.set(Field("updated_at"), now())
     qu = qu.where(tc.id == P())
     values = list(updates.values()) + [company_id]
     conn.execute(qu.get_sql(), values)
@@ -1194,7 +1192,7 @@ def initialize_database(conn, args):
     # Import the schema module (co-located in the same scripts/ directory)
     scripts_dir = os.path.dirname(os.path.abspath(__file__))
     sys.path.insert(0, scripts_dir)
-    from init_schema import init_db, ALL_DDL_BLOCKS
+    from init_schema import init_db, ALL_DDL_BLOCKS, redact_db_url
 
     force = getattr(args, "force", False) or getattr(args, "force_reinit", False)
 
@@ -1225,15 +1223,46 @@ def initialize_database(conn, args):
     finally:
         verify_conn.close()
 
+    # M39 (Wave G F6): catalog the foundation in its own erpclaw_module table.
+    # ClawHub's post hook runs this action and nothing else, so this INSERT is
+    # the ONLY chance a fresh install gets to be catalogued — without it
+    # list-modules is empty, update-modules says "No modules to update", and the
+    # dependency resolver drives the addon git-clone installer at the
+    # foundation. Bookkeeping, never fatal: a failure here is REPORTED in the
+    # response (never swallowed) rather than aborting a schema init that
+    # otherwise succeeded, and `update-foundation` heals it on the next
+    # reconcile through the same shared helper.
+    module_row = {"ensured": False, "inserted": False, "reason": "not attempted"}
+    try:
+        from erpclaw_lib.foundation_registry import (
+            ensure_foundation_module_row, load_foundation_entry,
+        )
+        registry_path = os.path.join(os.path.dirname(SKILL_DIR), "module_registry.json")
+        row_conn = get_connection(db_path)
+        try:
+            module_row = ensure_foundation_module_row(
+                row_conn,
+                load_foundation_entry(registry_path),
+                install_path=os.path.dirname(os.path.dirname(SKILL_DIR)),
+            )
+        finally:
+            row_conn.close()
+    except Exception as e:  # noqa: BLE001 — surfaced below, never fatal
+        module_row = {"ensured": False, "inserted": False, "reason": str(e)}
+
     ok({
         "message": "Database initialized successfully",
-        "db_path": db_path,
+        # F11: on PostgreSQL this value IS the connection URL, so the response
+        # echoed the database password to stdout. Same redactor as the stderr
+        # prints; a SQLite filesystem path passes through unchanged.
+        "db_path": redact_db_url(db_path),
         "tables": table_count,
         "indexes": index_count,
         "skills_registered": skill_count,
         "journal_mode": "WAL",
         "foreign_keys": "ON",
         "reinitialized": force,
+        "foundation_module_row": module_row,
     })
 
 
@@ -1518,7 +1547,7 @@ def fetch_exchange_rates(conn, args):
             q_upd = (Q.update(ter)
                      .set(ter.rate, P())
                      .set(ter.source, "api")
-                     .set(Field("updated_at"), _NOW)
+                     .set(Field("updated_at"), now())
                      .where(ter.id == P()))
             conn.execute(q_upd.get_sql(), (rate_str, existing["id"]))
         else:
@@ -1617,7 +1646,7 @@ def update_user(conn, args):
     qu = Q.update(tu2)
     for k in updates:
         qu = qu.set(Field(k), P())
-    qu = qu.set(Field("updated_at"), _NOW)
+    qu = qu.set(Field("updated_at"), now())
     qu = qu.where(tu2.id == P())
     vals = list(updates.values()) + [user_id]
     conn.execute(qu.get_sql(), vals)
@@ -1807,7 +1836,7 @@ def set_password(conn, args):
     pw_hash = hash_password(password)
     q_upd = (Q.update(tu)
              .set(Field("password_hash"), P())
-             .set(Field("updated_at"), _NOW)
+             .set(Field("updated_at"), now())
              .where(tu.id == P()))
     conn.execute(q_upd.get_sql(), (pw_hash, user_id))
     audit(conn, "erpclaw-setup", "set-password", "erp_user", user_id,
@@ -1842,7 +1871,7 @@ def link_telegram_user(conn, args):
 
     q_upd = (Q.update(tu)
              .set(Field("telegram_user_id"), P())
-             .set(Field("updated_at"), _NOW)
+             .set(Field("updated_at"), now())
              .where(tu.id == P()))
     conn.execute(q_upd.get_sql(), (str(telegram_user_id), user_id))
     audit(conn, "erpclaw-setup", "link-telegram-user", "erp_user", user_id,
@@ -1869,7 +1898,7 @@ def unlink_telegram_user(conn, args):
     user_id = user["id"] if isinstance(user, dict) else user[0]
     q_upd = (Q.update(tu)
              .set(Field("telegram_user_id"), None)
-             .set(Field("updated_at"), _NOW)
+             .set(Field("updated_at"), now())
              .where(tu.id == P()))
     conn.execute(q_upd.get_sql(), (user_id,))
     audit(conn, "erpclaw-setup", "unlink-telegram-user", "erp_user", user_id,

@@ -30,5 +30,7 @@ def conn(db_path):
 
 @pytest.fixture
 def fresh_db(conn):
-    """Alias for conn — enables invariant engine auto-hook from root conftest."""
+    """Alias for conn. NOTE: no auto-hook exists — no root conftest runs the invariant
+    engine on this fixture; tests that need invariant coverage must assert it explicitly
+    (the INV-27 pins do: 22 explicit calls). Docstring corrected 2026-08-01 (QA advisory A1)."""
     return conn

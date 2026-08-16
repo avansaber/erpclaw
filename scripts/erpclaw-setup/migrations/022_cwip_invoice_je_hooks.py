@@ -18,6 +18,10 @@ import argparse
 import os
 import sqlite3
 
+# M102: adds tables / columns / indexes only — nothing a row held before this
+# run is different afterwards.
+MIGRATION_DATA_CLASS = "none"
+
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "data.sqlite")
 
 # (table, column) — each added as plain nullable TEXT (validated app-side).
@@ -35,7 +39,8 @@ _SQLITE_ADD = {
 }
 _PG_ADD = {
     ("purchase_invoice", "cwip_asset_id"):
-        "ALTER TABLE purchase_invoice ADD COLUMN IF NOT EXISTS cwip_asset_id TEXT",
+        "ALTER TABLE purchase_invoice ADD COLUMN IF NOT EXISTS cwip_asset_id "
+        "TEXT",
     ("journal_entry", "cwip_asset_id"):
         "ALTER TABLE journal_entry ADD COLUMN IF NOT EXISTS cwip_asset_id TEXT",
 }

@@ -30,9 +30,19 @@ SETUP_DIR = os.path.join(os.path.dirname(MODULE_DIR), "erpclaw-setup")
 INIT_SCHEMA_PATH = os.path.join(SETUP_DIR, "init_schema.py")
 
 # Make erpclaw_lib importable
-ERPCLAW_LIB = os.path.expanduser("~/.openclaw/erpclaw/lib")
+# Bind erpclaw_lib to THIS TREE's lib, not the deployed ~/.openclaw symlink
+# (S1.3 SIM S11, the same fix selling_helpers.py carries): the symlink can point
+# at another worktree/branch, which would make these tests exercise foreign lib
+# code — or miss a lib module this branch adds entirely, so a green run would
+# prove nothing about the tree under test. The deployed path stays as a fallback
+# for non-repo layouts (a published skill tree has no sibling erpclaw-setup/lib).
+_IN_TREE_LIB = os.path.abspath(os.path.join(SETUP_DIR, "lib"))
+ERPCLAW_LIB = (_IN_TREE_LIB if os.path.isdir(os.path.join(_IN_TREE_LIB, "erpclaw_lib"))
+               else os.path.join(os.path.expanduser(
+                   os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
 if ERPCLAW_LIB not in sys.path:
-    sys.path.insert(0, ERPCLAW_LIB)
+    if importlib.util.find_spec("erpclaw_lib") is None:
+        sys.path.insert(0, ERPCLAW_LIB)
 
 from erpclaw_lib.db import setup_pragmas
 

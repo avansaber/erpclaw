@@ -63,3 +63,66 @@ def test_read_only_backup_siblings_stay_ungated():
     assert "verify-backup" not in ROUTER.DANGEROUS_ACTIONS
     with patch.object(sys, "argv", ["db_query.py", "--action", "list-backups"]):
         ROUTER._gate_dangerous_action("list-backups")  # no exit
+
+
+# ── Wave G F17: bad-debt write-off joins the gated transaction class ─────────
+#
+# QA condition 2. Submitting an invoice is gated and cancelling it — the only
+# undo for a write-off — is gated, while permanently forgiving the same
+# receivable was not. Both write-off actions post GL, so they are gated; neither
+# is in ADR-0018's five-member destructive list (that list is Nik-ratified and
+# closed), so both are transaction-class: the agent may pass the flag on a clear
+# request without re-asking.
+
+@pytest.mark.parametrize("action", ["write-off-invoice", "legal-write-off-invoice"])
+def test_write_off_actions_are_gated(action):
+    assert action in ROUTER.DANGEROUS_ACTIONS
+    # The asymmetry that made this necessary: both neighbours were already gated.
+    assert "submit-sales-invoice" in ROUTER.DANGEROUS_ACTIONS
+    assert "cancel-sales-invoice" in ROUTER.DANGEROUS_ACTIONS
+
+
+@pytest.mark.parametrize("action", ["write-off-invoice", "legal-write-off-invoice"])
+def test_write_off_blocked_without_flag(action, capsys):
+    with patch.object(sys, "argv", ["db_query.py", "--action", action]):
+        with pytest.raises(SystemExit) as exc:
+            ROUTER._gate_dangerous_action(action)
+    assert exc.value.code == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"] == "user_confirmation_required"
+    assert payload["action"] == action
+
+
+@pytest.mark.parametrize("action", ["write-off-invoice", "legal-write-off-invoice"])
+def test_write_off_passes_with_flag(action):
+    with patch.object(sys, "argv",
+                      ["db_query.py", "--action", action, "--user-confirmed"]):
+        ROUTER._gate_dangerous_action(action)  # no exit
+
+
+def test_write_off_is_transaction_class_not_destructive():
+    """ADR-0018 dec. 1: the destructive list is closed at five members.
+
+    A write-off is reversible by cancelling the invoice, so it must NOT be
+    smuggled into the destructive class — that list is Nik-ratified and any
+    addition needs its own ratification, not a lane's judgement.
+    """
+    destructive = {"close-fiscal-year", "restore-database", "install-module",
+                   "rollback-foundation", "generate-nacha-file"}
+    assert "write-off-invoice" not in destructive
+    assert "legal-write-off-invoice" not in destructive
+    assert destructive <= ROUTER.DANGEROUS_ACTIONS
+
+
+def test_the_mcp_layer_sees_the_gate_too():
+    """The MCP confirm map AST-reads the router's frozenset (ADR-0024 sub-dec 2),
+    so gating here must reach the protocol surface with no second edit."""
+    import importlib.util as _il
+    mcp_dir = os.path.join(os.path.dirname(os.path.dirname(_TESTS_DIR)), "mcp")
+    spec = _il.spec_from_file_location("_f17_skill_reader",
+                                       os.path.join(mcp_dir, "skill_reader.py"))
+    reader = _il.module_from_spec(spec)
+    spec.loader.exec_module(reader)
+    seen = reader.dangerous_actions()
+    assert "write-off-invoice" in seen
+    assert "legal-write-off-invoice" in seen

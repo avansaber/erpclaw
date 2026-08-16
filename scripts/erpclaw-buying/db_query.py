@@ -20,7 +20,9 @@ from decimal import Decimal, InvalidOperation
 
 # Add shared lib to path
 try:
-    sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
+    import importlib.util
+    if importlib.util.find_spec("erpclaw_lib") is None:
+        sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
     from erpclaw_lib.db import get_connection, ensure_db_exists, DEFAULT_DB_PATH
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.validation import check_input_lengths
@@ -2841,6 +2843,16 @@ def cancel_purchase_invoice(conn, args):
         except ValueError:
             reversal_sle_ids = []
 
+    # Release the payment allocations this cancel voids (M46/F1). Cash applied
+    # to a bill that no longer exists in the books is not applied cash: the
+    # allocation is delinked, its per-allocation PLE rows are closed out, and
+    # the payment's residual comes back. Same voucher_type this function uses
+    # for its GL and PLE handling, executed by the neutral clearing lib so
+    # buying never writes payments' tables itself.
+    from erpclaw_lib.payment_clearing import release_allocations_on_document
+    release = release_allocations_on_document(
+        conn, "purchase_invoice", args.purchase_invoice_id)
+
     # Cancel PLE entries
     ple_t = Table("payment_ledger_entry")
     q = (Q.update(ple_t)
@@ -2878,10 +2890,19 @@ def cancel_purchase_invoice(conn, args):
            args.purchase_invoice_id,
            new_values={"reversed": True})
     conn.commit()
-    ok({"purchase_invoice_id": args.purchase_invoice_id,
-         "status": "cancelled",
-         "gl_reversals": len(reversal_gl_ids),
-         "sle_reversals": len(reversal_sle_ids)})
+    payload = {"purchase_invoice_id": args.purchase_invoice_id,
+               "status": "cancelled",
+               "gl_reversals": len(reversal_gl_ids),
+               "sle_reversals": len(reversal_sle_ids)}
+    # Reported only when something was actually released or skipped, so the
+    # no-allocation cancel keeps its exact shipped payload (F1 pin 4). A SKIP
+    # (payment not submitted, correction C2) is surfaced with the payment id
+    # and status, never dropped.
+    if release.get("released"):
+        payload["allocations_released"] = release["released"]
+    if release.get("skipped"):
+        payload["allocations_release_skipped"] = release["skipped"]
+    ok(payload)
 
 
 # ---------------------------------------------------------------------------

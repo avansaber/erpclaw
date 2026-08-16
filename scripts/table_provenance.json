@@ -1250,14 +1250,6 @@
    "class": "module_spec",
    "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
   },
-  "elimination_entry": {
-   "doc_ref": "prov:internal:574c735b",
-   "class": "direct"
-  },
-  "elimination_rule": {
-   "doc_ref": "prov:internal:574c735b",
-   "class": "direct"
-  },
   "email_account": {
    "doc_ref": "prov:internal:0d805b08",
    "class": "direct"

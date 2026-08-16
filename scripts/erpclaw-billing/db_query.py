@@ -20,7 +20,9 @@ from decimal import Decimal, ROUND_HALF_UP
 # Shared library
 # ---------------------------------------------------------------------------
 try:
-    sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
+    import importlib.util
+    if importlib.util.find_spec("erpclaw_lib") is None:
+        sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
     from erpclaw_lib.db import get_connection, ensure_db_exists, DEFAULT_DB_PATH  # noqa: E402
     from erpclaw_lib.decimal_utils import to_decimal, round_currency  # noqa: E402
     from erpclaw_lib.naming import get_next_name  # noqa: E402
@@ -88,6 +90,15 @@ VALID_ADJUSTMENT_TYPES = (
     "proration", "discount", "penalty", "write_off",
 )
 VALID_PREPAID_STATUSES = ("active", "exhausted", "expired")
+# F22 (N8): a billing period reads 'invoiced' ⟺ its linked sales_invoice is
+# GL-posted. A GL-posted invoice is any live post-submit status; only 'draft'
+# posts no GL and only 'cancelled' reverses it. These are the sales_invoice
+# statuses (init_schema.py sales_invoice CHECK) that mean "GL-posted".
+_GL_POSTED_INVOICE_STATUSES = ("submitted", "partially_paid", "paid", "overdue")
+# The two billing_period statuses the F22 sync machinery is allowed to WRITE
+# (correction C7). Every other status is reported, never touched: 'void' is
+# terminal, 'paid' is downstream of 'invoiced', 'disputed' is a human state.
+_SYNC_WRITABLE_PERIOD_STATUSES = ("rated", "invoiced")
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +185,71 @@ def _resolve_company_from_customer(conn, customer_id):
         err(f"Customer not found: {customer_id}",
              suggestion="Use 'list customers' in the selling skill to see available customers.")
     return row["company_id"]
+
+
+def _resolve_or_create_billing_service_item(conn, company_id, selling_script,
+                                            db_path, cache):
+    """Return the id of the generic company-scoped billing service item.
+
+    ADR-0033: `add-sales-invoice` requires a real `item_id` on every line —
+    there is no description-only service line — but billing carries no item
+    reference. So `generate-invoices` uses one generic service item per
+    company: `item_code = 'BILLING-SVC-{company_id}'` (the code carries the
+    company scope; `item` has no `company_id`). Billing *reads* `item`
+    directly (a cross-module read is always allowed) but *creates* only
+    through the inventory `add-item` action subprocess, so it never writes the
+    `item` table itself (Constitution Article 5). `item_type=service` ⇒
+    `is_stock_item=0`: no warehouse, no stock ledger. A generic item is
+    correct because the authoritative period<->invoice linkage is
+    `billing_period.invoice_id` (not the invoice line): `sales_invoice_item`
+    has no `description` column and create-sales-invoice persists none, so the
+    line does not carry per-period text. `generate-invoices` stamps the
+    invoice `posting_date` with the period end for document-level
+    distinguishability between periods.
+
+    Returns `(item_id, None)` on success or `(None, error_str)` on failure —
+    it never raises, so one bad period never aborts the run.
+    """
+    if company_id in cache:
+        return cache[company_id], None
+    item_code = f"BILLING-SVC-{company_id}"
+    # Reuse on hit (cross-module read).
+    row = conn.execute(
+        "SELECT id FROM item WHERE item_code = ?", (item_code,)).fetchone()
+    if row:
+        cache[company_id] = row["id"]
+        return row["id"], None
+    # Create on miss through inventory's add-item (same dispatcher handle and
+    # db-context forwarding as the invoice call below).
+    cmd = [sys.executable, selling_script,
+           "--action", "add-item",
+           "--item-code", item_code,
+           "--item-name", "Billing Service",
+           "--item-type", "service"]
+    if db_path:
+        cmd.extend(["--db-path", db_path])
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        return None, "add-item timed out after 30s"
+    if proc.returncode == 0:
+        try:
+            r = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            r = None
+        if r is not None and r.get("status") == "ok" and r.get("item_id"):
+            cache[company_id] = r["item_id"]
+            return r["item_id"], None
+    # Non-zero (or unusable output): most likely a concurrent writer won the
+    # unique item_code. Re-resolve and reuse (mirrors import-items).
+    row = conn.execute(
+        "SELECT id FROM item WHERE item_code = ?", (item_code,)).fetchone()
+    if row:
+        cache[company_id] = row["id"]
+        return row["id"], None
+    detail = (proc.stdout or proc.stderr or "").strip()
+    return None, ("billing service item unavailable: add-item exited "
+                  f"{proc.returncode}" + (f": {detail[:300]}" if detail else ""))
 
 
 # =========================================================================
@@ -407,20 +483,27 @@ def add_meter_reading(conn, args):
         except (json.JSONDecodeError, TypeError):
             pass
 
+    # estimated_reason captures WHY a reading was estimated. It was a dead column
+    # (declared in schema, written by no path) even though reading_type='estimated'
+    # is a live capability — F19 wires it here. Only meaningful for estimated reads.
+    estimated_reason = getattr(args, "estimated_reason", None)
+    if estimated_reason and reading_type != "estimated":
+        err("--estimated-reason is only valid when --reading-type is 'estimated'")
+
     reading_id = str(uuid.uuid4())
     now = _now()
     q = (Q.into(T_meter_reading)
          .columns("id", "meter_id", "reading_date", "reading_value",
                   "previous_reading_value", "consumption", "reading_type",
-                  "uom", "source", "validated", "created_at")
-         .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(),
+                  "uom", "source", "estimated_reason", "validated", "created_at")
+         .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(), P(),
                  ValueWrapper(0), P()))
     conn.execute(q.get_sql(),
         (reading_id, args.meter_id, args.reading_date,
          str(reading_value),
          str(previous_reading_value) if previous_reading_value is not None else None,
          str(consumption) if consumption is not None else None,
-         reading_type, uom, source, now))
+         reading_type, uom, source, estimated_reason, now))
 
     q = (Q.update(T_meter)
          .set(T_meter.last_reading_date, P())
@@ -1576,6 +1659,14 @@ def run_billing(conn, args):
     if not company:
         err(f"Company not found: {args.company_id}")
 
+    # Materialize this company's period statuses from their linked invoices
+    # before billing, so the run never reasons off a stale 'invoiced'/'rated'
+    # display (F22; same helper as sync-billing-period-status). Own transaction.
+    from erpclaw_lib.dependencies import table_exists as _te
+    if _te(conn, "sales_invoice"):
+        _sync_period_rows(conn, _candidate_period_rows(conn, company_id=args.company_id))
+        conn.commit()
+
     billing_date = args.billing_date
     from_date = args.from_date
     to_date = args.to_date or billing_date
@@ -1956,37 +2047,595 @@ def _bill_one_meter(conn, meter_id, from_date, to_date, billing_date):
     }
 
 
-def generate_invoices(conn, args):
-    """Create sales invoices from rated billing periods.
+# =========================================================================
+# F22 (N8): billing-period status materialization from the linked invoice
+#
+# `billing_period.status` is billing-owned. Under N8 it reads 'invoiced' ⟺ the
+# linked sales_invoice is GL-posted (submitted). erpclaw-selling never writes
+# billing_period (§2.4), so billing MATERIALIZES the flip by reading
+# sales_invoice.status (cross-module reads are always allowed). The same helper
+# runs on demand (`sync-billing-period-status`) and at the start of the paths
+# that must not act on a stale status (generate-invoices, run-billing).
+# =========================================================================
 
-    S1.2b (minimal-honest fix, 2026-07-25): a billing period is marked
-    'invoiced' ONLY together with a real invoice id. Any failure — selling
-    module unavailable, subprocess error/timeout, unparseable output —
-    leaves the period 'rated' (retryable) and reports the reason in the
-    result. The full per-target structural model arrives with the
-    billing_run registry (S1.3).
+def _invoice_verdict(conn, invoice_id):
+    """Read the linked sales_invoice.status and classify it for the period.
+
+    Returns one of the tokens: 'gl_posted', 'draft', 'cancelled', 'dangling'
+    (row missing), or 'unknown' — paired with the raw invoice status (or None
+    when the row is missing). Read-only.
+    """
+    inv = conn.execute(
+        "SELECT status FROM sales_invoice WHERE id = ?", (invoice_id,)).fetchone()
+    if inv is None:
+        return "dangling", None
+    s = inv["status"]
+    if s == "cancelled":
+        return "cancelled", s
+    if s == "draft":
+        return "draft", s
+    if s in _GL_POSTED_INVOICE_STATUSES:
+        return "gl_posted", s
+    return "unknown", s
+
+
+def _period_link_warning(conn, bp):
+    """Read-only: does this period's stored status disagree with its linked
+    invoice, or is the link broken? Returns a warning dict or None. NEVER
+    writes — used by get-/list-billing-periods so a stale display surfaces
+    without the read action mutating anything (F22 pin 8)."""
+    status = bp["status"]
+    invoice_id = bp["invoice_id"]
+    if invoice_id is None:
+        # 'invoiced' with no link violates the F22 invariant and is invisible
+        # to any link-keyed iteration — surface it (correction C7).
+        if status == "invoiced":
+            return {"billing_period_id": bp["id"],
+                    "issue": "invoiced_with_null_link",
+                    "detail": "status is 'invoiced' but invoice_id is NULL; "
+                              "unlink (--reason) to revert it to 'rated', then "
+                              "link the covering invoice"}
+        return None
+    if status not in _SYNC_WRITABLE_PERIOD_STATUSES:
+        return None  # paid/disputed/void are not sync-managed (C7)
+    verdict, inv_status = _invoice_verdict(conn, invoice_id)
+    if verdict == "dangling":
+        return {"billing_period_id": bp["id"], "issue": "dangling_invoice_link",
+                "invoice_id": invoice_id,
+                "detail": "linked invoice row is missing; unlink (--reason) to resolve"}
+    if verdict == "cancelled":
+        return {"billing_period_id": bp["id"], "issue": "linked_invoice_cancelled",
+                "invoice_id": invoice_id,
+                "detail": "linked invoice is cancelled; run sync-billing-period-status "
+                          "to revert the period to 'rated'"}
+    if verdict == "gl_posted" and status != "invoiced":
+        return {"billing_period_id": bp["id"], "issue": "stale_rated",
+                "invoice_id": invoice_id, "invoice_status": inv_status,
+                "detail": "linked invoice is GL-posted; run sync-billing-period-status "
+                          "to mark the period 'invoiced'"}
+    if verdict == "draft" and status != "rated":
+        return {"billing_period_id": bp["id"], "issue": "stale_invoiced",
+                "invoice_id": invoice_id,
+                "detail": "linked invoice is only a draft; run sync-billing-period-status "
+                          "to return the period to 'rated'"}
+    if verdict == "unknown":
+        return {"billing_period_id": bp["id"], "issue": "unknown_invoice_status",
+                "invoice_id": invoice_id, "invoice_status": inv_status,
+                "detail": "linked invoice carries an unrecognized status; not touched"}
+    return None
+
+
+def _sync_period_rows(conn, periods):
+    """Materialize billing_period.status from each linked invoice (F22 / N8).
+
+    Correction C7 binds this writer to periods whose OWN status is 'rated' or
+    'invoiced'; every other status is reported, never touched, and the
+    'invoiced'-with-NULL-link class is reported (it has no link to derive from).
+
+    `periods` is an iterable of billing_period rows carrying at least
+    id/status/invoice_id/invoiced_at. Writes billing's own table only and does
+    NOT commit — the caller owns the transaction. Returns a report dict.
+    """
+    report = {"invoiced": [], "reverted": [], "returned_to_rated": [],
+              "protected": [], "warnings": [], "unchanged": 0}
+    for bp in periods:
+        pid = bp["id"]
+        status = bp["status"]
+        invoice_id = bp["invoice_id"]
+
+        if status not in _SYNC_WRITABLE_PERIOD_STATUSES:
+            # 'paid' / 'disputed' / 'void' — reported (only if it carries a
+            # link a naive writer would have grabbed), never touched.
+            if invoice_id is not None:
+                report["protected"].append(
+                    {"billing_period_id": pid, "status": status,
+                     "invoice_id": invoice_id,
+                     "detail": f"status '{status}' is not sync-managed; left untouched"})
+            continue
+
+        if invoice_id is None:
+            if status == "invoiced":
+                report["warnings"].append(
+                    {"billing_period_id": pid, "issue": "invoiced_with_null_link",
+                     "detail": "status is 'invoiced' but invoice_id is NULL; cannot "
+                               "materialize from a link — unlink (--reason) to revert "
+                               "it to 'rated', then link the covering invoice"})
+            # 'rated' with no link is the normal pre-generation state: no-op.
+            continue
+
+        verdict, inv_status = _invoice_verdict(conn, invoice_id)
+        now = _now()
+
+        if verdict == "dangling":
+            report["warnings"].append(
+                {"billing_period_id": pid, "issue": "dangling_invoice_link",
+                 "invoice_id": invoice_id,
+                 "detail": "linked invoice row is missing; a dangling pointer is an "
+                           "operator decision (unlink --reason) — never auto-touched"})
+            continue
+
+        if verdict == "cancelled":
+            uq = (Q.update(T_billing_period)
+                  .set(T_billing_period.status, ValueWrapper("rated"))
+                  .set(T_billing_period.invoice_id, P())
+                  .set(T_billing_period.invoiced_at, P())
+                  .set(T_billing_period.updated_at, P())
+                  .where(T_billing_period.id == P()))
+            conn.execute(uq.get_sql(), (None, None, now, pid))
+            audit(conn, "erpclaw-billing", "sync-billing-period-status",
+                  "billing_period", pid,
+                  old_values={"status": status, "invoice_id": invoice_id},
+                  new_values={"status": "rated", "invoice_id": None},
+                  description="auto-revert: linked sales_invoice is cancelled")
+            report["reverted"].append({"billing_period_id": pid, "invoice_id": invoice_id})
+            continue
+
+        if verdict == "gl_posted":
+            if status == "invoiced" and bp["invoiced_at"] is not None:
+                report["unchanged"] += 1
+                continue
+            # invoiced_at is the GL-post observation time (D2); keep an existing
+            # stamp, otherwise stamp now.
+            iat = bp["invoiced_at"] or now
+            uq = (Q.update(T_billing_period)
+                  .set(T_billing_period.status, ValueWrapper("invoiced"))
+                  .set(T_billing_period.invoiced_at, P())
+                  .set(T_billing_period.updated_at, P())
+                  .where(T_billing_period.id == P()))
+            conn.execute(uq.get_sql(), (iat, now, pid))
+            report["invoiced"].append(
+                {"billing_period_id": pid, "invoice_id": invoice_id,
+                 "invoice_status": inv_status})
+            continue
+
+        if verdict == "draft":
+            if status == "rated":
+                report["unchanged"] += 1  # already correct — draft link is the guard
+                continue
+            # was 'invoiced' but the invoice slipped back to draft: return to
+            # 'rated', clear the GL-post time, keep the link as the guard.
+            uq = (Q.update(T_billing_period)
+                  .set(T_billing_period.status, ValueWrapper("rated"))
+                  .set(T_billing_period.invoiced_at, P())
+                  .set(T_billing_period.updated_at, P())
+                  .where(T_billing_period.id == P()))
+            conn.execute(uq.get_sql(), (None, now, pid))
+            report["returned_to_rated"].append(
+                {"billing_period_id": pid, "invoice_id": invoice_id})
+            continue
+
+        # verdict == "unknown": surface, never touch.
+        report["warnings"].append(
+            {"billing_period_id": pid, "issue": "unknown_invoice_status",
+             "invoice_id": invoice_id, "invoice_status": inv_status,
+             "detail": "linked invoice carries an unrecognized status; not touched"})
+    return report
+
+
+def _candidate_period_rows(conn, company_id=None, period_ids=None):
+    """Periods the sync machinery must consider: any period carrying an
+    invoice_id, plus every 'invoiced' period (to catch the NULL-link class).
+    Optionally scoped to a company's customers or an explicit id list.
+
+    Variable-length IN clauses use parameterized raw SQL — the same idiom as
+    status_action / list_billing_runs — so the query stays dialect-portable
+    with no f-string value interpolation."""
+    sql = ("SELECT id, status, invoice_id, invoiced_at FROM billing_period "
+           "WHERE (invoice_id IS NOT NULL OR status = 'invoiced')")
+    params = []
+    if period_ids:
+        sql += f" AND id IN ({','.join('?' * len(period_ids))})"
+        params.extend(period_ids)
+    if company_id:
+        sql += (" AND customer_id IN "
+                "(SELECT id FROM customer WHERE company_id = ?)")
+        params.append(company_id)
+    return conn.execute(sql, params).fetchall()
+
+
+def sync_billing_period_status(conn, args):
+    """Materialize billing_period.status from each linked sales_invoice (F22).
+
+    A billing period reads 'invoiced' ⟺ its linked invoice is GL-posted. This
+    action is the on-demand reconciler; it also runs implicitly at the start of
+    generate-invoices and run-billing. Scope with --company-id and/or
+    --billing-period-ids; unscoped it reconciles every candidate period.
+
+    Correction C7: only 'rated'/'invoiced' periods are written; 'paid',
+    'disputed' and 'void' are reported and never touched, and the
+    'invoiced'-with-NULL-link anomaly is reported.
+    """
+    from erpclaw_lib.dependencies import table_exists
+    if not table_exists(conn, "sales_invoice"):
+        ok({"synced": 0, "reverted": 0, "returned_to_rated": 0,
+            "unchanged": 0, "protected": [], "warnings": [],
+            "message": ("erpclaw-selling not installed (no sales_invoice table); "
+                        "nothing to reconcile")})
+
+    company_id = getattr(args, "company_id", None)
+    period_ids = None
+    raw_ids = getattr(args, "billing_period_ids", None)
+    if raw_ids:
+        period_ids = _parse_json_arg(raw_ids, "billing-period-ids")
+        if not isinstance(period_ids, list):
+            err("--billing-period-ids must be a JSON array")
+
+    rows = _candidate_period_rows(conn, company_id=company_id, period_ids=period_ids)
+    report = _sync_period_rows(conn, rows)
+    conn.commit()
+    ok({
+        "synced": len(report["invoiced"]),
+        "reverted": len(report["reverted"]),
+        "returned_to_rated": len(report["returned_to_rated"]),
+        "unchanged": report["unchanged"],
+        "invoiced": report["invoiced"],
+        "reverted_periods": report["reverted"],
+        "returned_to_rated_periods": report["returned_to_rated"],
+        "protected": report["protected"],
+        "warnings": report["warnings"],
+    })
+
+
+def link_billing_period_invoice(conn, args):
+    """Attach an already-GL-posted sales_invoice to a rated period (F4 / M41).
+
+    The manual counterpart to generate-invoices, for the case where the
+    covering invoice was raised outside the billing flow. Preconditions (N8
+    semantics, matching F22): the period is 'rated' with NO existing link
+    (`invoice_id` is scalar — a second link is rejected, never overwritten;
+    the `billing_period_invoice` join table is filed, not built), the invoice
+    exists and is submitted / GL-posted (a draft posts no GL, so linking it
+    would let the period read 'invoiced' over an empty ledger — refused), and
+    the invoice's customer matches the period's. On success the period flips to
+    'invoiced' with `invoiced_at` stamped now — identical to what
+    sync-billing-period-status would materialize, so a later sync is a no-op.
+    Writes billing's own table only; the sales_invoice read is cross-module
+    (selling never writes billing_period, tripwire #4).
+    """
+    if not args.billing_period_id:
+        err("--billing-period-id is required")
+    if not args.invoice_id:
+        err("--invoice-id is required")
+
+    from erpclaw_lib.dependencies import table_exists
+    if not table_exists(conn, "sales_invoice"):
+        err("erpclaw-selling not installed (no sales_invoice table); nothing to link")
+
+    bq = (Q.from_(T_billing_period).select(T_billing_period.star)
+          .where(T_billing_period.id == P()))
+    bp = conn.execute(bq.get_sql(), (args.billing_period_id,)).fetchone()
+    if not bp:
+        err(f"Billing period not found: {args.billing_period_id}")
+
+    if bp["invoice_id"] is not None:
+        # A period covered by several invoices cannot be represented — reject a
+        # second link rather than overwrite (the join table is filed, not
+        # built). Unlink the existing link first if it is wrong.
+        err(f"Billing period {args.billing_period_id} already links invoice "
+            f"{bp['invoice_id']}; unlink it first "
+            "(a period holds one invoice link, not several)")
+
+    if bp["status"] != "rated":
+        err(f"Billing period status is '{bp['status']}', expected 'rated' to link "
+            "an invoice")
+
+    inv = conn.execute(
+        "SELECT id, customer_id, status FROM sales_invoice WHERE id = ?",
+        (args.invoice_id,)).fetchone()
+    if inv is None:
+        err(f"Sales invoice not found: {args.invoice_id}")
+
+    verdict, inv_status = _invoice_verdict(conn, args.invoice_id)
+    if verdict != "gl_posted":
+        err(f"Sales invoice {args.invoice_id} is '{inv_status}', not submitted / "
+            "GL-posted; only a GL-posted invoice can be linked (a draft posts no "
+            "GL). Submit the invoice first, or use generate-invoices to raise a "
+            "draft link")
+
+    if inv["customer_id"] != bp["customer_id"]:
+        err(f"Customer mismatch: invoice {args.invoice_id} belongs to customer "
+            f"{inv['customer_id']}, billing period to {bp['customer_id']}")
+
+    now = _now()
+    uq = (Q.update(T_billing_period)
+          .set(T_billing_period.invoice_id, P())
+          .set(T_billing_period.status, ValueWrapper("invoiced"))
+          .set(T_billing_period.invoiced_at, P())
+          .set(T_billing_period.updated_at, P())
+          .where(T_billing_period.id == P()))
+    conn.execute(uq.get_sql(), (args.invoice_id, now, now, args.billing_period_id))
+    audit(conn, "erpclaw-billing", "link-billing-period-invoice",
+          "billing_period", args.billing_period_id,
+          old_values={"status": bp["status"], "invoice_id": None},
+          new_values={"status": "invoiced", "invoice_id": args.invoice_id},
+          description=(f"manual link to GL-posted invoice {args.invoice_id} "
+                       f"(status '{inv_status}')"))
+    conn.commit()
+
+    row = conn.execute(
+        "SELECT * FROM billing_period WHERE id = ?",
+        (args.billing_period_id,)).fetchone()
+    ok({"billing_period": row_to_dict(row),
+        "linked_invoice_id": args.invoice_id, "invoice_status": inv_status})
+
+
+def _remedy_invoiced_with_null_link(conn, args):
+    """Unlink's remedy for the 'invoiced'-with-NULL-link anomaly (C7 / F4).
+
+    A period reading 'invoiced' with `invoice_id` NULL breaks F22's invariant
+    (`invoiced` ⟺ a GL-posted linked invoice) and, without this branch, is
+    permanently stuck: sync has no link to materialize from (it reports the
+    class), `link-billing-period-invoice` refuses it (that action expects
+    'rated'), and the ordinary unlink path has no invoice to drop. The remedy
+    reverts the period to 'rated' with `invoiced_at` cleared — the state it held
+    before an invoice was ever claimed — so it is invoiceable and linkable
+    again. Nothing is detached: there was never a link.
+
+    N8 safety: this writes 'rated' and NEVER 'invoiced', so the materialization
+    of 'invoiced' stays exactly where F22 and F4 put it. The caller has already
+    verified the state and that --reason is present (a corrupt row is an
+    operator judgement, so the remedy is operator-attributed).
+    """
+    period_id = args.billing_period_id
+    now = _now()
+    uq = (Q.update(T_billing_period)
+          .set(T_billing_period.status, ValueWrapper("rated"))
+          .set(T_billing_period.invoiced_at, P())
+          .set(T_billing_period.updated_at, P())
+          .where(T_billing_period.id == P()))
+    conn.execute(uq.get_sql(), (None, now, period_id))
+    audit(conn, "erpclaw-billing", "unlink-billing-period-invoice",
+          "billing_period", period_id,
+          old_values={"status": "invoiced", "invoice_id": None},
+          new_values={"status": "rated", "invoice_id": None},
+          description=(args.reason + " — remedy for the invoiced_with_null_link "
+                       "anomaly: the period read 'invoiced' with no linked "
+                       "invoice and was reverted to 'rated' (no invoice existed "
+                       "to detach)"))
+    conn.commit()
+
+    row = conn.execute(
+        "SELECT * FROM billing_period WHERE id = ?", (period_id,)).fetchone()
+    ok({"billing_period": row_to_dict(row),
+        "unlinked_invoice_id": None,
+        "unlinked_invoice_status": None,
+        "resolved_anomaly": "invoiced_with_null_link",
+        "reason": args.reason})
+
+
+def unlink_billing_period_invoice(conn, args):
+    """Detach a sales_invoice from a period, resetting it to rated/NULL (F4 / M41).
+
+    Handles three cases (N8 semantics): an 'invoiced' period whose operator wants
+    to detach the posted invoice, a period whose link is dangling (invoice
+    row missing) or cancelled — the housekeeping the sync machinery leaves for
+    an operator decision — and the 'invoiced'-with-NULL-link anomaly, whose only
+    exit this is (see `_remedy_invoiced_with_null_link`). Resets status to
+    'rated' and clears `invoice_id` / `invoiced_at`. A --reason is REQUIRED when
+    the linked invoice is still live (it exists and is not cancelled) and for the
+    anomaly remedy: detaching a real, live invoice and repairing a corrupt row
+    are both operator overrides, not cleanups. This drops billing's own link
+    ONLY — it never touches or reverses the invoice itself (that is selling's
+    cancel path).
+    """
+    if not args.billing_period_id:
+        err("--billing-period-id is required")
+
+    from erpclaw_lib.dependencies import table_exists
+    _si = table_exists(conn, "sales_invoice")
+
+    bq = (Q.from_(T_billing_period).select(T_billing_period.star)
+          .where(T_billing_period.id == P()))
+    bp = conn.execute(bq.get_sql(), (args.billing_period_id,)).fetchone()
+    if not bp:
+        err(f"Billing period not found: {args.billing_period_id}")
+
+    invoice_id = bp["invoice_id"]
+    if invoice_id is None:
+        # ONE state with a NULL link is actionable: 'invoiced' with no invoice —
+        # the C7 anomaly, stuck everywhere else. Every other NULL-link state is
+        # refused exactly as before ('rated' with no link is the normal
+        # pre-generation state, not something to unlink).
+        if bp["status"] != "invoiced":
+            err(f"Billing period {args.billing_period_id} has no linked invoice "
+                "to unlink")
+        if not args.reason:
+            err(f"--reason is required to resolve billing period "
+                f"{args.billing_period_id}: it reads 'invoiced' with no linked "
+                "invoice (the invoiced_with_null_link anomaly). Unlinking reverts "
+                "it to 'rated'; record why")
+        _remedy_invoiced_with_null_link(conn, args)
+        return
+
+    status = bp["status"]
+    # No sales_invoice table ⇒ the link cannot resolve to a live invoice; treat
+    # it as dangling (housekeeping) rather than blocking on a missing dependency.
+    verdict, inv_status = (_invoice_verdict(conn, invoice_id) if _si
+                           else ("dangling", None))
+    is_live = verdict not in ("dangling", "cancelled")
+
+    # Precondition: unlink handles an 'invoiced' period OR a dangling/cancelled
+    # link. A non-'invoiced' period carrying a LIVE link is managed by the
+    # generate/sync machinery (a draft link is the double-generation guard) —
+    # not detached here.
+    if status != "invoiced" and verdict not in ("dangling", "cancelled"):
+        err(f"Billing period status is '{status}' with a live linked invoice "
+            f"{invoice_id} ('{inv_status}'); unlink handles only 'invoiced' "
+            "periods or dangling/cancelled links. Run sync-billing-period-status "
+            "first, or cancel the invoice in selling (a draft cannot be "
+            "cancelled — submit it first, then cancel, then sync)")
+
+    if is_live and not args.reason:
+        err(f"--reason is required to unlink a live invoice (invoice {invoice_id} "
+            f"is '{inv_status}'); detaching a posted invoice is an operator "
+            "override, not a cleanup")
+
+    now = _now()
+    uq = (Q.update(T_billing_period)
+          .set(T_billing_period.status, ValueWrapper("rated"))
+          .set(T_billing_period.invoice_id, P())
+          .set(T_billing_period.invoiced_at, P())
+          .set(T_billing_period.updated_at, P())
+          .where(T_billing_period.id == P()))
+    conn.execute(uq.get_sql(), (None, None, now, args.billing_period_id))
+    audit(conn, "erpclaw-billing", "unlink-billing-period-invoice",
+          "billing_period", args.billing_period_id,
+          old_values={"status": status, "invoice_id": invoice_id},
+          new_values={"status": "rated", "invoice_id": None},
+          description=((args.reason + " — " if args.reason else "")
+                       + f"unlinked invoice {invoice_id} "
+                       f"(was '{inv_status or 'missing'}')"))
+    conn.commit()
+
+    row = conn.execute(
+        "SELECT * FROM billing_period WHERE id = ?",
+        (args.billing_period_id,)).fetchone()
+    ok({"billing_period": row_to_dict(row),
+        "unlinked_invoice_id": invoice_id,
+        "unlinked_invoice_status": inv_status,
+        "reason": args.reason})
+
+
+def _covering_invoice_candidates(conn, customer_id, period_start, period_end,
+                                 exclude_invoice_id=None):
+    """Flag-only detection (F4 / M41): live invoices for this customer whose
+    posting_date falls inside the period window. 'Live' excludes draft and
+    cancelled (`status NOT IN ('draft','cancelled')`). Returns a list of
+    warning dicts; the caller attaches them to a period's result WITHOUT
+    blocking or skipping — a possible double-bill is surfaced, never enforced.
+    Read-only. Excludes the period's own linked invoice (its own link is not a
+    double bill). The status list is a literal, not a value, so the query stays
+    parameterized with no f-string value interpolation."""
+    sql = ("SELECT id, status, posting_date, grand_total FROM sales_invoice "
+           "WHERE customer_id = ? AND status NOT IN ('draft','cancelled') "
+           "AND posting_date >= ? AND posting_date <= ?")
+    params = [customer_id, period_start, period_end]
+    if exclude_invoice_id is not None:
+        sql += " AND id <> ?"
+        params.append(exclude_invoice_id)
+    rows = conn.execute(sql, params).fetchall()
+    return [{"issue": "possible_existing_invoice", "invoice_id": r["id"],
+             "invoice_status": r["status"], "posting_date": r["posting_date"],
+             "grand_total": r["grand_total"],
+             "detail": ("a live invoice for this customer already posts inside "
+                        "the period window; generate-invoices does not block — "
+                        "verify this is not a double bill")}
+            for r in rows]
+
+
+def generate_invoices(conn, args):
+    """Create DRAFT sales invoices from rated billing periods (F22 / N8).
+
+    A billing period does NOT become 'invoiced' here — a draft posts no GL, so
+    it stays 'rated' with `invoice_id` set, and that link is the double-
+    generation guard. The period flips to 'invoiced' only when the invoice is
+    submitted (GL-posted), materialized by `sync-billing-period-status` (run
+    implicitly at the start of this action for the target periods).
+
+    Per period the result is 'generated' (draft created, id recorded),
+    'already_generated' (a live linked invoice already exists — never a second
+    invoice, never a silent skip), or an 'error' that leaves the period 'rated'
+    for retry (selling unavailable, subprocess error/timeout, unparseable
+    output). S1.2b's honesty contract — never mark a period done without a real
+    invoice, never a silent skip — is unchanged.
     """
     bp_ids = _parse_json_arg(args.billing_period_ids, "billing-period-ids")
     if not isinstance(bp_ids, list):
         err("--billing-period-ids must be a JSON array")
 
     from erpclaw_lib.dependencies import resolve_skill_script, table_exists
-    selling_script = resolve_skill_script("erpclaw") if table_exists(conn, "sales_invoice") else None
+    _si_exists = table_exists(conn, "sales_invoice")
+    selling_script = resolve_skill_script("erpclaw") if _si_exists else None
+
+    # Materialize the target periods' status from their linked invoices before
+    # the guard reads them: a period whose invoice was cancelled reverts to
+    # 'rated' (re-invoiceable), a submitted one becomes 'invoiced'. Never act
+    # on a stale status. (F22: same helper as sync-billing-period-status.)
+    if _si_exists:
+        _sync_period_rows(conn, _candidate_period_rows(conn, period_ids=bp_ids))
+        conn.commit()
+    # Same DB-context forwarding as resume-billing-run: the child resolves
+    # db_path eagerly; without the flag it writes the DEFAULT database.
+    _gi_db_path = getattr(args, "db_path", None)
+    _has_item_table = table_exists(conn, "item")
+    _svc_item_cache = {}
 
     results = []
+    # Flag-only covering-invoice detection (F4 / M41): a per-period `warnings`
+    # array attached to whatever result the period produces. It NEVER blocks and
+    # NEVER silently skips — a possible double bill is surfaced beside the
+    # generate/already_generated/error outcome, not enforced. `covering` is reset
+    # per period; the closure reads its current binding when appending.
+    covering = []
+
+    def _finish(result_dict):
+        if covering:
+            result_dict["warnings"] = covering
+        results.append(result_dict)
+
     for bp_id in bp_ids:
+        covering = []
         bq = Q.from_(T_billing_period).select(T_billing_period.star).where(T_billing_period.id == P())
         bp = conn.execute(bq.get_sql(), (bp_id,)).fetchone()
         if not bp:
-            results.append({"billing_period_id": bp_id, "error": "Not found"})
+            _finish({"billing_period_id": bp_id, "error": "Not found"})
             continue
+
+        if _si_exists:
+            covering = _covering_invoice_candidates(
+                conn, bp["customer_id"], bp["period_start"], bp["period_end"],
+                exclude_invoice_id=bp["invoice_id"])
+
+        # Double-generation guard (F22): a period already carrying a live
+        # (non-cancelled) invoice is never re-invoiced. Post-sync, a cancelled
+        # link has already been cleared, so a non-null invoice_id here means a
+        # draft or GL-posted invoice exists — name it, never a silent skip and
+        # never a second invoice.
+        if bp["invoice_id"] is not None:
+            verdict, inv_status = (_invoice_verdict(conn, bp["invoice_id"])
+                                   if _si_exists else ("dangling", None))
+            if verdict == "dangling":
+                _finish({
+                    "billing_period_id": bp_id, "invoice_id": bp["invoice_id"],
+                    "status": "already_generated",
+                    "message": ("period links a missing invoice row "
+                                f"{bp['invoice_id']}; unlink (--reason) before "
+                                "regenerating — not re-invoiced")})
+            else:
+                _finish({
+                    "billing_period_id": bp_id, "invoice_id": bp["invoice_id"],
+                    "status": "already_generated",
+                    "message": (f"invoice {bp['invoice_id']} already exists "
+                                f"(status '{inv_status}'); not re-invoiced")})
+            continue
+
         if bp["status"] != "rated":
-            results.append({"billing_period_id": bp_id,
-                            "error": f"Status is '{bp['status']}', expected 'rated'"})
+            _finish({"billing_period_id": bp_id,
+                     "error": f"Status is '{bp['status']}', expected 'rated'"})
             continue
 
         if not selling_script:
-            results.append({
+            _finish({
                 "billing_period_id": bp_id,
                 "error": ("Invoice creation unavailable: erpclaw selling "
                           "script not found. The billing period stays "
@@ -1995,24 +2644,57 @@ def generate_invoices(conn, args):
             })
             continue
 
+        if not _has_item_table:
+            _finish({
+                "billing_period_id": bp_id,
+                "error": ("Invoice creation unavailable: item table missing "
+                          "(inventory not installed). The billing period stays "
+                          "'rated'; re-run generate-invoices once the "
+                          "foundation install is repaired."),
+            })
+            continue
+
         invoice_id = None
         failure = None
         try:
+            # add-sales-invoice (selling create-sales-invoice) requires the
+            # owning company AND a real item_id per line — there is no
+            # description-only line. Billing derives the company from the
+            # period's customer and uses one generic company-scoped billing
+            # service item (ADR-0033), resolved-or-created via inventory's
+            # add-item so billing never writes the item table itself. Any
+            # failure leaves the period 'rated' for retry (never a silent skip).
+            company_id = _resolve_company_from_customer(conn, bp["customer_id"])
+            svc_item_id, svc_err = _resolve_or_create_billing_service_item(
+                conn, company_id, selling_script, _gi_db_path, _svc_item_cache)
+            if svc_item_id is None:
+                _finish({
+                    "billing_period_id": bp_id,
+                    "error": (svc_err or "billing service item unavailable")
+                             + " — billing period left 'rated' for retry",
+                })
+                continue
+            # NOTE: `sales_invoice_item` has no `description` column and
+            # create-sales-invoice persists none, so the line `description`
+            # below is NOT stored — it is passed for forward-compatibility
+            # only. The authoritative period<->invoice linkage is
+            # `billing_period.invoice_id` (set below). To keep invoices for
+            # distinct periods distinguishable at the document level we stamp
+            # the invoice `posting_date` with the period end.
             cmd = [
                 sys.executable, selling_script,
                 "--action", "add-sales-invoice",
                 "--customer-id", bp["customer_id"],
+                "--company-id", company_id,
+                "--posting-date", bp["period_end"],
                 "--items", json.dumps([{
+                    "item_id": svc_item_id,
                     "description": (f"Billing period "
                                     f"{bp['period_start']} to {bp['period_end']}"),
                     "qty": "1",
                     "rate": bp["grand_total"],
                 }]),
             ]
-            # Same DB-context forwarding as resume-billing-run (the child
-            # resolves db_path eagerly; without the flag it writes the
-            # DEFAULT database).
-            _gi_db_path = getattr(args, "db_path", None)
             if _gi_db_path:
                 cmd.extend(["--db-path", _gi_db_path])
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -2029,7 +2711,12 @@ def generate_invoices(conn, args):
                                f"output: {(proc.stdout or '').strip()[:500]}")
                 if inv_result is not None:
                     if inv_result.get("status") == "ok":
-                        invoice_id = inv_result.get("sales_invoice", {}).get("id")
+                        # create-sales-invoice spreads its payload at the top
+                        # level via ok(): the id is `sales_invoice_id`, not a
+                        # nested `sales_invoice.id`. The prior nested read
+                        # never matched the real script, so a real invoice was
+                        # never recorded — the bug the un-mocked E2E catches.
+                        invoice_id = inv_result.get("sales_invoice_id")
                         if not invoice_id:
                             failure = ("add-sales-invoice returned ok but "
                                        "no invoice id")
@@ -2042,32 +2729,42 @@ def generate_invoices(conn, args):
             failure = f"invoice creation failed: {exc}"
 
         if invoice_id is None:
-            results.append({
+            _finish({
                 "billing_period_id": bp_id,
                 "error": (failure or "invoice creation failed")
                          + " — billing period left 'rated' for retry",
             })
             continue
 
+        # F22: the draft posts no GL, so the period stays 'rated'. Only the
+        # link is recorded (the double-generation guard); no 'invoiced_at' — it
+        # now means the GL-post time and is stamped by sync at submit.
         inv_now = _now()
         uq = (Q.update(T_billing_period)
-              .set(T_billing_period.status, ValueWrapper("invoiced"))
-              .set(T_billing_period.invoiced_at, P())
               .set(T_billing_period.invoice_id, P())
               .set(T_billing_period.updated_at, P())
               .where(T_billing_period.id == P()))
-        conn.execute(uq.get_sql(), (inv_now, invoice_id, inv_now, bp_id))
-        results.append({
+        conn.execute(uq.get_sql(), (invoice_id, inv_now, bp_id))
+        # Commit this period's link BEFORE the next period's child subprocess
+        # runs. Otherwise the parent's uncommitted write transaction holds the
+        # single WAL writer slot, and the next add-sales-invoice child (its own
+        # connection) hits "database is locked" and that period is left 'rated'
+        # (re-QA multi-period finding). Per-period commit also durably records
+        # each link the moment its invoice exists, tightening the double-
+        # generation guard on a mid-loop crash.
+        conn.commit()
+        _finish({
             "billing_period_id": bp_id,
             "invoice_id": invoice_id,
-            "status": "invoiced",
+            "status": "generated",
         })
 
     conn.commit()
-    invoiced_count = sum(1 for r in results if r.get("status") == "invoiced")
+    generated_count = sum(1 for r in results if r.get("status") == "generated")
+    already_count = sum(1 for r in results if r.get("status") == "already_generated")
     failed_count = sum(1 for r in results if "error" in r)
-    ok({"invoiced": invoiced_count, "failed": failed_count,
-         "results": results})
+    ok({"generated": generated_count, "already_generated": already_count,
+         "failed": failed_count, "results": results})
 
 
 _BILLING_RUN_STATUSES = ("pending", "running", "completed", "failed",
@@ -2332,9 +3029,18 @@ def list_billing_periods(conn, args):
 
     data_q = data_q.orderby(bp.created_at, order=Order.desc).limit(P()).offset(P())
     rows = conn.execute(data_q.get_sql(), params + [limit, offset]).fetchall()
-    ok({"billing_periods": [dict(r) for r in rows], "total_count": total_count,
-         "limit": limit, "offset": offset,
-         "has_more": offset + limit < total_count})
+    # F22: surface any period whose stored status disagrees with its linked
+    # invoice (or whose link dangles). Read-only — never mutates.
+    from erpclaw_lib.dependencies import table_exists as _te
+    _si = _te(conn, "sales_invoice")
+    warnings = ([w for w in (_period_link_warning(conn, r) for r in rows) if w]
+                if _si else [])
+    payload = {"billing_periods": [dict(r) for r in rows], "total_count": total_count,
+               "limit": limit, "offset": offset,
+               "has_more": offset + limit < total_count}
+    if warnings:
+        payload["warnings"] = warnings
+    ok(payload)
 
 
 def get_billing_period(conn, args):
@@ -2363,7 +3069,14 @@ def get_billing_period(conn, args):
          .orderby(T_billing_adjustment.created_at))
     adjustments = [dict(r) for r in conn.execute(q.get_sql(), (args.billing_period_id,)).fetchall()]
     result["adjustments"] = adjustments
-    ok({"billing_period": result})
+    # F22: surface a stale/dangling invoice link without mutating (read-only).
+    from erpclaw_lib.dependencies import table_exists as _te
+    warning = (_period_link_warning(conn, bp)
+               if _te(conn, "sales_invoice") else None)
+    payload = {"billing_period": result}
+    if warning:
+        payload["warnings"] = [warning]
+    ok(payload)
 
 
 # =========================================================================
@@ -2556,6 +3269,9 @@ ACTIONS = {
     "create-billing-period": create_billing_period,
     "run-billing": run_billing,
     "generate-invoices": generate_invoices,
+    "sync-billing-period-status": sync_billing_period_status,
+    "link-billing-period-invoice": link_billing_period_invoice,
+    "unlink-billing-period-invoice": unlink_billing_period_invoice,
     "add-billing-adjustment": add_billing_adjustment,
     "list-billing-periods": list_billing_periods,
     "get-billing-period": get_billing_period,
@@ -2578,6 +3294,7 @@ def main():
     parser.add_argument("--billing-period-id")
     parser.add_argument("--customer-id")
     parser.add_argument("--company-id")
+    parser.add_argument("--invoice-id")
     parser.add_argument("--item-id")
     parser.add_argument("--serial-number-id")
     # Meter fields

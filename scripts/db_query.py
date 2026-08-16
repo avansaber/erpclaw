@@ -182,7 +182,7 @@ ACTION_MAP = {
     "delete-recurring-template": "erpclaw-journals",
     "journals-status": "erpclaw-journals",
 
-    # === Payments (14 actions) ===
+    # === Payments (15 actions) ===
     "add-payment": "erpclaw-payments",
     "update-payment": "erpclaw-payments",
     "get-payment": "erpclaw-payments",
@@ -191,6 +191,7 @@ ACTION_MAP = {
     "cancel-payment": "erpclaw-payments",
     "delete-payment": "erpclaw-payments",
     "create-payment-ledger-entry": "erpclaw-payments",
+    "write-off-invoice": "erpclaw-payments",
     "get-outstanding": "erpclaw-payments",
     "get-unallocated-payments": "erpclaw-payments",
     "allocate-payment": "erpclaw-payments",
@@ -370,6 +371,9 @@ ACTION_MAP = {
     "list-stock-entries": "erpclaw-inventory",
     "submit-stock-entry": "erpclaw-inventory",
     "cancel-stock-entry": "erpclaw-inventory",
+    # RETIRED (M103, 2026-08-13) but routable on purpose: both answer with a
+    # steer to the stock-entry flow and write nothing. See the retirement block
+    # in erpclaw-inventory/db_query.py.
     "create-stock-ledger-entries": "erpclaw-inventory",
     "reverse-stock-ledger-entries": "erpclaw-inventory",
     "get-stock-balance": "erpclaw-inventory",
@@ -438,6 +442,9 @@ ACTION_MAP = {
     "create-billing-period": "erpclaw-billing",
     "run-billing": "erpclaw-billing",
     "generate-invoices": "erpclaw-billing",
+    "sync-billing-period-status": "erpclaw-billing",
+    "link-billing-period-invoice": "erpclaw-billing",
+    "unlink-billing-period-invoice": "erpclaw-billing",
     "add-billing-adjustment": "erpclaw-billing",
     "list-billing-periods": "erpclaw-billing",
     "get-billing-period": "erpclaw-billing",
@@ -502,6 +509,9 @@ ACTION_MAP = {
     "add-currency-translation": "erpclaw-accounting-adv",
     "consolidation-trial-balance-report": "erpclaw-accounting-adv",
     "consolidation-summary": "erpclaw-accounting-adv",
+    # M114: surface + correct the pre-M95 elimination-duplication surplus.
+    "list-elimination-surplus": "erpclaw-accounting-adv",
+    "remove-elimination-surplus": "erpclaw-accounting-adv",
 
     # === Advanced Accounting — Reports (1 action) ===
     "standards-compliance-dashboard": "erpclaw-accounting-adv",
@@ -746,10 +756,24 @@ DANGEROUS_ACTIONS = frozenset({
     "delete-recurring-template",
     # Payments
     "submit-payment", "cancel-payment", "delete-payment",
+    # Bad-debt write-off (Wave G F17). Posts GL and permanently forgives a
+    # receivable — the transaction-class definition exactly (ADR-0018 dec. 1:
+    # everything gated that is not one of the five ratified destructive actions
+    # is transaction-class, so the agent may pass the flag on a clear request
+    # without re-asking). Gating them closes a real asymmetry: submitting the
+    # invoice is gated and cancelling it — the only undo — is gated, while
+    # forgiving the same debt was not. `legal-write-off-invoice` is listed with
+    # it because the two are one operation across the delegation hop.
+    "write-off-invoice", "legal-write-off-invoice",
     # Tax
     "delete-tax-template",
-    # Reports / consolidation that mutate
-    "run-elimination", "run-consolidation",
+    # Reports / consolidation that mutate. `run-elimination` left this set when
+    # it was retired (M63-C): it writes nothing now, and a confirmation prompt in
+    # front of a steer message is friction with no decision behind it.
+    "run-consolidation",
+    # M114: deletes consolidation-layer elimination rows (audited, report-only
+    # until --confirm) — financial-mutation class, gated like its siblings.
+    "remove-elimination-surplus",
     # Selling lifecycle
     "submit-quotation", "submit-sales-order", "cancel-sales-order",
     "submit-delivery-note", "cancel-delivery-note",

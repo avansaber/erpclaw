@@ -29,9 +29,11 @@ _IN_TREE_LIB = os.path.abspath(
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                  "..", "erpclaw-setup", "lib"))
 ERPCLAW_LIB = (_IN_TREE_LIB if os.path.isdir(os.path.join(_IN_TREE_LIB, "erpclaw_lib"))
-               else os.path.expanduser("~/.openclaw/erpclaw/lib"))
+               else os.path.join(os.path.expanduser(
+                   os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
 if ERPCLAW_LIB not in sys.path:
-    sys.path.insert(0, ERPCLAW_LIB)
+    if importlib.util.find_spec("erpclaw_lib") is None:
+        sys.path.insert(0, ERPCLAW_LIB)
 
 from erpclaw_lib.db import setup_pragmas
 

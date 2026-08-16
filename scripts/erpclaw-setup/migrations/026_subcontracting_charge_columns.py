@@ -24,6 +24,10 @@ import argparse
 import os
 import sqlite3
 
+# M102: adds tables / columns / indexes only — nothing a row held before this
+# run is different afterwards.
+MIGRATION_DATA_CLASS = "none"
+
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "data.sqlite")
 
 # (table, column). Nullable, no DEFAULT, plain TEXT (Decimal-as-text fee /

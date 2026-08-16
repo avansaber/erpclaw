@@ -10,7 +10,9 @@ from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
 try:
-    sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
+    import importlib.util
+    if importlib.util.find_spec("erpclaw_lib") is None:
+        sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
@@ -205,6 +207,75 @@ def run_consolidation(conn, args):
 # ===========================================================================
 # 5. generate-elimination-entries
 # ===========================================================================
+#
+# Re-running this is a normal thing to do (M95). A controller posts more
+# intercompany activity into an open period and generates again; an agent
+# following the M63-C steer arrives here having no idea whether the flow was run
+# before. So generation must be a function of what is NOT yet eliminated, never
+# a blind insert of everything posted.
+#
+# The unit of "already eliminated" is (group, period, source transaction), which
+# is why the row carries source_ic_transaction_id. Coarser keys were measured and
+# rejected in planning/simlogs/m95_SIM_2026-08-12.md §1: a (group, period) key
+# cannot let new activity through, and any key derived from the row's CONTENT
+# collapses two real transactions of the same shape (same from/to/type/amount
+# produces byte-identical rows) and silently under-eliminates.
+#
+# Skip, not supersede: a posted IC transaction is immutable in practice
+# (update-ic-transaction refuses anything past pending_approval, and there is no
+# un-post), so an elimination derived from one can never go stale.
+
+_SOURCE_LINK = "source_ic_transaction_id"
+_SOURCE_INDEX = "uq_advacct_ee_source"
+
+
+def _already_eliminated(conn, group_id, period_date):
+    """Source transaction ids already eliminated for this group and period.
+
+    An install running new code against a pre-M95 schema would otherwise
+    duplicate silently, which is the exact defect this is fixing, so the missing
+    column is turned into a directed instruction rather than a raw SQL error.
+
+    EVERY OTHER FAILURE IS RE-RAISED, and that `raise` is load-bearing rather
+    than tidy: this function's answer is the set of things NOT to do again, so a
+    swallowed error returning an empty set would mean "nothing is eliminated
+    yet" and re-create the duplicate this whole item exists to remove — from a
+    locked database, or any other transient fault. Pinned by
+    test_a_database_failure_that_is_not_the_column_is_never_swallowed.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT source_ic_transaction_id FROM advacct_elimination_entry "
+            "WHERE group_id = ? AND period_date = ? "
+            "  AND source_ic_transaction_id IS NOT NULL",
+            (group_id, period_date)
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001 - re-raised unless it is the column
+        if _SOURCE_LINK in str(exc):
+            err(f"This install's advacct_elimination_entry has no {_SOURCE_LINK} "
+                "column, so elimination generation cannot tell new intercompany "
+                "activity from activity it already eliminated.",
+                suggestion="Run the foundation migrations first: "
+                           "erpclaw-setup db_query.py --action migrate")
+        raise
+    return {r[0] for r in rows}
+
+
+def _is_duplicate_source(exc):
+    """Whether `exc` is the (group, period, source) uniqueness backstop firing.
+
+    Read from the MESSAGE, because neither driver gives this constraint a class
+    of its own and the two describe it differently: SQLite names the columns
+    ("UNIQUE constraint failed: advacct_elimination_entry.group_id, ...") while
+    PostgreSQL names the index ("duplicate key value violates unique constraint
+    \"uq_advacct_ee_source\""). Requiring the column or the index name as well as
+    the word keeps some OTHER uniqueness rule on this table from being reported
+    as this one.
+    """
+    text = str(exc).lower()
+    return "unique" in text and (_SOURCE_LINK in text or _SOURCE_INDEX in text)
+
+
 def generate_elimination_entries(conn, args):
     group_id = getattr(args, "group_id", None)
     _validate_group(conn, group_id)
@@ -233,36 +304,87 @@ def generate_elimination_entries(conn, args):
         WHERE ic_status = 'posted'
           AND from_company_id IN ({placeholders})
           AND to_company_id IN ({placeholders})
+        ORDER BY created_at, id
     """, entity_company_ids + entity_company_ids).fetchall()
 
-    entries_created = 0
+    already = _already_eliminated(conn, group_id, period_date)
+    created_ids, skipped_ids = [], []
     now = _now_iso()
 
     for ic_row in ic_rows:
         ic = row_to_dict(ic_row)
-        amount = ic["amount"]
+        if ic["id"] in already:
+            skipped_ids.append(ic["id"])
+            continue
 
         # Create elimination entry (debit IC revenue, credit IC expense)
-        conn.execute("""
-            INSERT INTO advacct_elimination_entry (
-                id, group_id, period_date, debit_account, credit_account,
-                amount, description, entry_type, company_id, created_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?)
-        """, (
-            str(uuid.uuid4()), group_id, period_date,
-            "IC Revenue", "IC Expense",
-            amount,
-            f"Elimination: {ic['transaction_type']} from {ic['from_company_id']} to {ic['to_company_id']}",
-            "ic_elimination", company_id, now,
-        ))
-        entries_created += 1
+        try:
+            conn.execute("""
+                INSERT INTO advacct_elimination_entry (
+                    id, group_id, period_date, debit_account, credit_account,
+                    amount, description, entry_type, source_ic_transaction_id,
+                    company_id, created_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                str(uuid.uuid4()), group_id, period_date,
+                "IC Revenue", "IC Expense",
+                ic["amount"],
+                f"Elimination: {ic['transaction_type']} from {ic['from_company_id']} to {ic['to_company_id']}",
+                "ic_elimination", ic["id"], company_id, now,
+            ))
+        except Exception as exc:  # noqa: BLE001 - re-raised unless it is the backstop
+            # The check above and this INSERT are not one atomic step, so a
+            # second generator can commit between them. The index catches that
+            # (it is there for exactly this), but a raw driver string about a
+            # failed UNIQUE constraint tells neither an operator nor an agent
+            # that the data is fine and a re-run finishes the job.
+            if not _is_duplicate_source(exc):
+                raise
+            conn.rollback()
+            err(f"Intercompany transaction {ic['id']} was eliminated for this "
+                f"group and {period_date} by another writer between this run's "
+                "check and its write, so this run wrote nothing at all.",
+                suggestion="Re-run generate-elimination-entries: it eliminates "
+                           "only what is still missing, so it will skip whatever "
+                           "the other run created and finish the rest.")
+        created_ids.append(ic["id"])
+
+    # Three outcomes, not two. "Nothing happened" splits into "everything was
+    # already eliminated" and "there was never anything to eliminate", and a
+    # caller that cannot tell them apart tells a user the work is done when the
+    # real answer is that they never posted their transaction.
+    if created_ids:
+        outcome = "created"
+        message = (f"Eliminated {len(created_ids)} posted intercompany "
+                   f"transaction(s) for {period_date}")
+        message += (f"; {len(skipped_ids)} were already eliminated."
+                    if skipped_ids else ".")
+    elif skipped_ids:
+        outcome = "already_eliminated"
+        message = (f"No new intercompany activity for this group and period; "
+                   f"{len(skipped_ids)} posted transaction(s) were already "
+                   f"eliminated. Nothing was written.")
+    else:
+        outcome = "nothing_to_eliminate"
+        message = ("No posted intercompany transactions between this group's "
+                   "entities, so there is nothing to eliminate. Only "
+                   "transactions in ic_status 'posted' are eliminated: "
+                   "add-ic-transaction -> approve-ic-transaction -> "
+                   "post-ic-transaction.")
 
     audit(conn, SKILL, "generate-elimination-entries", "advacct_elimination_entry", group_id,
-          new_values={"period_date": period_date, "entries_created": entries_created})
+          new_values={"period_date": period_date, "entries_created": len(created_ids),
+                      "entries_skipped": len(skipped_ids), "outcome": outcome})
     conn.commit()
     ok({
         "group_id": group_id, "period_date": period_date,
-        "entries_created": entries_created,
+        "entries_created": len(created_ids),
+        "entries_skipped": len(skipped_ids),
+        # Ids, not just counts: a count cannot be checked against the books.
+        "eliminated_ic_transaction_ids": created_ids,
+        "skipped_ic_transaction_ids": skipped_ids,
+        "outcome": outcome,
+        "message": message,
     })
 
 
@@ -342,6 +464,20 @@ def consolidation_trial_balance_report(conn, args):
         Decimal(row_to_dict(e)["amount"]) for e in elim_entries
     )
 
+    # M114: the duplication surplus is DECIDABLE and must be visible where the
+    # operator reads the number it inflates — not an unlabelled null per row.
+    surplus_rows, surplus_total = _surplus_rows(conn, group_id, period_date)
+    unlinked = {
+        "count": len(surplus_rows),
+        "total_amount": str(surplus_total),
+    }
+    if surplus_rows:
+        unlinked["warning"] = (
+            "these ic_elimination rows have no source intercompany "
+            "transaction (pre-M95 duplication residue) and INFLATE "
+            "total_eliminations. Review with list-elimination-surplus; "
+            "correct with remove-elimination-surplus.")
+
     ok({
         "report": "consolidation_trial_balance",
         "group_id": group_id, "group_name": group["name"],
@@ -349,6 +485,7 @@ def consolidation_trial_balance_report(conn, args):
         "entities": [row_to_dict(e) for e in entities],
         "elimination_entries": [row_to_dict(e) for e in elim_entries],
         "total_eliminations": str(total_eliminations),
+        "unlinked_ic_eliminations": unlinked,
         "entity_count": len(entities),
     })
 
@@ -392,6 +529,147 @@ def consolidation_summary(conn, args):
     })
 
 
+# ===========================================================================
+# 9/10. list-elimination-surplus / remove-elimination-surplus (M114)
+#
+# An install that ran the pre-M95 elimination-duplication defect holds surplus
+# `ic_elimination` rows that overstate the consolidated trial balance forever
+# (measured: 79,150.00 reported where 29,150.00 is true). Migration 036 linked
+# every row it could to its source intercompany transaction and deliberately
+# left the surplus unlinked, so the residue is a DECIDABLE predicate:
+#
+#     entry_type = 'ic_elimination' AND source_ic_transaction_id IS NULL
+#
+# No product path writes a manual `ic_elimination` row and there is no
+# delete-ic-transaction, so a false positive cannot arise through the product.
+# `currency_translation` rows are legitimately unlinked (hand-authored, derived
+# from nothing) and are NEVER matched by the predicate.
+#
+# The correction is an OPERATOR ACTION, not a migration — the M63-C precedent
+# bars silent migration deletion of operator data; a gated, operator-invoked,
+# fully audited removal is the consented opposite. These rows live in the
+# consolidation layer only (init_schema's own note: group elimination never
+# reaches `gl_entry`), so the immutable-GL rules are untouched.
+#
+# Plan home: planning/pending_items.md M114 (Nik go 2026-08-14);
+# SIM: planning/simlogs/m114_SIM_2026-08-14.md.
+# ===========================================================================
+
+_SURPLUS_WHERE = ("entry_type = 'ic_elimination' "
+                  "AND source_ic_transaction_id IS NULL")
+
+
+def _surplus_rows(conn, group_id, period_date=None):
+    where, params = [f"group_id = ?", ], [group_id]
+    if period_date:
+        where.append("period_date = ?")
+        params.append(period_date)
+    rows = conn.execute(
+        f"SELECT * FROM advacct_elimination_entry "
+        f"WHERE {' AND '.join(where)} AND {_SURPLUS_WHERE} "
+        f"ORDER BY period_date, created_at",
+        params
+    ).fetchall()
+    dicts = [row_to_dict(r) for r in rows]
+    total = sum((Decimal(d["amount"]) for d in dicts), Decimal("0"))
+    return dicts, total
+
+
+def _require_source_link_column(args):
+    """Refuse with a steer when migration 036 has not run on this install.
+
+    Without the source link the predicate cannot distinguish surplus from
+    legitimate rows, and guessing would remove an operator's real eliminations.
+    Catalog question through the seam (ADR-0034), never a raw driver-side read.
+    """
+    from erpclaw_lib import seam
+    cols = seam.column_names("advacct_elimination_entry",
+                             getattr(args, "db_path", None))
+    if "source_ic_transaction_id" not in cols:
+        err(
+            "this install has not run foundation migration 036, so elimination "
+            "entries carry no source link and the surplus cannot be identified "
+            "safely.",
+            suggestion="Run the foundation update first (module_manager "
+                       "update-foundation applies migration 036), then re-run "
+                       "this action.",
+        )
+
+
+def list_elimination_surplus(conn, args):
+    """Read-only: the unlinked ic_elimination rows for a group (M114 surface)."""
+    group_id = getattr(args, "group_id", None)
+    _validate_group(conn, group_id)
+    _require_source_link_column(args)
+    period_date = getattr(args, "period_date", None)
+
+    rows, total = _surplus_rows(conn, group_id, period_date)
+    ok({
+        "group_id": group_id,
+        "period_date": period_date,
+        "surplus_count": len(rows),
+        "surplus_total": str(total),
+        "rows": rows,
+        "note": ("these ic_elimination rows have no source intercompany "
+                 "transaction — the pre-M95 duplication residue. They inflate "
+                 "total_eliminations in the consolidated trial balance. "
+                 "remove-elimination-surplus corrects them (report-only until "
+                 "--confirm)." if rows else
+                 "no surplus — every ic_elimination row is linked to its "
+                 "source intercompany transaction."),
+    })
+
+
+def remove_elimination_surplus(conn, args):
+    """Gated correction: delete the decidable surplus, audited row by row.
+
+    Default is REPORT-ONLY (the migration-031 lesson: anything that changes an
+    operator's numbers is previewable through the action a human runs). With
+    --confirm, every deletion writes its own audit_log row carrying the full
+    old row, in the SAME transaction as the delete — no removed row without its
+    audit record, no audit record for a rollback.
+    """
+    group_id = getattr(args, "group_id", None)
+    _validate_group(conn, group_id)
+    _require_source_link_column(args)
+    period_date = getattr(args, "period_date", None)
+
+    rows, total = _surplus_rows(conn, group_id, period_date)
+    if not rows:
+        ok({"group_id": group_id, "removed": 0, "surplus_total": "0",
+            "note": "no surplus to remove — every ic_elimination row is "
+                    "linked to its source transaction."})
+
+    if not getattr(args, "confirm", False):
+        ok({
+            "group_id": group_id, "period_date": period_date,
+            "report_only": True, "would_remove": len(rows),
+            "surplus_total": str(total), "rows": rows,
+            "note": "report-only: nothing was removed. Re-run with --confirm "
+                    "to delete exactly these rows; each deletion is audited "
+                    "with the full removed row.",
+        })
+
+    for d in rows:
+        audit(conn, "erpclaw-accounting-adv", "remove-elimination-surplus",
+              "advacct_elimination_entry", d["id"],
+              old_values=d,
+              new_values={"removed": True, "reason": "M114 surplus — "
+                          "unlinked ic_elimination (pre-M95 duplication)"})
+        conn.execute(
+            f"DELETE FROM advacct_elimination_entry "
+            f"WHERE id = ? AND {_SURPLUS_WHERE}",
+            (d["id"],))
+    conn.commit()
+    ok({
+        "group_id": group_id, "period_date": period_date,
+        "removed": len(rows), "surplus_total_removed": str(total),
+        "note": "the consolidated trial balance for this group no longer "
+                "carries the duplication surplus. Each removed row is in the "
+                "audit log with its full contents.",
+    })
+
+
 # ---------------------------------------------------------------------------
 # Action registry
 # ---------------------------------------------------------------------------
@@ -404,4 +682,6 @@ ACTIONS = {
     "add-currency-translation": add_currency_translation,
     "consolidation-trial-balance-report": consolidation_trial_balance_report,
     "consolidation-summary": consolidation_summary,
+    "list-elimination-surplus": list_elimination_surplus,
+    "remove-elimination-surplus": remove_elimination_surplus,
 }

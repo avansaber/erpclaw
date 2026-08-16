@@ -21,7 +21,9 @@ from decimal import Decimal, InvalidOperation
 
 # Add shared lib to path
 try:
-    sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
+    import importlib.util
+    if importlib.util.find_spec("erpclaw_lib") is None:
+        sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
     from erpclaw_lib.db import get_connection, ensure_db_exists, DEFAULT_DB_PATH
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.validation import check_input_lengths
@@ -3203,6 +3205,16 @@ def cancel_sales_invoice(conn, args):
         except ValueError:
             reversal_sle_ids = []
 
+    # Release the payment allocations this cancel voids (M46/F1). Cash applied
+    # to a document that no longer exists in the books is not applied cash: the
+    # allocation is delinked, its per-allocation PLE rows are closed out, and
+    # the payment's residual comes back. Executed by the neutral clearing lib —
+    # the same lib that performs the mirror operation when a PAYMENT is
+    # cancelled — so selling never writes payments' tables itself.
+    from erpclaw_lib.payment_clearing import release_allocations_on_document
+    release = release_allocations_on_document(
+        conn, cancel_voucher_type, args.sales_invoice_id)
+
     # Mark PLE as delinked
     ple_uq = (Q.update(_t_payment_ledger)
               .set("delinked", 1)
@@ -3241,9 +3253,27 @@ def cancel_sales_invoice(conn, args):
     audit(conn, "erpclaw-selling", "cancel-sales-invoice", "sales_invoice", args.sales_invoice_id,
            new_values={"reversed": True})
     conn.commit()
-    ok({"sales_invoice_id": args.sales_invoice_id, "status": "cancelled",
-         "gl_reversals": len(reversal_gl_ids),
-         "sle_reversals": len(reversal_sle_ids)})
+    payload = {"sales_invoice_id": args.sales_invoice_id, "status": "cancelled",
+               "gl_reversals": len(reversal_gl_ids),
+               "sle_reversals": len(reversal_sle_ids)}
+    # Reported only when something was actually released or skipped, so the
+    # no-allocation cancel keeps its exact shipped payload (F1 pin 4).
+    _merge_release_result(payload, release)
+    ok(payload)
+
+
+def _merge_release_result(payload, release, prefix=""):
+    """Surface an allocation release on the cancelling action's response.
+
+    Silent when nothing was released or skipped. A SKIP is never dropped: an
+    allocation left standing because its payment is not submitted (correction
+    C2) is reported with the payment id and status so the operator can see why
+    the residual did not move.
+    """
+    if release.get("released"):
+        payload[f"{prefix}allocations_released"] = release["released"]
+    if release.get("skipped"):
+        payload[f"{prefix}allocations_release_skipped"] = release["skipped"]
 
 
 # ---------------------------------------------------------------------------
@@ -4861,6 +4891,8 @@ def cancel_intercompany_invoice(conn, args):
     si_status = si["status"]
     si_gl_reversals = 0
     si_sle_reversals = 0
+    si_release = {}
+    pi_release = {}
     if si_status in ("submitted", "overdue", "partially_paid"):
         voucher_type = "credit_note" if si["is_return"] else "sales_invoice"
 
@@ -4878,6 +4910,11 @@ def cancel_intercompany_invoice(conn, args):
                 si_sle_reversals = len(rev_sle)
             except ValueError:
                 pass
+
+        # Release the allocations this cancel voids (M46/F1) — same rule and
+        # same shared lib as cancel-sales-invoice.
+        from erpclaw_lib.payment_clearing import release_allocations_on_document
+        si_release = release_allocations_on_document(conn, voucher_type, si_id)
 
         # Mark PLE as delinked
         ple_uq = (Q.update(_t_payment_ledger)
@@ -4917,6 +4954,11 @@ def cancel_intercompany_invoice(conn, args):
                 rev_pi_sle = reverse_sle_entries(conn, pi_voucher, pi_id, pi_posting)
                 pi_sle_reversals = len(rev_pi_sle)
 
+            # Release the mirror bill's allocations too (M46/F1).
+            from erpclaw_lib.payment_clearing import (
+                release_allocations_on_document as _release_pi)
+            pi_release = _release_pi(conn, pi_voucher, pi_id)
+
             # Mark PI PLE as delinked
             pi_ple_uq = (Q.update(_t_payment_ledger)
                          .set("delinked", 1)
@@ -4940,7 +4982,7 @@ def cancel_intercompany_invoice(conn, args):
             conn.execute(dq2.get_sql(), (pi_id,))
 
     conn.commit()
-    ok({
+    payload = {
         "sales_invoice_id": si_id,
         "purchase_invoice_id": pi_id,
         "si_status": "cancelled",
@@ -4948,7 +4990,10 @@ def cancel_intercompany_invoice(conn, args):
         "si_sle_reversals": si_sle_reversals,
         "pi_gl_reversals": pi_gl_reversals,
         "pi_sle_reversals": pi_sle_reversals,
-    })
+    }
+    _merge_release_result(payload, si_release, prefix="si_")
+    _merge_release_result(payload, pi_release, prefix="pi_")
+    ok(payload)
 
 
 # ---------------------------------------------------------------------------

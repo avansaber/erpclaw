@@ -23,6 +23,11 @@ import argparse
 import os
 import sqlite3
 
+# M102: drops table(s) this migration asserts are dead surface. Rows in a
+# dropped table are gone, so there is no per-row trail to write; the emptiness
+# claim itself is unverified and tracked as its own row.
+MIGRATION_DATA_CLASS = "table-drop"
+
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "data.sqlite")
 
 # children/referencing tables first

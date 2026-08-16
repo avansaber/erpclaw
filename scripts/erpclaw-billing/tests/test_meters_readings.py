@@ -200,3 +200,46 @@ class TestListMeterReadings:
         ))
         assert is_ok(result)
         assert result["total_count"] >= 1
+
+
+class TestEstimatedReasonWiring:
+    """F19: estimated_reason was a dead column (schema-declared, never written)
+    though reading_type='estimated' is live. It is now wired into add-meter-reading."""
+
+    def _meter(self, conn, env):
+        m = call_action(mod.add_meter, conn, ns(
+            customer_id=env["customer"], meter_type="electricity",
+            name="Est Meter", address=None,
+            rate_plan_id=None, install_date=None, unit="kWh",
+        ))
+        return m["meter"]["id"]
+
+    def test_estimated_reason_persisted(self, conn, env):
+        meter_id = self._meter(conn, env)
+        result = call_action(mod.add_meter_reading, conn, ns(
+            meter_id=meter_id, reading_date="2026-06-01",
+            reading_value="100", reading_type="estimated", source=None,
+            uom=None, estimated_reason="meter inaccessible",
+        ))
+        assert is_ok(result)
+        assert result["reading"]["reading_type"] == "estimated"
+        assert result["reading"]["estimated_reason"] == "meter inaccessible"
+
+    def test_estimated_reason_rejected_for_non_estimated(self, conn, env):
+        meter_id = self._meter(conn, env)
+        result = call_action(mod.add_meter_reading, conn, ns(
+            meter_id=meter_id, reading_date="2026-06-01",
+            reading_value="100", reading_type="actual", source=None,
+            uom=None, estimated_reason="should not be allowed",
+        ))
+        assert is_error(result)
+
+    def test_actual_reading_leaves_estimated_reason_null(self, conn, env):
+        meter_id = self._meter(conn, env)
+        result = call_action(mod.add_meter_reading, conn, ns(
+            meter_id=meter_id, reading_date="2026-06-01",
+            reading_value="100", reading_type=None, source=None,
+            uom=None, estimated_reason=None,
+        ))
+        assert is_ok(result)
+        assert result["reading"]["estimated_reason"] is None

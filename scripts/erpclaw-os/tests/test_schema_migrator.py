@@ -15,10 +15,24 @@ import pytest
 # Add erpclaw-os directory to path
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 OS_DIR = os.path.dirname(SCRIPT_DIR)
+# The foundation's erpclaw-setup/, used only to bind erpclaw_lib to the tree
+# under test (M54).
+SETUP_DIR = os.path.join(os.path.dirname(os.path.dirname(SCRIPT_DIR)), "erpclaw-setup")
 if OS_DIR not in sys.path:
     sys.path.insert(0, OS_DIR)
 
-sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
+import importlib.util
+# M54: bind erpclaw_lib to the tree under test, never the deployed
+# ~/.openclaw/erpclaw/lib symlink — the last install to run wins that symlink,
+# so with several worktrees in flight it resolves to a tree nobody is testing
+# (and DANGLES once that worktree is removed). The deployed install stays as
+# the fallback for a published module repo, which ships no source/erpclaw/.
+_IN_TREE_LIB = os.path.join(SETUP_DIR, "lib")
+_ERPCLAW_LIB = (_IN_TREE_LIB if os.path.isdir(os.path.join(_IN_TREE_LIB, "erpclaw_lib"))
+                else os.path.join(os.path.expanduser(
+                    os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
+if importlib.util.find_spec("erpclaw_lib") is None:
+    sys.path.insert(0, _ERPCLAW_LIB)
 from erpclaw_lib.db import setup_pragmas
 
 from schema_diff import (

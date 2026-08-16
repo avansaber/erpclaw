@@ -15,6 +15,10 @@ import argparse
 import os
 import sqlite3
 
+# M102: backfills a column it adds in the same run — nothing a row held before
+# this run is different afterwards.
+MIGRATION_DATA_CLASS = "none"
+
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "data.sqlite")
 
 _TABLE = "asset_maintenance"

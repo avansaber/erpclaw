@@ -17,6 +17,7 @@ Usage:
 """
 
 import os
+import re
 import sys
 import sqlite3
 import argparse
@@ -24,6 +25,42 @@ from pathlib import Path
 
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "data.sqlite")
+
+
+# ---------------------------------------------------------------------------
+# Credential redaction for anything this module prints (Wave G F11)
+# ---------------------------------------------------------------------------
+# On PostgreSQL, `db_path` IS the connection URL (erpclaw_lib.db resolves
+# postgresql://user:password@host/db), so every message that interpolated it
+# printed the database password verbatim to stderr — straight into terminal
+# scrollback, CI logs, and any captured install transcript. Nothing here may
+# print a raw URL again; run it through redact_db_url first. The SQLite prints
+# are filesystem paths and pass through unchanged.
+
+# scheme://user:password@host — non-greedy on the user segment so a password
+# containing ':' is masked whole rather than half-printed.
+_URL_CREDENTIALS_RE = re.compile(r"\b([a-zA-Z][a-zA-Z0-9+.\-]*://)([^/@\s]*?:)([^/@\s]*)(@)")
+# key/value DSN + URL query form: password=secret
+_PASSWORD_PARAM_RE = re.compile(r"(?i)\b(password\s*=\s*)([^&\s]+)")
+
+
+def redact_db_url(value) -> str:
+    """Mask the credential segment of a connection URL/DSN before printing.
+
+    Public because ``erpclaw-setup/db_query.py`` echoes the same ``db_path`` in
+    ``initialize-database``'s JSON response, which is the same leak on the same
+    branch; both callers must use one redactor, not two spellings of it.
+
+    Applied to the URL itself AND to any exception text built from it, so a
+    driver message that echoes the connection string cannot leak the password
+    either. Everything except the credential is preserved on purpose: an
+    operator still needs the host, port, user and database name to act on the
+    message. A filesystem path (SQLite) contains no credential pattern and is
+    returned unchanged.
+    """
+    text = str(value)
+    text = _URL_CREDENTIALS_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}***{m.group(4)}", text)
+    return _PASSWORD_PARAM_RE.sub(lambda m: f"{m.group(1)}***", text)
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +315,12 @@ CREATE INDEX IF NOT EXISTS idx_role_permission_skill ON role_permission(skill);
 # SKILL: erpclaw-gl
 # Tables: account, gl_entry, fiscal_year, period_closing_voucher,
 #         cost_center, budget, naming_series
-# NOTE: elimination_rule, elimination_entry moved to erpclaw-growth
+# NOTE: elimination_rule, elimination_entry moved to erpclaw-growth and were then
+#       RETIRED there (M63-C, 2026-08-12) — group elimination lives in the
+#       consolidation layer (advacct_elimination_entry), never in gl_entry.
+#       erpclaw-growth migration 007 drops them from existing installs. The
+#       'elimination_entry' voucher type below stays registered on purpose: it
+#       labels ledger rows the legacy engine already posted.
 # ---------------------------------------------------------------------------
 
 GL_TABLES = """
@@ -585,6 +627,12 @@ CREATE TABLE IF NOT EXISTS payment_allocation (
     voucher_id      TEXT NOT NULL,
     allocated_amount TEXT NOT NULL DEFAULT '0',
     exchange_gain_loss TEXT NOT NULL DEFAULT '0',
+    -- M46/F1: cancelling the allocated document RELEASES the allocation instead
+    -- of leaving cash applied to a document that no longer exists in the books.
+    -- Same vocabulary payment_ledger_entry.delinked already uses: the row stays
+    -- for audit and drops out of every aggregation. Added to existing DBs by
+    -- migration 031.
+    delinked        INTEGER NOT NULL DEFAULT 0 CHECK(delinked IN (0,1)),
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -596,7 +644,12 @@ CREATE TABLE IF NOT EXISTS payment_deduction (
     payment_entry_id TEXT NOT NULL REFERENCES payment_entry(id) ON DELETE RESTRICT,
     account_id      TEXT NOT NULL REFERENCES account(id) ON DELETE RESTRICT,
     amount          TEXT NOT NULL DEFAULT '0',
-    type            TEXT NOT NULL CHECK(type IN ('tds','commission','early_payment_discount','other')),
+    -- 'write_off' (Wave G F17b, migration 034): the residual a customer never
+    -- pays, taken AT PAYMENT TIME against real cash (950.00 wire on a 1,000.00
+    -- invoice, 50.00 written off). The no-cash, standalone write-off is NOT
+    -- here — it has its own primitive, write-off-invoice (F17a), because a
+    -- deduction without a payment_entry is not representable on this table.
+    type            TEXT NOT NULL CHECK(type IN ('tds','commission','early_payment_discount','write_off','other')),
     description     TEXT,
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -3918,6 +3971,14 @@ CREATE TABLE IF NOT EXISTS advacct_elimination_entry (
     description         TEXT,
     entry_type          TEXT NOT NULL DEFAULT 'ic_elimination'
                         CHECK(entry_type IN ('ic_elimination','minority_interest','currency_translation','goodwill')),
+    -- M95: the intercompany transaction this elimination was DERIVED from, so
+    -- generate-elimination-entries can tell "already eliminated" from "new
+    -- activity" and is safe to re-run. Without it the row records only
+    -- type/from/to in its description, and two legitimately distinct IC
+    -- transactions of the same shape are indistinguishable. NULL for entries
+    -- nobody derived (add-currency-translation) and for rows written before
+    -- M95; added to existing DBs by migration 036.
+    source_ic_transaction_id TEXT REFERENCES advacct_ic_transaction(id),
     company_id          TEXT NOT NULL REFERENCES company(id),
     created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -3926,6 +3987,20 @@ CREATE INDEX IF NOT EXISTS idx_advacct_ee_group ON advacct_elimination_entry(gro
 CREATE INDEX IF NOT EXISTS idx_advacct_ee_period ON advacct_elimination_entry(period_date);
 CREATE INDEX IF NOT EXISTS idx_advacct_ee_type ON advacct_elimination_entry(entry_type);
 CREATE INDEX IF NOT EXISTS idx_advacct_ee_company ON advacct_elimination_entry(company_id);
+
+-- M95: one elimination per (group, period, source transaction). The application
+-- checks before inserting; this is the backstop for two generators running at
+-- once. Partial on purpose -- a manual currency-translation entry carries no
+-- source and must stay repeatable, so it sits VISIBLY outside the constraint
+-- rather than relying on NULL-distinctness. Same shape erpclaw-growth's CRM
+-- uniqueness uses; valid on SQLite and PostgreSQL alike. Migration 036 creates
+-- an index of this name, key and predicate on existing installs -- semantically
+-- the same object, differing from this text in whitespace only, and reached
+-- there by ALTER TABLE ADD COLUMN, which appends rather than declaring the
+-- column here at ordinal 9. Migration 036's docstring holds the measurement.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_advacct_ee_source
+    ON advacct_elimination_entry(group_id, period_date, source_ic_transaction_id)
+    WHERE source_ic_transaction_id IS NOT NULL;
 """
 
 
@@ -4354,8 +4429,9 @@ ALL_DDL_BLOCKS = [
 # Canonical account_type_registry seed (M0, 2026-05-30). Sources account_type
 # validity now that the hardcoded CHECK on account.account_type is dropped. Mirror
 # of migration 001's 21 types + the 3 Wave-1 prerequisites (capital_work_in_progress
-# for S3, goodwill for L1, revaluation_reserve for M7). Kept in sync with
-# migration 003. Idempotent seed via init_db() (fresh installs) + seed-registry-defaults.
+# for S3, goodwill for L1, revaluation_reserve for M7) + disposal_gain_loss (M94).
+# Kept in sync with migration 003 (the first 24) and migration 035 (the 25th).
+# Idempotent seed via init_db() (fresh installs) + seed-registry-defaults.
 ACCOUNT_TYPE_REGISTRY_SEED = [
     ("bank", "erpclaw-gl", "Bank"),
     ("cash", "erpclaw-gl", "Cash"),
@@ -4381,6 +4457,15 @@ ACCOUNT_TYPE_REGISTRY_SEED = [
     ("capital_work_in_progress", "erpclaw-assets", "Capital Work in Progress"),
     ("goodwill", "erpclaw-accounting-adv", "Goodwill"),
     ("revaluation_reserve", "erpclaw-assets", "Revaluation Reserve"),
+    # M94 (2026-08-12): the gain or loss recognized when a fixed asset leaves the
+    # books. Without it the shipped chart typed "Gain on Asset Disposal" exactly
+    # like "Sales Revenue" and "Loss on Asset Disposal" exactly like "Rent
+    # Expense", so dispose-asset's gain/loss gate could exclude other machinery
+    # but could not pin the disposal line (M91 residual). One type covers both
+    # sides on purpose: the gate's root_type check already separates gain from
+    # loss, a single combined "Gain/(Loss) on Disposal" account is a legitimate
+    # chart, and exchange_gain_loss above is the same shape for the same reason.
+    ("disposal_gain_loss", "erpclaw-assets", "Disposal Gain/Loss"),
 ]
 
 # Canonical voucher_type_registry seed (M0 phase 2). Mirror of migration 001's
@@ -4589,10 +4674,20 @@ def _init_db_postgres(db_path: str) -> None:
     one call (the executescript analogue). ``datetime('now')`` is SQLite-only,
     so the schema_version stamp uses ``now()`` here. Verification counts come
     from ``information_schema`` rather than ``sqlite_master``.
+
+    On this branch ``db_path`` is the connection URL and therefore carries the
+    database password, so every message built from it is redacted (F11) — both
+    the success line and the connection-failure line, which keeps the host /
+    port / user / database context an operator needs and drops only the secret.
     """
     from erpclaw_lib.db import get_connection
 
-    conn = get_connection(db_path)  # PgConnectionWrapper: timeouts + decimal_sum set
+    safe_url = redact_db_url(db_path)
+    try:
+        conn = get_connection(db_path)  # PgConnectionWrapper: timeouts + decimal_sum set
+    except Exception as e:  # noqa: BLE001 — re-raised with redacted context
+        raise RuntimeError(
+            f"PostgreSQL connection failed for {safe_url}: {redact_db_url(e)}") from e
     try:
         for skill_name, ddl_sql in ALL_DDL_BLOCKS:
             conn.execute(ddl_sql)  # params=None → raw multi-statement DDL, no translation
@@ -4618,7 +4713,7 @@ def _init_db_postgres(db_path: str) -> None:
             "SELECT COUNT(*) FROM pg_indexes WHERE schemaname = 'public'"
         ).fetchone()[0]
 
-        print(f"ERPClaw database initialized successfully at: {db_path}", file=sys.stderr)
+        print(f"ERPClaw database initialized successfully at: {safe_url}", file=sys.stderr)
         print(f"  Tables created: {table_count}", file=sys.stderr)
         print(f"  Indexes created: {index_count}", file=sys.stderr)
         print(f"  Skills registered: {len(ALL_DDL_BLOCKS)}", file=sys.stderr)

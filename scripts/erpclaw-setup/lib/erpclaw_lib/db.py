@@ -76,7 +76,8 @@ def setup_pragmas(conn):
       (unlimited), but the statement is still issued per the cross-DB plan.
       Both are overridable via ``ERPCLAW_PG_LOCK_TIMEOUT`` /
       ``ERPCLAW_PG_STATEMENT_TIMEOUT``.
-    For MySQL: no equivalent needed (InnoDB handles these).
+    Supported backends are SQLite and PostgreSQL only (MySQL ruled out
+    2026-08-11 — see erpclaw_lib/query.py's SUPPORTED_DIALECTS note).
     """
     dialect = get_dialect()
     if dialect == "sqlite":
@@ -423,11 +424,43 @@ def get_connection(db_path=None):
     return ConnectionWrapper(conn)
 
 
+def _reject_url_shaped_path(path: str) -> None:
+    """Refuse a connection URL handed in where a filesystem path belongs.
+
+    This is not hypothetical tidiness. `ensure_db_exists` used to run
+    `os.makedirs` on whatever it was given, so a caller passing
+    `postgresql://user:secret@host/db` created a DIRECTORY TREE NAMED AFTER THE
+    CONNECTION STRING — credentials and all — and then SQLite happily made a
+    database file inside it. Twice observed: a June-era tree on the test server
+    whose directory name embedded the then-current PostgreSQL password, and a
+    zero-byte `postgresql:/erpclaw@localhost/erpclaw_test` file that reached a
+    commit on 2026-08-13.
+
+    Writing a password into a filename is worse than the failure it replaces.
+    A path that names a scheme is a caller mistake every time, so it fails
+    loudly here rather than being silently turned into a directory.
+    """
+    if "://" in path or path.split(":", 1)[0] in _URL_SCHEMES:
+        scheme = path.split(":", 1)[0]
+        raise ValueError(
+            "database path looks like a %s connection URL, not a filesystem "
+            "path: pass it as ERPCLAW_DB_URL (or the module's --db-url) so it "
+            "is parsed as a URL. Refusing rather than creating a directory "
+            "named after it, because a URL can carry a password and a "
+            "directory name is not a place for one." % scheme
+        )
+
+
+_URL_SCHEMES = frozenset({"postgresql", "postgres", "psql", "mysql", "sqlite"})
+
+
 def ensure_db_exists(db_path=None) -> str:
     """Ensure the database directory exists.
 
     Creates parent directories if needed. Does not create the DB file
     itself — sqlite3.connect() handles that.
+
+    Refuses a value that names a URL scheme; see `_reject_url_shaped_path`.
 
     Args:
         db_path: Path to the database file.
@@ -436,6 +469,7 @@ def ensure_db_exists(db_path=None) -> str:
         The resolved database path.
     """
     path = db_path or DEFAULT_DB_PATH
+    _reject_url_shaped_path(path)
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)

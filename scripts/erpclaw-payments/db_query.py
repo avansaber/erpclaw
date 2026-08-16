@@ -18,7 +18,9 @@ from decimal import Decimal, InvalidOperation
 
 # Add shared lib to path
 try:
-    sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
+    import importlib.util
+    if importlib.util.find_spec("erpclaw_lib") is None:
+        sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
     from erpclaw_lib.db import get_connection, ensure_db_exists, DEFAULT_DB_PATH
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.validation import check_input_lengths
@@ -35,13 +37,18 @@ try:
     from erpclaw_lib.payment_clearing import (
         apply_payment_to_document,
         reverse_payment_on_document,
+        recalc_unallocated,
+        post_party_residual_compensation,
         canonical_voucher_type,
     )
+    # Aliased to match erpclaw-reports, where a bare `party_ledger`
+    # would be shadowed by that module's own `party-ledger` action.
+    from erpclaw_lib import party_ledger as party_ledger_rules
     from erpclaw_lib.naming import get_next_name
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.dependencies import check_required_tables
-    from erpclaw_lib.query_helpers import resolve_company_id
+    from erpclaw_lib.query_helpers import resolve_company_id, get_fiscal_year
     from erpclaw_lib.query import (
         Q, P, Table, Field, fn, Order, DecimalSum, insert_row, update_row, now,
     )
@@ -97,13 +104,20 @@ def _get_pe_or_err(conn, payment_entry_id: str) -> dict:
 
 
 def _get_allocations(conn, payment_entry_id: str) -> list[dict]:
-    """Fetch allocations for a payment entry."""
+    """Fetch the LIVE allocations for a payment entry.
+
+    Wave G F1: an allocation released by a document cancel carries
+    delinked = 1. It stays in the table as the audit trail but is void — it
+    clears nothing, consumes no residual, and must not appear in any
+    aggregation or in get-payment's allocation list.
+    """
     # Stable, dialect-portable insertion-ish order: created_at then id.
     # (rowid is SQLite-only and absent on Postgres.)
     q = (Q.from_(PA).select(PA.star)
          .where(PA.payment_entry_id == P())
+         .where(PA.delinked == P())
          .orderby(PA.created_at).orderby(PA.id))
-    rows = conn.execute(q.get_sql(), (payment_entry_id,)).fetchall()
+    rows = conn.execute(q.get_sql(), (payment_entry_id, 0)).fetchall()
     return [row_to_dict(r) for r in rows]
 
 
@@ -131,7 +145,12 @@ INVOICE_VOUCHER_TYPES = ("sales_invoice", "purchase_invoice")
 
 # WS2 D3: mirrors the payment_deduction.type CHECK enum in init_schema.py.
 # Validated here so a bad type errors with clean JSON, never a raw IntegrityError.
-VALID_DEDUCTION_TYPES = ("tds", "commission", "early_payment_discount", "other")
+# 'write_off' (Wave G F17b, migration 034) is the residual a customer never pays,
+# taken AT PAYMENT TIME against real cash. This gate runs BEFORE the CHECK is
+# ever reached, so widening only the schema would have left the value unreachable
+# through every real entry point — the two move together or not at all.
+VALID_DEDUCTION_TYPES = ("tds", "commission", "early_payment_discount",
+                         "write_off", "other")
 
 
 def _get_deductions(conn, payment_entry_id: str) -> list[dict]:
@@ -347,27 +366,98 @@ def _recalc_unallocated(conn, payment_entry_id: str):
     WS2 D3 invariant: paid_amount = allocations + deductions + unallocated.
     Deductions are non-cash consumption of the payment (discount/TDS/commission)
     and reduce the allocatable remainder exactly like allocations do.
+
+    Delegates to the neutral clearing lib (Wave G F1): a document cancel
+    releases its allocations through the SAME residual formula
+    (payment_clearing.release_allocations_on_document), and one live copy of
+    that arithmetic is the only way the two paths cannot drift. The lib counts
+    only LIVE allocations (payment_allocation.delinked = 0) — a released
+    allocation returns its cash to the residual.
+
+    Returns the residual the lib wrote (Decimal), or None when the payment is
+    absent, so a caller can act on it without re-reading the column it just
+    wrote — M60's non-negative guard is the first such caller.
     """
-    q = Q.from_(PE).select(PE.paid_amount).where(PE.id == P())
-    pe = conn.execute(q.get_sql(), (payment_entry_id,)).fetchone()
-    if not pe:
-        return
-    paid = to_decimal(pe["paid_amount"])
-    q2 = (Q.from_(PA)
-          .select(fn.Coalesce(DecimalSum(PA.allocated_amount), ValueWrapper("0")).as_("total"))
-          .where(PA.payment_entry_id == P()))
-    row = conn.execute(q2.get_sql(), (payment_entry_id,)).fetchone()
-    allocated = to_decimal(str(row["total"]))
-    q3 = (Q.from_(PD)
-          .select(fn.Coalesce(DecimalSum(PD.amount), ValueWrapper("0")).as_("total"))
-          .where(PD.payment_entry_id == P()))
-    drow = conn.execute(q3.get_sql(), (payment_entry_id,)).fetchone()
-    deducted = to_decimal(str(drow["total"]))
-    unallocated = round_currency(paid - allocated - deducted)
-    sql = update_row("payment_entry",
-                     data={"unallocated_amount": P(), "updated_at": now()},
-                     where={"id": P()})
-    conn.execute(sql, (str(unallocated), payment_entry_id))
+    return recalc_unallocated(conn, payment_entry_id)
+
+
+def _refuse_negative_residual(conn, payment_entry_id: str, residual):
+    """Roll back the current edit and refuse it, because it left paid < consumed.
+
+    Only ``update_payment`` calls this today (M60): lowering ``paid_amount``
+    below what the payment has already committed to allocations and deductions
+    would write a negative ``unallocated_amount``, which is not a residual at
+    all — the identity would still balance arithmetically while describing an
+    impossible payment, and that column is what INV-27 reads once the payment is
+    submitted.
+
+    THE ROLLBACK IS THE POINT, not defensive habit. The recompute runs after the
+    writes (so the guard reads the real post-change detail rows rather than a
+    second, drifting copy of the residual formula), which means the refused
+    write physically exists at the moment we decide to refuse it. ``err`` raises
+    SystemExit, and every other error site in this module relies on the CLI
+    process dying before any ``commit()`` — true for a CLI invocation, false for
+    any caller holding the connection, which is exactly how the refusal is
+    tested. Rolling back makes "a refused update leaves nothing behind" a fact
+    instead of a side effect of process teardown. Safe because
+    ``update_payment`` has no in-tree caller but the action dispatcher, so there
+    is never a caller's work in this transaction to discard.
+
+    Reads the terms BEFORE rolling back: afterwards the detail rows describe the
+    pre-edit state, and the message must name the numbers the user asked for.
+    """
+    pe = _get_pe_or_err(conn, payment_entry_id)
+    paid = round_currency(to_decimal(pe["paid_amount"]))
+    allocated = round_currency(sum(
+        (to_decimal(a["allocated_amount"])
+         for a in _get_allocations(conn, payment_entry_id)), Decimal("0")))
+    deducted = round_currency(sum(
+        (to_decimal(d["amount"])
+         for d in _get_deductions(conn, payment_entry_id)), Decimal("0")))
+    consumed = round_currency(allocated + deducted)
+    conn.rollback()
+    err(f"--paid-amount {paid} is below what this payment already consumes: "
+        f"allocations {allocated} + deductions {deducted} = {consumed} "
+        f"(paid_amount = allocations + deductions + unallocated, and the "
+        f"residual cannot be negative; this edit would make it {residual})",
+        suggestion=(f"Raise --paid-amount to at least {consumed}, or pass "
+                    "--allocations in the same call to reduce what the payment "
+                    "consumes."))
+
+
+def _post_party_residual_compensation(conn, payment_entry_id: str):
+    """Append the party-level residual compensation row (M38 / Wave G F2, W16).
+
+    Delegates to the neutral clearing lib for the same reason
+    ``_recalc_unallocated`` does: a document cancel re-runs this arithmetic from
+    ``payment_clearing.release_allocations_on_document``, and one live copy is
+    the only way the two paths cannot drift.
+
+    LIFECYCLE SITES, NOT RECALC SITES (correction C3 — the invocation rule was
+    wrong at both ends when it was first written, measured against the live
+    call-site map). This fires at exactly four places:
+
+      1. ``submit_payment``, right after the party-level row is written and the
+         status flips to 'submitted', in the same transaction. ``submit_payment``
+         never calls ``_recalc_unallocated`` — allocations and the residual are
+         computed at ADD time — so a recalc-site rule would have missed the most
+         common lifecycle entirely (``add-payment --allocations`` then
+         ``submit-payment``) and the 400-vs-700 defect would have survived the
+         fix on the mainline flow.
+      2. ``allocate_payment`` (already submitted-guarded).
+      3. ``reconcile_payments``, per affected payment.
+      4. F1's release helper, inside the clearing lib.
+
+    It must NEVER fire from ``add_payment`` / ``update_payment`` (both draft
+    sites — a draft compensation reads RED against the invariant's RHS) or from
+    ``delete_payment`` (which deletes allocations, deductions and the payment but
+    no ledger rows, so a draft-written compensation row would be orphaned
+    forever). There is no post-submit deduction mutation in this module today:
+    ``update_payment`` refuses anything that is not a draft, so the deduction
+    tables only change before submit. If that ever changes, the new site joins
+    this list.
+    """
+    return post_party_residual_compensation(conn, payment_entry_id)
 
 
 def _validate_not_group_account(conn, account_id: str, label: str) -> str:
@@ -533,7 +623,41 @@ def add_payment(conn, args):
 # ---------------------------------------------------------------------------
 
 def update_payment(conn, args):
-    """Update a draft payment entry."""
+    """Update a draft payment entry.
+
+    THE RESIDUAL IS RECOMPUTED FROM THE DETAIL ROWS ON EVERY MONEY EDIT (M60 /
+    F21-FINDING-1). ``--paid-amount`` used to write paid_amount + received_amount
+    and stop there, so the payment kept the residual of the OLD amount and
+
+        paid_amount = Σ live allocations + Σ deductions + unallocated
+
+    stopped holding — the identity INV-27 audits from the ledger side once the
+    payment is submitted. Measured before the fix (SIM
+    ``planning/simlogs/m60_SIM_2026-08-12.md`` §2): 1,000.00 with a 300.00
+    allocation reduced to 500.00 kept a 700.00 residual, and the break did NOT
+    require an allocation to exist — a bare 400.00 → 900.00 edit left the
+    residual at 400.00.
+
+    Two shape decisions come from that SIM, both measured rather than assumed:
+
+    1. ONE recompute site, after every branch, not one per branch. The
+       allocations branch already recomputed; ``--paid-amount`` and
+       ``--allocations`` in the SAME call was therefore already correct, because
+       the allocations recompute ran last. Recomputing per-branch would have
+       needed the same call ordered the same way to stay correct; recomputing
+       once at the end makes the order irrelevant.
+    2. The non-negative guard reads the POST-change detail rows. Comparing the
+       new paid_amount against the CURRENT allocations would refuse
+       ``--paid-amount 200 --allocations [100]`` on a 300-allocated draft, which
+       is a legal edit that works today.
+
+    Draft-only, and that guard is load-bearing rather than incidental: the
+    F2 party-level compensation (``_post_party_residual_compensation``) is
+    computed from allocation/deduction DETAIL and never reads paid_amount, so a
+    post-submit paid_amount edit would move INV-27's RHS while its LHS stood
+    still, and the GL entries already posted at the old amount would stop
+    describing the document. Nothing here can reach a non-draft row.
+    """
     pe_id = args.payment_entry_id
     if not pe_id:
         err("--payment-entry-id is required")
@@ -577,11 +701,28 @@ def update_payment(conn, args):
         dq = Q.from_(PA).delete().where(PA.payment_entry_id == P())
         conn.execute(dq.get_sql(), (pe_id,))
         _insert_allocations(conn, pe_id, allocs)
-        _recalc_unallocated(conn, pe_id)
         updated_fields.append("allocations")
 
     if not updated_fields:
         err("No fields to update")
+
+    # M60: the single recompute site. Reached whenever either side of the
+    # identity moved — the paid_amount term or the allocation terms.
+    #
+    # The non-negative guard is scoped to the paid_amount edit, which is M60's
+    # plan row, and deliberately not widened here. The rest of this module
+    # already accepts a negative residual whenever no deduction is present:
+    # add_payment's identical check is gated on `total_deducted > 0` (measured:
+    # add-payment 100.00 with a 300.00 allocation returns ok with a −200.00
+    # residual) and submit_payment carries the same gate, so the guard is
+    # currently unreachable without a deduction on every one of those paths.
+    # That is one defect class of its own, it reaches GL posting, and it needs
+    # its own row rather than a silent expansion from this branch. Recorded in
+    # planning/simlogs/m60_SIM_2026-08-12.md §5.
+    if "paid_amount" in updated_fields or "allocations" in updated_fields:
+        residual = _recalc_unallocated(conn, pe_id)
+        if "paid_amount" in updated_fields and residual < 0:
+            _refuse_negative_residual(conn, pe_id, residual)
 
     audit(conn, "erpclaw-payments", "update-payment", "payment_entry", pe_id,
            old_values=old_values, new_values={"updated_fields": updated_fields})
@@ -1087,6 +1228,15 @@ def submit_payment(conn, args):
                      where={"id": P()})
     conn.execute(sql, ("submitted", pe_id))
 
+    # Wave G F2 (M38), correction C3 — lifecycle site 1. The party-level row
+    # above subtracts the FULL paid_amount while the per-allocation rows below
+    # subtract the same cash again; the compensation converges the party back to
+    # the truth. It runs HERE, immediately after the party-level row and the
+    # status flip (the helper's guard reads the stored status, so the flip has to
+    # land first) and inside this same transaction. Delta 0 writes nothing, so an
+    # advance with no allocations and no deductions appends no row at all.
+    _post_party_residual_compensation(conn, pe_id)
+
     # S2: record that the advance portion was routed to a sub-account so
     # allocate-payment knows to post the offsetting reclassification.
     if routed_advance_account:
@@ -1299,6 +1449,258 @@ def delete_payment(conn, args):
 
 
 # ---------------------------------------------------------------------------
+# 7b. write-off-invoice  (Wave G F17a — its OWN clearing primitive)
+# ---------------------------------------------------------------------------
+
+# The GL entry_set the write-off pair is filed under, beside the invoice's own
+# 'primary' (and 'cogs') sets on the SAME voucher. Chosen over a separate
+# voucher for one reason that does all the work: reverse_gl_entries() reverses
+# EVERY active entry for a (voucher_type, voucher_id) regardless of entry_set,
+# and cancel-sales-invoice / cancel-purchase-invoice already delink every PLE
+# row for that voucher — so a written-off invoice cancels correctly with ZERO
+# new logic on the cancel side (ADR-0032 W18; SIM-0 S5 proved the shape).
+WRITE_OFF_ENTRY_SET = "write_off"
+
+# (voucher_type -> (party column, party_type, is the control leg credited?)).
+# 'receivable is credited' on the AR side (the customer owes less), 'payable is
+# debited' on the AP side (we owe less). Returns (credit/debit notes) are NOT
+# write-off-able: their outstanding is negative by design, so "writing one off"
+# is not an operation with a meaning — it is refused by name rather than
+# producing a backwards GL pair.
+_WRITE_OFF_DOCS = {
+    "sales_invoice": ("customer_id", "customer", True),
+    "purchase_invoice": ("supplier_id", "supplier", False),
+}
+
+
+def _active_write_off_gl(conn, voucher_type, voucher_id):
+    """The active write-off GL set for a voucher, or None.
+
+    insert_gl_entries() is idempotent per (voucher_type, voucher_id, entry_set),
+    so a second write-off on the same invoice would die inside the shared lib
+    with a generic 'GL entries already exist' message. This surfaces the real
+    reason to the operator instead, with the amount already written off.
+    """
+    row = conn.execute(
+        "SELECT decimal_sum(debit) AS dr, decimal_sum(credit) AS cr, "
+        "       COUNT(*) AS cnt "
+        "  FROM gl_entry "
+        " WHERE voucher_type = ? AND voucher_id = ? AND entry_set = ? "
+        "   AND is_cancelled = 0",
+        (voucher_type, voucher_id, WRITE_OFF_ENTRY_SET)).fetchone()
+    if not row or not row["cnt"]:
+        return None
+    return round_currency(to_decimal(row["dr"] or "0"))
+
+
+def write_off_invoice(conn, args):
+    """Write off part or all of ONE open invoice's outstanding balance.
+
+    Wave G F17a (ruling N6a — in the correctness floor, un-gated, single
+    invoice, explicit amount). This is its OWN clearing primitive and writes
+    **no payment_entry and no payment_deduction row**: the shipped payment path
+    structurally refuses a zero-cash write-off (``--paid-amount must be > 0``,
+    the non-negative residual gate, and ``payment_deduction.payment_entry_id``
+    being NOT NULL), so routing a write-off through it was unbuildable rather
+    than merely awkward (Wave-G SIM finding 4 / plan correction C4).
+
+    What it writes, all inside ONE transaction:
+
+      1. A balanced GL pair under the **invoice's own voucher** with
+         ``entry_set = 'write_off'``:
+           AR: DR bad-debt expense / CR the invoice's receivable control
+           AP: DR the invoice's payable control / CR the write-off account
+         The control leg carries the party, exactly as the invoice's own
+         control leg does, so party GL and party subledger move together.
+      2. ONE payment_ledger_entry row under that same voucher
+         (``against_voucher_*`` omitted, ``amount = −write_off``). Under
+         erpclaw_lib.party_ledger's rules a document row buckets to its own
+         voucher and carries the ``delinked = 0`` liveness filter, so INV-25
+         sees outstanding and PLE net fall by the same amount on the document
+         branch, and INV-27 falls by that amount on BOTH of its sides.
+      3. The outstanding reduction + status sync, through the shared clearing
+         lib (``apply_payment_to_document``) — the same canonical rule
+         submit-payment and update-invoice-outstanding use, so a full-residual
+         write-off reaches 'paid' by the existing sync with no bespoke branch.
+
+    Unlike the GL-exempt PLE writers (ADR-0032 W8/W9/W11-W15/W17) this ledger
+    row DOES have matching GL, so a future GL≡subledger check must expect to
+    find it on both sides. That is W18's whole disposition.
+
+    NOT in scope by ruling (N6 STRICT, restated at plan §2.3 and §4 F17): no
+    batch write-off, no due-date sweep, no policy rules, no dunning hook. One
+    invoice, one explicit amount, one reason.
+    """
+    voucher_type = canonical_voucher_type(args.voucher_type or "sales_invoice")
+    if voucher_type not in _WRITE_OFF_DOCS:
+        err(f"--voucher-type must be one of {tuple(_WRITE_OFF_DOCS)} "
+            f"(got '{voucher_type}')",
+            suggestion="Write off the accounting invoice, not a payment or a "
+                       "credit/debit note.")
+    voucher_id = args.voucher_id
+    if not voucher_id:
+        err("--voucher-id is required (the invoice being written off)")
+    if not args.write_off_amount:
+        err("--write-off-amount is required")
+    try:
+        amount = round_currency(to_decimal(args.write_off_amount))
+    except (TypeError, ValueError, InvalidOperation):
+        err(f"Invalid --write-off-amount {args.write_off_amount!r} "
+            "(pass money as a string, e.g. \"340.00\", never a float)")
+    if amount <= 0:
+        err("--write-off-amount must be > 0")
+    if not args.write_off_account_id:
+        err("--write-off-account-id is required "
+            "(the bad-debt expense account the write-off is charged to)")
+    reason = (args.reason or "").strip()
+    if not reason:
+        err("--reason is required (a write-off is an accounting decision; the "
+            "audit trail records why)")
+
+    party_col, party_type, credit_control = _WRITE_OFF_DOCS[voucher_type]
+    doc_t = Table(voucher_type)
+    inv = conn.execute(
+        Q.from_(doc_t).select(
+            Field("id"), Field(party_col), Field("posting_date"),
+            Field("outstanding_amount"), Field("status"), Field("is_return"),
+            Field("company_id"))
+        .where(Field("id") == P()).get_sql(), (voucher_id,)).fetchone()
+    if inv is None:
+        err(f"{voucher_type} {voucher_id} not found")
+    if inv["is_return"]:
+        err(f"{voucher_type} {voucher_id} is a return (credit/debit note); its "
+            "outstanding is negative by design and cannot be written off",
+            suggestion="Write off the original invoice instead.")
+    outstanding = to_decimal(inv["outstanding_amount"])
+
+    already = _active_write_off_gl(conn, voucher_type, voucher_id)
+    if already is not None:
+        err(f"{voucher_type} {voucher_id} already carries a write-off of "
+            f"{already}. One write-off per invoice is supported "
+            f"(GL entry_set '{WRITE_OFF_ENTRY_SET}' is posted once per voucher).",
+            suggestion="Cancel the invoice to reverse the existing write-off, "
+                       "or raise a credit note for the remaining balance.")
+
+    # Same precondition update-invoice-outstanding enforces (INV-25): this action
+    # moves the SUMMARY, so it must move the DETAIL, and it reuses the invoice's
+    # own posting-time ledger row for account + currency so the write-off lands
+    # in the same bucket on the same control account. Read BEFORE any write, so a
+    # broken-ledger invoice errors with zero writes.
+    src_ple = conn.execute(
+        Q.from_(PLE).select(PLE.account_id, PLE.currency)
+        .where(PLE.voucher_type == P()).where(PLE.voucher_id == P())
+        .where(PLE.delinked == P())
+        .orderby(PLE.created_at).orderby(PLE.id).get_sql() + " LIMIT 1",
+        (voucher_type, voucher_id, 0)).fetchone()
+    if src_ple is None:
+        err(f"{voucher_type} {voucher_id} has no active payment ledger posting; "
+            "cannot write it off (summary and detail must move together, INV-25)")
+    control_account = src_ple["account_id"]
+
+    write_off_account = _validate_not_group_account(
+        conn, args.write_off_account_id, "write-off-account")
+    acct = conn.execute(
+        Q.from_(ACCOUNT).select(ACCOUNT.id, ACCOUNT.root_type)
+        .where(ACCOUNT.id == P()).get_sql(), (write_off_account,)).fetchone()
+    if acct is None:
+        err(f"Write-off account {args.write_off_account_id} not found")
+    if write_off_account == control_account:
+        err("The write-off account must differ from the invoice's control "
+            f"account ({control_account}); charging the write-off to the same "
+            "account would post a self-cancelling pair and move nothing")
+
+    # A write-off is dated by the DECISION, not by the invoice (QA condition 3,
+    # pm ruling 2026-08-08). Defaulting to the invoice's own date backdated the
+    # bad-debt expense into the period the sale was made: a 2026 collections
+    # review would restate 2025, and once that year is closed the write-off
+    # becomes impossible through the documented flag set. Today also matches
+    # F17b, where the payment-time write-off lands on the payment's date.
+    # `--posting-date` remains the explicit override for a deliberate backdate.
+    posting_date = args.posting_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    amount_str = str(amount)
+    control_leg = {"account_id": control_account,
+                   "debit": "0" if credit_control else amount_str,
+                   "credit": amount_str if credit_control else "0",
+                   "party_type": party_type, "party_id": inv[party_col]}
+    write_off_leg = {"account_id": write_off_account,
+                     "debit": amount_str if credit_control else "0",
+                     "credit": "0" if credit_control else amount_str,
+                     "party_type": None, "party_id": None}
+    # P&L legs need a cost center (12-step validation step 6) — same resolution
+    # _apply_deduction_legs uses for its deduction legs.
+    if acct["root_type"] in ("income", "expense"):
+        cc = args.cost_center_id or _default_cost_center(conn, inv["company_id"])
+        if cc:
+            write_off_leg["cost_center_id"] = cc
+    fiscal_year = get_fiscal_year(conn, posting_date)
+    gl_entries = [write_off_leg, control_leg] if credit_control \
+        else [control_leg, write_off_leg]
+    for leg in gl_entries:
+        leg["fiscal_year"] = fiscal_year
+
+    # Outstanding + status move FIRST, through the shared clearing lib. The lib
+    # owns BOTH the clearable-status rule and the over-application reject;
+    # restating either here would be a second copy of a rule this module
+    # deliberately does not own (the same reason _recalc_unallocated delegates).
+    # Running it first also means a bad status costs zero writes.
+    try:
+        res = apply_payment_to_document(conn, voucher_type, voucher_id, amount)
+    except ValueError as e:
+        conn.rollback()
+        err(str(e))
+
+    try:
+        validate_gl_entries(conn, gl_entries, inv["company_id"], posting_date,
+                            voucher_type=voucher_type)
+        gl_ids = insert_gl_entries(
+            conn, gl_entries,
+            voucher_type=voucher_type, voucher_id=voucher_id,
+            posting_date=posting_date, company_id=inv["company_id"],
+            remarks=f"Write-off {voucher_type} {voucher_id}: {reason}",
+            entry_set=WRITE_OFF_ENTRY_SET)
+    except ValueError as e:
+        conn.rollback()
+        sys.stderr.write(f"[erpclaw-payments] {e}\n")
+        err(f"GL posting failed: {e}")
+
+    ple_id = str(uuid.uuid4())
+    ple_amount = str(round_currency(-amount))
+    ple_sql, _ = insert_row("payment_ledger_entry", {
+        "id": P(), "posting_date": P(), "account_id": P(),
+        "party_type": P(), "party_id": P(),
+        "voucher_type": P(), "voucher_id": P(),
+        "amount": P(), "amount_in_account_currency": P(),
+        "currency": P(), "remarks": P(),
+    })
+    conn.execute(ple_sql,
+        (ple_id, posting_date, control_account, party_type, inv[party_col],
+         voucher_type, voucher_id, ple_amount, ple_amount,
+         src_ple["currency"], f"Write-off: {reason}"))
+
+    audit(conn, "erpclaw-payments", "write-off-invoice", voucher_type,
+          voucher_id,
+          old_values={"outstanding_amount": str(outstanding),
+                      "status": inv["status"]},
+          new_values={"write_off_amount": amount_str,
+                      "write_off_account_id": write_off_account,
+                      "outstanding_amount": res["outstanding_amount"],
+                      "status": res["status"],
+                      "payment_ledger_entry_id": ple_id},
+          description=reason)
+    conn.commit()
+
+    ok({"status": "written_off",
+        "voucher_type": voucher_type, "voucher_id": voucher_id,
+        "write_off_amount": amount_str,
+        "write_off_account_id": write_off_account,
+        "outstanding_amount": res["outstanding_amount"],
+        "invoice_status": res["status"],
+        "gl_entries_created": len(gl_ids),
+        "payment_ledger_entry_id": ple_id,
+        "reason": reason})
+
+
+# ---------------------------------------------------------------------------
 # 8. create-payment-ledger-entry
 # ---------------------------------------------------------------------------
 
@@ -1359,7 +1761,29 @@ def create_payment_ledger_entry(conn, args):
 # ---------------------------------------------------------------------------
 
 def get_outstanding(conn, args):
-    """Get outstanding amounts for a party from payment ledger entries."""
+    """Get outstanding amounts for a party from payment ledger entries.
+
+    Reads the party ledger through the CANONICAL rules
+    (``erpclaw_lib.party_ledger``, ADR-0032 Decision 2 / F18) — reader
+    disposition R2. Two things changed with Wave G F2 and both were defects:
+
+    - LIVENESS. This used to filter a flat ``delinked = 0``, which drops a
+      payment's delinked original while keeping its active cancel mirror, so
+      every party read wrong after a ``cancel-payment``. Payment rows are now
+      netted reversal-inclusive; document rows still require ``delinked = 0``.
+    - ATTRIBUTION. This used to group on the row's OWN ``(voucher_type,
+      voucher_id)``, which collided every per-allocation row into the paying
+      payment's bucket instead of reducing the invoice it was applied to. Rows
+      now bucket by their against-voucher when one is present and is not the
+      payment itself, so a payment's allocations reduce the INVOICE buckets and
+      the party-level + compensation rows stay in the payment's own bucket
+      (correction C6 — there is no ``(None, None)`` bucket).
+
+    F18: this is the PARTY-level truth (bound always-on by INV-27). The
+    per-document truth is ``invoice.outstanding_amount`` (bound by INV-25), which
+    is what ``check-overdue`` reads. The two are equal by INV-25 per document and
+    therefore by summation per party; no reader may invent a third source.
+    """
     party_type = args.party_type
     if not party_type:
         err("--party-type is required")
@@ -1368,29 +1792,33 @@ def get_outstanding(conn, args):
         err("--party-id is required")
 
     ple = Table("payment_ledger_entry")
+    bucket_type = party_ledger_rules.bucket_voucher_type_term()
+    bucket_id = party_ledger_rules.bucket_voucher_id_term()
     base = (Q.from_(ple)
             .where(ple.party_type == P())
             .where(ple.party_id == P())
-            .where(ple.delinked == P()))
-    params = [party_type, party_id, 0]
+            .where(party_ledger_rules.live_rows_criterion()))
+    params = [party_type, party_id]
 
     if args.voucher_type:
         # FINDING-006: filtering by "Sales Invoice" should match stored
-        # "sales_invoice" PLE rows.
-        base = base.where(ple.voucher_type == P())
+        # "sales_invoice" PLE rows. The filter applies to the ATTRIBUTED bucket,
+        # not the raw column, so "show me this invoice" returns the payments
+        # applied to it as well as the invoice's own row.
+        base = base.where(bucket_type == P())
         params.append(canonical_voucher_type(args.voucher_type))
     if args.voucher_id:
-        base = base.where(ple.voucher_id == P())
+        base = base.where(bucket_id == P())
         params.append(args.voucher_id)
 
-    # Aggregate outstanding by voucher
+    # Aggregate outstanding by ATTRIBUTED voucher
     q = (base.select(
-             ple.voucher_type, ple.voucher_id,
+             bucket_type.as_("voucher_type"), bucket_id.as_("voucher_id"),
              DecimalSum(ple.amount).as_("outstanding_amount"),
              fn.Min(ple.posting_date).as_("posting_date"))
-         .groupby(ple.voucher_type, ple.voucher_id)
+         .groupby(bucket_type, bucket_id)
          .having(LiteralValue('CAST(decimal_sum("amount") AS NUMERIC) != 0'))
-         .orderby(ple.posting_date))
+         .orderby(LiteralValue('MIN("posting_date")')))
     rows = conn.execute(q.get_sql(), params).fetchall()
 
     vouchers = []
@@ -1534,6 +1962,11 @@ def allocate_payment(conn, args):
             "document\n")
         err("Allocation named an invoice but cleared no document")
 
+    # Wave G F2 (M38), correction C3 — lifecycle site 2. The new allocation both
+    # consumes residual and (for an invoice) writes its own per-allocation row,
+    # so the party-level compensation moves by exactly this allocation.
+    _post_party_residual_compensation(conn, pe_id)
+
     # Get updated unallocated
     qu = Q.from_(PE).select(PE.unallocated_amount).where(PE.id == P())
     updated = conn.execute(qu.get_sql(), (pe_id,)).fetchone()
@@ -1668,6 +2101,11 @@ def reconcile_payments(conn, args):
     # Update unallocated amounts on all affected payments
     for pay in pay_list:
         _recalc_unallocated(conn, pay["id"])
+        # Wave G F2 (M38), correction C3 — lifecycle site 3. Every payment the
+        # FIFO walk touched changed its live-allocation set; a payment it did not
+        # touch produces delta 0 and writes nothing, so the loop stays over the
+        # full list rather than a hand-tracked subset.
+        _post_party_residual_compensation(conn, pay["id"])
 
     unmatched_payments = sum(1 for p in pay_list if p["remaining"] > 0)
     unmatched_invoices = sum(1 for inv in inv_list if inv["remaining"] > 0)
@@ -1795,6 +2233,9 @@ ACTIONS = {
     "cancel-payment": cancel_payment,
     "delete-payment": delete_payment,
     "create-payment-ledger-entry": create_payment_ledger_entry,
+    # Wave G F17a. Deliberately NOT part of the payment lifecycle above: a
+    # write-off moves no cash, so it creates no payment_entry.
+    "write-off-invoice": write_off_invoice,
     "get-outstanding": get_outstanding,
     "get-unallocated-payments": get_unallocated_payments,
     "allocate-payment": allocate_payment,
@@ -1829,7 +2270,9 @@ def main():
     parser.add_argument("--reference-date")
     parser.add_argument("--allocations")
     # WS2 D3: JSON array of {account_id, amount, type, description?};
-    # type ∈ tds|commission|early_payment_discount|other
+    # type ∈ tds|commission|early_payment_discount|write_off|other
+    # (write_off = Wave G F17b, the residual taken at payment time; the no-cash
+    #  standalone write-off is write-off-invoice below, not a deduction)
     parser.add_argument("--deductions")
 
     # Allocation
@@ -1842,6 +2285,15 @@ def main():
     parser.add_argument("--account-id")
     parser.add_argument("--against-voucher-type")
     parser.add_argument("--against-voucher-id")
+
+    # Write-off (F17a). Its own flags rather than reusing --amount/--account-id:
+    # those already carry PLE meanings on this parser, and an accounting action
+    # that silently shares a flag with a raw-ledger primitive is how a write-off
+    # ends up posted against the wrong account.
+    parser.add_argument("--write-off-amount")
+    parser.add_argument("--write-off-account-id")
+    parser.add_argument("--reason")
+    parser.add_argument("--cost-center-id")
 
     # Bank reconciliation
     parser.add_argument("--bank-account-id")

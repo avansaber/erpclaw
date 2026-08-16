@@ -29,6 +29,22 @@ import os
 import sqlite3
 import sys
 
+# M102: rebuilds three tables and copies every row verbatim, with f-string
+# table names the classifier cannot read (see the exemptions below) — nothing a
+# row held before this run is different afterwards.
+MIGRATION_DATA_CLASS = "none"
+# Statements the classifier flags that this file's own shape explains.
+# Keyed per statement, never per file, so anything it does not name
+# still fails the gate.
+MIGRATION_DATA_EXEMPTIONS = {
+    ("INSERT", "<dynamic>"):
+        "the rebuild copy, written with an f-string table name so the "
+        "classifier cannot read it: INSERT INTO {table} ({common}) SELECT "
+        "{common} FROM {tmp}",
+    ("DROP", "<dynamic>"):
+        "the rebuild scratch table, dropped under the same f-string name",
+}
+
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "data.sqlite")
 
 # (table, check_marker_to_detect, new_ddl_without_that_check, pg_constraint_name)

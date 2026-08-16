@@ -2,6 +2,41 @@
 
 All notable changes to the ERPClaw foundation skill.
 
+## [4.15.0] — 2026-08-15 — correctness floor
+
+**Release gate:** nine end-to-end business scenarios, driven in plain business
+language and judged by a deterministic oracle against the resulting books
+(short-pay write-offs, recurring billing honesty, outside-invoice linking,
+order-to-cash with corrections, deposit forfeiture, and more), all pass at this
+tree. The books-integrity invariants held in every scenario.
+
+### Fixed — books integrity
+- **Cancelling an invoice now releases the payment allocations it voided.** Cash no longer stays "applied" to a document that left the books; allocations are marked delinked (kept for audit), the payment's unallocated balance is restored, all in the cancel's single transaction. Migration **031** back-heals existing installs.
+- **What a customer owes is no longer double-counted.** Payment submission wrote the same cash against the party twice in the ledger; readers now agree with the truth (a 1,000.00 invoice paid 300.00 reads 700.00). Corrected at the source with compensating ledger rows; migration **032** heals existing installs, refusing (and reporting) any payment whose stored residual disagrees with its detail rows.
+- **One canonical reading of the party ledger.** `ar-aging`, `ap-aging` and `get-outstanding` share a single definition of which ledger rows count and which document each row belongs to; `get-outstanding` attributes each amount to the invoice it belongs to. New always-on invariant **INV-27**: every party's payment-ledger net must equal open invoices minus unapplied cash, exact to the cent.
+- **Loan money reaches the ledger.** Loan disbursement and repayment posted no GL under an error swallow; both now post balanced entries or fail loudly.
+- **Asset disposal posts to the right accounts.** Sale proceeds and gain/loss stopped going to depreciation expense; a disposal gain can no longer be credited to plain Sales Revenue, and disposal account choices are gated by account type.
+- **Intercompany eliminations are idempotent, and old damage is correctable.** Re-running elimination generation eliminates only new activity (migration **036** links existing entries); the consolidated trial balance names any unlinked elimination rows an earlier duplicate run left behind, `list-elimination-surplus` shows exactly those rows, and `remove-elimination-surplus` removes them only with `--confirm`, auditing every removal.
+- **A billing period reads `invoiced` only when a real, GL-posted invoice backs it.** Draft creation no longer flips the status; `sync-billing-period-status` materializes the truth, a cancelled invoice auto-reverts the period, and migration **033** re-derives existing installs. `generate-invoices` now produces a real invoice end-to-end (company derived, a generic billing service item resolved through inventory), and flags — never blocks, never silently skips — a possible covering invoice.
+- **An invoice raised outside the billing flow gets attached, not duplicated.** `link-billing-period-invoice` attaches an already-posted invoice to its rated period (one link only; a second is rejected); `unlink-billing-period-invoice` resets deliberately, with `--reason` while the invoice is live.
+- **Write-offs are real accounting.** New `write-off-invoice` posts balanced bad-debt entries under the invoice's own voucher, dated by the decision (today) rather than the sale; short-pays can be written off in the same payment via the `write_off` deduction type (migration **034**); the legal edition's invoice write-off now moves the actual books instead of flipping a status. Both write-off actions ask for confirmation.
+- **Property security deposits post GL** (receipt, deduction, return, and the new `prop-forfeit-security-deposit`), with the liability netting to zero across the lifecycle.
+- **Education edition:** notifications accept everything core writes regardless of module install order (educlaw migration **003**); LMS document numbering carries the year (`LMS-2026-00001`) with a counter migration for live installs; course-prerequisite inserts are dialect-portable on PostgreSQL.
+
+### Changed — retired surface
+- **Intercompany elimination is done in one place.** The legacy four-action elimination pair — which posted "eliminations" into operating companies' own books and left them unbalanced — is retired. The actions still answer: each refuses with one message naming the consolidation flow that does the job correctly, which keeps group adjustments at group level. Existing posted entries are left in the books (immutable; removing them is a bookkeeping decision); their two tables are archived and dropped by a migration.
+- **The two one-sided stock-ledger actions are retired the same way.** They could move quantity with no general-ledger leg; both now refuse and name the document flows (stock entries, receipts, deliveries) that tie quantity to the books, and a constitutional gate pins that every stock movement path reaches the books.
+
+### Changed — database layer
+- **Every schema, connection and catalog access flows through one seam** (`erpclaw_lib.seam`, SQLAlchemy Core vendored, dialect-correct DDL). 38 of 39 module installers now provision through it, the module install path is verified against live PostgreSQL, and a ratcheted gate prevents new bypasses. MySQL is explicitly unsupported (the TEXT-keyed schema cannot be indexed there) rather than silently falling through.
+- **Migrations declare whether they change data**, and the ones that do write an audit-trail row per changed document inside the migration's own transaction.
+
+### Changed — agent guidance
+- Three guidance steers close the gaps the release-gate scenarios exposed, each re-verified end-to-end: the one-payment short-pay write-off route; the billing flow opener (plan → rate → real invoice, in plain words); and the record-once-then-link rule for outside invoices (an invoice exists in the books exactly once — never generate a second one for a period already covered).
+
+### Fixed — measurement integrity
+- An invariant check that examined nothing may no longer report a pass; the smoke tier verifies through the product-library checker on both backends; test lanes bind the tree under test rather than the deployed install, with a poisoned-install companion proving each pin does its job.
+
 ## [4.14.0] — 2026-07-27 — Wave F sprint 1 (F-debt): billing foundation
 
 - **Rating engine complete**: all 7 rate plan types rate to exact Decimal — `time_of_use`, `demand`, `prepaid_credit`, `hybrid` join `flat`/`tiered`/`volume_discount`. TOU tiers validated for 24h coverage; demand plans price peak + optional energy component; prepaid deducts FIFO inside the billing transaction with explicit `over_limit` on insufficient balance; hybrid composes non-hybrid components.

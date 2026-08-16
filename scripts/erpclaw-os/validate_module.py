@@ -48,10 +48,13 @@ _PREFIX_OVERRIDES: dict[str, list[str]] = {
     "legalclaw": ["legalclaw_", "legal_"],
     "nonprofitclaw": ["nonprofitclaw_", "nonprofit_"],
     # erpclaw-addons
+    # elimination_rule / elimination_entry left this list with M63-C (2026-08-12):
+    # growth no longer creates them, so a future table by either name would be new
+    # surface and should be questioned, not waved through.
     "erpclaw-growth": ["erpclaw_", "crm_", "crmadv_", "anomaly", "scenario", "correlation",
                         "categorization_rule", "business_rule", "pending_decision",
                         "usage_event", "audit_conversation", "conversation_context",
-                        "relationship_score", "elimination_rule", "elimination_entry"],
+                        "relationship_score"],
     "erpclaw-ops": ["erpclaw_", "mfg_", "project_", "asset_", "quality_", "support_",
                      "shop_floor_", "tool", "engineering_change_", "process_recipe", "recipe_ingredient"],
     "erpclaw-integrations": ["erpclaw_", "integration_", "connv2_", "plaid_", "stripe_", "s3_"],
@@ -184,6 +187,31 @@ def _extract_tables_from_ddl(ddl_text: str) -> list[str]:
     return _CREATE_TABLE_RE.findall(ddl_text)
 
 
+def _declared_tables(path: str, ddl_text: str) -> list[str]:
+    """Every table `path` declares — raw DDL text OR SQLAlchemy metadata.
+
+    Dual-source for the length of ADR-0034 phase 2. The tree is a MIX of
+    converted and unconverted installers for the whole phase, so this reads both
+    rather than switching: a converted module contributes through
+    ``seam.declared_tables_in_source``, an unconverted one through the text
+    scan, and a half-converted one through both. Without this, a converted
+    module's tables silently vanish from the table registry while still existing
+    in the database.
+
+    Delegates the metadata half to the seam so the three CREATE-TABLE parsers in
+    this codebase do not each grow their own metadata reader and drift apart.
+    """
+    tables = list(_extract_tables_from_ddl(ddl_text))
+    try:
+        from erpclaw_lib.seam import declared_tables_in_source
+    except ImportError:
+        return tables  # seam unavailable (very old install): text scan only
+    for name in declared_tables_in_source(path):
+        if name not in tables:
+            tables.append(name)
+    return tables
+
+
 def _extract_fk_references(ddl_text: str) -> list[str]:
     """Extract referenced table names from FOREIGN KEY / REFERENCES clauses."""
     return _FK_REFERENCE_RE.findall(ddl_text)
@@ -273,11 +301,16 @@ def _find_tests_dir(module_path: str) -> str | None:
 
 
 def _get_all_py_files(directory: str) -> list[str]:
-    """Recursively get all .py files in a directory."""
+    """Recursively get all .py files in a directory.
+
+    Vendored third-party trees are excluded: they are not ERPClaw modules and
+    grading them against ERPClaw conventions is meaningless. PyPika never
+    surfaced this; SQLAlchemy (vendored under ADR-0034) does.
+    """
     py_files = []
     for root, _dirs, files in os.walk(directory):
-        # Skip __pycache__ and .git
-        if "__pycache__" in root or ".git" in root:
+        # Skip __pycache__, .git and vendored third-party code
+        if "__pycache__" in root or ".git" in root or os.sep + "vendor" in root:
             continue
         for f in files:
             if f.endswith(".py"):
@@ -508,13 +541,13 @@ def build_table_ownership_registry(src_root: str) -> dict[str, str]:
     if os.path.isfile(init_schema_path):
         with open(init_schema_path, "r") as f:
             content = f.read()
-        tables = _extract_tables_from_ddl(content)
+        tables = _declared_tables(init_schema_path, content)
         for t in tables:
             registry[t] = "erpclaw"
 
     # 2. Scan all init_db.py files
     for root, _dirs, files in os.walk(src_root):
-        if "__pycache__" in root or ".git" in root:
+        if "__pycache__" in root or ".git" in root or os.sep + "vendor" in root:
             continue
         for fname in files:
             if fname == "init_db.py":
@@ -527,7 +560,7 @@ def build_table_ownership_registry(src_root: str) -> dict[str, str]:
 
                 # Derive module name from directory
                 module_name = _derive_module_name(root)
-                tables = _extract_tables_from_ddl(content)
+                tables = _declared_tables(filepath, content)
                 for t in tables:
                     registry[t] = module_name
 
