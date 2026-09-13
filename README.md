@@ -163,6 +163,32 @@ ERPClaw v4.15.0 | 46 modules (46 active + 0 preview) | 3,235 actions
 <!-- SYNC:facts:end -->
 </sub>
 
+## What is coming
+
+A short, honest note on where the foundation is heading. No dates here, because we would rather
+ship when the checks pass than when a calendar says so.
+
+**Talking to the books instead of filling in forms.** You ask what a customer still owes, and the
+answer comes from the actual books. You ask to record the payment, and you are told in plain words
+what would change before anything happens. You confirm, and only then does a real entry get posted.
+This runs today as an early preview against a single synthetic company over a short, fixed set of
+steps. It is not something you can install and use this way yet, and we will not pretend otherwise.
+
+**The same rules, whichever door an operation comes through.** Anything the conversation can do goes
+through the same governed operations as everything else. No side door into the database, and no
+second set of accounting rules written for the chat surface. The entry still has to balance, the
+period still has to be open, the posting still lands completely or not at all, and once it is posted
+it still has no edit path.
+
+**Who may approve what.** Identity and authorization are being built out, and that work is the
+reason the preview stays bounded rather than open. Approvals route work today. They do not yet
+require a second approver, and we will not call them a control until they are one.
+
+**PostgreSQL past the foundation.** PostgreSQL is already a first-class option at the foundation,
+and module coverage is landing one module at a time. We will name each one as it lands.
+
+Watch the releases here for what actually shipped.
+
 ## Web dashboard
 
 The primary interface is the AI assistant, but two optional dashboards exist:
