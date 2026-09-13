@@ -165,14 +165,21 @@ ERPClaw v4.15.0 | 46 modules (46 active + 0 preview) | 3,235 actions
 
 ## What is coming
 
-A short, honest note on where the foundation is heading. No dates here, because we would rather
-ship when the checks pass than when a calendar says so.
+A short note on where the foundation is heading. No dates, because we would rather ship when the
+checks pass than when a calendar says so.
 
-**Talking to the books instead of filling in forms.** You ask what a customer still owes, and the
-answer comes from the actual books. You ask to record the payment, and you are told in plain words
-what would change before anything happens. You confirm, and only then does a real entry get posted.
-This runs today as an early preview against a single synthetic company over a short, fixed set of
-steps. It is not something you can install and use this way yet, and we will not pretend otherwise.
+**More of the business, on the same books.** The ledger, order to cash, source to pay, stock and
+manufacturing, projects and assets, payroll and people, and a growing set of industry editions all
+run on one shared database. We are widening that coverage rather than deepening one corner of it,
+and every new area posts to the same books under the same rules.
+
+**ERPClaw Atrium, our own agent loop.** You can already ask what a customer owes, tell ERPClaw to
+record the payment, and watch it post to the books. Today that conversation runs inside a general
+purpose assistant runtime, which means the experience depends on which runtime you installed and on
+someone else's release schedule. Atrium is our own loop, built so that the conversation is part of
+ERPClaw rather than a property of the software around it. The same behaviour wherever it runs,
+fewer moving parts to install, and the things that need fixing get fixed by us. It is in
+development and not something you can install yet.
 
 **The same rules, whichever door an operation comes through.** Anything the conversation can do goes
 through the same governed operations as everything else. No side door into the database, and no
@@ -180,11 +187,11 @@ second set of accounting rules written for the chat surface. The entry still has
 period still has to be open, the posting still lands completely or not at all, and once it is posted
 it still has no edit path.
 
-**Who may approve what.** Identity and authorization are being built out, and that work is the
-reason the preview stays bounded rather than open. Approvals route work today. They do not yet
-require a second approver, and we will not call them a control until they are one.
+**Who may approve what.** Identity and authorization are being built out alongside Atrium.
+Approvals route work today. They do not yet require a second approver, and we will not call them a
+control until they are one.
 
-**PostgreSQL past the foundation.** PostgreSQL is already a first-class option at the foundation,
+**PostgreSQL past the foundation.** PostgreSQL is already a first class option at the foundation,
 and module coverage is landing one module at a time. We will name each one as it lands.
 
 Watch the releases here for what actually shipped.
