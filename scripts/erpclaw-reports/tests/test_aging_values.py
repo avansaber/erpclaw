@@ -86,10 +86,24 @@ def _outstanding(conn, party_type, party_id):
     return r
 
 
-def _receive(conn, env, amount, allocations=None, submit=True):
+def _january_invoice(conn, env):
+    """Seed a 1,000.00 invoice backdated to 2026-01-01 (the helper posts in
+    June): both the document and its voucher-level ledger row."""
+    si = seed_sales_invoice(conn, env, "1000.00")
+    conn.execute("UPDATE sales_invoice SET posting_date = '2026-01-01' "
+                 "WHERE id = ?", (si,))
+    conn.execute("UPDATE payment_ledger_entry SET posting_date = '2026-01-01' "
+                 "WHERE voucher_type = 'sales_invoice' AND voucher_id = ?",
+                 (si,))
+    conn.commit()
+    return si
+
+
+def _receive(conn, env, amount, allocations=None, submit=True,
+             posting_date="2026-06-01"):
     created = call_action(pay.add_payment, conn, ns(
         company_id=env["company_id"], payment_type="receive",
-        posting_date="2026-06-01", party_type="customer",
+        posting_date=posting_date, party_type="customer",
         party_id=env["customer"], paid_from_account=env["ar"],
         paid_to_account=env["bank"], paid_amount=str(amount),
         exchange_rate=None, payment_currency=None,
@@ -275,3 +289,138 @@ def test_f18_check_overdue_and_get_outstanding_agree_per_invoice(conn, env):
         "the document column and the party ledger disagree per invoice — F18's "
         "two truths have diverged")
     assert D(overdue["total_overdue"]) == D(out["outstanding"]) == D("1100.00")
+
+
+# ── M139 — residuals age at the invoice's date, not the payment rows' ────────
+
+def test_pin_probe_partial_payment_ages_residual_not_rows(conn, env):
+    """M139 probe: 1,000.00 invoice posted 2026-01-01, 300.00 applied
+    2026-05-20, read 2026-06-01 with buckets 30,60,90,120.
+
+    Before the fix each row aged at its own date: days_120_plus 1,000.00,
+    current -300.00. The truth is the 700.00 residual in the invoice's bucket.
+    """
+    si = _january_invoice(conn, env)
+    _receive(conn, env, "300.00", allocations=[
+        {"voucher_type": "sales_invoice", "voucher_id": si,
+         "allocated_amount": "300.00"}], posting_date="2026-05-20")
+    r = call_action(rep.ar_aging, conn, ns(
+        company_id=env["company_id"], company_name=None,
+        as_of_date="2026-06-01", aging_buckets="30,60,90,120"))
+    assert is_ok(r), r
+    row = _party_row(r, "customer", env["customer"])
+    assert row["current"] == "0.00"
+    assert row["days_120_plus"] == "700.00"
+    assert row["unapplied"] == "0.00"
+    assert row["total"] == "700.00"
+    assert r["total_outstanding"] == "700.00"
+
+
+def test_pin_unapplied_cash_is_labeled_not_aged(conn, env):
+    """The probe invoice plus a 200.00 payment with no allocation posted
+    2026-05-25: the invoice residual stays in its bucket, the cash sits in
+    `unapplied`, and the two readers agree on the party net."""
+    si = _january_invoice(conn, env)
+    _receive(conn, env, "300.00", allocations=[
+        {"voucher_type": "sales_invoice", "voucher_id": si,
+         "allocated_amount": "300.00"}], posting_date="2026-05-20")
+    _receive(conn, env, "200.00", posting_date="2026-05-25")
+    r = call_action(rep.ar_aging, conn, ns(
+        company_id=env["company_id"], company_name=None,
+        as_of_date="2026-06-01", aging_buckets="30,60,90,120"))
+    assert is_ok(r), r
+    row = _party_row(r, "customer", env["customer"])
+    assert row["days_120_plus"] == "700.00"
+    assert row["unapplied"] == "-200.00"
+    assert row["total"] == "500.00"
+    assert _outstanding(conn, "customer", env["customer"])["outstanding"] == "500.00"
+
+
+def _bucketed_sum(row, aging_buckets=None):
+    buckets = (aging_buckets or "30,60,90,120").split(",")
+    first = buckets[0].strip()
+    skip = f"days_{first}"
+    return (D(row["current"])
+            + sum(D(v) for k, v in row.items()
+                   if k.startswith("days_") and k != skip)
+            + D(row.get("unapplied", "0.00")))
+
+
+def test_pin_buckets_plus_unapplied_equal_total(conn, env, apenv):
+    """Buckets plus unapplied reconstruct the party total to the cent: the
+    probe scenario, the probe-plus-unapplied scenario, a current-bucket
+    scenario, and an AP partial. The report emits both `current` and a
+    duplicate `days_<first bucket>` key carrying the same value, so the
+    helper counts `current` once and skips the duplicate."""
+    si = _january_invoice(conn, env)
+    _receive(conn, env, "300.00", allocations=[
+        {"voucher_type": "sales_invoice", "voucher_id": si,
+         "allocated_amount": "300.00"}], posting_date="2026-05-20")
+    probe = call_action(rep.ar_aging, conn, ns(
+        company_id=env["company_id"], company_name=None,
+        as_of_date="2026-06-01", aging_buckets="30,60,90,120"))
+    assert is_ok(probe), probe
+    probe_row = _party_row(probe, "customer", env["customer"])
+    assert D(probe_row["total"]) == _bucketed_sum(probe_row, "30,60,90,120")
+
+    env2 = build_ar_env(conn)
+    si2 = seed_sales_invoice(conn, env2, "1000.00")
+    conn.execute("UPDATE sales_invoice SET posting_date = '2026-01-01' WHERE id = ?",
+                 (si2,))
+    conn.execute("UPDATE payment_ledger_entry SET posting_date = '2026-01-01' "
+                 "WHERE voucher_type = 'sales_invoice' AND voucher_id = ?", (si2,))
+    conn.commit()
+    _receive(conn, env2, "300.00", allocations=[
+        {"voucher_type": "sales_invoice", "voucher_id": si2,
+         "allocated_amount": "300.00"}], posting_date="2026-05-20")
+    _receive(conn, env2, "200.00", posting_date="2026-05-25")
+    mixed = call_action(rep.ar_aging, conn, ns(
+        company_id=env2["company_id"], company_name=None,
+        as_of_date="2026-06-01", aging_buckets="30,60,90,120"))
+    assert is_ok(mixed), mixed
+    mixed_row = _party_row(mixed, "customer", env2["customer"])
+    assert D(mixed_row["total"]) == _bucketed_sum(mixed_row, "30,60,90,120")
+
+    env3 = build_ar_env(conn)
+    si3 = seed_sales_invoice(conn, env3, "1000.00")
+    conn.execute("UPDATE sales_invoice SET posting_date = '2026-05-20' WHERE id = ?",
+                 (si3,))
+    conn.execute("UPDATE payment_ledger_entry SET posting_date = '2026-05-20' "
+                 "WHERE voucher_type = 'sales_invoice' AND voucher_id = ?", (si3,))
+    conn.commit()
+    _receive(conn, env3, "300.00", allocations=[
+        {"voucher_type": "sales_invoice", "voucher_id": si3,
+         "allocated_amount": "300.00"}], posting_date="2026-05-25")
+    _receive(conn, env3, "200.00", posting_date="2026-05-28")
+    current_case = call_action(rep.ar_aging, conn, ns(
+        company_id=env3["company_id"], company_name=None,
+        as_of_date="2026-06-01", aging_buckets="30,60,90,120"))
+    assert is_ok(current_case), current_case
+    current_row = _party_row(current_case, "customer", env3["customer"])
+    assert current_row["current"] == "700.00"
+    assert current_row["days_30"] == "700.00"
+    assert current_row["days_30"] == current_row["current"]
+    assert current_row["unapplied"] == "-200.00"
+    assert current_row["total"] == "500.00"
+    assert D(current_row["total"]) == _bucketed_sum(current_row, "30,60,90,120")
+
+    pi = seed_purchase_invoice(conn, apenv, "800.00")
+    created = call_action(pay.add_payment, conn, ns(
+        company_id=apenv["company_id"], payment_type="pay",
+        posting_date="2026-06-01", party_type="supplier",
+        party_id=apenv["supplier"], paid_from_account=apenv["bank"],
+        paid_to_account=apenv["ap"], paid_amount="300.00", exchange_rate=None,
+        payment_currency=None, reference_number=None, reference_date=None,
+        allocations=json.dumps([{"voucher_type": "purchase_invoice",
+                                 "voucher_id": pi,
+                                 "allocated_amount": "300.00"}]),
+        deductions=None))
+    assert is_ok(created), created
+    assert is_ok(call_action(pay.submit_payment, conn,
+                             ns(payment_entry_id=created["payment_entry_id"])))
+    ap = call_action(rep.ap_aging, conn, ns(
+        company_id=apenv["company_id"], company_name=None, as_of_date=AS_OF,
+        aging_buckets=None))
+    assert is_ok(ap), ap
+    ap_row = _party_row(ap, "supplier", apenv["supplier"])
+    assert D(ap_row["total"]) == _bucketed_sum(ap_row, None)

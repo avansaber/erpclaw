@@ -207,9 +207,10 @@ __all__ = [
     'SQLLiteQuery', 'QmarkParameter',
     'now', 'today', 'date_format', 'coalesce', 'ilike',
     'json_get', 'string_agg', 'days_between', 'hours_between',
-    'seconds_between', 'abs_days_between',
+    'seconds_between', 'abs_days_between', 'date_add_days',
     'ddl_now', 'ddl_today',
     'line_order', 'rowid_col', 'latest_insert_order', 'scalar_max',
+    'gl_legacy_order_recoverable',
 ]
 
 
@@ -294,11 +295,14 @@ def date_format(col, fmt):
 
     Uses Python-style format codes: %Y, %m, %d, %H, %M, %S.
     Replaces: LiteralValue("strftime('%Y-%m', col)")
+
+    Dates are stored as TEXT on every backend, and PostgreSQL has no
+    ``to_char(text, text)``, so the column is cast to a timestamp first.
     """
     if _dialect() == "postgresql":
         pg_fmt = fmt.replace('%Y', 'YYYY').replace('%m', 'MM').replace('%d', 'DD')
         pg_fmt = pg_fmt.replace('%H', 'HH24').replace('%M', 'MI').replace('%S', 'SS')
-        return LiteralValue(f"to_char({col}, '{pg_fmt}')")
+        return LiteralValue(f"to_char(CAST({col} AS timestamp), '{pg_fmt}')")
     return LiteralValue(f"strftime('{fmt}', {col})")
 
 
@@ -403,6 +407,22 @@ def abs_days_between(d1, d2):
     return LiteralValue(f"ABS(julianday({d1}) - julianday({d2}))")
 
 
+def date_add_days(date_expr, days_expr, sign):
+    """A date moved by a whole number of days, as ISO TEXT — dialect-aware.
+
+    ``sign`` is ``"+"`` or ``"-"``. Both expressions are raw SQL fragments,
+    usually ``?`` placeholders.
+
+    Replaces: date(date_expr, '<sign>' || days_expr || ' days')
+    """
+    if sign not in ("+", "-"):
+        raise ValueError(f"date_add_days sign must be '+' or '-', not {sign!r}")
+    if _dialect() == "postgresql":
+        return LiteralValue(
+            f"(CAST({date_expr} AS date) {sign} CAST({days_expr} AS integer))::text")
+    return LiteralValue(f"date({date_expr}, '{sign}' || {days_expr} || ' days')")
+
+
 def line_order(table=None):
     """ORDER BY field for stable document line-item display — dialect-aware.
 
@@ -431,6 +451,18 @@ def rowid_col(alias=""):
     (erpclaw-gl) sides keeps the GL hash chain self-consistent per backend.
     """
     return f"{alias}id" if _dialect() == "postgresql" else f"{alias}rowid"
+
+
+def gl_legacy_order_recoverable():
+    """Whether legacy GL insertion order is recoverable on this backend.
+
+    SQLite records true insertion order, so chained rows written before the
+    sequence column existed can still be walked in the order they were
+    written. Other backends never recorded that order, so those rows cannot
+    be verified. The single backend-dependent question the GL integrity
+    check asks; domain code branches on this, never on a dialect name.
+    """
+    return _dialect() != "postgresql"
 
 
 def insert_or_ignore(sql):

@@ -7,7 +7,7 @@ right-hand side reads (`payment_entry.unallocated_amount` for submitted
 payments), so a wrong residual written here is a party-ledger defect of exactly
 the M38 family.
 
-Register row: `planning/wave_g/F21_TEST_DEPTH_REGISTER_2026-08-11.json`
+Register row:
 (`update-payment`, class `routability-only`, ledger reach `payment_allocation`,
 `payment_entry`).
 
@@ -15,7 +15,7 @@ M60 (2026-08-12) repaired F21-FINDING-1: `--paid-amount` now recomputes the
 residual from the detail rows, and an edit that would push it below zero is
 refused with nothing written. The pins below moved with it — the `xfail(strict)`
 became a plain assertion and the companion pin on the defective reading became
-the regression pin on the repaired one. SIM: `planning/simlogs/m60_SIM_2026-08-12.md`.
+the regression pin on the repaired one.
 """
 import json
 from decimal import Decimal

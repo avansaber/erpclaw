@@ -1,6 +1,6 @@
 """Part A — migration 031: payment_allocation.delinked + the release back-heal.
 
-Wave G item F1 (planning/WAVE_G_PLAN_2026-07-31.md §5, row 031). Two halves:
+Two halves:
 the new column, and the back-heal that repairs installs which already ran the
 M46 defect (an invoice cancelled while a payment allocation stood against it).
 
@@ -376,7 +376,6 @@ def test_report_only_on_a_pre_column_install_enumerates_and_writes_nothing(conn,
 # This migration delinks allocations and rewrites a residual. Which allocations
 # it voided is the one fact a reversal needs and, until M102, the only place it
 # lived was a line printed to a terminal.
-# SIM: planning/simlogs/m102_SIM_2026-08-12.md.
 
 def _reader(db_path):
     """A read connection through the seam (ADR-0034), not sqlite3 directly.

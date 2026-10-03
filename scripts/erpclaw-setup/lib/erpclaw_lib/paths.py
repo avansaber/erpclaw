@@ -62,7 +62,7 @@ def install_state_dir() -> str:
     """Path holding foundation install-state markers.
 
     The module manager's foundation state files (``registry_cache.json``,
-    ``.sync.lock``, ``.last_sync``, ``.no_autosync``, ``.last_registry_version``,
+    ``.sync.lock``, ``.no_autosync``, ``.last_registry_version``,
     ``logs/sync.log``) all sit directly under the install root, so this is the
     install root itself.
     """

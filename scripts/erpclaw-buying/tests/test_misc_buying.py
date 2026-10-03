@@ -14,6 +14,7 @@ from buying_helpers import (
     call_action, ns, is_error, is_ok, load_db_query,
     seed_supplier,
 )
+from erpclaw_lib.query import P, Q, Table, fn
 
 mod = load_db_query()
 
@@ -148,6 +149,43 @@ class TestAddSupplierQuotation:
         ))
         assert is_ok(result)
         assert "supplier_quotation_id" in result
+
+        # Deepened (m478): the stored quotation prices the line at the RFQ
+        # quantity — 50 x 45.00 = 2250.00 — links the supplier row, and flips
+        # the RFQ once every supplier has responded. A quotation posts no
+        # ledger rows, so none may appear.
+        sq_id = result["supplier_quotation_id"]
+        sq_t = Table("supplier_quotation")
+        q = Q.from_(sq_t).select(sq_t.star).where(sq_t.id == P())
+        header = conn.execute(q.get_sql(), (sq_id,)).fetchone()
+        assert (header["supplier_id"], header["rfq_id"],
+                header["status"]) == (env["supplier"], rfq["rfq_id"], "draft")
+        assert (header["total_amount"], header["grand_total"]) == (
+            "2250.00", "2250.00")
+        sqi_t = Table("supplier_quotation_item")
+        q = (Q.from_(sqi_t)
+             .select(sqi_t.item_id, sqi_t.quantity, sqi_t.rate, sqi_t.amount)
+             .where(sqi_t.supplier_quotation_id == P()))
+        lines = conn.execute(q.get_sql(), (sq_id,)).fetchall()
+        assert [(r["item_id"], r["quantity"], r["rate"], r["amount"])
+                for r in lines] == [
+            (env["item1"], "50.00", "45.00", "2250.00")]
+        rs_t = Table("rfq_supplier")
+        q = (Q.from_(rs_t)
+             .select(rs_t.supplier_quotation_id, rs_t.response_date)
+             .where(rs_t.rfq_id == P())
+             .where(rs_t.supplier_id == P()))
+        link = conn.execute(q.get_sql(),
+                            (rfq["rfq_id"], env["supplier"])).fetchone()
+        assert link["supplier_quotation_id"] == sq_id
+        assert link["response_date"] is not None
+        rfq_t = Table("request_for_quotation")
+        q = Q.from_(rfq_t).select(rfq_t.status).where(rfq_t.id == P())
+        assert conn.execute(q.get_sql(), (rfq["rfq_id"],)).fetchone()[
+            "status"] == "quotation_received"
+        gl_t = Table("gl_entry")
+        q = Q.from_(gl_t).select(fn.Count("*").as_("n"))
+        assert conn.execute(q.get_sql()).fetchone()["n"] == 0
 
 
 class TestListSupplierQuotations:

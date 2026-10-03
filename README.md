@@ -11,7 +11,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/license-GPL--3.0-green" alt="License: GPL-3.0">
   <!-- version badge auto-synced by release/scripts/sync_facts.py (badge URL pattern) -->
-  <img src="https://img.shields.io/badge/version-v4.15.0-0d9488" alt="Version v4.15.0">
+  <img src="https://img.shields.io/badge/version-v4.15.1-0d9488" alt="Version v4.15.1">
   <img src="https://img.shields.io/badge/OpenClaw-skill-14b8a6" alt="OpenClaw Skill">
   <img src="https://img.shields.io/badge/database-SQLite%20%7C%20PostgreSQL-0d9488" alt="SQLite or PostgreSQL">
   <a href="https://www.erpclaw.ai"><img src="https://img.shields.io/badge/website-erpclaw.ai-14b8a6" alt="Website erpclaw.ai"></a>
@@ -151,6 +151,14 @@ domains (`setup`, `gl`, `selling`, `buying`, `inventory`, `billing`, `tax`,
 (`scripts/module_registry.json`) tracks every additional module across the
 `github.com/avansaber/*` repos and installs them on demand by sparse checkout.
 
+Modules in this release install from AvanSaber's signed registry. Contributors
+can build modules and check them with `validate-module` and the constitution
+checks. Customer-accepted publisher signing keys are planned and are not
+supplied by this release. Community modules must obey table ownership, make
+financial changes through actions and follow the installation's
+approval-envelope rules. The planned publisher-key path does not permit direct
+writes to financial tables.
+
 Module authoring and DGM evolution (code generation, sandboxed test runs, the
 deploy pipeline) live in the optional
 [`erpclaw-os-engine`](https://github.com/avansaber/erpclaw-addons/tree/main/erpclaw-os-engine)
@@ -159,7 +167,7 @@ module-generation or auto-deploy code paths.
 
 <sub>Current build:
 <!-- SYNC:facts:start -->
-ERPClaw v4.15.0 | 46 modules (46 active + 0 preview) | 3,235 actions
+ERPClaw v4.15.1 | 46 modules (46 active + 0 preview) | 3,235 actions
 <!-- SYNC:facts:end -->
 </sub>
 

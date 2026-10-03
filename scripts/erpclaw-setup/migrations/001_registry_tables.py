@@ -26,38 +26,7 @@ MIGRATION_DATA_CLASS = "none"
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "data.sqlite")
 
-
-def _table_exists(conn, table_name):
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-        (table_name,),
-    ).fetchone()
-    return row is not None
-
-
-def _column_exists(conn, table_name, column_name):
-    cursor = conn.execute(f"PRAGMA table_info({table_name})")
-    for row in cursor:
-        if row[1] == column_name:
-            return True
-    return False
-
-
-def run_migration(db_path=None):
-    path = db_path or os.environ.get("ERPCLAW_DB_PATH", DEFAULT_DB_PATH)
-    if not os.path.exists(path):
-        print(f"Database not found at {path}. Nothing to migrate.")
-        return
-
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    from erpclaw_lib.db import setup_pragmas
-    setup_pragmas(conn)
-    conn.execute("PRAGMA foreign_keys=OFF")  # Must be OFF during table rebuild
-
-    try:
-        # Step 1: Create registry tables if they don't exist
-        conn.executescript("""
+_REGISTRY_DDL = """
             CREATE TABLE IF NOT EXISTS voucher_type_registry (
                 voucher_type TEXT NOT NULL,
                 skill_name   TEXT NOT NULL,
@@ -77,16 +46,125 @@ def run_migration(db_path=None):
                 skill_name   TEXT NOT NULL,
                 label        TEXT NOT NULL
             );
-        """)
+        """
+
+_ADD_DIMENSIONS_JSON = "ALTER TABLE gl_entry ADD COLUMN dimensions_json TEXT NOT NULL DEFAULT '{}'"
+_ADD_PAYMENT_METHOD = "ALTER TABLE payment_entry ADD COLUMN payment_method TEXT DEFAULT ''"
+_ADD_PROJECT_INDEX = "CREATE INDEX IF NOT EXISTS idx_gl_entry_project ON gl_entry(project_id)"
+
+
+def _get_dialect():
+    return os.environ.get("ERPCLAW_DB_DIALECT", "sqlite")
+
+
+def _run_postgres(db_path):
+    import importlib.util
+    if importlib.util.find_spec("erpclaw_lib") is None:
+        sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
+    import erpclaw_lib.db as _db
+    import erpclaw_lib.seam as _seam
+    _registries = ("voucher_type_registry", "party_type_registry", "account_type_registry")
+    missing_registries = [t for t in _registries if not _seam.table_exists(t, db_path)]
+    _gl_exists = _seam.table_exists("gl_entry", db_path)
+    _pay_exists = _seam.table_exists("payment_entry", db_path)
+    if _gl_exists:
+        _gl_columns = _seam.column_names("gl_entry", db_path)
+        _gl_indexes = _seam.index_names("gl_entry", db_path)
+    else:
+        _gl_columns = []
+        _gl_indexes = []
+    if _pay_exists:
+        _pay_columns = _seam.column_names("payment_entry", db_path)
+    else:
+        _pay_columns = []
+    add_dimensions = _gl_exists and "dimensions_json" not in _gl_columns
+    add_payment_method = _pay_exists and "payment_method" not in _pay_columns
+    add_project_index = _gl_exists and "idx_gl_entry_project" not in _gl_indexes
+    conn = _db.get_connection(db_path)
+    try:
+        if missing_registries:
+            conn.execute(_REGISTRY_DDL)
+            for _name in _registries:
+                if _name in missing_registries:
+                    print("  PostgreSQL: %s: created." % _name)
+                else:
+                    print("  PostgreSQL: %s: already present" % _name)
+        else:
+            for _name in _registries:
+                print("  PostgreSQL: %s: already present" % _name)
+        if add_dimensions:
+            conn.execute(_ADD_DIMENSIONS_JSON)
+            print("  PostgreSQL: gl_entry.dimensions_json: added.")
+        else:
+            print("  PostgreSQL: gl_entry.dimensions_json: already present")
+        if add_payment_method:
+            conn.execute(_ADD_PAYMENT_METHOD)
+            print("  PostgreSQL: payment_entry.payment_method: added.")
+        else:
+            print("  PostgreSQL: payment_entry.payment_method: already present")
+        if add_project_index:
+            conn.execute(_ADD_PROJECT_INDEX)
+            print("  PostgreSQL: idx_gl_entry_project: added.")
+        else:
+            print("  PostgreSQL: idx_gl_entry_project: already present")
+        _seed_registries(conn)
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        try:
+            conn.close()
+        except Exception:
+            pass
+        raise
+    conn.close()
+    print("  PostgreSQL: registries seeded (missing rows only).")
+
+
+def _table_exists(conn, table_name):
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def _column_exists(conn, table_name, column_name):
+    cursor = conn.execute(f"PRAGMA table_info({table_name})")
+    for row in cursor:
+        if row[1] == column_name:
+            return True
+    return False
+
+
+def run_migration(db_path=None):
+    if _get_dialect() == "postgresql":
+        return _run_postgres(db_path)
+    path = db_path or os.environ.get("ERPCLAW_DB_PATH", DEFAULT_DB_PATH)
+    if not os.path.exists(path):
+        print(f"Database not found at {path}. Nothing to migrate.")
+        return
+
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    from erpclaw_lib.db import setup_pragmas
+    setup_pragmas(conn)
+    conn.execute("PRAGMA foreign_keys=OFF")  # Must be OFF during table rebuild
+
+    try:
+        # Step 1: Create registry tables if they don't exist
+        conn.executescript(_REGISTRY_DDL)
 
         # Step 2: Add dimensions_json to gl_entry if missing
         if _table_exists(conn, "gl_entry") and not _column_exists(conn, "gl_entry", "dimensions_json"):
-            conn.execute("ALTER TABLE gl_entry ADD COLUMN dimensions_json TEXT NOT NULL DEFAULT '{}'")
+            conn.execute(_ADD_DIMENSIONS_JSON)
             print("  Added dimensions_json column to gl_entry")
 
         # Step 3: Add payment_method to payment_entry if missing
         if _table_exists(conn, "payment_entry") and not _column_exists(conn, "payment_entry", "payment_method"):
-            conn.execute("ALTER TABLE payment_entry ADD COLUMN payment_method TEXT DEFAULT ''")
+            conn.execute(_ADD_PAYMENT_METHOD)
             print("  Added payment_method column to payment_entry")
 
         # Step 4: Add project_id index if missing
@@ -94,7 +172,7 @@ def run_migration(db_path=None):
             "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_gl_entry_project'"
         ).fetchone()
         if not idx and _table_exists(conn, "gl_entry"):
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_gl_entry_project ON gl_entry(project_id)")
+            conn.execute(_ADD_PROJECT_INDEX)
             print("  Added idx_gl_entry_project index")
 
         # Step 5: Seed registry tables
@@ -144,7 +222,7 @@ def _seed_registries(conn):
         ).fetchone()
         if not existing:
             conn.execute(
-                "INSERT INTO voucher_type_registry VALUES (?, ?, ?, 'gl_entry')",
+                "INSERT INTO voucher_type_registry (voucher_type, skill_name, label, target_table) VALUES (?, ?, ?, 'gl_entry')",
                 (vt, skill, label),
             )
 
@@ -168,7 +246,7 @@ def _seed_registries(conn):
         ).fetchone()
         if not existing:
             conn.execute(
-                "INSERT INTO voucher_type_registry VALUES (?, ?, ?, 'stock_ledger_entry')",
+                "INSERT INTO voucher_type_registry (voucher_type, skill_name, label, target_table) VALUES (?, ?, ?, 'stock_ledger_entry')",
                 (vt, skill, label),
             )
 
@@ -186,7 +264,7 @@ def _seed_registries(conn):
         ).fetchone()
         if not existing:
             conn.execute(
-                "INSERT INTO voucher_type_registry VALUES (?, ?, ?, 'payment_allocation')",
+                "INSERT INTO voucher_type_registry (voucher_type, skill_name, label, target_table) VALUES (?, ?, ?, 'payment_allocation')",
                 (vt, skill, label),
             )
 
@@ -202,7 +280,7 @@ def _seed_registries(conn):
         ).fetchone()
         if not existing:
             conn.execute(
-                "INSERT INTO party_type_registry VALUES (?, ?, ?)",
+                "INSERT INTO party_type_registry (party_type, skill_name, label) VALUES (?, ?, ?)",
                 (pt, skill, label),
             )
 
@@ -236,7 +314,7 @@ def _seed_registries(conn):
         ).fetchone()
         if not existing:
             conn.execute(
-                "INSERT INTO account_type_registry VALUES (?, ?, ?)",
+                "INSERT INTO account_type_registry (account_type, skill_name, label) VALUES (?, ?, ?)",
                 (at, skill, label),
             )
 

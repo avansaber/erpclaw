@@ -16,7 +16,8 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import dynamic_update
+    from erpclaw_lib.query import Case, DecimalSum, Field, P, Q, Table, dynamic_update, fn
+    from erpclaw_lib.query_helpers import resolve_company_id, resolve_scope_company
 
     ENTITY_PREFIXES.setdefault("lease", "LEAS-")
 except ImportError:
@@ -76,6 +77,12 @@ def add_lease(conn, args):
     monthly_payment = getattr(args, "monthly_payment", None) or "0"
     discount_rate = getattr(args, "discount_rate", None) or "0"
     term_months = int(getattr(args, "term_months", None) or 0)
+    try:
+        valid = Decimal(monthly_payment).is_finite()
+    except Exception:
+        valid = False
+    if not valid:
+        err(f"Invalid monthly-payment: {monthly_payment}")
 
     lease_id = str(uuid.uuid4())
     conn.company_id = args.company_id
@@ -124,6 +131,14 @@ def update_lease(conn, args):
         err("--id is required")
     if not conn.execute("SELECT id FROM advacct_lease WHERE id = ?", (lease_id,)).fetchone():
         err(f"Lease {lease_id} not found")
+    monthly_payment = getattr(args, "monthly_payment", None)
+    if monthly_payment is not None:
+        try:
+            valid = Decimal(monthly_payment).is_finite()
+        except Exception:
+            valid = False
+        if not valid:
+            err(f"Invalid monthly-payment: {monthly_payment}")
 
     data, changed = {}, []
     for arg_name, col_name in {
@@ -157,11 +172,15 @@ def update_lease(conn, args):
     if not data:
         err("No fields to update")
 
+    current = row_to_dict(conn.execute(
+        "SELECT * FROM advacct_lease WHERE id = ?", (lease_id,)).fetchone())
+    old_values = {col: current[col] for col in changed}
     data["updated_at"] = _now_iso()
     sql, params = dynamic_update("advacct_lease", data, where={"id": lease_id})
     conn.execute(sql, params)
+    new_values = {col: data[col] for col in changed}
     audit(conn, SKILL, "update-lease", "advacct_lease", lease_id,
-          new_values={"updated_fields": changed})
+          old_values=old_values, new_values=new_values)
     conn.commit()
     ok({"id": lease_id, "updated_fields": changed})
 
@@ -200,10 +219,10 @@ def get_lease(conn, args):
 # 4. list-leases
 # ===========================================================================
 def list_leases(conn, args):
+    company_id = resolve_scope_company(conn, getattr(args, "company_id", None), getattr(args, "company_name", None))
     where, params = ["1=1"], []
-    if getattr(args, "company_id", None):
-        where.append("company_id = ?")
-        params.append(args.company_id)
+    where.append("company_id = ?")
+    params.append(company_id)
     if getattr(args, "lease_type", None):
         where.append("lease_type = ?")
         params.append(args.lease_type)
@@ -489,10 +508,10 @@ def record_lease_payment(conn, args):
 # 10. lease-maturity-report
 # ===========================================================================
 def lease_maturity_report(conn, args):
+    company_id = resolve_scope_company(conn, getattr(args, "company_id", None), getattr(args, "company_name", None))
     where, params = ["1=1"], []
-    if getattr(args, "company_id", None):
-        where.append("company_id = ?")
-        params.append(args.company_id)
+    where.append("company_id = ?")
+    params.append(company_id)
 
     where_sql = " AND ".join(where)
     rows = conn.execute(f"""
@@ -514,26 +533,37 @@ def lease_maturity_report(conn, args):
 # 11. lease-disclosure-report
 # ===========================================================================
 def lease_disclosure_report(conn, args):
-    where, params = ["1=1"], []
-    if getattr(args, "company_id", None):
-        where.append("l.company_id = ?")
-        params.append(args.company_id)
+    lease_t = Table("advacct_lease").as_("l")
+    company_id = resolve_scope_company(conn, getattr(args, "company_id", None), getattr(args, "company_name", None))
+    query = (
+        Q.from_(lease_t)
+        .select(
+            lease_t.lease_type,
+            fn.Count("*").as_("lease_count"),
+            fn.Coalesce(DecimalSum(lease_t.monthly_payment), "0").as_("total_monthly_payments"),
+            fn.Coalesce(DecimalSum(fn.Coalesce(lease_t.rou_asset_value, "0")), "0").as_("total_rou_assets"),
+            fn.Coalesce(DecimalSum(fn.Coalesce(lease_t.lease_liability, "0")), "0").as_("total_lease_liabilities"),
+        )
+        .groupby(lease_t.lease_type)
+    )
+    params = []
+    query = query.where(lease_t.company_id == P())
+    params.append(company_id)
+    rows = conn.execute(query.get_sql(), params).fetchall()
 
-    where_sql = " AND ".join(where)
-    rows = conn.execute(f"""
-        SELECT l.lease_type,
-               COUNT(*) as lease_count,
-               SUM(CAST(l.monthly_payment AS NUMERIC)) as total_monthly_payments,
-               SUM(CAST(COALESCE(l.rou_asset_value, '0') AS NUMERIC)) as total_rou_assets,
-               SUM(CAST(COALESCE(l.lease_liability, '0') AS NUMERIC)) as total_lease_liabilities
-        FROM advacct_lease l
-        WHERE {where_sql}
-        GROUP BY l.lease_type
-    """, params).fetchall()
+    out = []
+    for item in rows:
+        data = row_to_dict(item)
+        for key in ("total_monthly_payments", "total_rou_assets", "total_lease_liabilities"):
+            raw = data.get(key)
+            if raw is None:
+                raw = "0"
+            data[key] = str(Decimal(str(raw)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+        out.append(data)
 
     ok({
         "report": "lease_disclosure",
-        "rows": [row_to_dict(r) for r in rows],
+        "rows": out,
     })
 
 
@@ -541,10 +571,10 @@ def lease_disclosure_report(conn, args):
 # 12. lease-summary
 # ===========================================================================
 def lease_summary(conn, args):
+    company_id = resolve_scope_company(conn, getattr(args, "company_id", None), getattr(args, "company_name", None))
     where, params = ["1=1"], []
-    if getattr(args, "company_id", None):
-        where.append("company_id = ?")
-        params.append(args.company_id)
+    where.append("company_id = ?")
+    params.append(company_id)
 
     where_sql = " AND ".join(where)
     total = conn.execute(

@@ -211,7 +211,7 @@ class TestUpdateAccountType:
     dropped: passing it alongside any other field returned `status: ok` and left
     the type unchanged, and the `has_entries` probe written for this exact
     restriction was computed and never read. M94's migration retypes accounts, so
-    the manual remedy has to exist. Plan home: planning/pending_items.md row M94.
+    the manual remedy has to exist.
     """
 
     def _seed_posted_entry(self, conn, cid, account_id):

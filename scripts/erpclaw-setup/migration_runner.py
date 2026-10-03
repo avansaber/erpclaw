@@ -17,6 +17,7 @@ Entry points: `run_pending(db_path, dry_run=False)` and `discover()`.
 Exposed to users as the `migrate` action in db_query.py.
 """
 import contextlib
+import gc
 import importlib.util
 import os
 import re
@@ -69,12 +70,31 @@ def _ledger_id(module_name, stem):
     return stem if module_name == "erpclaw-setup" else f"{module_name}:{stem}"
 
 
+def _resolve_target(db_path):
+    """On PostgreSQL `ERPCLAW_DB_URL` wins when set, otherwise only a `postgresql://` or `postgres://` URL from the `db_path` argument or `ERPCLAW_DB_PATH` is used and a file path or other non-URL location (including a libpq keyword string such as `host=h dbname=b`, which is not a URL) is ignored; on SQLite `db_path` is used exactly as passed."""
+    if _dialect() == "postgresql":
+        env_url = os.environ.get("ERPCLAW_DB_URL")
+        if env_url:
+            from erpclaw_lib.db import require_pg_url
+            return require_pg_url(env_url, source="ERPCLAW_DB_URL")
+        if isinstance(db_path, str) and (db_path.startswith("postgresql://")
+                                         or db_path.startswith("postgres://")):
+            return db_path
+        env_path = os.environ.get("ERPCLAW_DB_PATH")
+        if isinstance(env_path, str) and (env_path.startswith("postgresql://")
+                                          or env_path.startswith("postgres://")):
+            return env_path
+        raise RuntimeError(
+            "ERPCLAW_DB_DIALECT=postgresql but the migration runner has no target: "
+            "set ERPCLAW_DB_URL, pass a postgresql:// URL, or set ERPCLAW_DB_PATH to a postgresql:// URL.")
+    return db_path
+
+
 def _connect(db_path):
     """Return (connection, placeholder) for the active dialect."""
     if _dialect() == "postgresql":
         import psycopg2
-        url = os.environ.get("ERPCLAW_DB_URL") or db_path
-        return psycopg2.connect(url), "%s"
+        return psycopg2.connect(_resolve_target(db_path)), "%s"
     import sqlite3
     conn = sqlite3.connect(db_path)
     try:
@@ -86,11 +106,19 @@ def _connect(db_path):
 
 
 def _applied_ids(db_path):
+    """Ids ledgered as 'applied'. Reads only: on a database the runner has
+    never written to there is no ledger yet, and a read-only question (dry
+    run) or a failed run must not be the thing that first writes one. The
+    existence question goes to the seam, which answers from the backend
+    catalog over its own connection, so a missing ledger reads as empty on
+    any backend with no raw catalog reads here. The ledger comes into being
+    with the first recorded row in `_record` (applied or failed)."""
+    from erpclaw_lib import seam
+    if not seam.table_exists("erpclaw_schema_migration", _resolve_target(db_path)):
+        return set()
     conn, _ = _connect(db_path)
     try:
         cur = conn.cursor()
-        cur.execute(_LEDGER_DDL)
-        conn.commit()
         cur.execute("SELECT id FROM erpclaw_schema_migration WHERE status = 'applied'")
         return {r[0] for r in cur.fetchall()}
     finally:
@@ -123,6 +151,8 @@ def run_pending(db_path, dry_run=False, migrations_dir=MIGRATIONS_DIR,
     """Run all not-yet-applied migrations in `migrations_dir` in order, recording
     each under `module_name` in the shared ledger. Works for the foundation
     (default) and for any module that ships its own migrations/ dir (P1)."""
+    if _dialect() == "postgresql":
+        _resolve_target(db_path)
     applied = _applied_ids(db_path)
     discovered = discover(migrations_dir)
     pending = [(stem, p) for stem, p in discovered
@@ -144,15 +174,44 @@ def run_pending(db_path, dry_run=False, migrations_dir=MIGRATIONS_DIR,
             # by routing their output to stderr (still visible in server logs).
             with contextlib.redirect_stdout(sys.stderr):
                 spec.loader.exec_module(mod)
-                mod.run_migration(db_path)
+                mod.run_migration(_resolve_target(db_path))
         except Exception as e:  # noqa: BLE001 — surface, don't swallow
+            error = str(e)
+        else:
+            try:
+                _record(db_path, lid, "applied", module_name)
+            except Exception as record_e:  # noqa: BLE001 — report, don't mask
+                record_error = str(record_e)
+                return {"ok": False, "module": module_name, "applied": ran, "failed": stem,
+                        "stage": "record",
+                        "error": record_error,
+                        "detail": "The migration ran and its changes are committed, but its "
+                                  "ledger row could not be written, so it will run again on "
+                                  "the next run and must be idempotent. Fix the ledger write "
+                                  "and re-run.",
+                        "ledger_error": record_error}
+            ran.append(stem)
+            continue
+        gc.collect()
+        try:
             _record(db_path, lid, "failed", module_name)
+        except Exception as ledger_e:  # noqa: BLE001 — report, don't mask
+            ledger_error = str(ledger_e)
             return {"ok": False, "module": module_name, "applied": ran, "failed": stem,
-                    "error": str(e),
-                    "detail": "DB left at the last successful migration. "
-                              "Fix the failing migration and re-run."}
-        _record(db_path, lid, "applied", module_name)
-        ran.append(stem)
+                    "stage": "run",
+                    "error": error,
+                    "detail": "A failing migration's own changes are rolled back only if it "
+                              "runs in a single transaction; anything it committed before "
+                              "failing remains. It is recorded in the ledger as failed and is "
+                              "retried on the next run. Fix the failing migration and re-run.",
+                    "ledger_error": ledger_error}
+        return {"ok": False, "module": module_name, "applied": ran, "failed": stem,
+                "stage": "run",
+                "error": error,
+                "detail": "A failing migration's own changes are rolled back only if it "
+                          "runs in a single transaction; anything it committed before "
+                          "failing remains. It is recorded in the ledger as failed and is "
+                          "retried on the next run. Fix the failing migration and re-run."}
 
     return {"ok": True, "module": module_name, "applied": ran,
             "already_applied": [s for s, _ in discovered if s not in [r for r in ran]

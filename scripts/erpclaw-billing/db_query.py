@@ -23,7 +23,7 @@ try:
     import importlib.util
     if importlib.util.find_spec("erpclaw_lib") is None:
         sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
-    from erpclaw_lib.db import get_connection, ensure_db_exists, DEFAULT_DB_PATH  # noqa: E402
+    from erpclaw_lib.db import get_connection, unexpected_error_message  # noqa: E402
     from erpclaw_lib.decimal_utils import to_decimal, round_currency  # noqa: E402
     from erpclaw_lib.naming import get_next_name  # noqa: E402
     from erpclaw_lib.validation import check_input_lengths  # noqa: E402
@@ -389,6 +389,14 @@ def get_meter(conn, args):
 
 def list_meters(conn, args):
     """List meters with optional filters."""
+    meter_type = getattr(args, "meter_type", None)
+    if meter_type and meter_type not in VALID_SERVICE_TYPES:
+        err(f"Invalid meter-type: {meter_type}. "
+            f"Must be one of: {', '.join(VALID_SERVICE_TYPES)}")
+    meter_status = getattr(args, "status", None)
+    if meter_status and meter_status not in VALID_METER_STATUSES:
+        err(f"Invalid status: {meter_status}. "
+            f"Must be one of: {', '.join(VALID_METER_STATUSES)}")
     m = Table("meter")
     c = Table("customer")
     limit = int(args.limit or 20)
@@ -3356,12 +3364,8 @@ def main():
     check_unknown_args(parser, unknown)
     check_input_lengths(args)
 
-    db_path = args.db_path
-    if db_path:
-        os.environ["ERPCLAW_DB_PATH"] = db_path
-
-    ensure_db_exists()
-    conn = get_connection()
+    db_path = getattr(args, "db_path", None)
+    conn = get_connection(db_path)
 
     # Dependency check
     _dep = check_required_tables(conn, REQUIRED_TABLES)
@@ -3377,7 +3381,7 @@ def main():
         raise
     except Exception as e:
         sys.stderr.write(f"[erpclaw-billing] {e}\n")
-        err("An unexpected error occurred")
+        err(unexpected_error_message(e))
     finally:
         conn.close()
 

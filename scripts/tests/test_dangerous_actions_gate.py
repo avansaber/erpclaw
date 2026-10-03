@@ -126,3 +126,53 @@ def test_the_mcp_layer_sees_the_gate_too():
     seen = reader.dangerous_actions()
     assert "write-off-invoice" in seen
     assert "legal-write-off-invoice" in seen
+
+
+# ── m197a: callers that pass a user confirmation on are gated themselves ────
+#
+# A module action that puts --user-confirmed on a child call to a gated
+# foundation action is confirming on the user's behalf unless the calling
+# action itself required that confirmation. These twelve callers each carry a
+# confirmation across a module boundary (derived from the tree on every run
+# by testing/unit/L0/test_code_supplied_confirmation.py), so they join
+# DANGEROUS_ACTIONS.
+
+_CODE_CONFIRMING_CALLERS = [
+    "transfer-materials-to-subcontractor",
+    "cancel-subcontract-transfer",
+    "pos-submit-transaction",
+    "pos-void-transaction",
+    "pos-return-transaction",
+    "construction-approve-progress-bill",
+    "legal-generate-invoice",
+    "legal-send-invoice",
+    "food-complete-catering-event",
+    "prop-generate-charges",
+    "prop-process-rent-payment",
+    "food-receive-catering-deposit",
+]
+
+
+@pytest.mark.parametrize("action", _CODE_CONFIRMING_CALLERS)
+def test_code_confirming_callers_are_gated(action):
+    assert action in ROUTER.DANGEROUS_ACTIONS
+
+
+@pytest.mark.parametrize("action", _CODE_CONFIRMING_CALLERS)
+def test_code_confirming_callers_blocked_without_flag(action, capsys):
+    with patch.object(sys, "argv",
+                      ["db_query.py", "--action", action]):
+        with pytest.raises(SystemExit) as exc:
+            ROUTER._gate_dangerous_action(action)
+    assert exc.value.code == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"] == "user_confirmation_required"
+    assert payload["action"] == action
+
+
+@pytest.mark.parametrize("action", _CODE_CONFIRMING_CALLERS)
+def test_code_confirming_callers_pass_with_flag(action):
+    with patch.object(sys, "argv",
+                      ["db_query.py", "--action", action,
+                       "--user-confirmed"]):
+        ROUTER._gate_dangerous_action(action)  # no exit

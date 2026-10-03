@@ -11,6 +11,8 @@ Functions:
 """
 from decimal import Decimal, ROUND_HALF_UP
 
+from erpclaw_lib.query import abs_days_between, date_add_days
+
 
 def get_exchange_rate(conn, from_currency, to_currency, date, max_days=7):
     """Look up exchange rate for a given date with fallback.
@@ -58,12 +60,19 @@ def get_exchange_rate(conn, from_currency, to_currency, date, max_days=7):
         if rate > 0:
             return (Decimal("1") / rate).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
 
+    # Nearest-date ordering, resolved on every call. abs_days_between reads
+    # the active dialect at call time; a module-level constant would freeze
+    # whichever backend happened to be set at import.
+    nearest_first = str(abs_days_between("effective_date", "?"))
+    window_start = str(date_add_days("?", "?", "-"))
+    window_end = str(date_add_days("?", "?", "+"))
+
     # 2. Nearest date within window
     row = conn.execute(
-        """SELECT rate, effective_date FROM exchange_rate
+        f"""SELECT rate, effective_date FROM exchange_rate
            WHERE from_currency = ? AND to_currency = ?
-             AND effective_date BETWEEN date(?, '-' || ? || ' days') AND date(?, '+' || ? || ' days')
-           ORDER BY ABS(julianday(effective_date) - julianday(?)) ASC
+             AND effective_date BETWEEN {window_start} AND {window_end}
+           ORDER BY {nearest_first} ASC
            LIMIT 1""",
         (from_currency, to_currency, date, max_days, date, max_days, date),
     ).fetchone()
@@ -72,10 +81,10 @@ def get_exchange_rate(conn, from_currency, to_currency, date, max_days=7):
 
     # Try inverse within window
     row = conn.execute(
-        """SELECT rate, effective_date FROM exchange_rate
+        f"""SELECT rate, effective_date FROM exchange_rate
            WHERE from_currency = ? AND to_currency = ?
-             AND effective_date BETWEEN date(?, '-' || ? || ' days') AND date(?, '+' || ? || ' days')
-           ORDER BY ABS(julianday(effective_date) - julianday(?)) ASC
+             AND effective_date BETWEEN {window_start} AND {window_end}
+           ORDER BY {nearest_first} ASC
            LIMIT 1""",
         (to_currency, from_currency, date, max_days, date, max_days, date),
     ).fetchone()

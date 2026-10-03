@@ -21,24 +21,32 @@ try:
     import importlib.util
     if importlib.util.find_spec("erpclaw_lib") is None:
         sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
-    from erpclaw_lib.db import get_connection, ensure_db_exists, DEFAULT_DB_PATH
+    from erpclaw_lib.db import get_connection, unexpected_error_message
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.validation import check_input_lengths
     from erpclaw_lib.gl_posting import (
         validate_gl_entries,
         insert_gl_entries,
         reverse_gl_entries,
+        take_chain_heads,
     )
     from erpclaw_lib.cwip_posting import (
         get_under_construction_asset, cwip_debit_legs, record_cwip_accumulation,
         reverse_cwip_accumulations,
     )
     from erpclaw_lib.naming import get_next_name
+    from erpclaw_lib.dimensions import (
+        parse_dimension_input,
+        validate_document_dimensions,
+        dimensions_json_text,
+    )
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.dependencies import check_required_tables
-    from erpclaw_lib.query_helpers import resolve_company_id
+    from erpclaw_lib.query_helpers import resolve_company_id, resolve_scope_company
     from erpclaw_lib.query import Q, P, Table, Field, fn, Order, line_order
+    from erpclaw_lib import authority_gate
+    from erpclaw_lib.authorization_consumption import INPUT_INVALID
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
 except ImportError:
     import json as _json
@@ -65,6 +73,34 @@ VALID_ENTRY_TYPES = (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _parse_paging(args, default_limit=20, default_offset=0):
+    raw_limit = getattr(args, "limit", None)
+    raw_offset = getattr(args, "offset", None)
+    if raw_limit is None or (isinstance(raw_limit, str) and raw_limit.strip() == ""):
+        limit = default_limit
+    else:
+        if isinstance(raw_limit, bool) or isinstance(raw_limit, float):
+            err("--limit must be a positive integer")
+        try:
+            limit = int(raw_limit.strip()) if isinstance(raw_limit, str) else int(raw_limit)
+        except (ValueError, TypeError):
+            err("--limit must be a positive integer")
+        if limit <= 0:
+            err("--limit must be a positive integer")
+    if raw_offset is None or (isinstance(raw_offset, str) and raw_offset.strip() == ""):
+        offset = default_offset
+    else:
+        if isinstance(raw_offset, bool) or isinstance(raw_offset, float):
+            err("--offset must be a non-negative integer")
+        try:
+            offset = int(raw_offset.strip()) if isinstance(raw_offset, str) else int(raw_offset)
+        except (ValueError, TypeError):
+            err("--offset must be a non-negative integer")
+        if offset < 0:
+            err("--offset must be a non-negative integer")
+    return limit, offset
+
 
 def _validate_lines(lines: list[dict]) -> tuple[Decimal, Decimal]:
     """Validate journal entry lines. Returns (total_debit, total_credit).
@@ -107,6 +143,73 @@ def _validate_lines(lines: list[dict]) -> tuple[Decimal, Decimal]:
     return total_debit, total_credit
 
 
+def _parse_header_dimensions(args):
+    """Parse --dimensions/--dimension-key/--dimension-value into a dict or None.
+
+    Returns None when the caller supplied no dimension input at all (so the
+    caller can tell "leave it" from "clear it" with an explicit '{}').
+    A ValueError from the shared parser ends the action with err(), before
+    any write.
+    """
+    try:
+        return parse_dimension_input(
+            getattr(args, "dimensions", None),
+            getattr(args, "dimension_key", None),
+            getattr(args, "dimension_value", None))
+    except ValueError as e:
+        err(str(e))
+
+
+def _parse_line_dimensions(lines: list[dict]) -> list[dict]:
+    """Normalise each line's "dimensions" object in place; refuse bad ones.
+
+    A present non-object value is refused as
+    "Line {n}: dimensions must be a JSON object"; each object goes through
+    the same key/value rules as the header so the texts are identical,
+    prefixed "Line {n}: ".
+    """
+    for i, line in enumerate(lines):
+        if "dimensions" not in line:
+            continue
+        raw = line["dimensions"]
+        if not isinstance(raw, dict):
+            err(f"Line {i+1}: dimensions must be a JSON object")
+        try:
+            line["dimensions"] = parse_dimension_input(
+                json.dumps(raw), None, None)
+        except ValueError as e:
+            err(f"Line {i+1}: {e}")
+    return lines
+
+
+def _loads_dims(text):
+    """Parse a stored dimensions_json value back to a dict (never fail)."""
+    try:
+        parsed = json.loads(text) if isinstance(text, str) else text
+    except (ValueError, TypeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _validate_effective_dimensions(conn, header_obj, lines):
+    """Check each line's effective object (header merged with line, line wins).
+
+    A shared-registry refusal ends the action with err() and nothing written.
+    """
+    header_obj = header_obj or {}
+    for line in lines:
+        line_dims = line.get("dimensions") or {}
+        if not isinstance(line_dims, dict):
+            line_dims = {}
+        effective = dict(header_obj)
+        effective.update(line_dims)
+        try:
+            validate_document_dimensions(
+                conn, effective, account_ids=[line.get("account_id")])
+        except ValueError as e:
+            err(str(e))
+
+
 def _insert_lines(conn, journal_entry_id: str, lines: list[dict]):
     """Insert journal_entry_line rows."""
     for line in lines:
@@ -114,8 +217,9 @@ def _insert_lines(conn, journal_entry_id: str, lines: list[dict]):
         conn.execute(
             """INSERT INTO journal_entry_line
                (id, journal_entry_id, account_id, party_type, party_id,
-                debit, credit, cost_center_id, project_id, remark)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                debit, credit, cost_center_id, project_id, remark,
+                dimensions_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (line_id, journal_entry_id,
              line["account_id"],
              line.get("party_type"),
@@ -124,7 +228,8 @@ def _insert_lines(conn, journal_entry_id: str, lines: list[dict]):
              str(round_currency(to_decimal(line.get("credit", "0")))),
              line.get("cost_center_id"),
              line.get("project_id"),
-             line.get("remark")),
+             line.get("remark"),
+             dimensions_json_text(line.get("dimensions"))),
         )
 
 
@@ -204,17 +309,26 @@ def add_journal_entry(conn, args):
         if not acct:
             err(f"Line {i+1}: account {line['account_id']} not found")
 
+    # Accounting dimensions (M6): header input plus per-line objects are
+    # parsed and checked against the registry here, before get_next_name
+    # consumes a naming-series step.
+    header_dims = _parse_header_dimensions(args)
+    header_obj = header_dims if header_dims is not None else {}
+    _parse_line_dimensions(lines)
+    _validate_effective_dimensions(conn, header_obj, lines)
+
     je_id = str(uuid.uuid4())
     naming = get_next_name(conn, "journal_entry", company_id=company_id)
 
     conn.execute(
         """INSERT INTO journal_entry
            (id, naming_series, posting_date, entry_type, total_debit, total_credit,
-            remark, status, cwip_asset_id, company_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)""",
+            remark, status, cwip_asset_id, company_id, dimensions_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)""",
         (je_id, naming, posting_date, entry_type,
          str(total_debit), str(total_credit),
-         args.remark, cwip_asset_id, company_id),
+         args.remark, cwip_asset_id, company_id,
+         dimensions_json_text(header_obj)),
     )
 
     _insert_lines(conn, je_id, lines)
@@ -246,6 +360,44 @@ def update_journal_entry(conn, args):
     updated_fields = []
     old_values = {}
 
+    # Accounting dimensions (M6): parse the header input and --lines here,
+    # before the first UPDATE below, so a refusal writes nothing and consumes
+    # no naming-series step. Validation only runs when the caller supplied
+    # header input or --lines.
+    header_input = _parse_header_dimensions(args)
+    replacement_lines = None
+    replacement_totals = None
+    if args.lines:
+        try:
+            replacement_lines = (json.loads(args.lines)
+                                 if isinstance(args.lines, str) else args.lines)
+        except json.JSONDecodeError as e:
+            err("Invalid JSON format in --lines")
+        try:
+            replacement_totals = _validate_lines(replacement_lines)
+        except ValueError as e:
+            err(str(e))
+        q_acct_pre = Q.from_(_t_account).select(_t_account.id).where(_t_account.id == P())
+        for i, line in enumerate(replacement_lines):
+            acct = conn.execute(q_acct_pre.get_sql(), (line["account_id"],)).fetchone()
+            if not acct:
+                err(f"Line {i+1}: account {line['account_id']} not found")
+        _parse_line_dimensions(replacement_lines)
+    if header_input is not None or args.lines:
+        if header_input is not None:
+            validation_header = header_input
+        else:
+            validation_header = _loads_dims(je.get("dimensions_json"))
+        if replacement_lines is not None:
+            validation_lines = replacement_lines
+        else:
+            stored = _get_je_lines(conn, je_id)
+            validation_lines = [
+                {"account_id": l["account_id"],
+                 "dimensions": _loads_dims(l.get("dimensions_json"))}
+                for l in stored]
+        _validate_effective_dimensions(conn, validation_header, validation_lines)
+
     # Update posting_date
     if args.posting_date:
         old_values["posting_date"] = je["posting_date"]
@@ -269,24 +421,20 @@ def update_journal_entry(conn, args):
                      (args.remark, je_id))
         updated_fields.append("remark")
 
-    # Replace lines if provided
-    if args.lines:
-        try:
-            lines = json.loads(args.lines) if isinstance(args.lines, str) else args.lines
-        except json.JSONDecodeError as e:
-            err("Invalid JSON format in --lines")
+    # Replace header dimensions when dimension input was supplied (an
+    # explicit --dimensions '{}' clears the stored header object).
+    new_header_text = None
+    if header_input is not None:
+        old_values["dimensions_json"] = je.get("dimensions_json") or "{}"
+        new_header_text = dimensions_json_text(header_input)
+        conn.execute("UPDATE journal_entry SET dimensions_json = ?, updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?",
+                     (new_header_text, je_id))
+        updated_fields.append("dimensions")
 
-        try:
-            total_debit, total_credit = _validate_lines(lines)
-        except ValueError as e:
-            err(str(e))
-
-        # Validate all account_ids exist
-        q_acct = Q.from_(_t_account).select(_t_account.id).where(_t_account.id == P())
-        for i, line in enumerate(lines):
-            acct = conn.execute(q_acct.get_sql(), (line["account_id"],)).fetchone()
-            if not acct:
-                err(f"Line {i+1}: account {line['account_id']} not found")
+    # Replace lines if provided (parsed and dimension-checked above)
+    if replacement_lines is not None:
+        lines = replacement_lines
+        total_debit, total_credit = replacement_totals
 
         # Delete old lines, insert new
         q_del = Q.from_(_t_jel).delete().where(_t_jel.journal_entry_id == P())
@@ -303,9 +451,12 @@ def update_journal_entry(conn, args):
     if not updated_fields:
         err("No fields to update")
 
+    new_values = {"updated_fields": updated_fields}
+    if new_header_text is not None:
+        new_values["dimensions_json"] = new_header_text
     audit(conn, "erpclaw-journals", "update-journal-entry", "journal_entry", je_id,
            old_values=old_values,
-           new_values={"updated_fields": updated_fields})
+           new_values=new_values)
     conn.commit()
 
     ok({"status": "updated", "journal_entry_id": je_id,
@@ -322,7 +473,15 @@ def get_journal_entry(conn, args):
     if not je_id:
         err("--journal-entry-id is required")
 
+    scope_company_id = None
+    if getattr(args, "company_id", None) or getattr(args, "company_name", None):
+        scope_company_id = resolve_scope_company(
+            conn, getattr(args, "company_id", None),
+            getattr(args, "company_name", None))
+
     je = _get_je_or_err(conn, je_id)
+    if scope_company_id is not None and je["company_id"] != scope_company_id:
+        err(f"Journal entry {je_id} belongs to another company")
     lines = _get_je_lines(conn, je_id)
 
     # Format lines for output
@@ -339,14 +498,16 @@ def get_journal_entry(conn, args):
             "cost_center_id": line.get("cost_center_id"),
             "project_id": line.get("project_id"),
             "remark": line.get("remark"),
+            "dimensions_json": line.get("dimensions_json") or "{}",
         })
 
     ok({
         "id": je["id"],
         "naming_series": je["naming_series"],
+        "dimensions_json": je.get("dimensions_json") or "{}",
         "posting_date": je["posting_date"],
         "entry_type": je["entry_type"],
-        "status": je["status"],
+        "document_status": je["status"],
         "total_debit": je["total_debit"],
         "total_credit": je["total_credit"],
         "remark": je.get("remark"),
@@ -401,8 +562,7 @@ def list_journal_entries(conn, args):
     total_count = count_row[0]
 
     # Paginated results
-    limit = int(args.limit) if args.limit else 20
-    offset = int(args.offset) if args.offset else 0
+    limit, offset = _parse_paging(args)
     list_params = params + [limit, offset]
 
     q_list = (base.select(
@@ -433,91 +593,129 @@ def submit_journal_entry(conn, args):
     if je["status"] != "draft":
         err(f"Cannot submit: journal entry is '{je['status']}' (must be 'draft')")
 
-    lines = _get_je_lines(conn, je_id)
-
-    # Re-validate lines (they were validated at creation but re-check)
     try:
-        _validate_lines([{
-            "account_id": l["account_id"],
-            "debit": l["debit"],
-            "credit": l["credit"],
-        } for l in lines])
-    except ValueError as e:
-        sys.stderr.write(f"[erpclaw-journals] {e}\n")
-        err("Validation failed at submit")
+        take_chain_heads(conn, [je["company_id"]])
+        _rr_q = Q.from_(_t_je).select(_t_je.star).where(_t_je.id == P())
+        _rr_row = conn.execute(_rr_q.get_sql(), (je_id,)).fetchone()
+        if not _rr_row:
+            conn.rollback()
+            err(f"Journal entry {je_id} not found")
+        je = row_to_dict(_rr_row)
+        if je["status"] != "draft":
+            conn.rollback()
+            err(f"Cannot submit: journal entry is '{je['status']}' (must be 'draft')")
 
-    # Build GL entries from lines
-    gl_entries = []
-    for line in lines:
-        gl_entries.append({
-            "account_id": line["account_id"],
-            "debit": line["debit"],
-            "credit": line["credit"],
-            "party_type": line.get("party_type"),
-            "party_id": line.get("party_id"),
-            "cost_center_id": line.get("cost_center_id"),
-        })
+        lines = _get_je_lines(conn, je_id)
 
-    # Single transaction: validate GL, insert GL entries, update JE status
-    try:
-        is_opening = je["entry_type"] in ("opening",)
-        validate_gl_entries(
-            conn, gl_entries, je["company_id"],
-            je["posting_date"], is_opening=is_opening,
-            voucher_type="journal_entry",
-        )
-        gl_ids = insert_gl_entries(
-            conn, gl_entries,
-            voucher_type="journal_entry",
-            voucher_id=je_id,
-            posting_date=je["posting_date"],
-            company_id=je["company_id"],
-            remarks=je.get("remark") or "",
-            is_opening=is_opening,
-            # S3 CWIP hook (AVA-43): a --cwip-asset-id JE is the sanctioned
-            # capitalization path, so its CWIP debit leg is permitted.
-            allow_cwip=bool(je.get("cwip_asset_id")),
-        )
-    except ValueError as e:
-        sys.stderr.write(f"[erpclaw-journals] {e}\n")
-        err(f"GL posting failed: {e}")
-
-    # S3 CWIP hook (AVA-43): a JE tagged with --cwip-asset-id must debit a
-    # capital_work_in_progress account; record the accumulation against that leg
-    # in THIS submit transaction. gl_ids is 1:1 with gl_entries by index.
-    cwip_accum_id = None
-    cwip_asset_id = je.get("cwip_asset_id")
-    if cwip_asset_id:
+        # Re-validate lines (they were validated at creation but re-check)
         try:
-            cwip_asset = get_under_construction_asset(conn, cwip_asset_id)
-            legs = cwip_debit_legs(conn, gl_entries)
-            if not legs:
-                raise ValueError(
-                    "A journal entry tagged with --cwip-asset-id must debit a "
-                    "capital_work_in_progress account.")
-            if len({a for _, a, _ in legs}) > 1:
-                raise ValueError(
-                    "Journal entry debits multiple capital_work_in_progress "
-                    "accounts; one CWIP account per asset.")
-            cwip_amount = sum((d for _, _, d in legs), Decimal("0"))
-            cwip_accum_id = record_cwip_accumulation(
-                conn, cwip_asset, cwip_amount,
-                source_voucher_type="journal_entry", source_voucher_id=je_id,
-                gl_entry_id=gl_ids[legs[0][0]], accumulated_at=je["posting_date"],
-                notes=je.get("remark") or f"Journal entry {je.get('naming_series') or je_id}")
+            _validate_lines([{
+                "account_id": l["account_id"],
+                "debit": l["debit"],
+                "credit": l["credit"],
+            } for l in lines])
         except ValueError as e:
             sys.stderr.write(f"[erpclaw-journals] {e}\n")
-            err(f"CWIP accumulation failed: {e}")
+            err("Validation failed at submit")
 
-    conn.execute(
-        """UPDATE journal_entry SET status = 'submitted',
-           updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?""",
-        (je_id,),
-    )
+        # Build GL entries from lines. Each ledger dict carries the line's
+        # effective dimensions (stored header merged with the stored line object,
+        # line wins per key); untagged lines post exactly the dict they always did.
+        submit_header = _loads_dims(je.get("dimensions_json"))
+        gl_entries = []
+        for line in lines:
+            line_dims = _loads_dims(line.get("dimensions_json"))
+            effective = dict(submit_header)
+            effective.update(line_dims)
+            # Line wins: a line's own cost center replaces a header-carried
+            # cost_center tag in that leg's dimensions before posting, so step
+            # 13 sees one cost center on the leg.
+            if (line.get("cost_center_id") and "cost_center" not in line_dims
+                    and effective.get("cost_center")
+                    and effective["cost_center"] != line["cost_center_id"]):
+                effective["cost_center"] = line["cost_center_id"]
+            gl_entry = {
+                "account_id": line["account_id"],
+                "debit": line["debit"],
+                "credit": line["credit"],
+                "party_type": line.get("party_type"),
+                "party_id": line.get("party_id"),
+                "cost_center_id": line.get("cost_center_id"),
+            }
+            if effective:
+                gl_entry["dimensions"] = effective
+            gl_entries.append(gl_entry)
 
-    audit(conn, "erpclaw-journals", "submit-journal-entry", "journal_entry", je_id,
-           new_values={"gl_entries_created": len(gl_ids)})
-    conn.commit()
+        # Single transaction: validate GL, insert GL entries, update JE status
+        try:
+            is_opening = je["entry_type"] in ("opening",)
+            validate_gl_entries(
+                conn, gl_entries, je["company_id"],
+                je["posting_date"], is_opening=is_opening,
+                voucher_type="journal_entry",
+            )
+            gl_ids = insert_gl_entries(
+                conn, gl_entries,
+                voucher_type="journal_entry",
+                voucher_id=je_id,
+                posting_date=je["posting_date"],
+                company_id=je["company_id"],
+                remarks=je.get("remark") or "",
+                is_opening=is_opening,
+                # S3 CWIP hook (AVA-43): a --cwip-asset-id JE is the sanctioned
+                # capitalization path, so its CWIP debit leg is permitted.
+                allow_cwip=bool(je.get("cwip_asset_id")),
+            )
+        except ValueError as e:
+            sys.stderr.write(f"[erpclaw-journals] {e}\n")
+            err(f"GL posting failed: {e}")
+
+        # S3 CWIP hook (AVA-43): a JE tagged with --cwip-asset-id must debit a
+        # capital_work_in_progress account; record the accumulation against that leg
+        # in THIS submit transaction. gl_ids is 1:1 with gl_entries by index.
+        cwip_accum_id = None
+        cwip_asset_id = je.get("cwip_asset_id")
+        if cwip_asset_id:
+            try:
+                cwip_asset = get_under_construction_asset(conn, cwip_asset_id)
+                legs = cwip_debit_legs(conn, gl_entries)
+                if not legs:
+                    raise ValueError(
+                        "A journal entry tagged with --cwip-asset-id must debit a "
+                        "capital_work_in_progress account.")
+                if len({a for _, a, _ in legs}) > 1:
+                    raise ValueError(
+                        "Journal entry debits multiple capital_work_in_progress "
+                        "accounts; one CWIP account per asset.")
+                cwip_amount = sum((d for _, _, d in legs), Decimal("0"))
+                cwip_accum_id = record_cwip_accumulation(
+                    conn, cwip_asset, cwip_amount,
+                    source_voucher_type="journal_entry", source_voucher_id=je_id,
+                    gl_entry_id=gl_ids[legs[0][0]], accumulated_at=je["posting_date"],
+                    notes=je.get("remark") or f"Journal entry {je.get('naming_series') or je_id}")
+            except ValueError as e:
+                sys.stderr.write(f"[erpclaw-journals] {e}\n")
+                err(f"CWIP accumulation failed: {e}")
+
+        _cas = conn.execute(
+            """UPDATE journal_entry SET status = 'submitted',
+               updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ? AND status = ?""",
+            (je_id, "draft"),
+        )
+        if _cas.rowcount == 0:
+            conn.rollback()
+            _fr_row = conn.execute(_rr_q.get_sql(), (je_id,)).fetchone()
+            if not _fr_row:
+                err(f"Journal entry {je_id} not found")
+            _fresh = row_to_dict(_fr_row)
+            err(f"Cannot submit: journal entry is '{_fresh['status']}' (must be 'draft')")
+
+        audit(conn, "erpclaw-journals", "submit-journal-entry", "journal_entry", je_id,
+               new_values={"gl_entries_created": len(gl_ids)})
+        conn.commit()
+    except SystemExit:
+        conn.rollback()
+        raise
 
     resp = {"status": "submitted", "journal_entry_id": je_id,
             "gl_entries_created": len(gl_ids)}
@@ -531,6 +729,7 @@ def submit_journal_entry(conn, args):
 # 6. cancel-journal-entry
 # ---------------------------------------------------------------------------
 
+
 def cancel_journal_entry(conn, args):
     """Cancel a submitted JE: reverse GL entries, update status."""
     je_id = args.journal_entry_id
@@ -541,32 +740,54 @@ def cancel_journal_entry(conn, args):
     if je["status"] != "submitted":
         err(f"Cannot cancel: journal entry is '{je['status']}' (must be 'submitted')")
 
-    # Single transaction: reverse GL entries + update status
     try:
-        reversal_ids = reverse_gl_entries(
-            conn,
-            voucher_type="journal_entry",
-            voucher_id=je_id,
-            posting_date=je["posting_date"],
+        take_chain_heads(conn, [je["company_id"]])
+        _rr_q = Q.from_(_t_je).select(_t_je.star).where(_t_je.id == P())
+        _rr_row = conn.execute(_rr_q.get_sql(), (je_id,)).fetchone()
+        if not _rr_row:
+            conn.rollback()
+            err(f"Journal entry {je_id} not found")
+        je = row_to_dict(_rr_row)
+        if je["status"] != "submitted":
+            conn.rollback()
+            err(f"Cannot cancel: journal entry is '{je['status']}' (must be 'submitted')")
+
+        # Single transaction: reverse GL entries + update status
+        try:
+            reversal_ids = reverse_gl_entries(
+                conn,
+                voucher_type="journal_entry",
+                voucher_id=je_id,
+                posting_date=je["posting_date"],
+            )
+        except ValueError as e:
+            sys.stderr.write(f"[erpclaw-journals] {e}\n")
+            err(f"GL reversal failed: {e}")
+
+        # S3 CWIP hook (AVA-43): if this JE accumulated cost to a CWIP asset, unwind the
+        # accumulation row + asset carrying value (the GL CWIP leg was just reversed).
+        if je.get("cwip_asset_id"):
+            reverse_cwip_accumulations(conn, "journal_entry", je_id)
+
+        _cas = conn.execute(
+            """UPDATE journal_entry SET status = 'cancelled',
+               updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ? AND status = ?""",
+            (je_id, "submitted"),
         )
-    except ValueError as e:
-        sys.stderr.write(f"[erpclaw-journals] {e}\n")
-        err(f"GL reversal failed: {e}")
+        if _cas.rowcount == 0:
+            conn.rollback()
+            _fr_row = conn.execute(_rr_q.get_sql(), (je_id,)).fetchone()
+            if not _fr_row:
+                err(f"Journal entry {je_id} not found")
+            _fresh = row_to_dict(_fr_row)
+            err(f"Cannot cancel: journal entry is '{_fresh['status']}' (must be 'submitted')")
 
-    # S3 CWIP hook (AVA-43): if this JE accumulated cost to a CWIP asset, unwind the
-    # accumulation row + asset carrying value (the GL CWIP leg was just reversed).
-    if je.get("cwip_asset_id"):
-        reverse_cwip_accumulations(conn, "journal_entry", je_id)
-
-    conn.execute(
-        """UPDATE journal_entry SET status = 'cancelled',
-           updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?""",
-        (je_id,),
-    )
-
-    audit(conn, "erpclaw-journals", "cancel-journal-entry", "journal_entry", je_id,
-           new_values={"reversed_gl_entries": len(reversal_ids)})
-    conn.commit()
+        audit(conn, "erpclaw-journals", "cancel-journal-entry", "journal_entry", je_id,
+               new_values={"reversed_gl_entries": len(reversal_ids)})
+        conn.commit()
+    except SystemExit:
+        conn.rollback()
+        raise
 
     ok({"status": "cancelled", "journal_entry_id": je_id, "reversed": True})
 
@@ -574,6 +795,7 @@ def cancel_journal_entry(conn, args):
 # ---------------------------------------------------------------------------
 # 7. amend-journal-entry
 # ---------------------------------------------------------------------------
+
 
 def amend_journal_entry(conn, args):
     """Amend a submitted JE: cancel old, create new linked draft."""
@@ -585,38 +807,24 @@ def amend_journal_entry(conn, args):
     if je["status"] != "submitted":
         err(f"Cannot amend: journal entry is '{je['status']}' (must be 'submitted')")
 
-    # Cancel the old JE (reverse GL entries)
-    try:
-        reverse_gl_entries(
-            conn,
-            voucher_type="journal_entry",
-            voucher_id=je_id,
-            posting_date=je["posting_date"],
-        )
-    except ValueError as e:
-        sys.stderr.write(f"[erpclaw-journals] {e}\n")
-        err(f"GL reversal failed: {e}")
-
-    conn.execute(
-        """UPDATE journal_entry SET status = 'amended',
-           updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?""",
-        (je_id,),
-    )
-
-    # Determine lines for new JE
+    # Accounting dimensions (M6): parse the header input and --lines here,
+    # before reverse_gl_entries writes anything, so a refusal writes nothing
+    # and consumes no naming-series step. An amend that supplies header input
+    # or --lines uses what it is given; otherwise both are copied over.
+    amend_header_input = _parse_header_dimensions(args)
     if args.lines:
         try:
-            new_lines = json.loads(args.lines) if isinstance(args.lines, str) else args.lines
+            amend_lines = (json.loads(args.lines)
+                           if isinstance(args.lines, str) else args.lines)
         except json.JSONDecodeError as e:
             err("Invalid JSON format in --lines")
     else:
-        # Copy lines from original
-        q_lines = Q.from_(_t_jel).select(_t_jel.star).where(_t_jel.journal_entry_id == P())
-        old_lines = conn.execute(q_lines.get_sql(), (je_id,)).fetchall()
-        new_lines = []
-        for ol in old_lines:
+        q_amend_lines = Q.from_(_t_jel).select(_t_jel.star).where(_t_jel.journal_entry_id == P())
+        amend_old_lines = conn.execute(q_amend_lines.get_sql(), (je_id,)).fetchall()
+        amend_lines = []
+        for ol in amend_old_lines:
             old_dict = row_to_dict(ol)
-            new_lines.append({
+            amend_lines.append({
                 "account_id": old_dict["account_id"],
                 "debit": old_dict["debit"],
                 "credit": old_dict["credit"],
@@ -625,35 +833,87 @@ def amend_journal_entry(conn, args):
                 "cost_center_id": old_dict.get("cost_center_id"),
                 "project_id": old_dict.get("project_id"),
                 "remark": old_dict.get("remark"),
+                "dimensions": _loads_dims(old_dict.get("dimensions_json")),
             })
+    _parse_line_dimensions(amend_lines)
+    if amend_header_input is not None:
+        amend_header_obj = amend_header_input
+    else:
+        amend_header_obj = _loads_dims(je.get("dimensions_json"))
+    _validate_effective_dimensions(conn, amend_header_obj, amend_lines)
 
-    # Validate lines
-    try:
-        total_debit, total_credit = _validate_lines(new_lines)
-    except ValueError as e:
-        err(str(e))
-
-    # Create new draft JE
-    new_je_id = str(uuid.uuid4())
-    new_posting_date = args.posting_date or je["posting_date"]
     naming = get_next_name(conn, "journal_entry", company_id=je["company_id"])
 
-    conn.execute(
-        """INSERT INTO journal_entry
-           (id, naming_series, posting_date, entry_type, total_debit, total_credit,
-            remark, status, amended_from, company_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)""",
-        (new_je_id, naming, new_posting_date, je["entry_type"],
-         str(total_debit), str(total_credit),
-         args.remark if args.remark is not None else je.get("remark"),
-         je_id, je["company_id"]),
-    )
+    try:
+        take_chain_heads(conn, [je["company_id"]])
+        _rr_q = Q.from_(_t_je).select(_t_je.star).where(_t_je.id == P())
+        _rr_row = conn.execute(_rr_q.get_sql(), (je_id,)).fetchone()
+        if not _rr_row:
+            conn.rollback()
+            err(f"Journal entry {je_id} not found")
+        je = row_to_dict(_rr_row)
+        if je["status"] != "submitted":
+            conn.rollback()
+            err(f"Cannot amend: journal entry is '{je['status']}' (must be 'submitted')")
 
-    _insert_lines(conn, new_je_id, new_lines)
+        # Cancel the old JE (reverse GL entries)
+        try:
+            reverse_gl_entries(
+                conn,
+                voucher_type="journal_entry",
+                voucher_id=je_id,
+                posting_date=je["posting_date"],
+            )
+        except ValueError as e:
+            sys.stderr.write(f"[erpclaw-journals] {e}\n")
+            err(f"GL reversal failed: {e}")
 
-    audit(conn, "erpclaw-journals", "amend-journal-entry", "journal_entry", je_id,
-           new_values={"new_journal_entry_id": new_je_id, "new_naming_series": naming})
-    conn.commit()
+        _cas = conn.execute(
+            """UPDATE journal_entry SET status = 'amended',
+               updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ? AND status = ?""",
+            (je_id, "submitted"),
+        )
+        if _cas.rowcount == 0:
+            conn.rollback()
+            _fr_row = conn.execute(_rr_q.get_sql(), (je_id,)).fetchone()
+            if not _fr_row:
+                err(f"Journal entry {je_id} not found")
+            _fresh = row_to_dict(_fr_row)
+            err(f"Cannot amend: journal entry is '{_fresh['status']}' (must be 'submitted')")
+
+        # Lines were parsed and dimension-checked before the reversal above.
+        new_lines = amend_lines
+
+        # Validate lines
+        try:
+            total_debit, total_credit = _validate_lines(new_lines)
+        except ValueError as e:
+            err(str(e))
+
+        # Create new draft JE
+        new_je_id = str(uuid.uuid4())
+        new_posting_date = args.posting_date or je["posting_date"]
+
+        conn.execute(
+            """INSERT INTO journal_entry
+               (id, naming_series, posting_date, entry_type, total_debit, total_credit,
+                remark, status, amended_from, company_id, dimensions_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)""",
+            (new_je_id, naming, new_posting_date, je["entry_type"],
+             str(total_debit), str(total_credit),
+             args.remark if args.remark is not None else je.get("remark"),
+             je_id, je["company_id"],
+             dimensions_json_text(amend_header_obj)),
+        )
+
+        _insert_lines(conn, new_je_id, new_lines)
+
+        audit(conn, "erpclaw-journals", "amend-journal-entry", "journal_entry", je_id,
+               new_values={"new_journal_entry_id": new_je_id, "new_naming_series": naming})
+        conn.commit()
+    except SystemExit:
+        conn.rollback()
+        raise
 
     ok({"status": "created", "original_id": je_id,
          "new_journal_entry_id": new_je_id,
@@ -716,7 +976,18 @@ def duplicate_journal_entry(conn, args):
             "cost_center_id": old_dict.get("cost_center_id"),
             "project_id": old_dict.get("project_id"),
             "remark": old_dict.get("remark"),
+            "dimensions": _loads_dims(old_dict.get("dimensions_json")),
         })
+
+    # Accounting dimensions (M6): the copied header and line objects are
+    # validated before get_next_name consumes a naming-series step.
+    duplicate_header_input = _parse_header_dimensions(args)
+    if duplicate_header_input is not None:
+        duplicate_header_obj = duplicate_header_input
+    else:
+        duplicate_header_obj = _loads_dims(je.get("dimensions_json"))
+    _parse_line_dimensions(new_lines)
+    _validate_effective_dimensions(conn, duplicate_header_obj, new_lines)
 
     # Validate lines (should always pass since source was valid)
     try:
@@ -731,11 +1002,12 @@ def duplicate_journal_entry(conn, args):
     conn.execute(
         """INSERT INTO journal_entry
            (id, naming_series, posting_date, entry_type, total_debit, total_credit,
-            remark, status, company_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?)""",
+            remark, status, company_id, dimensions_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)""",
         (new_je_id, naming, posting_date, je["entry_type"],
          str(total_debit), str(total_credit),
-         je.get("remark"), je["company_id"]),
+         je.get("remark"), je["company_id"],
+         dimensions_json_text(duplicate_header_obj)),
     )
 
     _insert_lines(conn, new_je_id, new_lines)
@@ -811,9 +1083,13 @@ def create_intercompany_je(conn, args):
     if src_co["default_currency"] != tgt_co["default_currency"]:
         err("Intercompany JE between different currencies is not supported (v2)")
 
-    # Ensure intercompany accounts exist in both companies
-    src_ic_recv = _ensure_intercompany_account(
-        conn, source_company_id, "Intercompany Receivable", "asset", "receivable")
+    # Accounting dimensions (M6): the header input is stored on both drafts.
+    # Parsed here, before _ensure_intercompany_account can insert accounts,
+    # so a refusal writes nothing and consumes no naming-series step.
+    ic_header_input = _parse_header_dimensions(args)
+    ic_header_obj = ic_header_input if ic_header_input is not None else {}
+    ic_header_text = dimensions_json_text(ic_header_obj)
+
     q_rev = (Q.from_(_t_account).select(_t_account.id)
              .where(_t_account.account_type == "revenue")
              .where(_t_account.company_id == P())
@@ -823,8 +1099,6 @@ def create_intercompany_je(conn, args):
     if not src_revenue:
         err("Source company has no revenue account")
 
-    tgt_ic_pay = _ensure_intercompany_account(
-        conn, target_company_id, "Intercompany Payable", "liability", "payable")
     q_exp = (Q.from_(_t_account).select(_t_account.id)
              .where(_t_account.account_type.isin(["expense", "cost_of_goods_sold"]))
              .where(_t_account.company_id == P())
@@ -842,6 +1116,26 @@ def create_intercompany_je(conn, args):
     src_cc = conn.execute(q_cc.get_sql(), (source_company_id,)).fetchone()
     tgt_cc = conn.execute(q_cc.get_sql(), (target_company_id,)).fetchone()
 
+    # The four lines this action builds carry no per-line objects, so each
+    # effective object is the header. The P&L legs exist already and are
+    # checked before any account is created; the intercompany legs are
+    # checked right after they are ensured, before any naming-series step.
+    _validate_effective_dimensions(
+        conn, ic_header_obj,
+        [{"account_id": src_revenue["id"]},
+         {"account_id": tgt_expense["id"]}])
+
+    # Ensure intercompany accounts exist in both companies
+    src_ic_recv = _ensure_intercompany_account(
+        conn, source_company_id, "Intercompany Receivable", "asset", "receivable")
+
+    tgt_ic_pay = _ensure_intercompany_account(
+        conn, target_company_id, "Intercompany Payable", "liability", "payable")
+
+    _validate_effective_dimensions(
+        conn, ic_header_obj,
+        [{"account_id": src_ic_recv}, {"account_id": tgt_ic_pay}])
+
     amt = str(round_currency(amount))
 
     # Create Source JE: DR Intercompany Receivable / CR Revenue
@@ -850,9 +1144,10 @@ def create_intercompany_je(conn, args):
     conn.execute(
         """INSERT INTO journal_entry
            (id, naming_series, posting_date, entry_type, total_debit, total_credit,
-            remark, status, company_id)
-           VALUES (?, ?, ?, 'inter_company', ?, ?, ?, 'draft', ?)""",
-        (src_je_id, src_naming, posting_date, amt, amt, description, source_company_id),
+            remark, status, company_id, dimensions_json)
+           VALUES (?, ?, ?, 'inter_company', ?, ?, ?, 'draft', ?, ?)""",
+        (src_je_id, src_naming, posting_date, amt, amt, description, source_company_id,
+         ic_header_text),
     )
     # Source lines
     for line_data in [
@@ -863,11 +1158,12 @@ def create_intercompany_je(conn, args):
         line_id = str(uuid.uuid4())
         conn.execute(
             """INSERT INTO journal_entry_line
-               (id, journal_entry_id, account_id, debit, credit, cost_center_id)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+               (id, journal_entry_id, account_id, debit, credit, cost_center_id,
+                dimensions_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (line_id, src_je_id, line_data["account_id"],
              line_data["debit"], line_data["credit"],
-             line_data.get("cost_center_id")),
+             line_data.get("cost_center_id"), "{}"),
         )
 
     # Create Target JE: DR Expense / CR Intercompany Payable
@@ -876,9 +1172,10 @@ def create_intercompany_je(conn, args):
     conn.execute(
         """INSERT INTO journal_entry
            (id, naming_series, posting_date, entry_type, total_debit, total_credit,
-            remark, status, company_id)
-           VALUES (?, ?, ?, 'inter_company', ?, ?, ?, 'draft', ?)""",
-        (tgt_je_id, tgt_naming, posting_date, amt, amt, description, target_company_id),
+            remark, status, company_id, dimensions_json)
+           VALUES (?, ?, ?, 'inter_company', ?, ?, ?, 'draft', ?, ?)""",
+        (tgt_je_id, tgt_naming, posting_date, amt, amt, description, target_company_id,
+         ic_header_text),
     )
     # Target lines
     for line_data in [
@@ -889,11 +1186,12 @@ def create_intercompany_je(conn, args):
         line_id = str(uuid.uuid4())
         conn.execute(
             """INSERT INTO journal_entry_line
-               (id, journal_entry_id, account_id, debit, credit, cost_center_id)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+               (id, journal_entry_id, account_id, debit, credit, cost_center_id,
+                dimensions_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (line_id, tgt_je_id, line_data["account_id"],
              line_data["debit"], line_data["credit"],
-             line_data.get("cost_center_id")),
+             line_data.get("cost_center_id"), "{}"),
         )
 
     # Store cross-references in remark
@@ -1018,18 +1316,29 @@ def add_recurring_template(conn, args):
         if not acct:
             err(f"Line {i+1}: account {line['account_id']} not found")
 
+    # Accounting dimensions (M6): header input plus per-line objects are
+    # parsed and checked against the registry here, before get_next_name
+    # consumes a naming-series step. The header object is stored on the
+    # template; each line's own object stays inside the lines JSON.
+    tmpl_header_input = _parse_header_dimensions(args)
+    tmpl_header_obj = tmpl_header_input if tmpl_header_input is not None else {}
+    _parse_line_dimensions(lines)
+    _validate_effective_dimensions(conn, tmpl_header_obj, lines)
+
     template_id = str(uuid.uuid4())
     naming = get_next_name(conn, "recurring_journal_template", company_id=company_id)
 
     conn.execute(
         """INSERT INTO recurring_journal_template
            (id, naming_series, company_id, name, frequency, start_date, end_date,
-            next_run_date, entry_type, lines, auto_submit, remark, status)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')""",
+            next_run_date, entry_type, lines, auto_submit, remark, status,
+            dimensions_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)""",
         (template_id, naming, company_id, template_name, frequency,
          start_date, end_date, start_date, entry_type,
          json.dumps(lines) if isinstance(lines, list) else lines_json,
-         auto_submit, args.remark),
+         auto_submit, args.remark,
+         dimensions_json_text(tmpl_header_obj)),
     )
 
     audit(conn, "erpclaw-journals", "add-recurring-template",
@@ -1061,6 +1370,43 @@ def update_recurring_template(conn, args):
         err("Cannot update a completed template")
 
     updated_fields = []
+
+    # Accounting dimensions (M6): parse the header input and --lines here,
+    # before any UPDATE below, so a refusal writes nothing. Validation runs
+    # when the caller supplied header input or --lines; otherwise the stored
+    # header and the template's stored lines are checked.
+    rec_header_input = _parse_header_dimensions(args)
+    rec_lines = None
+    if args.lines:
+        try:
+            rec_lines = (json.loads(args.lines)
+                         if isinstance(args.lines, str) else args.lines)
+        except json.JSONDecodeError:
+            err("Invalid JSON format in --lines")
+        try:
+            _validate_lines(rec_lines)
+        except ValueError as e:
+            err(str(e))
+        q_acct_rec = Q.from_(_t_account).select(_t_account.id).where(_t_account.id == P())
+        for i, line in enumerate(rec_lines):
+            acct = conn.execute(q_acct_rec.get_sql(), (line["account_id"],)).fetchone()
+            if not acct:
+                err(f"Line {i+1}: account {line['account_id']} not found")
+        _parse_line_dimensions(rec_lines)
+    if rec_header_input is not None or args.lines:
+        if rec_header_input is not None:
+            rec_validation_header = rec_header_input
+        else:
+            rec_validation_header = _loads_dims(tmpl.get("dimensions_json"))
+        if rec_lines is not None:
+            rec_validation_lines = rec_lines
+        else:
+            try:
+                rec_validation_lines = json.loads(tmpl["lines"])
+            except (ValueError, TypeError):
+                err("Invalid JSON format in template lines")
+        _validate_effective_dimensions(
+            conn, rec_validation_header, rec_validation_lines)
 
     if args.template_name:
         conn.execute("UPDATE recurring_journal_template SET name = ?, updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?",
@@ -1097,20 +1443,13 @@ def update_recurring_template(conn, args):
                      (val, template_id))
         updated_fields.append("auto_submit")
 
-    if args.lines:
-        try:
-            lines = json.loads(args.lines) if isinstance(args.lines, str) else args.lines
-        except json.JSONDecodeError:
-            err("Invalid JSON format in --lines")
-        try:
-            _validate_lines(lines)
-        except ValueError as e:
-            err(str(e))
-        q_acct = Q.from_(_t_account).select(_t_account.id).where(_t_account.id == P())
-        for i, line in enumerate(lines):
-            acct = conn.execute(q_acct.get_sql(), (line["account_id"],)).fetchone()
-            if not acct:
-                err(f"Line {i+1}: account {line['account_id']} not found")
+    if rec_header_input is not None:
+        conn.execute("UPDATE recurring_journal_template SET dimensions_json = ?, updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?",
+                     (dimensions_json_text(rec_header_input), template_id))
+        updated_fields.append("dimensions")
+
+    if rec_lines is not None:
+        lines = rec_lines
         conn.execute("UPDATE recurring_journal_template SET lines = ?, updated_at = CAST(CURRENT_TIMESTAMP AS TEXT) WHERE id = ?",
                      (json.dumps(lines) if isinstance(lines, list) else args.lines, template_id))
         updated_fields.append("lines")
@@ -1153,8 +1492,7 @@ def list_recurring_templates(conn, args):
         base = base.where(rjt.status == P())
         params.append(args.template_status)
 
-    limit = int(args.limit) if args.limit else 20
-    offset = int(args.offset) if args.offset else 0
+    limit, offset = _parse_paging(args)
 
     q_count = base.select(fn.Count("*"))
     count_row = conn.execute(q_count.get_sql(), params).fetchone()
@@ -1339,13 +1677,18 @@ def _process_one_recurring_template(conn, template_id, company_id, as_of_date_st
 
     remark = tmpl.get("remark") or f"Auto-generated from {tmpl['naming_series'] or tmpl['name']}"
 
+    # Accounting dimensions (M6): the template header rides onto the
+    # generated entry's header; each template line's own object rides onto
+    # the generated line via _insert_lines.
+    generated_header = _loads_dims(tmpl.get("dimensions_json"))
     conn.execute(
         """INSERT INTO journal_entry
            (id, naming_series, posting_date, entry_type, total_debit, total_credit,
-            remark, status, company_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?)""",
+            remark, status, company_id, dimensions_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)""",
         (je_id, naming, posting_date, tmpl["entry_type"],
-         str(total_debit), str(total_credit), remark, company_id),
+         str(total_debit), str(total_credit), remark, company_id,
+         dimensions_json_text(generated_header)),
     )
     _insert_lines(conn, je_id, lines)
 
@@ -1355,14 +1698,31 @@ def _process_one_recurring_template(conn, template_id, company_id, as_of_date_st
     if tmpl["auto_submit"]:
         try:
             is_opening = tmpl["entry_type"] in ("opening",)
-            gl_entries = [{
-                "account_id": l["account_id"],
-                "debit": l.get("debit", "0"),
-                "credit": l.get("credit", "0"),
-                "party_type": l.get("party_type"),
-                "party_id": l.get("party_id"),
-                "cost_center_id": l.get("cost_center_id"),
-            } for l in lines]
+            gl_entries = []
+            for l in lines:
+                line_dims = l.get("dimensions") or {}
+                if not isinstance(line_dims, dict):
+                    line_dims = {}
+                effective = dict(generated_header)
+                effective.update(line_dims)
+                # Line wins: a line's own cost center replaces a
+                # header-carried cost_center tag in that leg's dimensions
+                # before posting, so step 13 sees one cost center.
+                if (l.get("cost_center_id") and "cost_center" not in line_dims
+                        and effective.get("cost_center")
+                        and effective["cost_center"] != l["cost_center_id"]):
+                    effective["cost_center"] = l["cost_center_id"]
+                gl_entry = {
+                    "account_id": l["account_id"],
+                    "debit": l.get("debit", "0"),
+                    "credit": l.get("credit", "0"),
+                    "party_type": l.get("party_type"),
+                    "party_id": l.get("party_id"),
+                    "cost_center_id": l.get("cost_center_id"),
+                }
+                if effective:
+                    gl_entry["dimensions"] = effective
+                gl_entries.append(gl_entry)
 
             validate_gl_entries(
                 conn, gl_entries, company_id, posting_date,
@@ -1525,6 +1885,13 @@ def main():
     # S3 CWIP hook (AVA-43): capitalise this JE's CWIP debit leg to an asset
     parser.add_argument("--cwip-asset-id")
 
+    # Accounting dimensions (M6): header tags for every draft action below
+    parser.add_argument("--dimensions", default=None)
+    parser.add_argument("--dimension-key", dest="dimension_key",
+                        action="append", default=None)
+    parser.add_argument("--dimension-value", dest="dimension_value",
+                        action="append", default=None)
+
     # Intercompany fields
     parser.add_argument("--source-company-id")
     parser.add_argument("--target-company-id")
@@ -1550,13 +1917,17 @@ def main():
     parser.add_argument("--limit", default="20")
     parser.add_argument("--offset", default="0")
 
-    args, unknown = parser.parse_known_args()
+    raw = sys.argv[1:]
+    try:
+        parse_argv, _auth_id = authority_gate.split_authorization_id(raw)
+    except ValueError:
+        err(INPUT_INVALID)
+    args, unknown = parser.parse_known_args(parse_argv)
     check_unknown_args(parser, unknown)
     check_input_lengths(args)
     action_fn = ACTIONS[args.action]
 
-    db_path = args.db_path or DEFAULT_DB_PATH
-    ensure_db_exists(db_path)
+    db_path = getattr(args, "db_path", None)   # None unless --db-path was given
     conn = get_connection(db_path)
 
     # Dependency check
@@ -1568,11 +1939,21 @@ def main():
         sys.exit(1)
 
     try:
-        action_fn(conn, args)
+        authority_gate.run(conn, args.action, raw, lambda handle: action_fn(handle, args), option_strings=[s for a in parser._actions for s in a.option_strings], repeatable_options=[s for a in parser._actions if isinstance(a, argparse._AppendAction) for s in a.option_strings])
+    except authority_gate.AuthorityRefusal as refusal:
+        conn.rollback()
+        err(refusal.args[0], suggestion=authority_gate.SUGGESTIONS.get(refusal.args[0]))
+    except ValueError as exc:
+        if exc.args == (INPUT_INVALID,):
+            conn.rollback()
+            err(INPUT_INVALID)
+        conn.rollback()
+        sys.stderr.write(f"[erpclaw-journals] {exc}\n")
+        err(unexpected_error_message(exc))
     except Exception as e:
         conn.rollback()
         sys.stderr.write(f"[erpclaw-journals] {e}\n")
-        err("An unexpected error occurred")
+        err(unexpected_error_message(e))
     finally:
         conn.close()
 

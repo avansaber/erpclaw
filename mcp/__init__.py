@@ -12,4 +12,12 @@ construction. v1 scope is foundation-only (Nik D3); all-modules discovery is
 later config, not a redesign.
 
 Entry point: ``server.py`` (stdio, spawn-on-demand).
+
+Read-only sessions: when the server process environment sets
+``ERPCLAW_MCP_READONLY=1``, the session can discover, describe and run every
+foundation read (any ``get-*``/``list-*`` action plus a fixed report set) and
+nothing else — writes are refused before any router process starts,
+``user_confirmed`` is refused outright, and each router child runs with
+``ERPCLAW_DB_READONLY=1``. Unset or empty means today's behaviour exactly;
+any other value refuses every tool call.
 """

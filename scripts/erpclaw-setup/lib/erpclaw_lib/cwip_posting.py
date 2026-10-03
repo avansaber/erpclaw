@@ -25,6 +25,7 @@ import uuid
 from decimal import Decimal
 
 from erpclaw_lib.decimal_utils import to_decimal, round_currency
+from erpclaw_lib.query import P, now, update_row
 
 CWIP_ACCOUNT_TYPE = "capital_work_in_progress"
 
@@ -134,8 +135,10 @@ def record_cwip_accumulation(conn: sqlite3.Connection, asset: dict, amount,
     new_gross = round_currency(to_decimal(asset["gross_value"]) + amount)
     new_book = round_currency(to_decimal(asset["current_book_value"]) + amount)
     conn.execute(
-        "UPDATE asset SET gross_value = ?, current_book_value = ?, "
-        "updated_at = datetime('now') WHERE id = ?",
+        update_row("asset",
+                   data={"gross_value": P(), "current_book_value": P(),
+                         "updated_at": now()},
+                   where={"id": P()}),
         (str(new_gross), str(new_book), asset["id"]))
     asset["gross_value"] = str(new_gross)
     asset["current_book_value"] = str(new_book)
@@ -169,7 +172,9 @@ def reverse_cwip_accumulations(conn: sqlite3.Connection, source_voucher_type: st
             new_gross = round_currency(to_decimal(asset["gross_value"]) - amount)
             new_book = round_currency(to_decimal(asset["current_book_value"]) - amount)
             conn.execute(
-                "UPDATE asset SET gross_value = ?, current_book_value = ?, "
-                "updated_at = datetime('now') WHERE id = ?",
+                update_row("asset",
+                           data={"gross_value": P(), "current_book_value": P(),
+                                 "updated_at": now()},
+                           where={"id": P()}),
                 (str(new_gross), str(new_book), r["asset_id"]))
     return len(rows)

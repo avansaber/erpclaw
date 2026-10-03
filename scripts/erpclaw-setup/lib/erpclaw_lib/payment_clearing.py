@@ -1,11 +1,13 @@
 """Document payment-clearing engine (AR/AP outstanding + status sync).
 
 Neutral transactional layer — same model as gl_posting.py / stock_posting.py.
-Both the payments paths (submit-payment / allocate-payment / reconcile-payments)
-and the selling/buying ``update-invoice-outstanding`` actions delegate the
-compute-and-write of a document's ``outstanding_amount`` + ``status`` to the
-functions here, so there is exactly ONE canonical implementation of the
-clearing rule (no drift between modules).
+The payments paths (submit-payment / allocate-payment / reconcile-payments /
+write-off-invoice) delegate the compute-and-write of a document's
+``outstanding_amount`` + ``status`` to the functions here, so there is exactly
+ONE canonical implementation of the clearing rule (no drift between modules).
+The selling/buying ``update-invoice-outstanding`` /
+``update-purchase-outstanding`` actions that used to do the same are retired
+and answer with ``RETIRED_OUTSTANDING_STEER``.
 
 Key functions:
 - apply_payment_to_document():   reduce outstanding, flip to paid/partially_paid
@@ -17,14 +19,27 @@ Key functions:
 NEVER commit inside these functions — the caller owns the transaction (mirrors
 gl_posting.py). Money is Decimal throughout, stored TEXT. No floats.
 
-Ownership note: writing to ``sales_invoice`` / ``purchase_invoice`` from this
-neutral lib is exactly like gl_posting.insert_gl_entries writing ``gl_entry`` on
-behalf of every module. The owning modules (selling/buying) also delegate here;
-payments invokes the same shared write path rather than hand-rolling an UPDATE.
+Ownership note: writing to ``sales_invoice`` / ``purchase_invoice`` (and to
+``expense_claim`` status via apply_payment_to_expense_claim /
+reverse_payment_on_expense_claim) from this neutral lib is exactly like
+gl_posting.insert_gl_entries writing ``gl_entry`` on behalf of every module.
+The owning modules (selling/buying/hr) also delegate here; payments invokes
+the same shared write path rather than hand-rolling an UPDATE.
 The same rule covers the payments-owned tables written by
 release_allocations_on_document(): the cancel paths delegate here instead of
 reaching into payment_allocation / payment_ledger_entry themselves.
 """
+
+RETIRED_OUTSTANDING_STEER = (
+    "Record cash with add-payment -> submit-payment (or allocate-payment for "
+    "an existing payment). Reduce an invoice with create-credit-note -> "
+    "submit-sales-invoice (payable side: create-debit-note -> "
+    "submit-purchase-invoice). Write off a remainder with write-off-invoice. "
+    "There is no supported way to move an invoice's balance without its "
+    "ledger posting."
+)
+
+
 import uuid
 from decimal import Decimal
 
@@ -72,15 +87,43 @@ def _read_doc(conn, voucher_type, voucher_id, columns):
     return conn.execute(q.get_sql(), (voucher_id,)).fetchone()
 
 
-def _write_doc(conn, voucher_type, voucher_id, outstanding_str, status):
-    """UPDATE a document's outstanding/status/updated_at via PyPika (no f-string)."""
+def _lock_doc(conn, voucher_type, voucher_id):
+    """Take the document's row lock via a no-op UPDATE (PyPika, no f-string).
+
+    ``voucher_type`` is always a whitelisted constant from _CLEARABLE_DOCS, never
+    user input — the Table() name is a fixed token, the id is a bound param.
+    On PostgreSQL this blocks a concurrent clearer of the same document until
+    the holder commits; on SQLite it is one more write inside an already
+    serialised transaction. Returns the cursor's rowcount (0 when absent).
+    """
+    t = Table(voucher_type)
+    q = (Q.update(t)
+         .set(Field("updated_at"), now())
+         .where(Field("id") == P()))
+    return conn.execute(q.get_sql(), (voucher_id,)).rowcount
+
+
+def _write_doc(conn, voucher_type, voucher_id, outstanding_str, status,
+               *, expect_outstanding=None):
+    """UPDATE a document's outstanding/status/updated_at via PyPika (no f-string).
+
+    When ``expect_outstanding`` is given, the UPDATE also carries
+    ``AND outstanding_amount = ?`` bound to that exact stored string, so a
+    concurrent commit that moved the outstanding makes the write match no row.
+    Returns the cursor's rowcount in both cases.
+    """
     t = Table(voucher_type)
     q = (Q.update(t)
          .set(Field("outstanding_amount"), P())
          .set(Field("status"), P())
          .set(Field("updated_at"), now())
          .where(Field("id") == P()))
-    conn.execute(q.get_sql(), (outstanding_str, status, voucher_id))
+    if expect_outstanding is not None:
+        q = q.where(Field("outstanding_amount") == P())
+        return conn.execute(
+            q.get_sql(),
+            (outstanding_str, status, voucher_id, expect_outstanding)).rowcount
+    return conn.execute(q.get_sql(), (outstanding_str, status, voucher_id)).rowcount
 
 
 def apply_payment_to_document(conn, voucher_type, voucher_id, allocated_amount):
@@ -107,6 +150,9 @@ def apply_payment_to_document(conn, voucher_type, voucher_id, allocated_amount):
     if voucher_type not in _CLEARABLE_DOCS:
         return {"voucher_type": voucher_type, "voucher_id": voucher_id,
                 "outstanding_amount": None, "status": None, "applied": False}
+
+    if _lock_doc(conn, voucher_type, voucher_id) == 0:
+        raise ValueError(f"{voucher_type} {voucher_id} not found")
 
     row = _read_doc(conn, voucher_type, voucher_id, ("outstanding_amount", "status"))
     if row is None:
@@ -137,7 +183,13 @@ def apply_payment_to_document(conn, voucher_type, voucher_id, allocated_amount):
         new_status = "partially_paid"
         new_outstanding_str = str(new_outstanding)
 
-    _write_doc(conn, voucher_type, voucher_id, new_outstanding_str, new_status)
+    stored_outstanding = row["outstanding_amount"]
+    matched = _write_doc(conn, voucher_type, voucher_id, new_outstanding_str,
+                         new_status, expect_outstanding=stored_outstanding)
+    if matched == 0:
+        raise ValueError(
+            f"{voucher_type} {voucher_id} changed while the payment was "
+            "being applied; nothing was written, retry")
 
     return {"voucher_type": voucher_type, "voucher_id": voucher_id,
             "outstanding_amount": new_outstanding_str, "status": new_status,
@@ -177,6 +229,9 @@ def reverse_payment_on_document(conn, voucher_type, voucher_id,
         return {"voucher_type": voucher_type, "voucher_id": voucher_id,
                 "outstanding_amount": None, "status": None, "applied": False}
 
+    if _lock_doc(conn, voucher_type, voucher_id) == 0:
+        raise ValueError(f"{voucher_type} {voucher_id} not found")
+
     row = _read_doc(conn, voucher_type, voucher_id, ("outstanding_amount",))
     if row is None:
         raise ValueError(f"{voucher_type} {voucher_id} not found")
@@ -190,9 +245,187 @@ def reverse_payment_on_document(conn, voucher_type, voucher_id,
     new_status = "submitted" if restored == round_currency(to_decimal(grand_total)) \
         else "partially_paid"
 
-    _write_doc(conn, voucher_type, voucher_id, str(restored), new_status)
+    stored_outstanding = row["outstanding_amount"]
+    matched = _write_doc(conn, voucher_type, voucher_id, str(restored),
+                         new_status, expect_outstanding=stored_outstanding)
+    if matched == 0:
+        raise ValueError(
+            f"{voucher_type} {voucher_id} changed while the payment was "
+            "being reversed; nothing was written, retry")
 
     return {"voucher_type": voucher_type, "voucher_id": voucher_id,
+            "outstanding_amount": str(restored), "status": new_status,
+            "applied": True}
+
+
+def apply_payment_to_expense_claim(conn, claim_id, employee_id, company_id,
+                                   payment_entry_id, allocated_amount):
+    """Mark an approved expense claim paid in full by a submitted payment.
+
+    An expense claim carries no outstanding_amount column: it is paid in full
+    or not at all, so the allocated amount must equal the claim total exactly
+    (a partial payment is REJECTED, never silently clamped — the same rule as
+    apply_payment_to_document's over-application guard).
+
+    Runs inside the caller's open transaction — does NOT commit.
+
+    Args:
+        conn: open DB connection (caller owns the transaction).
+        claim_id: the expense_claim id.
+        employee_id: the paying payment's party_id (must be the claimant).
+        company_id: the paying payment's company_id (must be the claim's).
+        payment_entry_id: the paying payment's id, stamped on the claim.
+        allocated_amount: amount applied (str/int/Decimal; never float).
+
+    Returns:
+        dict {"voucher_type", "voucher_id", "total_amount", "status",
+        "applied": True}.
+
+    Raises:
+        ValueError: claim not found, non-approved status, wrong
+            employee/company, or an amount that is not exactly the total.
+    """
+    ect = Table("expense_claim")
+    row = conn.execute(
+        Q.from_(ect).select(ect.status, ect.total_amount, ect.employee_id,
+                            ect.company_id)
+        .where(ect.id == P()).get_sql(), (claim_id,)).fetchone()
+    if row is None:
+        raise ValueError(f"expense_claim {claim_id} not found")
+    status = row["status"]
+    if status != "approved":
+        raise ValueError(
+            f"Cannot apply payment: expense claim is '{status}' "
+            "(must be 'approved')")
+    if row["employee_id"] != employee_id or row["company_id"] != company_id:
+        raise ValueError(
+            f"Expense claim {claim_id} belongs to another employee or company")
+    total = round_currency(to_decimal(row["total_amount"]))
+    amt = round_currency(to_decimal(allocated_amount))
+    if amt != total:
+        raise ValueError(
+            f"An expense claim is paid in full: allocate exactly {total:.2f} "
+            f"to expense claim {claim_id}")
+    conn.execute(
+        update_row("expense_claim",
+                   data={"status": P(), "payment_entry_id": P(),
+                         "updated_at": now()},
+                   where={"id": P()}),
+        ("paid", payment_entry_id, claim_id))
+    return {"voucher_type": "expense_claim", "voucher_id": claim_id,
+            "total_amount": str(total), "status": "paid", "applied": True}
+
+
+def reverse_payment_on_expense_claim(conn, claim_id, payment_entry_id):
+    """Restore a paid expense claim to approved (cancel path).
+
+    Runs inside the caller's open transaction — does NOT commit. Only acts
+    when the claim is 'paid' by exactly this payment; a claim paid by another
+    payment, or never paid, is left alone (applied False).
+
+    Args:
+        conn: open DB connection (caller owns the transaction).
+        claim_id: the expense_claim id.
+        payment_entry_id: the cancelling payment's id.
+
+    Returns:
+        dict {"voucher_type", "voucher_id", "status", "applied": bool}.
+
+    Raises:
+        ValueError: claim not found.
+    """
+    ect = Table("expense_claim")
+    row = conn.execute(
+        Q.from_(ect).select(ect.status, ect.payment_entry_id)
+        .where(ect.id == P()).get_sql(), (claim_id,)).fetchone()
+    if row is None:
+        raise ValueError(f"expense_claim {claim_id} not found")
+    if row["status"] != "paid" or row["payment_entry_id"] != payment_entry_id:
+        return {"voucher_type": "expense_claim", "voucher_id": claim_id,
+                "status": row["status"], "applied": False}
+    conn.execute(
+        update_row("expense_claim",
+                   data={"status": P(), "payment_entry_id": None,
+                         "updated_at": now()},
+                   where={"id": P()}),
+        ("approved", claim_id))
+    return {"voucher_type": "expense_claim", "voucher_id": claim_id,
+            "status": "approved", "applied": True}
+
+
+def is_customer_refund(payment_type, party_type):
+    """True only for a customer refund: pay against a customer."""
+    return payment_type == "pay" and party_type == "customer"
+
+
+def apply_refund_to_credit_note(conn, credit_note_id, amount):
+    """Reduce a credit note's open credit by ``amount`` and sync status.
+
+    Runs inside the caller's open transaction — does NOT commit.
+    """
+    row = _read_doc(conn, "sales_invoice", credit_note_id,
+                    ("outstanding_amount", "status", "is_return"))
+    if row is None:
+        raise ValueError(f"credit_note {credit_note_id} not found")
+    try:
+        is_return = int(row["is_return"] or 0)
+    except (TypeError, ValueError):
+        is_return = 0
+    if is_return != 1:
+        raise ValueError(f"{credit_note_id} is not a credit note")
+    status = row["status"]
+    if status not in _CLEARABLE_STATUSES:
+        raise ValueError(
+            f"Cannot refund: credit note {credit_note_id} is '{status}'")
+    amt = round_currency(to_decimal(amount))
+    if amt <= 0:
+        raise ValueError("refund amount must be > 0")
+    current = to_decimal(row["outstanding_amount"])
+    open_credit = round_currency(-current)
+    if amt > open_credit:
+        raise ValueError(
+            f"Refund amount {amt:.2f} exceeds the open credit "
+            f"{open_credit:.2f} on credit note {credit_note_id}")
+    new_outstanding = round_currency(current + amt)
+    if new_outstanding == Decimal("0"):
+        new_status = "paid"
+        new_outstanding_str = "0"
+    else:
+        new_status = "partially_paid"
+        new_outstanding_str = str(new_outstanding)
+    _write_doc(conn, "sales_invoice", credit_note_id,
+               new_outstanding_str, new_status)
+    return {"voucher_type": "credit_note", "voucher_id": credit_note_id,
+            "outstanding_amount": new_outstanding_str, "status": new_status,
+            "applied": True}
+
+
+def reverse_refund_on_credit_note(conn, credit_note_id, amount, grand_total):
+    """Add ``amount`` back to a credit note's open credit (cancel path).
+
+    Runs inside the caller's open transaction — does NOT commit.
+    """
+    row = _read_doc(conn, "sales_invoice", credit_note_id,
+                    ("outstanding_amount", "is_return"))
+    if row is None:
+        raise ValueError(f"credit_note {credit_note_id} not found")
+    try:
+        is_return = int(row["is_return"] or 0)
+    except (TypeError, ValueError):
+        is_return = 0
+    if is_return != 1:
+        raise ValueError(f"{credit_note_id} is not a credit note")
+    amt = round_currency(to_decimal(amount))
+    if amt <= 0:
+        raise ValueError("refund amount must be > 0")
+    current = to_decimal(row["outstanding_amount"])
+    restored = round_currency(current - amt)
+    new_status = ("submitted"
+                  if restored == round_currency(to_decimal(grand_total))
+                  else "partially_paid")
+    _write_doc(conn, "sales_invoice", credit_note_id,
+               str(restored), new_status)
+    return {"voucher_type": "credit_note", "voucher_id": credit_note_id,
             "outstanding_amount": str(restored), "status": new_status,
             "applied": True}
 
@@ -258,7 +491,10 @@ def party_residual_compensation_delta(conn, payment_entry_id):
 
         delta = Σ live payment_allocation.allocated_amount
               + Σ payment_deduction.amount
-              − Σ existing compensation rows for this payment
+              − Σ existing compensation rows for this payment,
+    except for a customer refund (pay against a customer), where the
+    party-level row carries the receivable sign (+paid_amount) and the
+    target is −(allocated + deducted).
 
     DETAIL-TABLE DRIVEN, and that is the load-bearing property, not an
     implementation taste. Deriving the amount from
@@ -303,7 +539,17 @@ def party_residual_compensation_delta(conn, payment_entry_id):
          for r in conn.execute(q_comp.get_sql(), (payment_entry_id,))),
         Decimal("0"))
 
-    target = round_currency(allocated + deducted)
+    pe_t = Table("payment_entry")
+    pe_row = conn.execute(
+        Q.from_(pe_t).select(pe_t.payment_type, pe_t.party_type)
+        .where(pe_t.id == P()).get_sql(),
+        (payment_entry_id,)).fetchone()
+    is_refund = (pe_row is not None and is_customer_refund(
+        pe_row["payment_type"], pe_row["party_type"]))
+    if is_refund:
+        target = round_currency(-(allocated + deducted))
+    else:
+        target = round_currency(allocated + deducted)
     delta = round_currency(target - existing)
     return delta, {"live_allocations": str(round_currency(allocated)),
                    "deductions": str(round_currency(deducted)),
@@ -316,7 +562,8 @@ def post_party_residual_compensation(conn, payment_entry_id):
 
     Wave G F2 / ADR-0032 W16 — Fork A, ratified as ruling N1. ``submit_payment``
     writes ONE full-amount party-level row per submit (``against_voucher_*``
-    omitted, ``amount = −paid_amount``) AND a per-allocation row per allocation,
+    omitted, ``amount = −paid_amount``, except +paid_amount for a customer
+    refund) AND a per-allocation row per allocation,
     so the same cash is subtracted from the party twice: an invoice of 1,000.00
     paid 300.00 read 400.00 where the truth is 700.00. Fork A corrects the
     LEDGER rather than masking it in each reader, so every future report and
@@ -345,6 +592,10 @@ def post_party_residual_compensation(conn, payment_entry_id):
       contradict each other otherwise, and every re-invocation would add a zero
       row. A correctly-compensated payment therefore stays byte-identical across
       re-runs, which is also what makes a mis-healed install self-repair.
+
+    For a customer refund (pay against a customer) the compensation target is
+    sign-aware: −(allocated + deducted), matching the +paid_amount party-level
+    row and the +allocated per-allocation rows.
 
     Runs inside the caller's transaction — does NOT commit.
 
@@ -441,7 +692,7 @@ def release_allocations_on_document(conn, voucher_type, voucher_id):
          released allocation no longer counts, so the delta is negative here.
 
     Two properties are load-bearing and were both proven red before they were
-    specified (planning/simlogs/waveg-plan_SIM_2026-07-31.md findings 1 and 2):
+    specified:
 
     C1 — the release pair is written with ``delinked = 1`` on BOTH rows. It is
     the only PLE row in the tree written pre-delinked, and that is deliberate:
@@ -597,3 +848,56 @@ def _release_allocation_ple(conn, payment_entry_id, spellings, voucher_id):
                 f"{row['against_voucher_type']} {row['against_voucher_id']}"))
             pairs += 1
     return pairs
+
+
+def close_dead_payment_tails(conn, voucher_type, voucher_id):
+    """Delink a cancelled document's document-side tails from dead payments.
+
+    M352b. ``release_allocations_on_document`` skips a cancelled payment's
+    allocation and must keep skipping it: its ledger legs are already balanced
+    by its own cancel, and a second reversal would take a green party red
+    (correction C2, pinned — the skip writes nothing at all). But the
+    payment's own cancel left live per-allocation mirrors pointing AT this
+    document, and a cancelled document reads outstanding zero, so INV-22
+    counts them. Those mirrors belong to a dead payment: no live reader needs
+    them, and the payment's own party scope nets to zero without them.
+
+    So the document's own close-out delinks them here, after the release has
+    run: every live ``payment_entry`` row pointed at (voucher_type,
+    voucher_id) whose payment's status is ``cancelled`` is marked delinked.
+    Anything else is left alone — a submitted payment's rows are the
+    release's property (it already closed them), and any other status is not
+    this cancel's business.
+
+    Delink only: no mirror is appended (that would be the second reversal C2
+    forbids), the ``payment_allocation`` row is untouched (a cancelled
+    payment's allocation survives with ``delinked = 0`` by the same
+    correction), no residual is recomputed and no compensation is posted.
+    Returns the number of rows closed.
+    """
+    spellings = _voucher_spellings(voucher_type)
+    ple_t = Table("payment_ledger_entry")
+    pe_t = Table("payment_entry")
+    delink_sql = update_row("payment_ledger_entry",
+                            data={"delinked": P(), "updated_at": now()},
+                            where={"id": P()})
+    closed = 0
+    for spelling in spellings:
+        q = (Q.from_(ple_t).select(ple_t.id, ple_t.voucher_id)
+             .where(ple_t.voucher_type == P())
+             .where(ple_t.against_voucher_type == P())
+             .where(ple_t.against_voucher_id == P())
+             .where(ple_t.delinked == P())
+             .orderby(ple_t.created_at).orderby(ple_t.id))
+        rows = conn.execute(
+            q.get_sql(), ("payment_entry", spelling, voucher_id, 0)).fetchall()
+        for row in rows:
+            pe_row = conn.execute(
+                Q.from_(pe_t).select(pe_t.status)
+                .where(pe_t.id == P()).get_sql(),
+                (row["voucher_id"],)).fetchone()
+            if pe_row is None or pe_row["status"] != "cancelled":
+                continue
+            conn.execute(delink_sql, (1, row["id"]))
+            closed += 1
+    return closed

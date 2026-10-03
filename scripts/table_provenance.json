@@ -251,6 +251,38 @@
    "doc_ref": "prov:internal:11819eef",
    "class": "direct"
   },
+  "authority_delegation": {
+   "doc_ref": "prov:module-spec:erpclaw",
+   "class": "module_spec"
+  },
+  "authority_delegation_cap": {
+   "doc_ref": "prov:module-spec:erpclaw",
+   "class": "module_spec"
+  },
+  "authority_delegation_right": {
+   "doc_ref": "prov:module-spec:erpclaw",
+   "class": "module_spec"
+  },
+  "authority_delegation_usage": {
+   "doc_ref": "prov:module-spec:erpclaw",
+   "class": "module_spec"
+  },
+  "authority_install": {
+   "doc_ref": "prov:module-spec:erpclaw",
+   "class": "module_spec"
+  },
+  "authority_membership": {
+   "doc_ref": "prov:module-spec:erpclaw",
+   "class": "module_spec"
+  },
+  "authority_principal": {
+   "doc_ref": "prov:module-spec:erpclaw",
+   "class": "module_spec"
+  },
+  "authority_right": {
+   "doc_ref": "prov:module-spec:erpclaw",
+   "class": "module_spec"
+  },
   "automotiveclaw_buyer_order": {
    "doc_ref": "prov:module-spec:automotiveclaw",
    "class": "module_spec",
@@ -963,6 +995,11 @@
    "class": "module_spec",
    "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
   },
+  "educlaw_fee_invoice": {
+   "parent_concept": "educlaw_fee_structure",
+   "doc_ref": "prov:internal:42adb8dc",
+   "class": "child_of_traced"
+  },
   "educlaw_fee_structure_item": {
    "doc_ref": "prov:module-spec:educlaw",
    "class": "module_spec",
@@ -1520,6 +1557,11 @@
    "doc_ref": "prov:internal:16b783f4",
    "class": "direct"
   },
+  "foodclaw_catering_invoice": {
+   "parent_concept": "foodclaw_catering_event",
+   "doc_ref": "prov:internal:16b783f4",
+   "class": "child_of_traced"
+  },
   "foodclaw_catering_item": {
    "doc_ref": "prov:module-spec:foodclaw",
    "class": "module_spec",
@@ -1630,6 +1672,11 @@
    "doc_ref": "prov:module-spec:erpclaw",
    "class": "module_spec",
    "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "gl_chain_head": {
+   "parent_concept": "gl_entry",
+   "doc_ref": "prov:architecture",
+   "class": "child_of_traced"
   },
   "gl_entry": {
    "doc_ref": "prov:architecture",
@@ -2492,6 +2539,11 @@
    "doc_ref": "prov:internal:f72ccf8f",
    "class": "direct"
   },
+  "nonprofitclaw_grant_receipt": {
+   "parent_concept": "nonprofitclaw_grant",
+   "doc_ref": "prov:internal:f72ccf8f",
+   "class": "child_of_traced"
+  },
   "nonprofitclaw_pledge": {
    "doc_ref": "prov:internal:f72ccf8f",
    "class": "direct"
@@ -2519,6 +2571,18 @@
   "operation": {
    "doc_ref": "prov:architecture",
    "class": "direct"
+  },
+  "operation_authorization": {
+   "doc_ref": "prov:module-spec:erpclaw",
+   "class": "module_spec"
+  },
+  "operation_authorization_envelope": {
+   "doc_ref": "prov:module-spec:erpclaw",
+   "class": "module_spec"
+  },
+  "operation_authorization_result": {
+   "doc_ref": "prov:module-spec:erpclaw",
+   "class": "module_spec"
   },
   "opportunity": {
    "doc_ref": "prov:internal:0698635d",
@@ -3485,6 +3549,11 @@
   "billing_run_target": {
    "doc_ref": "prov:internal:6392ed16",
    "class": "direct"
+  },
+  "intercompany_account_map": {
+   "doc_ref": "prov:module-spec:erpclaw",
+   "class": "module_spec",
+   "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
   }
  }
 }

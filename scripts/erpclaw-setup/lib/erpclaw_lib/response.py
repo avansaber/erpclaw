@@ -8,7 +8,16 @@ import sys
 
 
 def ok(data: dict) -> None:
-    """Send success response and exit."""
+    """Send success response and exit.
+
+    Top-level ``status`` is the envelope (``"ok"`` here); a document's own
+    state, when present, is preserved under ``document_status``.
+    """
+    existing = data.get("status")
+    if existing is not None and existing != "ok":
+        if "document_status" in data and data["document_status"] != existing:
+            err("response carries both status and a different document_status; refusing to clobber")
+        data["document_status"] = existing
     data["status"] = "ok"
     print(json.dumps(data, indent=2, default=str))
     sys.exit(0)

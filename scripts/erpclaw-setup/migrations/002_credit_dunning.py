@@ -31,6 +31,99 @@ MIGRATION_DATA_CLASS = "none"
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "data.sqlite")
 
+_DUNNING_LEVEL_DDL = """
+            CREATE TABLE IF NOT EXISTS dunning_level (
+                id              TEXT PRIMARY KEY,
+                company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE CASCADE,
+                level           INTEGER NOT NULL CHECK(level BETWEEN 1 AND 10),
+                days_overdue    INTEGER NOT NULL CHECK(days_overdue >= 0),
+                action          TEXT NOT NULL
+                                CHECK(action IN ('email','hold','call','suspend')),
+                template_id     TEXT,
+                description     TEXT,
+                created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(company_id, level)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_dunning_level_company
+                ON dunning_level(company_id);
+        """
+
+_DUNNING_RUN_DDL = """
+            CREATE TABLE IF NOT EXISTS dunning_run (
+                id              TEXT PRIMARY KEY,
+                company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE CASCADE,
+                run_date        TEXT NOT NULL,
+                customer_id     TEXT NOT NULL REFERENCES customer(id) ON DELETE CASCADE,
+                level           INTEGER NOT NULL CHECK(level BETWEEN 1 AND 10),
+                invoice_ids_json TEXT NOT NULL DEFAULT '[]',
+                action_taken    TEXT NOT NULL
+                                CHECK(action_taken IN ('email','hold','call','suspend')),
+                status          TEXT NOT NULL DEFAULT 'completed'
+                                CHECK(status IN ('completed','failed','skipped')),
+                generated_email_id TEXT,
+                notes           TEXT,
+                created_at      TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_dunning_run_customer
+                ON dunning_run(customer_id);
+            CREATE INDEX IF NOT EXISTS idx_dunning_run_date
+                ON dunning_run(run_date);
+        """
+
+_ADD_CREDIT_STATUS_PG = "ALTER TABLE customer ADD COLUMN credit_status TEXT NOT NULL DEFAULT 'active' CHECK(credit_status IN ('active','on_hold','suspended'))"
+
+
+def _get_dialect():
+    return os.environ.get("ERPCLAW_DB_DIALECT", "sqlite")
+
+
+def _run_postgres(db_path):
+    import importlib.util
+    if importlib.util.find_spec("erpclaw_lib") is None:
+        sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
+    import erpclaw_lib.db as _db
+    import erpclaw_lib.seam as _seam
+    _customer_exists = _seam.table_exists("customer", db_path)
+    if _customer_exists:
+        _customer_columns = _seam.column_names("customer", db_path)
+    else:
+        _customer_columns = []
+    add_credit_status = _customer_exists and "credit_status" not in _customer_columns
+    create_level = not _seam.table_exists("dunning_level", db_path)
+    create_run = not _seam.table_exists("dunning_run", db_path)
+    conn = _db.get_connection(db_path)
+    try:
+        if add_credit_status:
+            conn.execute(_ADD_CREDIT_STATUS_PG)
+            print("  PostgreSQL: customer.credit_status: added.")
+        else:
+            print("  PostgreSQL: customer.credit_status: already present")
+        if create_level:
+            conn.execute(_DUNNING_LEVEL_DDL)
+            print("  PostgreSQL: dunning_level: created.")
+        else:
+            print("  PostgreSQL: dunning_level: already present")
+        if create_run:
+            conn.execute(_DUNNING_RUN_DDL)
+            print("  PostgreSQL: dunning_run: created.")
+        else:
+            print("  PostgreSQL: dunning_run: already present")
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        try:
+            conn.close()
+        except Exception:
+            pass
+        raise
+    conn.close()
+
 
 def _table_exists(conn, table_name):
     row = conn.execute(
@@ -49,6 +142,8 @@ def _column_exists(conn, table_name, column_name):
 
 
 def run_migration(db_path=None):
+    if _get_dialect() == "postgresql":
+        return _run_postgres(db_path)
     path = db_path or os.environ.get("ERPCLAW_DB_PATH", DEFAULT_DB_PATH)
     if not os.path.exists(path):
         print(f"Database not found at {path}. Nothing to migrate.")
@@ -77,49 +172,11 @@ def run_migration(db_path=None):
             print("  customer.credit_status: already present, skipping")
 
         # Step 2: Create dunning_level table
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS dunning_level (
-                id              TEXT PRIMARY KEY,
-                company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE CASCADE,
-                level           INTEGER NOT NULL CHECK(level BETWEEN 1 AND 10),
-                days_overdue    INTEGER NOT NULL CHECK(days_overdue >= 0),
-                action          TEXT NOT NULL
-                                CHECK(action IN ('email','hold','call','suspend')),
-                template_id     TEXT,
-                description     TEXT,
-                created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(company_id, level)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_dunning_level_company
-                ON dunning_level(company_id);
-        """)
+        conn.executescript(_DUNNING_LEVEL_DDL)
         print("  ensured dunning_level table")
 
         # Step 3: Create dunning_run table
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS dunning_run (
-                id              TEXT PRIMARY KEY,
-                company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE CASCADE,
-                run_date        TEXT NOT NULL,
-                customer_id     TEXT NOT NULL REFERENCES customer(id) ON DELETE CASCADE,
-                level           INTEGER NOT NULL CHECK(level BETWEEN 1 AND 10),
-                invoice_ids_json TEXT NOT NULL DEFAULT '[]',
-                action_taken    TEXT NOT NULL
-                                CHECK(action_taken IN ('email','hold','call','suspend')),
-                status          TEXT NOT NULL DEFAULT 'completed'
-                                CHECK(status IN ('completed','failed','skipped')),
-                generated_email_id TEXT,
-                notes           TEXT,
-                created_at      TEXT DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_dunning_run_customer
-                ON dunning_run(customer_id);
-            CREATE INDEX IF NOT EXISTS idx_dunning_run_date
-                ON dunning_run(run_date);
-        """)
+        conn.executescript(_DUNNING_RUN_DDL)
         print("  ensured dunning_run table")
 
         conn.commit()

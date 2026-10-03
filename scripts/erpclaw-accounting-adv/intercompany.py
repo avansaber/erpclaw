@@ -7,7 +7,7 @@ import os
 import sys
 import uuid
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 try:
     import importlib.util
@@ -16,7 +16,7 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import dynamic_update
+    from erpclaw_lib.query import Case, DecimalSum, Field, P, Q, Table, dynamic_update, fn
 
     ENTITY_PREFIXES.setdefault("ic_transaction", "ICT-")
 except ImportError:
@@ -119,6 +119,18 @@ def update_ic_transaction(conn, args):
     data = row_to_dict(row)
     if data["ic_status"] not in ("draft", "pending_approval"):
         err(f"Cannot update IC transaction in status '{data['ic_status']}'. Must be draft or pending_approval.")
+    amount = getattr(args, "amount", None)
+    if amount is not None:
+        try:
+            parsed = Decimal(amount)
+            finite = parsed.is_finite()
+        except Exception:
+            finite = False
+            parsed = None
+        if not finite:
+            err(f"Invalid amount: {amount}")
+        if parsed <= 0:
+            err("Amount must be greater than zero")
 
     data, changed = {}, []
     for arg_name, col_name in {
@@ -148,11 +160,15 @@ def update_ic_transaction(conn, args):
     if not data:
         err("No fields to update")
 
+    current = row_to_dict(conn.execute(
+        "SELECT * FROM advacct_ic_transaction WHERE id = ?", (ic_id,)).fetchone())
+    old_values = {col: current[col] for col in changed}
     data["updated_at"] = _now_iso()
     sql, params = dynamic_update("advacct_ic_transaction", data, where={"id": ic_id})
     conn.execute(sql, params)
+    new_values = {col: data[col] for col in changed}
     audit(conn, SKILL, "update-ic-transaction", "advacct_ic_transaction", ic_id,
-          new_values={"updated_fields": changed})
+          old_values=old_values, new_values=new_values)
     conn.commit()
     ok({"id": ic_id, "updated_fields": changed})
 
@@ -344,26 +360,39 @@ def list_transfer_price_rules(conn, args):
 # 9. ic-reconciliation-report
 # ===========================================================================
 def ic_reconciliation_report(conn, args):
-    where, params = ["1=1"], []
-    if getattr(args, "company_id", None):
-        where.append("company_id = ?")
-        params.append(args.company_id)
+    ic_t = Table("advacct_ic_transaction")
+    company_id = getattr(args, "company_id", None)
+    query = (
+        Q.from_(ic_t)
+        .select(
+            ic_t.from_company_id,
+            ic_t.to_company_id,
+            ic_t.transaction_type,
+            fn.Count("*").as_("transaction_count"),
+            fn.Coalesce(DecimalSum(ic_t.amount), "0").as_("total_amount"),
+            ic_t.ic_status,
+        )
+        .groupby(ic_t.from_company_id, ic_t.to_company_id, ic_t.transaction_type, ic_t.ic_status)
+        .orderby(ic_t.from_company_id, ic_t.to_company_id)
+    )
+    params = []
+    if company_id:
+        query = query.where(ic_t.company_id == P())
+        params.append(company_id)
+    rows = conn.execute(query.get_sql(), params).fetchall()
 
-    where_sql = " AND ".join(where)
-    rows = conn.execute(f"""
-        SELECT from_company_id, to_company_id, transaction_type,
-               COUNT(*) as transaction_count,
-               SUM(CAST(amount AS NUMERIC)) as total_amount,
-               ic_status
-        FROM advacct_ic_transaction
-        WHERE {where_sql}
-        GROUP BY from_company_id, to_company_id, transaction_type, ic_status
-        ORDER BY from_company_id, to_company_id
-    """, params).fetchall()
+    out = []
+    for item in rows:
+        data = row_to_dict(item)
+        raw = data.get("total_amount")
+        if raw is None:
+            raw = "0"
+        data["total_amount"] = str(Decimal(str(raw)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+        out.append(data)
 
     ok({
         "report": "ic_reconciliation",
-        "rows": [row_to_dict(r) for r in rows],
+        "rows": out,
     })
 
 

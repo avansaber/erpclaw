@@ -17,9 +17,12 @@ try:
     import importlib.util
     if importlib.util.find_spec("erpclaw_lib") is None:
         sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
-    from erpclaw_lib.db import get_connection, ensure_db_exists, DEFAULT_DB_PATH
+    from erpclaw_lib.db import get_connection
+    from erpclaw_lib.dependencies import table_exists
     from erpclaw_lib.response import ok, err
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
+    from erpclaw_lib.query import P, Q, Table
+    from erpclaw_lib.query_helpers import resolve_company_id
 except ImportError:
     import json as _json
     print(_json.dumps({
@@ -55,6 +58,18 @@ REQUIRED_TABLES = [
 ]
 
 
+def _resolve_company_flag(conn, args):
+    if getattr(args, "company_name", None) and not getattr(args, "company_id", None):
+        value = args.company_name
+        c = Table("company")
+        q = Q.from_(c).select(c.id).where(c.id == P())
+        rows = conn.execute(q.get_sql(), [value]).fetchall()
+        if rows:
+            args.company_id = value
+        else:
+            args.company_id = resolve_company_id(conn, None, value)
+
+
 def main():
     parser = SafeArgumentParser(description=SKILL)
     parser.add_argument("--action", required=True, choices=sorted(ACTIONS.keys()))
@@ -63,6 +78,7 @@ def main():
     # Entity IDs
     parser.add_argument("--id")
     parser.add_argument("--company-id")
+    parser.add_argument("--company", dest="company_name", default=None)
     parser.add_argument("--contract-id")
     parser.add_argument("--obligation-id")
     parser.add_argument("--lease-id")
@@ -77,6 +93,7 @@ def main():
     parser.add_argument("--contract-status")
     parser.add_argument("--name")
     parser.add_argument("--standalone-price")
+    parser.add_argument("--allocated-price")
     parser.add_argument("--recognition-method")
     parser.add_argument("--recognition-basis")
     parser.add_argument("--pct-complete")
@@ -85,6 +102,9 @@ def main():
     parser.add_argument("--constraint-amount")
     parser.add_argument("--method")
     parser.add_argument("--probability")
+    parser.add_argument("--deferred-revenue-account-id")
+    parser.add_argument("--revenue-account-id")
+    parser.add_argument("--cost-center-id")
 
     # Lease fields
     parser.add_argument("--lessee-name")
@@ -122,6 +142,7 @@ def main():
     parser.add_argument("--functional-currency")
     parser.add_argument("--consolidation-method")
     parser.add_argument("--period-date")
+    parser.add_argument("--as-of-date")
     # M114: remove-elimination-surplus is report-only by default; --confirm
     # executes the audited deletion. The foundation DANGEROUS_ACTIONS gate
     # (user intent) sits on top of this action-semantic flag.
@@ -140,20 +161,17 @@ def main():
     check_unknown_args(parser, unknown)
 
     # DB setup
-    db_path = args.db_path or os.environ.get("ERPCLAW_DB_PATH", DEFAULT_DB_PATH)
-    ensure_db_exists(db_path)
+    db_path = getattr(args, "db_path", None)   # None unless --db-path was given
     conn = get_connection(db_path)
 
     # Check required tables exist
-    tables = [r[0] for r in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'"
-    ).fetchall()]
-    missing = [t for t in REQUIRED_TABLES if t not in tables]
+    missing = [t for t in REQUIRED_TABLES if not table_exists(conn, t)]
     if missing:
         conn.close()
         err(f"Missing tables: {', '.join(missing)}. Run init_db.py first.",
             suggestion="python3 init_db.py")
 
+    _resolve_company_flag(conn, args)
     try:
         ACTIONS[args.action](conn, args)
     except Exception as e:

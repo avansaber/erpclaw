@@ -23,7 +23,7 @@ try:
     import importlib.util
     if importlib.util.find_spec("erpclaw_lib") is None:
         sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
-    from erpclaw_lib.db import get_connection, ensure_db_exists, DEFAULT_DB_PATH
+    from erpclaw_lib.db import get_connection
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.validation import check_input_lengths
     from erpclaw_lib.response import ok, err, row_to_dict
@@ -76,6 +76,34 @@ def _parse_json_arg(value, name):
         return json.loads(value)
     except (json.JSONDecodeError, TypeError):
         err(f"Invalid JSON for --{name}: {value}")
+
+
+def _parse_paging(args, default_limit=20, default_offset=0):
+    raw_limit = getattr(args, "limit", None)
+    raw_offset = getattr(args, "offset", None)
+    if raw_limit is None or (isinstance(raw_limit, str) and raw_limit.strip() == ""):
+        limit = default_limit
+    else:
+        if isinstance(raw_limit, bool) or isinstance(raw_limit, float):
+            err("--limit must be a positive integer")
+        try:
+            limit = int(raw_limit.strip()) if isinstance(raw_limit, str) else int(raw_limit)
+        except (ValueError, TypeError):
+            err("--limit must be a positive integer")
+        if limit <= 0:
+            err("--limit must be a positive integer")
+    if raw_offset is None or (isinstance(raw_offset, str) and raw_offset.strip() == ""):
+        offset = default_offset
+    else:
+        if isinstance(raw_offset, bool) or isinstance(raw_offset, float):
+            err("--offset must be a non-negative integer")
+        try:
+            offset = int(raw_offset.strip()) if isinstance(raw_offset, str) else int(raw_offset)
+        except (ValueError, TypeError):
+            err("--offset must be a non-negative integer")
+        if offset < 0:
+            err("--offset must be a non-negative integer")
+    return limit, offset
 
 
 def _validate_lines(lines):
@@ -273,8 +301,7 @@ def list_tax_templates(conn, args):
                                     getattr(args, 'company_id', None),
                                     getattr(args, 'company_name', None))
 
-    limit = int(args.limit or 20)
-    offset = int(args.offset or 0)
+    limit, offset = _parse_paging(args)
 
     base = Q.from_(tt_t).where(tt_t.company_id == P())
     params = [company_id]
@@ -342,8 +369,7 @@ def add_tax_category(conn, args):
 
 
 def list_tax_categories(conn, args):
-    limit = int(args.limit or 20)
-    offset = int(args.offset or 0)
+    limit, offset = _parse_paging(args)
     q_count = Q.from_(tc_t).select(fn.Count("*").as_("cnt"))
     total_count = conn.execute(q_count.get_sql()).fetchone()["cnt"]
     q = Q.from_(tc_t).select(tc_t.star).orderby(tc_t.name).limit(P()).offset(P())
@@ -404,8 +430,7 @@ def list_tax_rules(conn, args):
                                     getattr(args, 'company_id', None),
                                     getattr(args, 'company_name', None))
 
-    limit = int(args.limit or 20)
-    offset = int(args.offset or 0)
+    limit, offset = _parse_paging(args)
 
     q_count = Q.from_(tr_t).select(fn.Count("*").as_("cnt")).where(tr_t.company_id == P())
     total_count = conn.execute(q_count.get_sql(), (company_id,)).fetchone()["cnt"]
@@ -1080,8 +1105,7 @@ def main():
     check_unknown_args(parser, unknown)
     check_input_lengths(args)
 
-    db_path = args.db_path or DEFAULT_DB_PATH
-    ensure_db_exists(db_path)
+    db_path = getattr(args, "db_path", None)   # None unless --db-path was given
     conn = get_connection(db_path)
 
     # Dependency check

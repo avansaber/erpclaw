@@ -10,7 +10,7 @@ import json
 import pytest
 from decimal import Decimal
 from advacct_helpers import (
-    call_action, ns, is_error, is_ok, load_db_query,
+    call_action, ns, is_error, is_ok, load_db_query, seed_recognition_ledger,
 )
 
 mod = load_db_query()
@@ -319,12 +319,17 @@ class TestGenerateRevenueEntries:
         call_action(mod.calculate_revenue_schedule, conn, ns(
             obligation_id=ob["id"],
         ))
+        ledger = seed_recognition_ledger(conn, env["company_id"])
         result = call_action(mod.generate_revenue_entries, conn, ns(
             obligation_id=ob["id"],
+            deferred_revenue_account_id=ledger["deferred_revenue_account_id"],
+            revenue_account_id=ledger["revenue_account_id"],
+            cost_center_id=ledger["cost_center_id"],
         ))
         assert is_ok(result)
         assert result["recognized_count"] == 6
         assert Decimal(result["total_recognized"]) == Decimal("6000.00")
+        assert result["gl_entry_count"] == 12
 
     def test_no_unrecognized_fails(self, conn, env):
         c = _add_contract(conn, env, start_date="2026-01-01", end_date="2026-03-31")
@@ -332,14 +337,23 @@ class TestGenerateRevenueEntries:
         call_action(mod.calculate_revenue_schedule, conn, ns(
             obligation_id=ob["id"],
         ))
-        call_action(mod.generate_revenue_entries, conn, ns(
+        ledger = seed_recognition_ledger(conn, env["company_id"])
+        first = call_action(mod.generate_revenue_entries, conn, ns(
             obligation_id=ob["id"],
+            deferred_revenue_account_id=ledger["deferred_revenue_account_id"],
+            revenue_account_id=ledger["revenue_account_id"],
+            cost_center_id=ledger["cost_center_id"],
         ))
+        assert is_ok(first), first
         # All recognized now; second call should fail
         result = call_action(mod.generate_revenue_entries, conn, ns(
             obligation_id=ob["id"],
+            deferred_revenue_account_id=ledger["deferred_revenue_account_id"],
+            revenue_account_id=ledger["revenue_account_id"],
+            cost_center_id=ledger["cost_center_id"],
         ))
         assert is_error(result)
+        assert result["message"] == "No unrecognized revenue schedule entries found"
 
 
 # ──────────────────────────────────────────────────────────────────────────────

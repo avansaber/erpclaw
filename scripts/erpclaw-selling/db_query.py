@@ -11,7 +11,6 @@ Output: JSON to stdout, exit 0 on success, exit 1 on error.
 import argparse
 import json
 import os
-import sqlite3
 import subprocess
 import sys
 import uuid
@@ -24,7 +23,7 @@ try:
     import importlib.util
     if importlib.util.find_spec("erpclaw_lib") is None:
         sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
-    from erpclaw_lib.db import get_connection, ensure_db_exists, DEFAULT_DB_PATH
+    from erpclaw_lib.db import get_connection, integrity_error_types, unexpected_error_message
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.validation import check_input_lengths
     from erpclaw_lib.naming import get_next_name
@@ -35,12 +34,20 @@ try:
         get_valuation_rate,
         create_perpetual_inventory_gl,
     )
-    from erpclaw_lib.gl_posting import insert_gl_entries, reverse_gl_entries
+    from erpclaw_lib.gl_posting import insert_gl_entries, reverse_gl_entries, take_chain_heads
+    from erpclaw_lib.dimensions import (
+        parse_dimension_input,
+        validate_document_dimensions,
+        dimensions_json_text,
+    )
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.custom_fields import store_from_arg, merge_into_response
     from erpclaw_lib.dependencies import check_required_tables
+    from erpclaw_lib.query_helpers import get_default_cost_center, get_fiscal_year, resolve_company_id, resolve_scope_company
     from erpclaw_lib.query import Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL, DecimalSum, DecimalAbs, dynamic_update, line_order, scalar_max, now
+    from erpclaw_lib import authority_gate
+    from erpclaw_lib.authorization_consumption import INPUT_INVALID
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
     from erpclaw_lib.vendor.pypika.terms import LiteralValue, ValueWrapper
 except ImportError:
@@ -60,7 +67,6 @@ _t_company = Table("company")
 _t_customer = Table("customer")
 _t_account = Table("account")
 _t_cost_center = Table("cost_center")
-_t_fiscal_year = Table("fiscal_year")
 _t_warehouse = Table("warehouse")
 _t_item = Table("item")
 _t_quotation = Table("quotation")
@@ -77,6 +83,11 @@ _t_sales_partner = Table("sales_partner")
 _t_recurring_template = Table("recurring_invoice_template")
 _t_recurring_template_item = Table("recurring_invoice_template_item")
 _t_payment_ledger = Table("payment_ledger_entry")
+_t_gl_entry = Table("gl_entry")
+_t_payment_allocation = Table("payment_allocation")
+_t_timesheet = Table("timesheet")
+_t_billing_period = Table("billing_period")
+_t_billing_run_target = Table("billing_run_target")
 _t_payment_terms = Table("payment_terms")
 _t_tax_template_line = Table("tax_template_line")
 _t_stock_ledger = Table("stock_ledger_entry")
@@ -103,26 +114,75 @@ def _parse_json_arg(value, name):
         err(f"Invalid JSON for --{name}: {value}")
 
 
-def _get_fiscal_year(conn, posting_date: str) -> str | None:
-    """Return the fiscal year name for a posting date, or None."""
-    q = (Q.from_(_t_fiscal_year)
-         .select(_t_fiscal_year.name)
-         .where(_t_fiscal_year.start_date <= P())
-         .where(_t_fiscal_year.end_date >= P())
-         .where(_t_fiscal_year.is_closed == 0))
-    fy = conn.execute(q.get_sql(), (posting_date, posting_date)).fetchone()
-    return fy["name"] if fy else None
+def _parse_dimensions_arg(args):
+    """Parse --dimensions / --dimension-key / --dimension-value (m712).
+
+    Returns None when the caller gave nothing, else a dict (explicit '{}'
+    returns {}: the caller clears the set). A ValueError becomes err()
+    before any write.
+    """
+    try:
+        return parse_dimension_input(
+            getattr(args, "dimensions", None),
+            getattr(args, "dimension_key", None),
+            getattr(args, "dimension_value", None))
+    except ValueError as e:
+        err(str(e))
+
+
+def _checked_dimensions_text(conn, dims):
+    """Registry-check a non-empty parsed object; return its stored text."""
+    if dims:
+        try:
+            validate_document_dimensions(conn, dims)
+        except ValueError as e:
+            err(str(e))
+    return dimensions_json_text(dims)
+
+
+def _inherited_dimensions_text(conn, parent_text):
+    """Return a parent's stored text, registry-checking a non-empty one."""
+    stored = parent_text or "{}"
+    if stored != "{}":
+        try:
+            obj = json.loads(stored)
+        except (ValueError, TypeError):
+            obj = {}
+        if obj:
+            try:
+                validate_document_dimensions(conn, obj)
+            except ValueError as e:
+                err(str(e))
+    return stored
+
+
+def _resolve_dimensions_text(conn, args, parent_text=None):
+    """Given-or-inherited stored dimensions text for a draft action.
+
+    Explicit input (including '{}' to clear) wins; otherwise the parent's
+    stored text is copied, or '{}' when there is no parent. A non-empty
+    result is registry-checked before the caller's first write.
+    """
+    dims = _parse_dimensions_arg(args)
+    if dims is not None:
+        return _checked_dimensions_text(conn, dims)
+    if parent_text is not None:
+        return _inherited_dimensions_text(conn, parent_text)
+    return "{}"
+
+
+def _read_document_dimensions(si_dict):
+    """json.loads a document's dimensions_json once (posting sites)."""
+    try:
+        obj = json.loads(si_dict.get("dimensions_json") or "{}")
+    except (ValueError, TypeError):
+        obj = {}
+    return obj if isinstance(obj, dict) else {}
 
 
 def _get_cost_center(conn, company_id: str) -> str | None:
     """Return the first non-group cost center for a company, or None."""
-    q = (Q.from_(_t_cost_center)
-         .select(_t_cost_center.id)
-         .where(_t_cost_center.company_id == P())
-         .where(_t_cost_center.is_group == 0)
-         .limit(1))
-    cc = conn.execute(q.get_sql(), (company_id,)).fetchone()
-    return cc["id"] if cc else None
+    return get_default_cost_center(conn, company_id)
 
 
 def _get_receivable_account(conn, company_id: str) -> str | None:
@@ -460,9 +520,11 @@ def add_customer(conn, args):
     if not args.company_id:
         err("--company-id is required")
 
-    q = Q.from_(_t_company).select(_t_company.id).where(_t_company.id == P())
-    if not conn.execute(q.get_sql(), (args.company_id,)).fetchone():
+    q = Q.from_(_t_company).select(_t_company.id, _t_company.default_currency).where(_t_company.id == P())
+    company_row = conn.execute(q.get_sql(), (args.company_id,)).fetchone()
+    if not company_row:
         err(f"Company {args.company_id} not found")
+    company_currency = company_row["default_currency"]
 
     customer_type = args.customer_type or "company"
     if customer_type not in VALID_CUSTOMER_TYPES:
@@ -493,17 +555,17 @@ def add_customer(conn, args):
                        "payment_terms_id", "credit_limit", "tax_id",
                        "exempt_from_sales_tax", "primary_address",
                        "primary_contact", "email", "phone",
-                       "default_price_list_id", "status", "company_id")
+                       "default_price_list_id", "status", "default_currency", "company_id")
              .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(), P(),
-                     P(), P(), P(), ValueWrapper("active"), P()))
+                     P(), P(), P(), ValueWrapper("active"), P(), P()))
         conn.execute(q.get_sql(),
             (cust_id, args.name, customer_type, args.customer_group,
              args.payment_terms_id, credit_limit, args.tax_id, exempt,
              primary_address, primary_contact,
              getattr(args, "email", None), getattr(args, "phone", None),
-             default_price_list_id, args.company_id),
+             default_price_list_id, company_currency, args.company_id),
         )
-    except sqlite3.IntegrityError as e:
+    except integrity_error_types() as e:
         sys.stderr.write(f"[erpclaw-selling] {e}\n")
         err("Customer creation failed — check for duplicates or invalid data")
 
@@ -597,14 +659,27 @@ def get_customer(conn, args):
     if not args.customer_id:
         err("--customer-id is required")
 
-    q = (Q.from_(_t_customer)
-         .select(_t_customer.star)
-         .where((_t_customer.id == P()) | (_t_customer.name == P())))
-    cust = conn.execute(q.get_sql(),
-                        (args.customer_id, args.customer_id)).fetchone()
+    scope_company_id = None
+    if getattr(args, "company_id", None) or getattr(args, "company_name", None):
+        scope_company_id = resolve_scope_company(conn, getattr(args, "company_id", None), getattr(args, "company_name", None))
+
+    if scope_company_id:
+        q = (Q.from_(_t_customer)
+             .select(_t_customer.star)
+             .where((_t_customer.id == P()) | ((_t_customer.name == P()) & (_t_customer.company_id == P()))))
+        cust = conn.execute(q.get_sql(),
+                            (args.customer_id, args.customer_id, scope_company_id)).fetchone()
+    else:
+        q = (Q.from_(_t_customer)
+             .select(_t_customer.star)
+             .where((_t_customer.id == P()) | (_t_customer.name == P())))
+        cust = conn.execute(q.get_sql(),
+                            (args.customer_id, args.customer_id)).fetchone()
     if not cust:
         err(f"Customer {args.customer_id} not found",
              suggestion="Use 'list customers' to see available customers.")
+    if scope_company_id and cust["company_id"] != scope_company_id:
+        err(f"Customer {args.customer_id} belongs to another company")
 
     data = row_to_dict(cust)
 
@@ -632,15 +707,13 @@ def get_customer(conn, args):
 
 def list_customers(conn, args):
     """Query customers with filtering."""
+    company_id = resolve_scope_company(conn, args.company_id, getattr(args, "company_name", None))
     c = _t_customer.as_("c")
     params = []
 
     base = Q.from_(c)
-    crit = None
-
-    if args.company_id:
-        crit = Criterion.all([crit, c.company_id == P()]) if crit else (c.company_id == P())
-        params.append(args.company_id)
+    crit = (c.company_id == P())
+    params.append(company_id)
     if args.customer_group:
         cond = c.customer_group == P()
         crit = Criterion.all([crit, cond]) if crit else cond
@@ -686,17 +759,23 @@ def add_quotation(conn, args):
     if not args.company_id:
         err("--company-id is required")
 
-    q = (Q.from_(_t_customer).select(_t_customer.id)
-         .where((_t_customer.id == P()) | (_t_customer.name == P()))
+    q = (Q.from_(_t_customer).select(_t_customer.id, _t_customer.company_id)
+         .where((_t_customer.id == P())
+                | ((_t_customer.name == P())
+                   & (_t_customer.company_id == P())))
          .where(_t_customer.status == ValueWrapper("active")))
     cust_row = conn.execute(q.get_sql(),
-        (args.customer_id, args.customer_id)).fetchone()
+        (args.customer_id, args.customer_id, args.company_id)).fetchone()
     if not cust_row:
         err(f"Active customer {args.customer_id} not found")
     args.customer_id = cust_row["id"]  # normalize to id
     q2 = Q.from_(_t_company).select(_t_company.id).where(_t_company.id == P())
     if not conn.execute(q2.get_sql(), (args.company_id,)).fetchone():
         err(f"Company {args.company_id} not found")
+    if cust_row["company_id"] != args.company_id:
+        err(f"Customer {args.customer_id} belongs to another company")
+
+    dimensions_text = _resolve_dimensions_text(conn, args)
 
     items = _parse_json_arg(args.items, "items")
     total_amount, item_rows = _calculate_line_items(
@@ -711,13 +790,14 @@ def add_quotation(conn, args):
     qi = (Q.into(_t_quotation)
           .columns("id", "customer_id", "quotation_date", "valid_until",
                     "total_amount", "tax_amount", "grand_total",
-                    "tax_template_id", "status", "company_id")
+                    "tax_template_id", "status", "company_id",
+                    "dimensions_json")
           .insert(P(), P(), P(), P(), P(), P(), P(), P(),
-                  ValueWrapper("draft"), P()))
+                  ValueWrapper("draft"), P(), P()))
     conn.execute(qi.get_sql(),
         (q_id, args.customer_id, args.posting_date, args.valid_till,
          str(total_amount), str(tax_amount), str(grand_total),
-         args.tax_template_id, args.company_id),
+         args.tax_template_id, args.company_id, dimensions_text),
     )
 
     # Insert child quotation_item rows
@@ -760,7 +840,14 @@ def update_quotation(conn, args):
         err(f"Cannot update: quotation is '{q['status']}' (must be 'draft')",
              suggestion="Cancel the document first, then make changes.")
 
+    dims = _parse_dimensions_arg(args)
+    dims_text = None
+    if dims is not None:
+        dims_text = _checked_dimensions_text(conn, dims)
+
     updated_fields = []
+    old_values = {}
+    new_values = {}
 
     if args.valid_till is not None:
         uq = (Q.update(_t_quotation)
@@ -769,6 +856,8 @@ def update_quotation(conn, args):
               .where(_t_quotation.id == P()))
         conn.execute(uq.get_sql(), (args.valid_till, args.quotation_id))
         updated_fields.append("valid_until")
+        old_values["valid_until"] = q["valid_until"]
+        new_values["valid_until"] = args.valid_till
 
     if args.items:
         items = _parse_json_arg(args.items, "items")
@@ -806,12 +895,29 @@ def update_quotation(conn, args):
              args.quotation_id),
         )
         updated_fields.extend(["items", "total_amount", "tax_amount", "grand_total"])
+        old_values["total_amount"] = q["total_amount"]
+        old_values["tax_amount"] = q["tax_amount"]
+        old_values["grand_total"] = q["grand_total"]
+        new_values["total_amount"] = str(total_amount)
+        new_values["tax_amount"] = str(tax_amount)
+        new_values["grand_total"] = str(grand_total)
+
+    if dims_text is not None:
+        uq_dim = (Q.update(_t_quotation)
+              .set("dimensions_json", P())
+              .set("updated_at", now())
+              .where(_t_quotation.id == P()))
+        conn.execute(uq_dim.get_sql(), (dims_text, args.quotation_id))
+        updated_fields.append("dimensions_json")
+        old_values["dimensions_json"] = q["dimensions_json"] or "{}"
+        new_values["dimensions_json"] = dims_text
 
     if not updated_fields:
         err("No fields to update")
 
     audit(conn, "erpclaw-selling", "update-quotation", "quotation", args.quotation_id,
-           new_values={"updated_fields": updated_fields})
+           old_values=old_values, new_values=new_values,
+           description="Updated fields: " + ", ".join(updated_fields))
     conn.commit()
     ok({"quotation_id": args.quotation_id, "updated_fields": updated_fields})
 
@@ -850,14 +956,12 @@ def get_quotation(conn, args):
 
 def list_quotations(conn, args):
     """Query quotations with filtering."""
+    company_id = resolve_scope_company(conn, args.company_id, getattr(args, "company_name", None))
     q = _t_quotation.as_("q")
     c = _t_customer.as_("c")
     params = []
-    crit = None
-
-    if args.company_id:
-        crit = (q.company_id == P())
-        params.append(args.company_id)
+    crit = (q.company_id == P())
+    params.append(company_id)
     if args.customer_id:
         cond = q.customer_id == P()
         crit = Criterion.all([crit, cond]) if crit else cond
@@ -962,6 +1066,9 @@ def convert_quotation_to_so(conn, args):
     if not q_items:
         err("Quotation has no items")
 
+    dimensions_text = _resolve_dimensions_text(
+        conn, args, q_dict.get("dimensions_json"))
+
     so_id = str(uuid.uuid4())
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -970,15 +1077,16 @@ def convert_quotation_to_so(conn, args):
               .columns("id", "customer_id", "order_date", "delivery_date",
                         "currency", "exchange_rate", "total_amount",
                         "tax_amount", "grand_total", "tax_template_id",
-                        "payment_terms_id", "status", "quotation_id", "company_id")
+                        "payment_terms_id", "status", "quotation_id", "company_id",
+                        "dimensions_json")
               .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(), P(), P(),
-                      ValueWrapper("draft"), P(), P()))
+                      ValueWrapper("draft"), P(), P(), P()))
     conn.execute(so_ins.get_sql(),
         (so_id, q_dict["customer_id"], today, args.delivery_date,
          q_dict["currency"], q_dict["exchange_rate"],
          q_dict["total_amount"], q_dict["tax_amount"], q_dict["grand_total"],
          q_dict["tax_template_id"], q_dict["payment_terms_id"],
-         args.quotation_id, q_dict["company_id"]),
+         args.quotation_id, q_dict["company_id"], dimensions_text),
     )
 
     # Insert child sales_order_item rows from quotation items
@@ -1028,16 +1136,23 @@ def add_sales_order(conn, args):
         err("--company-id is required")
 
     cq = (Q.from_(_t_customer).select(_t_customer.star)
-          .where((_t_customer.id == P()) | (_t_customer.name == P()))
+          .where((_t_customer.id == P())
+                 | ((_t_customer.name == P())
+                    & (_t_customer.company_id == P())))
           .where(_t_customer.status == ValueWrapper("active")))
     cust = conn.execute(cq.get_sql(),
-                        (args.customer_id, args.customer_id)).fetchone()
+                        (args.customer_id, args.customer_id,
+                         args.company_id)).fetchone()
     if not cust:
         err(f"Active customer {args.customer_id} not found")
     args.customer_id = cust["id"]  # normalize to id
     cq2 = Q.from_(_t_company).select(_t_company.id).where(_t_company.id == P())
     if not conn.execute(cq2.get_sql(), (args.company_id,)).fetchone():
         err(f"Company {args.company_id} not found")
+    if cust["company_id"] != args.company_id:
+        err(f"Customer {args.customer_id} belongs to another company")
+
+    dimensions_text = _resolve_dimensions_text(conn, args)
 
     items = _parse_json_arg(args.items, "items")
     total_amount, item_rows = _calculate_line_items(
@@ -1053,13 +1168,14 @@ def add_sales_order(conn, args):
     so_ins = (Q.into(_t_sales_order)
               .columns("id", "customer_id", "order_date", "delivery_date",
                         "total_amount", "tax_amount", "grand_total",
-                        "tax_template_id", "status", "company_id")
+                        "tax_template_id", "status", "company_id",
+                        "dimensions_json")
               .insert(P(), P(), P(), P(), P(), P(), P(), P(),
-                      ValueWrapper("draft"), P()))
+                      ValueWrapper("draft"), P(), P()))
     conn.execute(so_ins.get_sql(),
         (so_id, args.customer_id, args.posting_date, args.delivery_date,
          str(total_amount), str(tax_amount), str(grand_total),
-         args.tax_template_id, args.company_id),
+         args.tax_template_id, args.company_id, dimensions_text),
     )
 
     # Insert child sales_order_item rows
@@ -1102,7 +1218,14 @@ def update_sales_order(conn, args):
         err(f"Cannot update: sales order is '{so['status']}' (must be 'draft')",
              suggestion="Cancel the document first, then make changes.")
 
+    dims = _parse_dimensions_arg(args)
+    dims_text = None
+    if dims is not None:
+        dims_text = _checked_dimensions_text(conn, dims)
+
     updated_fields = []
+    old_values = {}
+    new_values = {}
 
     if args.delivery_date is not None:
         uq = (Q.update(_t_sales_order)
@@ -1111,6 +1234,8 @@ def update_sales_order(conn, args):
               .where(_t_sales_order.id == P()))
         conn.execute(uq.get_sql(), (args.delivery_date, args.sales_order_id))
         updated_fields.append("delivery_date")
+        old_values["delivery_date"] = so["delivery_date"]
+        new_values["delivery_date"] = args.delivery_date
 
     if args.items:
         items = _parse_json_arg(args.items, "items")
@@ -1149,12 +1274,29 @@ def update_sales_order(conn, args):
              args.sales_order_id),
         )
         updated_fields.extend(["items", "total_amount", "tax_amount", "grand_total"])
+        old_values["total_amount"] = so["total_amount"]
+        old_values["tax_amount"] = so["tax_amount"]
+        old_values["grand_total"] = so["grand_total"]
+        new_values["total_amount"] = str(total_amount)
+        new_values["tax_amount"] = str(tax_amount)
+        new_values["grand_total"] = str(grand_total)
+
+    if dims_text is not None:
+        uq_dim = (Q.update(_t_sales_order)
+              .set("dimensions_json", P())
+              .set("updated_at", now())
+              .where(_t_sales_order.id == P()))
+        conn.execute(uq_dim.get_sql(), (dims_text, args.sales_order_id))
+        updated_fields.append("dimensions_json")
+        old_values["dimensions_json"] = so["dimensions_json"] or "{}"
+        new_values["dimensions_json"] = dims_text
 
     if not updated_fields:
         err("No fields to update")
 
     audit(conn, "erpclaw-selling", "update-sales-order", "sales_order", args.sales_order_id,
-           new_values={"updated_fields": updated_fields})
+           old_values=old_values, new_values=new_values,
+           description="Updated fields: " + ", ".join(updated_fields))
     conn.commit()
     ok({"sales_order_id": args.sales_order_id, "updated_fields": updated_fields})
 
@@ -1214,14 +1356,12 @@ def get_sales_order(conn, args):
 
 def list_sales_orders(conn, args):
     """Query sales orders with filtering."""
+    company_id = resolve_scope_company(conn, args.company_id, getattr(args, "company_name", None))
     so = _t_sales_order.as_("so")
     c = _t_customer.as_("c")
     params = []
-    crit = None
-
-    if args.company_id:
-        crit = (so.company_id == P())
-        params.append(args.company_id)
+    crit = (so.company_id == P())
+    params.append(company_id)
     if args.customer_id:
         cond = so.customer_id == P()
         crit = Criterion.all([crit, cond]) if crit else cond
@@ -1421,8 +1561,9 @@ def create_delivery_note(conn, args):
         err(f"Sales order {args.sales_order_id} not found")
     if so["status"] == "closed":
         err("Cannot create DN: sales order is closed")
-    if so["status"] not in ("confirmed", "partially_delivered"):
-        err(f"Cannot create DN: sales order is '{so['status']}' (must be 'confirmed' or 'partially_delivered')")
+    if so["status"] not in ("confirmed", "partially_delivered", "partially_invoiced",
+                             "fully_invoiced"):
+        err(f"Cannot create DN: sales order is '{so['status']}' (must be 'confirmed', 'partially_delivered', 'partially_invoiced' or 'fully_invoiced')")
 
     so_dict = row_to_dict(so)
     posting_date = args.posting_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -1462,7 +1603,8 @@ def create_delivery_note(conn, args):
             else:
                 err(f"Item {item_id or so_item_id} not found in sales order")
 
-            remaining = to_decimal(soi_dict["quantity"]) - to_decimal(soi_dict["delivered_qty"])
+            remaining = _so_line_remaining(
+                conn, soi_dict["id"], soi_dict["quantity"], soi_dict["delivered_qty"])
             if qty <= 0:
                 err(f"Item {soi_dict['item_id']}: qty must be > 0")
             if qty > remaining:
@@ -1479,7 +1621,8 @@ def create_delivery_note(conn, args):
         # Full delivery: copy all undelivered items
         for soi in so_items:
             soi_dict = row_to_dict(soi)
-            remaining = to_decimal(soi_dict["quantity"]) - to_decimal(soi_dict["delivered_qty"])
+            remaining = _so_line_remaining(
+                conn, soi_dict["id"], soi_dict["quantity"], soi_dict["delivered_qty"])
             if remaining > 0:
                 items_to_deliver.append({
                     "so_item": soi_dict,
@@ -1490,7 +1633,18 @@ def create_delivery_note(conn, args):
                 })
 
     if not items_to_deliver:
+        first_si = _first_stock_moving_invoice(conn, args.sales_order_id)
+        if first_si is not None:
+            moved_total = Decimal("0")
+            for soi in so_items:
+                moved_total += _so_line_moved_by_invoice(conn, soi["id"])
+            if moved_total > 0:
+                label = first_si.get("naming_series") or first_si["id"]
+                err(f"Nothing left to deliver: invoice {label} already moved these goods out of stock")
         err("No items to deliver (all items already fully delivered)")
+
+    dimensions_text = _resolve_dimensions_text(
+        conn, args, so_dict.get("dimensions_json"))
 
     # Propagate --warehouse-id override to all DN items if provided
     override_warehouse_id = getattr(args, "warehouse_id", None)
@@ -1504,12 +1658,13 @@ def create_delivery_note(conn, args):
     # Insert parent delivery_note first
     dn_ins = (Q.into(_t_delivery_note)
               .columns("id", "customer_id", "posting_date", "sales_order_id",
-                        "status", "total_qty", "company_id")
-              .insert(P(), P(), P(), P(), ValueWrapper("draft"), P(), P()))
+                        "status", "total_qty", "company_id",
+                        "dimensions_json")
+              .insert(P(), P(), P(), P(), ValueWrapper("draft"), P(), P(), P()))
     conn.execute(dn_ins.get_sql(),
         (dn_id, so_dict["customer_id"], posting_date,
          args.sales_order_id, str(round_currency(total_qty)),
-         so_dict["company_id"]),
+         so_dict["company_id"], dimensions_text),
     )
 
     # Insert child delivery_note_item rows
@@ -1573,14 +1728,12 @@ def get_delivery_note(conn, args):
 
 def list_delivery_notes(conn, args):
     """Query delivery notes with filtering."""
+    company_id = resolve_scope_company(conn, args.company_id, getattr(args, "company_name", None))
     dn = _t_delivery_note.as_("dn")
     c = _t_customer.as_("c")
     params = []
-    crit = None
-
-    if args.company_id:
-        crit = (dn.company_id == P())
-        params.append(args.company_id)
+    crit = (dn.company_id == P())
+    params.append(company_id)
     if args.customer_id:
         cond = dn.customer_id == P()
         crit = Criterion.all([crit, cond]) if crit else cond
@@ -1641,208 +1794,327 @@ def submit_delivery_note(conn, args):
     if dn["status"] != "draft":
         err(f"Cannot submit: delivery note is '{dn['status']}' (must be 'draft')")
 
-    dn_dict = row_to_dict(dn)
-    company_id = dn_dict["company_id"]
-    posting_date = dn_dict["posting_date"]
-
-    # Verify linked SO is not cancelled
-    if dn_dict.get("sales_order_id"):
-        soq = (Q.from_(_t_sales_order).select(_t_sales_order.status)
-               .where(_t_sales_order.id == P()))
-        so = conn.execute(soq.get_sql(), (dn_dict["sales_order_id"],)).fetchone()
-        if so and so["status"] == "cancelled":
-            err("Cannot submit: linked sales order is cancelled")
-
-    # Fetch DN items
-    dniq = (Q.from_(_t_delivery_note_item).select(_t_delivery_note_item.star)
-            .where(_t_delivery_note_item.delivery_note_id == P())
-            .orderby(line_order(_t_delivery_note_item)))
-    dn_items = conn.execute(dniq.get_sql(), (args.delivery_note_id,)).fetchall()
-    if not dn_items:
-        err("Delivery note has no items")
-
-    fiscal_year = _get_fiscal_year(conn, posting_date)
-    cost_center_id = _get_cost_center(conn, company_id)
-    cogs_account_id = _get_cogs_account(conn, company_id)
-
-    # Build SLE entries (negative qty from warehouse)
-    sle_entries = []
-    for dni in dn_items:
-        dni_dict = row_to_dict(dni)
-        qty = to_decimal(dni_dict["quantity"])
-
-        # Skip warehouse validation for service items
-        item_row = conn.execute("SELECT item_type FROM item WHERE id = ?", (dni_dict["item_id"],)).fetchone()
-        if item_row and item_row["item_type"] == "service":
-            continue
-
-        warehouse_id = dni_dict.get("warehouse_id")
-        if not warehouse_id:
-            # Try to get default warehouse from company
-            cwq = (Q.from_(_t_company).select(_t_company.default_warehouse_id)
-                   .where(_t_company.id == P()))
-            comp = conn.execute(cwq.get_sql(), (company_id,)).fetchone()
-            warehouse_id = comp["default_warehouse_id"] if comp else None
-        if not warehouse_id:
-            err(f"No warehouse specified for item {dni_dict['item_id']} and no default warehouse")
-
-        # B8: Validate warehouse type — only dispatch from stores warehouses
-        wh_type_row = conn.execute(
-            "SELECT warehouse_type FROM warehouse WHERE id = ?", (warehouse_id,)
-        ).fetchone()
-        if wh_type_row and wh_type_row["warehouse_type"] not in ("stores",):
-            err(f"Cannot dispatch from '{wh_type_row['warehouse_type']}' warehouse. Use a 'stores' warehouse.")
-
-        sle_entries.append({
-            "item_id": dni_dict["item_id"],
-            "warehouse_id": warehouse_id,
-            "actual_qty": str(round_currency(-qty)),
-            "incoming_rate": "0",
-            "batch_id": dni_dict.get("batch_id"),
-            "serial_number": dni_dict.get("serial_numbers"),
-            "fiscal_year": fiscal_year,
-        })
-
-    # Insert SLE entries
     try:
-        sle_ids = insert_sle_entries(
-            conn, sle_entries,
-            voucher_type="delivery_note",
-            voucher_id=args.delivery_note_id,
-            posting_date=posting_date,
-            company_id=company_id,
-        )
-    except ValueError as e:
-        sys.stderr.write(f"[erpclaw-selling] {e}\n")
-        err(f"SLE posting failed: {e}")
+        take_chain_heads(conn, [dn["company_id"]])
 
-    # B12: Update serial number status to 'delivered'
-    for dni in dn_items:
-        dni_d = row_to_dict(dni)
-        serial_nums = dni_d.get("serial_numbers")
-        if serial_nums:
-            for sn in serial_nums.split("\n"):
-                sn = sn.strip()
-                if sn:
-                    conn.execute(
-                        """UPDATE serial_number
-                           SET status = 'delivered',
-                               delivery_document_type = 'delivery_note',
-                               delivery_document_id = ?,
-                               customer_id = ?,
-                               warehouse_id = NULL
-                           WHERE serial_no = ?""",
-                        (args.delivery_note_id, dn_dict["customer_id"], sn),
-                    )
+        dn = conn.execute(dnq.get_sql(), (args.delivery_note_id,)).fetchone()
+        if not dn:
+            conn.rollback()
+            err(f"Delivery note {args.delivery_note_id} not found")
+        if dn["status"] != "draft":
+            conn.rollback()
+            err(f"Cannot submit: delivery note is '{dn['status']}' (must be 'draft')")
 
-    # Build COGS GL entries from SLE data
-    sleq = (Q.from_(_t_stock_ledger).select(_t_stock_ledger.star)
-            .where(_t_stock_ledger.voucher_type == ValueWrapper("delivery_note"))
-            .where(_t_stock_ledger.voucher_id == P())
-            .where(_t_stock_ledger.is_cancelled == 0))
-    sle_rows = conn.execute(sleq.get_sql(), (args.delivery_note_id,)).fetchall()
-    sle_dicts = [row_to_dict(r) for r in sle_rows]
+        dn_dict = row_to_dict(dn)
+        doc_dimensions = _read_document_dimensions(dn_dict)
+        company_id = dn_dict["company_id"]
+        posting_date = dn_dict["posting_date"]
 
-    try:
-        gl_entries = create_perpetual_inventory_gl(
-            conn, sle_dicts,
-            voucher_type="delivery_note",
-            voucher_id=args.delivery_note_id,
-            posting_date=posting_date,
-            company_id=company_id,
-            expense_account_id=cogs_account_id,
-            cost_center_id=cost_center_id,
-        )
-    except ValueError as e:
-        sys.stderr.write(f"[erpclaw-selling] {e}\n")
-        err(f"GL posting failed: {e}")
+        # Verify linked SO is not cancelled
+        if dn_dict.get("sales_order_id"):
+            soq = (Q.from_(_t_sales_order).select(_t_sales_order.status)
+                   .where(_t_sales_order.id == P()))
+            so = conn.execute(soq.get_sql(), (dn_dict["sales_order_id"],)).fetchone()
+            if so and so["status"] == "cancelled":
+                err("Cannot submit: linked sales order is cancelled")
 
-    gl_ids = []
-    if gl_entries:
-        for gle in gl_entries:
-            gle["fiscal_year"] = fiscal_year
+        # Fetch DN items
+        dniq = (Q.from_(_t_delivery_note_item).select(_t_delivery_note_item.star)
+                .where(_t_delivery_note_item.delivery_note_id == P())
+                .orderby(line_order(_t_delivery_note_item)))
+        dn_items = conn.execute(dniq.get_sql(), (args.delivery_note_id,)).fetchall()
+        if not dn_items:
+            err("Delivery note has no items")
+
+        fiscal_year = get_fiscal_year(conn, posting_date, company_id=dn_dict["company_id"])
+        cost_center_id = doc_dimensions.get("cost_center") or _get_cost_center(conn, company_id)
+        cogs_account_id = _get_cogs_account(conn, company_id)
+
+        # Build SLE entries (negative qty from warehouse)
+        sle_entries = []
+        for dni in dn_items:
+            dni_dict = row_to_dict(dni)
+            qty = to_decimal(dni_dict["quantity"])
+
+            # Skip warehouse validation for service items
+            item_row = conn.execute("SELECT item_type FROM item WHERE id = ?", (dni_dict["item_id"],)).fetchone()
+            if item_row and item_row["item_type"] == "service":
+                continue
+
+            warehouse_id = dni_dict.get("warehouse_id")
+            if not warehouse_id:
+                # Try to get default warehouse from company
+                cwq = (Q.from_(_t_company).select(_t_company.default_warehouse_id)
+                       .where(_t_company.id == P()))
+                comp = conn.execute(cwq.get_sql(), (company_id,)).fetchone()
+                warehouse_id = comp["default_warehouse_id"] if comp else None
+            if not warehouse_id:
+                err(f"No warehouse specified for item {dni_dict['item_id']} and no default warehouse")
+
+            # B8: Validate warehouse type — only dispatch from stores warehouses
+            wh_type_row = conn.execute(
+                "SELECT warehouse_type FROM warehouse WHERE id = ?", (warehouse_id,)
+            ).fetchone()
+            if wh_type_row and wh_type_row["warehouse_type"] not in ("stores",):
+                err(f"Cannot dispatch from '{wh_type_row['warehouse_type']}' warehouse. Use a 'stores' warehouse.")
+
+            sle_entries.append({
+                "item_id": dni_dict["item_id"],
+                "warehouse_id": warehouse_id,
+                "actual_qty": str(round_currency(-qty)),
+                "incoming_rate": "0",
+                "batch_id": dni_dict.get("batch_id"),
+                "serial_number": dni_dict.get("serial_numbers"),
+                "fiscal_year": fiscal_year,
+            })
+
+        # Insert SLE entries
         try:
-            gl_ids = insert_gl_entries(
-                conn, gl_entries,
+            sle_ids = insert_sle_entries(
+                conn, sle_entries,
                 voucher_type="delivery_note",
                 voucher_id=args.delivery_note_id,
                 posting_date=posting_date,
                 company_id=company_id,
-                remarks=f"Delivery Note {dn_dict.get('naming_series', args.delivery_note_id)}",
+            )
+        except ValueError as e:
+            sys.stderr.write(f"[erpclaw-selling] {e}\n")
+            err(f"SLE posting failed: {e}")
+
+        # B12: Update serial number status to 'delivered'
+        for dni in dn_items:
+            dni_d = row_to_dict(dni)
+            serial_nums = dni_d.get("serial_numbers")
+            if serial_nums:
+                for sn in serial_nums.split("\n"):
+                    sn = sn.strip()
+                    if sn:
+                        conn.execute(
+                            """UPDATE serial_number
+                               SET status = 'delivered',
+                                   delivery_document_type = 'delivery_note',
+                                   delivery_document_id = ?,
+                                   customer_id = ?,
+                                   warehouse_id = NULL
+                               WHERE serial_no = ?""",
+                            (args.delivery_note_id, dn_dict["customer_id"], sn),
+                        )
+
+        # Build COGS GL entries from SLE data
+        sleq = (Q.from_(_t_stock_ledger).select(_t_stock_ledger.star)
+                .where(_t_stock_ledger.voucher_type == ValueWrapper("delivery_note"))
+                .where(_t_stock_ledger.voucher_id == P())
+                .where(_t_stock_ledger.is_cancelled == 0))
+        sle_rows = conn.execute(sleq.get_sql(), (args.delivery_note_id,)).fetchall()
+        sle_dicts = [row_to_dict(r) for r in sle_rows]
+
+        _cogs_kwargs = ({"dimensions": dict(doc_dimensions)}
+                        if doc_dimensions else {})
+        try:
+            gl_entries = create_perpetual_inventory_gl(
+                conn, sle_dicts,
+                voucher_type="delivery_note",
+                voucher_id=args.delivery_note_id,
+                posting_date=posting_date,
+                company_id=company_id,
+                expense_account_id=cogs_account_id,
+                cost_center_id=cost_center_id,
+                **_cogs_kwargs,
             )
         except ValueError as e:
             sys.stderr.write(f"[erpclaw-selling] {e}\n")
             err(f"GL posting failed: {e}")
 
-    # Generate naming series
-    naming = get_next_name(conn, "delivery_note", company_id=company_id)
-
-    # Update DN status
-    uq = (Q.update(_t_delivery_note)
-          .set("status", ValueWrapper("submitted"))
-          .set("naming_series", P())
-          .set("updated_at", now())
-          .where(_t_delivery_note.id == P()))
-    conn.execute(uq.get_sql(), (naming, args.delivery_note_id))
-
-    # Update SO delivered_qty
-    if dn_dict.get("sales_order_id"):
-        for dni in dn_items:
-            dni_dict = row_to_dict(dni)
-            if dni_dict.get("sales_order_item_id"):
-                # raw SQL — CAST with arithmetic on TEXT column
-                conn.execute(
-                    """UPDATE sales_order_item
-                       SET delivered_qty = CAST(
-                           CAST(delivered_qty AS NUMERIC) + CAST(? AS NUMERIC)
-                       AS TEXT)
-                       WHERE id = ?""",
-                    (dni_dict["quantity"], dni_dict["sales_order_item_id"]),
+        gl_ids = []
+        if gl_entries:
+            for gle in gl_entries:
+                gle["fiscal_year"] = fiscal_year
+            try:
+                gl_ids = insert_gl_entries(
+                    conn, gl_entries,
+                    voucher_type="delivery_note",
+                    voucher_id=args.delivery_note_id,
+                    posting_date=posting_date,
+                    company_id=company_id,
+                    remarks=f"Delivery Note {dn_dict.get('naming_series', args.delivery_note_id)}",
                 )
+            except ValueError as e:
+                sys.stderr.write(f"[erpclaw-selling] {e}\n")
+                err(f"GL posting failed: {e}")
 
-        # Recalculate SO per_delivered and status
-        _update_so_delivery_status(conn, dn_dict["sales_order_id"])
+        # Generate naming series
+        naming = get_next_name(conn, "delivery_note", company_id=company_id)
 
-    audit(conn, "erpclaw-selling", "submit-delivery-note", "delivery_note", args.delivery_note_id,
-           new_values={"sle_count": len(sle_ids), "gl_count": len(gl_ids),
-                       "naming_series": naming})
-    conn.commit()
+        # Update DN status
+        uq = (Q.update(_t_delivery_note)
+              .set("status", ValueWrapper("submitted"))
+              .set("naming_series", P())
+              .set("updated_at", now())
+              .where(_t_delivery_note.id == P())
+              .where(_t_delivery_note.status == ValueWrapper("draft")))
+        _flip_cur = conn.execute(uq.get_sql(), (naming, args.delivery_note_id))
+        if _flip_cur.rowcount == 0:
+            conn.rollback()
+            _fresh = conn.execute(dnq.get_sql(), (args.delivery_note_id,)).fetchone()
+            if not _fresh:
+                err(f"Delivery note {args.delivery_note_id} not found")
+            err(f"Cannot submit: delivery note is '{_fresh['status']}' (must be 'draft')")
+
+        # Update SO delivered_qty
+        if dn_dict.get("sales_order_id"):
+            for dni in dn_items:
+                dni_dict = row_to_dict(dni)
+                if dni_dict.get("sales_order_item_id"):
+                    # raw SQL — CAST with arithmetic on TEXT column
+                    conn.execute(
+                        """UPDATE sales_order_item
+                           SET delivered_qty = CAST(
+                               CAST(delivered_qty AS NUMERIC) + CAST(? AS NUMERIC)
+                           AS TEXT)
+                           WHERE id = ?""",
+                        (dni_dict["quantity"], dni_dict["sales_order_item_id"]),
+                    )
+
+            # Recompute SO percentages and status from both deliveries and invoices
+            _old_so_status, _new_so_status = _recompute_so_status(conn, dn_dict["sales_order_id"])
+            _audit_so_status_change(conn, "submit-delivery-note", dn_dict["sales_order_id"],
+                                    _old_so_status, _new_so_status)
+
+        audit(conn, "erpclaw-selling", "submit-delivery-note", "delivery_note", args.delivery_note_id,
+               new_values={"sle_count": len(sle_ids), "gl_count": len(gl_ids),
+                           "naming_series": naming})
+        conn.commit()
+    except SystemExit:
+        conn.rollback()
+        raise
     ok({"delivery_note_id": args.delivery_note_id, "naming_series": naming,
          "status": "submitted", "sle_entries_created": len(sle_ids),
          "gl_entries_created": len(gl_ids)})
 
 
-def _update_so_delivery_status(conn, sales_order_id: str):
-    """Recalculate SO per_delivered and update status accordingly."""
+def _recompute_so_status(conn, sales_order_id: str) -> tuple[str, str]:
+    """Recompute one sales order's percentages and status from its lines.
+
+    Both percentages are always rewritten from delivered_qty / invoiced_qty
+    (round_currency of sum / total_qty * 100, Decimal("0") when total_qty
+    is 0). The status follows invoicing first, then delivery, so the last
+    writer no longer wins: draft, closed and cancelled orders keep their
+    status (percentages still written). Returns (old status, new status).
+    """
     q = (Q.from_(_t_sales_order_item)
-         .select(_t_sales_order_item.quantity, _t_sales_order_item.delivered_qty)
+         .select(_t_sales_order_item.quantity, _t_sales_order_item.delivered_qty,
+                 _t_sales_order_item.invoiced_qty)
          .where(_t_sales_order_item.sales_order_id == P()))
     items = conn.execute(q.get_sql(), (sales_order_id,)).fetchall()
 
     total_qty = Decimal("0")
     total_delivered = Decimal("0")
+    total_invoiced = Decimal("0")
     for item in items:
         total_qty += to_decimal(item["quantity"])
         total_delivered += to_decimal(item["delivered_qty"])
+        total_invoiced += to_decimal(item["invoiced_qty"])
 
     if total_qty > 0:
         per_delivered = round_currency(total_delivered / total_qty * Decimal("100"))
+        per_invoiced = round_currency(total_invoiced / total_qty * Decimal("100"))
     else:
         per_delivered = Decimal("0")
+        per_invoiced = Decimal("0")
 
-    if per_delivered >= Decimal("100"):
+    soq = (Q.from_(_t_sales_order).select(_t_sales_order.status)
+           .where(_t_sales_order.id == P()))
+    so = conn.execute(soq.get_sql(), (sales_order_id,)).fetchone()
+    old_status = so["status"]
+
+    if old_status in ("draft", "closed", "cancelled"):
+        new_status = old_status
+    elif per_invoiced >= Decimal("100"):
+        new_status = "fully_invoiced"
+    elif per_invoiced > 0:
+        new_status = "partially_invoiced"
+    elif per_delivered >= Decimal("100"):
         new_status = "fully_delivered"
     elif per_delivered > 0:
         new_status = "partially_delivered"
     else:
-        return  # No change needed
+        new_status = "confirmed"
 
     uq = (Q.update(_t_sales_order)
           .set("per_delivered", P())
+          .set("per_invoiced", P())
           .set("status", P())
           .set("updated_at", now())
           .where(_t_sales_order.id == P()))
-    conn.execute(uq.get_sql(), (str(per_delivered), new_status, sales_order_id))
+    conn.execute(uq.get_sql(), (str(per_delivered), str(per_invoiced), new_status, sales_order_id))
+    return (old_status, new_status)
+
+
+def _audit_so_status_change(conn, action_name: str, sales_order_id: str,
+                            old_status: str, new_status: str):
+    """Write one sales_order audit row when the recompute changed the status."""
+    if old_status == new_status:
+        return
+    soq = (Q.from_(_t_sales_order)
+           .select(_t_sales_order.per_delivered, _t_sales_order.per_invoiced)
+           .where(_t_sales_order.id == P()))
+    so = conn.execute(soq.get_sql(), (sales_order_id,)).fetchone()
+    so_dict = row_to_dict(so) if so else {}
+    audit(conn, "erpclaw-selling", action_name, "sales_order", sales_order_id,
+          old_values={"status": old_status},
+          new_values={"status": new_status,
+                      "per_delivered": so_dict.get("per_delivered", "0"),
+                      "per_invoiced": so_dict.get("per_invoiced", "0")})
+
+
+def _so_line_moved_by_invoice(conn, sales_order_item_id: str) -> Decimal:
+    """Qty a stock-moving invoice already took out for one SO line.
+
+    Sums sales_invoice_item.quantity over invoices with update_stock = 1
+    whose status is neither draft nor cancelled. Returns (credit notes)
+    carry negative quantities, so returned stock reduces the figure.
+    Floored at zero.
+    """
+    sii = _t_sales_invoice_item.as_("sii")
+    si = _t_sales_invoice.as_("si")
+    q = (Q.from_(sii)
+         .join(si).on(si.id == sii.sales_invoice_id)
+         .select(fn.Coalesce(DecimalSum(sii.quantity), ValueWrapper("0")).as_("moved"))
+         .where(sii.sales_order_item_id == P())
+         .where(si.update_stock == P())
+         .where(si.status.notin([ValueWrapper("draft"), ValueWrapper("cancelled")])))
+    row = conn.execute(q.get_sql(), (sales_order_item_id, 1)).fetchone()
+    moved = to_decimal(row[0] if row and row[0] is not None else "0")
+    return moved if moved > 0 else Decimal("0")
+
+
+def _so_line_remaining(conn, sales_order_item_id: str, quantity, delivered_qty) -> Decimal:
+    """Qty of one SO line still deliverable by delivery note.
+
+    quantity - delivered_qty - moved_by_invoice, never above
+    quantity - delivered_qty, so a stock-moving invoice cannot cause a
+    second shipment of the same goods.
+    """
+    base = to_decimal(quantity) - to_decimal(delivered_qty)
+    remaining = base - _so_line_moved_by_invoice(conn, sales_order_item_id)
+    if remaining > base:
+        remaining = base
+    return remaining
+
+
+def _first_stock_moving_invoice(conn, sales_order_id: str):
+    """First non-return stock-moving invoice on an order, by posting date then id."""
+    q = (Q.from_(_t_sales_invoice)
+         .select(_t_sales_invoice.id, _t_sales_invoice.naming_series)
+         .where(_t_sales_invoice.sales_order_id == P())
+         .where(_t_sales_invoice.update_stock == P())
+         .where(_t_sales_invoice.is_return == ValueWrapper(0))
+         .where(_t_sales_invoice.status.notin([ValueWrapper("draft"), ValueWrapper("cancelled")]))
+         .orderby(_t_sales_invoice.posting_date)
+         .orderby(_t_sales_invoice.id)
+         .limit(1))
+    rows = conn.execute(q.get_sql(), (sales_order_id, 1)).fetchall()
+    return row_to_dict(rows[0]) if rows else None
 
 
 # ---------------------------------------------------------------------------
@@ -1862,109 +2134,99 @@ def cancel_delivery_note(conn, args):
     if dn["status"] != "submitted":
         err(f"Cannot cancel: delivery note is '{dn['status']}' (must be 'submitted')")
 
-    dn_dict = row_to_dict(dn)
-    posting_date = dn_dict["posting_date"]
-
-    # Check no invoices reference this DN
-    sic = (Q.from_(_t_sales_invoice)
-           .select(fn.Count("*").as_("cnt"))
-           .where(_t_sales_invoice.delivery_note_id == P())
-           .where(_t_sales_invoice.status != ValueWrapper("cancelled")))
-    si_count = conn.execute(sic.get_sql(), (args.delivery_note_id,)).fetchone()["cnt"]
-    if si_count > 0:
-        err(f"Cannot cancel: {si_count} active invoice(s) reference this delivery note")
-
-    # Reverse SLE entries
     try:
-        reversal_sle_ids = reverse_sle_entries(
-            conn,
-            voucher_type="delivery_note",
-            voucher_id=args.delivery_note_id,
-            posting_date=posting_date,
-        )
-    except ValueError as e:
-        sys.stderr.write(f"[erpclaw-selling] {e}\n")
-        err(f"SLE reversal failed: {e}")
+        take_chain_heads(conn, [dn["company_id"]])
 
-    # Reverse GL entries
-    reversal_gl_ids = []
-    try:
-        reversal_gl_ids = reverse_gl_entries(
-            conn,
-            voucher_type="delivery_note",
-            voucher_id=args.delivery_note_id,
-            posting_date=posting_date,
-        )
-    except ValueError:
+        dn = conn.execute(dnq.get_sql(), (args.delivery_note_id,)).fetchone()
+        if not dn:
+            conn.rollback()
+            err(f"Delivery note {args.delivery_note_id} not found")
+        if dn["status"] != "submitted":
+            conn.rollback()
+            err(f"Cannot cancel: delivery note is '{dn['status']}' (must be 'submitted')")
+
+        dn_dict = row_to_dict(dn)
+        posting_date = dn_dict["posting_date"]
+
+        # Check no invoices reference this DN
+        sic = (Q.from_(_t_sales_invoice)
+               .select(fn.Count("*").as_("cnt"))
+               .where(_t_sales_invoice.delivery_note_id == P())
+               .where(_t_sales_invoice.status != ValueWrapper("cancelled")))
+        si_count = conn.execute(sic.get_sql(), (args.delivery_note_id,)).fetchone()["cnt"]
+        if si_count > 0:
+            err(f"Cannot cancel: {si_count} active invoice(s) reference this delivery note")
+
+        # Reverse SLE entries
+        try:
+            reversal_sle_ids = reverse_sle_entries(
+                conn,
+                voucher_type="delivery_note",
+                voucher_id=args.delivery_note_id,
+                posting_date=posting_date,
+            )
+        except ValueError as e:
+            sys.stderr.write(f"[erpclaw-selling] {e}\n")
+            err(f"SLE reversal failed: {e}")
+
+        # Reverse GL entries
         reversal_gl_ids = []
+        try:
+            reversal_gl_ids = reverse_gl_entries(
+                conn,
+                voucher_type="delivery_note",
+                voucher_id=args.delivery_note_id,
+                posting_date=posting_date,
+            )
+        except ValueError:
+            reversal_gl_ids = []
 
-    # Update DN status
-    uq = (Q.update(_t_delivery_note)
-          .set("status", ValueWrapper("cancelled"))
-          .set("updated_at", now())
-          .where(_t_delivery_note.id == P()))
-    conn.execute(uq.get_sql(), (args.delivery_note_id,))
+        # Update DN status
+        uq = (Q.update(_t_delivery_note)
+              .set("status", ValueWrapper("cancelled"))
+              .set("updated_at", now())
+              .where(_t_delivery_note.id == P())
+              .where(_t_delivery_note.status == ValueWrapper("submitted")))
+        _flip_cur = conn.execute(uq.get_sql(), (args.delivery_note_id,))
+        if _flip_cur.rowcount == 0:
+            conn.rollback()
+            _fresh = conn.execute(dnq.get_sql(), (args.delivery_note_id,)).fetchone()
+            if not _fresh:
+                err(f"Delivery note {args.delivery_note_id} not found")
+            err(f"Cannot cancel: delivery note is '{_fresh['status']}' (must be 'submitted')")
 
-    # Reverse SO delivered_qty
-    if dn_dict.get("sales_order_id"):
-        dniq = (Q.from_(_t_delivery_note_item).select(_t_delivery_note_item.star)
-                .where(_t_delivery_note_item.delivery_note_id == P()))
-        dn_items = conn.execute(dniq.get_sql(), (args.delivery_note_id,)).fetchall()
-        for dni in dn_items:
-            dni_dict = row_to_dict(dni)
-            if dni_dict.get("sales_order_item_id"):
-                # raw SQL — CAST with MAX and arithmetic on TEXT column
-                conn.execute(
-                    f"""UPDATE sales_order_item
-                       SET delivered_qty = CAST(
-                           {scalar_max("CAST(delivered_qty AS NUMERIC) - CAST(? AS NUMERIC)", "0")}
-                       AS TEXT)
-                       WHERE id = ?""",
-                    (dni_dict["quantity"], dni_dict["sales_order_item_id"]),
-                )
+        # Reverse SO delivered_qty
+        if dn_dict.get("sales_order_id"):
+            dniq = (Q.from_(_t_delivery_note_item).select(_t_delivery_note_item.star)
+                    .where(_t_delivery_note_item.delivery_note_id == P()))
+            dn_items = conn.execute(dniq.get_sql(), (args.delivery_note_id,)).fetchall()
+            for dni in dn_items:
+                dni_dict = row_to_dict(dni)
+                if dni_dict.get("sales_order_item_id"):
+                    # raw SQL — CAST with MAX and arithmetic on TEXT column
+                    conn.execute(
+                        f"""UPDATE sales_order_item
+                           SET delivered_qty = CAST(
+                               {scalar_max("CAST(delivered_qty AS NUMERIC) - CAST(? AS NUMERIC)", "0")}
+                           AS TEXT)
+                           WHERE id = ?""",
+                        (dni_dict["quantity"], dni_dict["sales_order_item_id"]),
+                    )
 
-        # Recalculate SO delivery status
-        _update_so_delivery_status_after_cancel(conn, dn_dict["sales_order_id"])
+            # Recompute SO percentages and status from both deliveries and invoices
+            _old_so_status, _new_so_status = _recompute_so_status(conn, dn_dict["sales_order_id"])
+            _audit_so_status_change(conn, "cancel-delivery-note", dn_dict["sales_order_id"],
+                                    _old_so_status, _new_so_status)
 
-    audit(conn, "erpclaw-selling", "cancel-delivery-note", "delivery_note", args.delivery_note_id,
-           new_values={"reversed": True})
-    conn.commit()
+        audit(conn, "erpclaw-selling", "cancel-delivery-note", "delivery_note", args.delivery_note_id,
+               new_values={"reversed": True})
+        conn.commit()
+    except SystemExit:
+        conn.rollback()
+        raise
     ok({"delivery_note_id": args.delivery_note_id, "status": "cancelled",
          "sle_reversals": len(reversal_sle_ids),
          "gl_reversals": len(reversal_gl_ids)})
-
-
-def _update_so_delivery_status_after_cancel(conn, sales_order_id: str):
-    """Recalculate SO delivery status after a DN cancellation."""
-    q = (Q.from_(_t_sales_order_item)
-         .select(_t_sales_order_item.quantity, _t_sales_order_item.delivered_qty)
-         .where(_t_sales_order_item.sales_order_id == P()))
-    items = conn.execute(q.get_sql(), (sales_order_id,)).fetchall()
-
-    total_qty = Decimal("0")
-    total_delivered = Decimal("0")
-    for item in items:
-        total_qty += to_decimal(item["quantity"])
-        total_delivered += to_decimal(item["delivered_qty"])
-
-    if total_qty > 0:
-        per_delivered = round_currency(total_delivered / total_qty * Decimal("100"))
-    else:
-        per_delivered = Decimal("0")
-
-    if per_delivered >= Decimal("100"):
-        new_status = "fully_delivered"
-    elif per_delivered > 0:
-        new_status = "partially_delivered"
-    else:
-        new_status = "confirmed"
-
-    uq = (Q.update(_t_sales_order)
-          .set("per_delivered", P())
-          .set("status", P())
-          .set("updated_at", now())
-          .where(_t_sales_order.id == P()))
-    conn.execute(uq.get_sql(), (str(per_delivered), new_status, sales_order_id))
 
 
 # ---------------------------------------------------------------------------
@@ -1980,6 +2242,7 @@ def create_sales_invoice(conn, args):
     delivery_note_id = args.delivery_note_id
     posting_date = args.posting_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     update_stock = 1  # Default for US perpetual inventory
+    parent_dimensions_text = None
 
     if sales_order_id:
         # Create from Sales Order
@@ -1991,7 +2254,7 @@ def create_sales_invoice(conn, args):
         if so["status"] == "closed":
             err("Cannot invoice: sales order is closed")
         if so["status"] not in ("confirmed", "partially_delivered", "fully_delivered",
-                                 "partially_invoiced"):
+                                 "partially_invoiced", "fully_invoiced"):
             err(f"Cannot invoice: sales order is '{so['status']}'")
 
         so_dict = row_to_dict(so)
@@ -2038,6 +2301,8 @@ def create_sales_invoice(conn, args):
         if not si_items_data:
             err("No uninvoiced items in sales order")
 
+        parent_dimensions_text = so_dict.get("dimensions_json")
+
     elif delivery_note_id:
         # Create from Delivery Note
         dnq = (Q.from_(_t_delivery_note).select(_t_delivery_note.star)
@@ -2049,6 +2314,7 @@ def create_sales_invoice(conn, args):
             err(f"Cannot invoice: delivery note is '{dn['status']}'")
 
         dn_dict = row_to_dict(dn)
+        parent_dimensions_text = dn_dict.get("dimensions_json")
         customer_id = dn_dict["customer_id"]
         company_id = dn_dict["company_id"]
         sales_order_id = dn_dict.get("sales_order_id")
@@ -2089,10 +2355,16 @@ def create_sales_invoice(conn, args):
         if not company_id:
             err("--company-id is required for standalone invoices")
 
+        cco = Q.from_(_t_company).select(_t_company.id).where(_t_company.id == P())
+        if not conn.execute(cco.get_sql(), (company_id,)).fetchone():
+            err(f"Company {company_id} not found")
+
         cchk = (Q.from_(_t_customer).select(_t_customer.id)
-                .where((_t_customer.id == P()) | (_t_customer.name == P()))
+                .where((_t_customer.id == P())
+                       | ((_t_customer.name == P())
+                          & (_t_customer.company_id == P())))
                 .where(_t_customer.status == ValueWrapper("active")))
-        cust_chk = conn.execute(cchk.get_sql(), (customer_id, customer_id)).fetchone()
+        cust_chk = conn.execute(cchk.get_sql(), (customer_id, customer_id, company_id)).fetchone()
         if not cust_chk:
             err(f"Active customer {customer_id} not found")
         customer_id = cust_chk["id"]  # normalize to id
@@ -2118,6 +2390,18 @@ def create_sales_invoice(conn, args):
                 "delivery_note_item_id": None,
                 "warehouse_id": row["warehouse_id"],
             })
+
+    # The invoice names a customer of its own company. Derived paths inherit
+    # both from the parent; a parent that already mixes companies is refused
+    # here, before the first write.
+    sicq = (Q.from_(_t_customer).select(_t_customer.company_id)
+            .where(_t_customer.id == P()))
+    si_cust = conn.execute(sicq.get_sql(), (customer_id,)).fetchone()
+    if si_cust is not None and si_cust["company_id"] != company_id:
+        err(f"Customer {customer_id} belongs to another company")
+
+    dimensions_text = _resolve_dimensions_text(
+        conn, args, parent_dimensions_text)
 
     # Calculate tax
     total_amount = round_currency(total_amount)
@@ -2158,14 +2442,15 @@ def create_sales_invoice(conn, args):
                         "total_amount", "tax_amount", "grand_total",
                         "outstanding_amount", "tax_template_id",
                         "payment_terms_id", "status", "sales_order_id",
-                        "delivery_note_id", "update_stock", "company_id")
+                        "delivery_note_id", "update_stock", "company_id",
+                        "dimensions_json")
               .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(), P(),
-                      ValueWrapper("draft"), P(), P(), P(), P()))
+                      ValueWrapper("draft"), P(), P(), P(), P(), P()))
     conn.execute(si_ins.get_sql(),
         (si_id, customer_id, posting_date, due_date,
          str(total_amount), str(tax_amount), str(grand_total), str(grand_total),
          tax_template_id, payment_terms_id, sales_order_id, delivery_note_id,
-         update_stock, company_id),
+         update_stock, company_id, dimensions_text),
     )
 
     # Insert child sales_invoice_item rows
@@ -2209,6 +2494,27 @@ def update_sales_invoice(conn, args):
     if si["status"] != "draft":
         err(f"Cannot update: sales invoice is '{si['status']}' (must be 'draft')",
              suggestion="Cancel the document first, then make changes.")
+
+    si_dict = row_to_dict(si)
+    dims = _parse_dimensions_arg(args)
+    dims_text = None
+    if dims is not None:
+        if si_dict.get("is_return"):
+            orig_row = None
+            if si_dict.get("return_against"):
+                oq = (Q.from_(_t_sales_invoice)
+                      .select(_t_sales_invoice.star)
+                      .where(_t_sales_invoice.id == P()))
+                orig_row = conn.execute(
+                    oq.get_sql(), (si_dict["return_against"],)).fetchone()
+            orig_text = ((row_to_dict(orig_row).get("dimensions_json")
+                          if orig_row else None) or "{}")
+            if dimensions_json_text(dims) != orig_text:
+                err("Credit note dimensions must match the original invoice's "
+                    f"({orig_text})")
+            dims_text = orig_text
+        else:
+            dims_text = _checked_dimensions_text(conn, dims)
 
     updated_fields = []
 
@@ -2256,11 +2562,27 @@ def update_sales_invoice(conn, args):
         )
         updated_fields.extend(["items", "total_amount", "tax_amount", "grand_total"])
 
+    old_dims_text = None
+    if dims_text is not None:
+        uq_dim = (Q.update(_t_sales_invoice)
+              .set("dimensions_json", P())
+              .set("updated_at", now())
+              .where(_t_sales_invoice.id == P()))
+        conn.execute(uq_dim.get_sql(), (dims_text, args.sales_invoice_id))
+        updated_fields.append("dimensions_json")
+        old_dims_text = si["dimensions_json"] or "{}"
+
     if not updated_fields:
         err("No fields to update")
 
-    audit(conn, "erpclaw-selling", "update-sales-invoice", "sales_invoice", args.sales_invoice_id,
-           new_values={"updated_fields": updated_fields})
+    if dims_text is not None:
+        audit(conn, "erpclaw-selling", "update-sales-invoice", "sales_invoice", args.sales_invoice_id,
+               old_values={"dimensions_json": old_dims_text},
+               new_values={"updated_fields": updated_fields,
+                           "dimensions_json": dims_text})
+    else:
+        audit(conn, "erpclaw-selling", "update-sales-invoice", "sales_invoice", args.sales_invoice_id,
+               new_values={"updated_fields": updated_fields})
     conn.commit()
     ok({"sales_invoice_id": args.sales_invoice_id,
          "updated_fields": updated_fields})
@@ -2275,11 +2597,17 @@ def get_sales_invoice(conn, args):
     if not args.sales_invoice_id:
         err("--sales-invoice-id is required")
 
+    scope_company_id = None
+    if getattr(args, "company_id", None) or getattr(args, "company_name", None):
+        scope_company_id = resolve_scope_company(conn, getattr(args, "company_id", None), getattr(args, "company_name", None))
+
     siq = (Q.from_(_t_sales_invoice).select(_t_sales_invoice.star)
            .where(_t_sales_invoice.id == P()))
     si = conn.execute(siq.get_sql(), (args.sales_invoice_id,)).fetchone()
     if not si:
         err(f"Sales invoice {args.sales_invoice_id} not found")
+    if scope_company_id and si["company_id"] != scope_company_id:
+        err(f"Sales invoice {args.sales_invoice_id} belongs to another company")
 
     data = row_to_dict(si)
 
@@ -2310,14 +2638,12 @@ def get_sales_invoice(conn, args):
 
 def list_sales_invoices(conn, args):
     """Query sales invoices with filtering."""
+    company_id = resolve_scope_company(conn, args.company_id, getattr(args, "company_name", None))
     si = _t_sales_invoice.as_("si")
     c = _t_customer.as_("c")
     params = []
-    crit = None
-
-    if args.company_id:
-        crit = (si.company_id == P())
-        params.append(args.company_id)
+    crit = (si.company_id == P())
+    params.append(company_id)
     if args.customer_id:
         cond = si.customer_id == P()
         crit = Criterion.all([crit, cond]) if crit else cond
@@ -2380,6 +2706,7 @@ def submit_sales_invoice(conn, args):
         err(f"Cannot submit: sales invoice is '{si['status']}' (must be 'draft')")
 
     si_dict = row_to_dict(si)
+    doc_dimensions = _read_document_dimensions(si_dict)
     company_id = si_dict["company_id"]
     customer_id = si_dict["customer_id"]
     posting_date = si_dict["posting_date"]
@@ -2399,7 +2726,9 @@ def submit_sales_invoice(conn, args):
 
     # Credit-limit + credit_status policy (ROADMAP S1). Blocks suspended /
     # on-hold customers and enforces credit_limit when configured.
-    _enforce_credit_policy(conn, customer_id, abs(grand_total))
+    # A credit note reduces exposure and is never refused by the policy.
+    if not si_dict.get("is_return", 0):
+        _enforce_credit_policy(conn, customer_id, abs(grand_total))
 
     # Verify items
     siiq = (Q.from_(_t_sales_invoice_item).select(_t_sales_invoice_item.star)
@@ -2408,8 +2737,8 @@ def submit_sales_invoice(conn, args):
     if not si_items:
         err("Sales invoice has no items")
 
-    fiscal_year = _get_fiscal_year(conn, posting_date)
-    cost_center_id = _get_cost_center(conn, company_id)
+    fiscal_year = get_fiscal_year(conn, posting_date, company_id=si_dict["company_id"])
+    cost_center_id = doc_dimensions.get("cost_center") or _get_cost_center(conn, company_id)
 
     # Collect project_ids from invoice items for GL propagation
     item_project_ids = []
@@ -2500,6 +2829,10 @@ def submit_sales_invoice(conn, args):
                         "cost_center_id": cost_center_id,
                         "project_id": aggregate_project_id,
                     })
+
+    if doc_dimensions:
+        for gle in gl_entries:
+            gle["dimensions"] = dict(doc_dimensions)
 
     # Generate naming series early so GL remarks include the human-readable name
     if is_return:
@@ -2595,6 +2928,8 @@ def submit_sales_invoice(conn, args):
                 (voucher_type, args.sales_invoice_id)).fetchall()
             sle_dicts = [row_to_dict(r) for r in sle_rows]
 
+            _cogs_kwargs = ({"dimensions": dict(doc_dimensions)}
+                            if doc_dimensions else {})
             try:
                 cogs_gl_entries = create_perpetual_inventory_gl(
                     conn, sle_dicts,
@@ -2604,6 +2939,7 @@ def submit_sales_invoice(conn, args):
                     company_id=company_id,
                     expense_account_id=cogs_account_id,
                     cost_center_id=cost_center_id,
+                    **_cogs_kwargs,
                 )
             except ValueError as e:
                 sys.stderr.write(f"[erpclaw-selling] {e}\n")
@@ -2675,7 +3011,9 @@ def submit_sales_invoice(conn, args):
                        WHERE id = ?""",
                     (sii_dict["quantity"], sii_dict["sales_order_item_id"]),
                 )
-        _update_so_invoice_status(conn, si_dict["sales_order_id"])
+        _old_so_status, _new_so_status = _recompute_so_status(conn, si_dict["sales_order_id"])
+        _audit_so_status_change(conn, "submit-sales-invoice", si_dict["sales_order_id"],
+                                _old_so_status, _new_so_status)
 
     audit(conn, "erpclaw-selling", "submit-sales-invoice", "sales_invoice", args.sales_invoice_id,
            new_values={"naming_series": naming, "gl_count": len(gl_ids),
@@ -2693,20 +3031,29 @@ def submit_sales_invoice(conn, args):
 # ---------------------------------------------------------------------------
 
 def _customer_outstanding_ar(conn, customer_id: str) -> Decimal:
-    """Sum of unpaid sales_invoice grand_total for a customer.
+    """Exact-decimal sum of outstanding_amount for a customer's exposure.
 
-    Counts only submitted, non-cancelled invoices. Excludes credit notes
-    (is_return=1) since they reduce AR rather than add to it — the grand_total
-    on a credit note is already signed negative or stored as negative, and
-    summing all rows would over-count. We sum is_return=0 invoices and
-    subtract is_return=1 absolute values.
+    Counts rows with is_return 0 and status in ("submitted", "overdue",
+    "partially_paid"), plus submitted credit notes (is_return 1) whose
+    negative outstanding_amount nets against the invoices. The sum is not
+    floored at zero, so unapplied credit notes can raise available credit
+    above the limit.
     """
+    _clearable = (
+        (_t_sales_invoice.is_return == ValueWrapper(0))
+        & (_t_sales_invoice.status.isin([
+            ValueWrapper("submitted"), ValueWrapper("overdue"),
+            ValueWrapper("partially_paid")]))
+    )
+    _credit = (
+        (_t_sales_invoice.is_return == ValueWrapper(1))
+        & (_t_sales_invoice.status == ValueWrapper("submitted"))
+    )
     q_owed = (
         Q.from_(_t_sales_invoice)
-         .select(fn.Coalesce(DecimalSum(_t_sales_invoice.outstanding_amount), 0))
+         .select(fn.Coalesce(DecimalSum(_t_sales_invoice.outstanding_amount), ValueWrapper("0")))
          .where(_t_sales_invoice.customer_id == P())
-         .where(_t_sales_invoice.status == ValueWrapper("submitted"))
-         .where(_t_sales_invoice.is_return == ValueWrapper(0))
+         .where(_clearable | _credit)
     )
     row = conn.execute(q_owed.get_sql(), (customer_id,)).fetchone()
     return to_decimal(row[0] if row and row[0] is not None else "0")
@@ -2858,7 +3205,7 @@ def add_dunning_level(conn, args):
             (dl_id, args.company_id, level, days, args.dunning_action,
              args.template_id, args.description),
         )
-    except sqlite3.IntegrityError as e:
+    except integrity_error_types() as e:
         err(f"Dunning level {level} already exists for this company (or constraint failed): {e}")
     conn.commit()
     audit(conn, "erpclaw-selling", "add-dunning-level", "dunning_level", dl_id,
@@ -2973,9 +3320,13 @@ def run_dunning_cycle(conn, args):
     invoices = conn.execute(
         Q.from_(_t_sales_invoice).select(_t_sales_invoice.star)
          .where(_t_sales_invoice.company_id == P())
-         .where(_t_sales_invoice.status == ValueWrapper("submitted"))
+         .where(_t_sales_invoice.status.isin([
+             ValueWrapper("submitted"), ValueWrapper("overdue"),
+             ValueWrapper("partially_paid")]))
          .where(_t_sales_invoice.is_return == ValueWrapper(0))
-         .where(_t_sales_invoice.outstanding_amount > ValueWrapper("0"))
+         # outstanding_amount is TEXT: compare its numeric value, so "0.00"
+         # (a fully discounted invoice) is not dunned.
+         .where(fn.Cast(_t_sales_invoice.outstanding_amount, "NUMERIC") > 0)
          .where(_t_sales_invoice.due_date < ValueWrapper(today))
          .get_sql(),
         (args.company_id,),
@@ -3099,14 +3450,14 @@ def run_dunning_cycle(conn, args):
 
 def list_dunning_runs(conn, args):
     """List dunning_run history, optionally filtered by customer + date range."""
+    company_id = resolve_scope_company(conn, args.company_id, getattr(args, "company_name", None))
     q = Q.from_(_t_dunning_run).select(_t_dunning_run.star)
     bound = []
+    q = q.where(_t_dunning_run.company_id == P())
+    bound.append(company_id)
     if args.customer_id:
         q = q.where(_t_dunning_run.customer_id == P())
         bound.append(args.customer_id)
-    if args.company_id:
-        q = q.where(_t_dunning_run.company_id == P())
-        bound.append(args.company_id)
     q = q.orderby("run_date", order=Order.desc).orderby("created_at", order=Order.desc)
     if args.limit:
         try:
@@ -3115,43 +3466,6 @@ def list_dunning_runs(conn, args):
             pass
     rows = conn.execute(q.get_sql(), tuple(bound)).fetchall()
     ok({"runs": [row_to_dict(r) for r in rows]})
-
-
-def _update_so_invoice_status(conn, sales_order_id: str):
-    """Recalculate SO per_invoiced and update status."""
-    q = (Q.from_(_t_sales_order_item)
-         .select(_t_sales_order_item.quantity, _t_sales_order_item.invoiced_qty)
-         .where(_t_sales_order_item.sales_order_id == P()))
-    items = conn.execute(q.get_sql(), (sales_order_id,)).fetchall()
-
-    total_qty = Decimal("0")
-    total_invoiced = Decimal("0")
-    for item in items:
-        total_qty += to_decimal(item["quantity"])
-        total_invoiced += to_decimal(item["invoiced_qty"])
-
-    if total_qty > 0:
-        per_invoiced = round_currency(total_invoiced / total_qty * Decimal("100"))
-    else:
-        per_invoiced = Decimal("0")
-
-    soq = (Q.from_(_t_sales_order).select(_t_sales_order.status)
-           .where(_t_sales_order.id == P()))
-    so = conn.execute(soq.get_sql(), (sales_order_id,)).fetchone()
-    if so and so["status"] not in ("cancelled",):
-        if per_invoiced >= Decimal("100"):
-            new_status = "fully_invoiced"
-        elif per_invoiced > 0:
-            new_status = "partially_invoiced"
-        else:
-            return
-
-        uq = (Q.update(_t_sales_order)
-              .set("per_invoiced", P())
-              .set("status", P())
-              .set("updated_at", now())
-              .where(_t_sales_order.id == P()))
-        conn.execute(uq.get_sql(), (str(per_invoiced), new_status, sales_order_id))
 
 
 # ---------------------------------------------------------------------------
@@ -3169,6 +3483,16 @@ def cancel_sales_invoice(conn, args):
     if not si:
         err(f"Sales invoice {args.sales_invoice_id} not found")
     if si["status"] not in ("submitted", "overdue", "partially_paid"):
+        err(f"Cannot cancel: sales invoice is '{si['status']}' (must be 'submitted', 'overdue', or 'partially_paid')")
+
+    take_chain_heads(conn, [si["company_id"]])
+
+    si = conn.execute(siq.get_sql(), (args.sales_invoice_id,)).fetchone()
+    if not si:
+        conn.rollback()
+        err(f"Sales invoice {args.sales_invoice_id} not found")
+    if si["status"] not in ("submitted", "overdue", "partially_paid"):
+        conn.rollback()
         err(f"Cannot cancel: sales invoice is '{si['status']}' (must be 'submitted', 'overdue', or 'partially_paid')")
 
     si_dict = row_to_dict(si)
@@ -3195,15 +3519,7 @@ def cancel_sales_invoice(conn, args):
     # Reverse SLE if update_stock
     reversal_sle_ids = []
     if update_stock:
-        try:
-            reversal_sle_ids = reverse_sle_entries(
-                conn,
-                voucher_type=cancel_voucher_type,
-                voucher_id=args.sales_invoice_id,
-                posting_date=posting_date,
-            )
-        except ValueError:
-            reversal_sle_ids = []
+        reversal_sle_ids = _reverse_stock_or_refuse(conn, cancel_voucher_type, args.sales_invoice_id, posting_date, "SLE reversal")
 
     # Release the payment allocations this cancel voids (M46/F1). Cash applied
     # to a document that no longer exists in the books is not applied cash: the
@@ -3223,13 +3539,32 @@ def cancel_sales_invoice(conn, args):
               .where(_t_payment_ledger.voucher_id == P()))
     conn.execute(ple_uq.get_sql(), (cancel_voucher_type, args.sales_invoice_id))
 
+    # Close the document side of allocations the release had to skip (M352b).
+    # A cancelled payment's allocation survives the release by correction C2 —
+    # the release writes nothing for it — but the payment's own cancel left
+    # live per-allocation mirrors pointing at this invoice, and a cancelled
+    # invoice reads outstanding zero, so INV-22 counts them. They belong to a
+    # dead payment, so the invoice's own close-out delinks them here, through
+    # the neutral clearing lib like the release above: no mirror is appended,
+    # the allocation row keeps correction C2's delinked = 0, and no live
+    # payment's rows are touched.
+    from erpclaw_lib.payment_clearing import close_dead_payment_tails
+    close_dead_payment_tails(conn, cancel_voucher_type, args.sales_invoice_id)
+
     # Update invoice status
     uq = (Q.update(_t_sales_invoice)
           .set("status", ValueWrapper("cancelled"))
           .set("outstanding_amount", ValueWrapper("0"))
           .set("updated_at", now())
-          .where(_t_sales_invoice.id == P()))
-    conn.execute(uq.get_sql(), (args.sales_invoice_id,))
+          .where(_t_sales_invoice.id == P())
+          .where(_t_sales_invoice.status.isin([ValueWrapper("submitted"), ValueWrapper("overdue"), ValueWrapper("partially_paid")])))
+    _flip_cur = conn.execute(uq.get_sql(), (args.sales_invoice_id,))
+    if _flip_cur.rowcount == 0:
+        conn.rollback()
+        _fresh = conn.execute(siq.get_sql(), (args.sales_invoice_id,)).fetchone()
+        if not _fresh:
+            err(f"Sales invoice {args.sales_invoice_id} not found")
+        err(f"Cannot cancel: sales invoice is '{_fresh['status']}' (must be 'submitted', 'overdue', or 'partially_paid')")
 
     # Reverse SO invoiced_qty if linked
     if si_dict.get("sales_order_id"):
@@ -3248,7 +3583,9 @@ def cancel_sales_invoice(conn, args):
                        WHERE id = ?""",
                     (sii_dict["quantity"], sii_dict["sales_order_item_id"]),
                 )
-        _update_so_invoice_status(conn, si_dict["sales_order_id"])
+        _old_so_status, _new_so_status = _recompute_so_status(conn, si_dict["sales_order_id"])
+        _audit_so_status_change(conn, "cancel-sales-invoice", si_dict["sales_order_id"],
+                                _old_so_status, _new_so_status)
 
     audit(conn, "erpclaw-selling", "cancel-sales-invoice", "sales_invoice", args.sales_invoice_id,
            new_values={"reversed": True})
@@ -3277,6 +3614,110 @@ def _merge_release_result(payload, release, prefix=""):
 
 
 # ---------------------------------------------------------------------------
+# 27b. delete-sales-invoice (drafts only)
+# ---------------------------------------------------------------------------
+
+def delete_sales_invoice(conn, args):
+    """Delete a draft sales invoice and its items.
+
+    Only drafts with no ledger rows and no references from payments, credit
+    notes, timesheets, billing periods or billing-run targets can be deleted.
+    Links held by vertical modules (for example construction progress bills,
+    legal invoices, education fee links, hospitality, POS) are not visible to
+    selling; the action is gated, and deleting a draft such a module links is
+    an operator decision.
+    """
+    if not args.sales_invoice_id:
+        err("--sales-invoice-id is required")
+    si_id = args.sales_invoice_id
+
+    siq = (Q.from_(_t_sales_invoice).select(_t_sales_invoice.star)
+           .where(_t_sales_invoice.id == P()))
+    si = conn.execute(siq.get_sql(), (si_id,)).fetchone()
+    if not si:
+        err(f"Sales invoice {si_id} not found")
+    if si["status"] != "draft":
+        err(f"Cannot delete: sales invoice is '{si['status']}' (only 'draft' can be deleted)")
+
+    si_dict = row_to_dict(si)
+    voucher_types = [ValueWrapper("sales_invoice"), ValueWrapper("credit_note")]
+
+    glq = (Q.from_(_t_gl_entry).select(_t_gl_entry.id)
+           .where(_t_gl_entry.voucher_type.isin(voucher_types))
+           .where(_t_gl_entry.voucher_id == P()))
+    if conn.execute(glq.get_sql(), (si_id,)).fetchone():
+        err(f"Cannot delete: sales invoice {si_id} has ledger rows")
+
+    sleq = (Q.from_(_t_stock_ledger).select(_t_stock_ledger.id)
+            .where(_t_stock_ledger.voucher_type.isin(voucher_types))
+            .where(_t_stock_ledger.voucher_id == P()))
+    if conn.execute(sleq.get_sql(), (si_id,)).fetchone():
+        err(f"Cannot delete: sales invoice {si_id} has ledger rows")
+
+    pleq = (Q.from_(_t_payment_ledger).select(_t_payment_ledger.id)
+            .where(_t_payment_ledger.voucher_type.isin(voucher_types))
+            .where(_t_payment_ledger.voucher_id == P()))
+    if conn.execute(pleq.get_sql(), (si_id,)).fetchone():
+        err(f"Cannot delete: sales invoice {si_id} has ledger rows")
+
+    pleaq = (Q.from_(_t_payment_ledger).select(_t_payment_ledger.id)
+             .where(_t_payment_ledger.against_voucher_type.isin(voucher_types))
+             .where(_t_payment_ledger.against_voucher_id == P()))
+    if conn.execute(pleaq.get_sql(), (si_id,)).fetchone():
+        err(f"Cannot delete: sales invoice {si_id} has ledger rows")
+
+    alloq = (Q.from_(_t_payment_allocation)
+             .select(_t_payment_allocation.payment_entry_id)
+             .where(_t_payment_allocation.voucher_type.isin(voucher_types))
+             .where(_t_payment_allocation.voucher_id == P())
+             .orderby(_t_payment_allocation.id))
+    allo_rows = conn.execute(alloq.get_sql(), (si_id,)).fetchall()
+    if allo_rows:
+        err(f"Cannot delete: sales invoice {si_id} is referenced by payment {allo_rows[0]['payment_entry_id']}")
+
+    cnq = (Q.from_(_t_sales_invoice).select(_t_sales_invoice.id)
+           .where(_t_sales_invoice.return_against == P())
+           .orderby(_t_sales_invoice.id))
+    cn_rows = conn.execute(cnq.get_sql(), (si_id,)).fetchall()
+    if cn_rows:
+        err(f"Cannot delete: sales invoice {si_id} has credit note {cn_rows[0]['id']}")
+
+    tsq = (Q.from_(_t_timesheet).select(_t_timesheet.id)
+           .where(_t_timesheet.sales_invoice_id == P())
+           .orderby(_t_timesheet.id))
+    ts_rows = conn.execute(tsq.get_sql(), (si_id,)).fetchall()
+    if ts_rows:
+        err(f"Cannot delete: sales invoice {si_id} is referenced by timesheet {ts_rows[0]['id']}")
+
+    bpq = (Q.from_(_t_billing_period).select(_t_billing_period.id)
+           .where(_t_billing_period.invoice_id == P())
+           .orderby(_t_billing_period.id))
+    bp_rows = conn.execute(bpq.get_sql(), (si_id,)).fetchall()
+    if bp_rows:
+        err(f"Cannot delete: sales invoice {si_id} is referenced by billing_period {bp_rows[0]['id']}")
+
+    brtq = (Q.from_(_t_billing_run_target).select(_t_billing_run_target.id)
+            .where(_t_billing_run_target.result_voucher_id == P())
+            .orderby(_t_billing_run_target.id))
+    brt_rows = conn.execute(brtq.get_sql(), (si_id,)).fetchall()
+    if brt_rows:
+        err(f"Cannot delete: sales invoice {si_id} is referenced by billing_run_target {brt_rows[0]['id']}")
+
+    del_items = (Q.from_(_t_sales_invoice_item).delete()
+                 .where(_t_sales_invoice_item.sales_invoice_id == P()))
+    conn.execute(del_items.get_sql(), (si_id,))
+    del_si = (Q.from_(_t_sales_invoice).delete()
+              .where(_t_sales_invoice.id == P()))
+    conn.execute(del_si.get_sql(), (si_id,))
+
+    audit(conn, "erpclaw-selling", "delete-sales-invoice", "sales_invoice", si_id,
+           old_values={"status": "draft", "grand_total": si_dict["grand_total"],
+                       "customer_id": si_dict["customer_id"]})
+    conn.commit()
+    ok({"status": "deleted", "deleted": True, "sales_invoice_id": si_id})
+
+
+# ---------------------------------------------------------------------------
 # 28. create-credit-note
 # ---------------------------------------------------------------------------
 
@@ -3296,6 +3737,12 @@ def create_credit_note(conn, args):
         err(f"Cannot create credit note: original invoice is '{orig['status']}'")
 
     orig_dict = row_to_dict(orig)
+    orig_dimensions_text = orig_dict.get("dimensions_json") or "{}"
+    cn_dims = _parse_dimensions_arg(args)
+    if (cn_dims is not None
+            and dimensions_json_text(cn_dims) != orig_dimensions_text):
+        err("Credit note dimensions must match the original invoice's "
+            f"({orig_dimensions_text})")
     company_id = orig_dict["company_id"]
     customer_id = orig_dict["customer_id"]
     posting_date = args.posting_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -3356,15 +3803,15 @@ def create_credit_note(conn, args):
                         "total_amount", "tax_amount", "grand_total",
                         "outstanding_amount", "tax_template_id", "status",
                         "sales_order_id", "is_return", "return_against",
-                        "update_stock", "company_id")
+                        "update_stock", "company_id", "dimensions_json")
               .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(),
-                      ValueWrapper("draft"), P(), 1, P(), P(), P()))
+                      ValueWrapper("draft"), P(), 1, P(), P(), P(), P()))
     conn.execute(cn_ins.get_sql(),
         (si_id, customer_id, posting_date, posting_date,
          str(total_amount), str(tax_amount), str(grand_total), str(grand_total),
          orig_dict.get("tax_template_id"), orig_dict.get("sales_order_id"),
          args.against_invoice_id, orig_dict.get("update_stock", 0),
-         company_id),
+         company_id, orig_dimensions_text),
     )
 
     # Insert child items
@@ -3387,7 +3834,9 @@ def create_credit_note(conn, args):
                        "reason": args.reason, "grand_total": str(grand_total)})
     conn.commit()
     ok({"credit_note_id": si_id, "against_invoice_id": args.against_invoice_id,
-         "grand_total": str(grand_total), "is_return": True})
+         "grand_total": str(grand_total), "is_return": True,
+         "document_status": "draft", "posted": False,
+         "next_step": f"Nothing is in the books yet: run submit-sales-invoice --sales-invoice-id {si_id} to post this credit note"})
 
 
 # ---------------------------------------------------------------------------
@@ -3396,15 +3845,15 @@ def create_credit_note(conn, args):
 
 def list_credit_notes(conn, args):
     """List credit notes (sales invoices where is_return=1)."""
+    company_id = resolve_scope_company(conn, args.company_id, getattr(args, "company_name", None))
     si = _t_sales_invoice.as_("si")
     c = _t_customer.as_("c")
     orig = _t_sales_invoice.as_("orig")
     params = []
     crit = si.is_return == 1
 
-    if args.company_id:
-        crit = Criterion.all([crit, si.company_id == P()])
-        params.append(args.company_id)
+    crit = Criterion.all([crit, si.company_id == P()])
+    params.append(company_id)
     if args.customer_id:
         crit = Criterion.all([crit, si.customer_id == P()])
         params.append(args.customer_id)
@@ -3445,87 +3894,36 @@ def list_credit_notes(conn, args):
 
 
 # ---------------------------------------------------------------------------
-# 29. update-invoice-outstanding (cross-skill)
+# 29. update-invoice-outstanding — RETIRED (M776)
+#
+# The action reduced an invoice's outstanding_amount and appended a
+# payment_ledger_entry adjustment row with NO general-ledger posting: one call
+# moved a balance the books never saw, while the summary-versus-detail checks
+# stayed green because both of their sides moved together. An agent used it to
+# "apply" a credit note and the credit counted twice. It had no production
+# caller — payments clears documents in-process through
+# erpclaw_lib.payment_clearing — so the "called by erpclaw-payments" line in
+# the old docstring was false.
+#
+# The action name stays ROUTABLE on purpose (Nik ruling 2026-08-13: retired
+# actions STEER to their replacement, the M63-C shape). An agent or an old
+# script that asks for a balance move gets one JSON error naming the flows
+# that do the job, instead of "Unknown action". The old handler BODY stays
+# deleted: its control flow was ok()/err(), which print JSON to stdout and
+# sys.exit(), so no in-process caller could ever have used it.
+#
+# Pinned by selling/tests/test_delivery_invoice.py
+# (TestUpdateInvoiceOutstandingRetired: steer + nothing-lands).
 # ---------------------------------------------------------------------------
 
 def update_invoice_outstanding(conn, args):
-    """Called by erpclaw-payments when payment is allocated."""
-    if not args.sales_invoice_id:
-        err("--sales-invoice-id is required")
-    if not args.amount:
-        err("--amount is required")
-
-    siq = (Q.from_(_t_sales_invoice).select(_t_sales_invoice.star)
-           .where(_t_sales_invoice.id == P()))
-    si = conn.execute(siq.get_sql(), (args.sales_invoice_id,)).fetchone()
-    if not si:
-        err(f"Sales invoice {args.sales_invoice_id} not found")
-    if si["status"] not in ("submitted", "overdue", "partially_paid"):
-        err(f"Cannot update outstanding: invoice is '{si['status']}'")
-
-    payment_amount = to_decimal(args.amount)
-    if payment_amount <= 0:
-        err("--amount must be > 0")
-
-    # Summary ≡ detail (INV-25, ADR-0031): this action moves the SUMMARY
-    # (outstanding_amount), so it must move the DETAIL (payment_ledger_entry)
-    # in the SAME transaction — sweep W6 re-disposition, QA round-1 DEFECT 1.
-    # Reuse the invoice's posting-time PLE row for voucher bucket / account /
-    # currency so the adjustment nets inside INV-25's own-voucher branch and is
-    # swept by the same cancel-delink predicate. Looked up BEFORE any write so
-    # a broken-ledger invoice (no active posting row) errors with zero writes.
-    src_ple = conn.execute(
-        """SELECT voucher_type, account_id, currency FROM payment_ledger_entry
-           WHERE voucher_id = ?
-             AND voucher_type IN ('sales_invoice', 'credit_note')
-             AND delinked = 0
-           ORDER BY created_at LIMIT 1""",
-        (args.sales_invoice_id,)).fetchone()
-    if src_ple is None:
-        err(f"Sales invoice {args.sales_invoice_id} has no active payment "
-            "ledger posting; cannot apply a payment against it (summary and "
-            "detail must move together, INV-25)")
-
-    # Delegate compute-and-write to the neutral payment-clearing lib so this
-    # action and erpclaw-payments share ONE canonical clearing rule (no drift).
-    # The clearable-status guard + over-payment REJECT live in the helper.
-    try:
-        from erpclaw_lib.payment_clearing import apply_payment_to_document
-        res = apply_payment_to_document(
-            conn, "sales_invoice", args.sales_invoice_id, args.amount)
-    except ValueError as e:
-        err(str(e))
-
-    # Adjustment PLE row (−applied) in the invoice's own voucher bucket, same
-    # transaction as the outstanding write. raw SQL — mirrors the submit-time
-    # PLE insert idiom above ('customer' literal); all values bound params.
-    adj_ple_id = str(uuid.uuid4())
-    adj_amount = str(round_currency(-payment_amount))
-    conn.execute(
-        """INSERT INTO payment_ledger_entry
-           (id, posting_date, account_id, party_type, party_id,
-            voucher_type, voucher_id, amount, amount_in_account_currency,
-            currency, remarks)
-           VALUES (?, ?, ?, 'customer', ?, ?, ?, ?, ?, ?, ?)""",
-        (adj_ple_id, datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-         src_ple["account_id"], si["customer_id"],
-         src_ple["voucher_type"], args.sales_invoice_id,
-         adj_amount, adj_amount, src_ple["currency"],
-         f"Payment applied to sales_invoice {args.sales_invoice_id} "
-         f"via update-invoice-outstanding"),
+    """RETIRED — see the block above. Steers to the payment, credit-note and write-off flows."""
+    from erpclaw_lib.payment_clearing import RETIRED_OUTSTANDING_STEER
+    err(
+        "'update-invoice-outstanding' has been retired: it moved a document's "
+        "balance with no ledger posting.",
+        suggestion=RETIRED_OUTSTANDING_STEER,
     )
-
-    audit(conn, "erpclaw-selling", "update-invoice-outstanding", "sales_invoice",
-           args.sales_invoice_id,
-           new_values={"payment_amount": str(payment_amount),
-                       "new_outstanding": res["outstanding_amount"],
-                       "new_status": res["status"],
-                       "payment_ledger_entry_id": adj_ple_id})
-    conn.commit()
-    ok({"sales_invoice_id": args.sales_invoice_id,
-         "outstanding_amount": res["outstanding_amount"],
-         "status": res["status"],
-         "payment_ledger_entry_id": adj_ple_id})
 
 
 # ---------------------------------------------------------------------------
@@ -3547,7 +3945,7 @@ def add_sales_partner(conn, args):
                   .columns("id", "name", "commission_rate")
                   .insert(P(), P(), P()))
         conn.execute(sp_ins.get_sql(), (sp_id, args.name, str(rate)))
-    except sqlite3.IntegrityError as e:
+    except integrity_error_types() as e:
         sys.stderr.write(f"[erpclaw-selling] {e}\n")
         err("Sales partner creation failed — check for duplicates or invalid data")
 
@@ -3600,17 +3998,21 @@ def add_recurring_template(conn, args):
     if args.frequency not in VALID_FREQUENCIES:
         err(f"--frequency must be one of: {', '.join(VALID_FREQUENCIES)}")
 
-    csq = (Q.from_(_t_customer).select(_t_customer.id)
-           .where((_t_customer.id == P()) | (_t_customer.name == P()))
-           .where(_t_customer.status == ValueWrapper("active")))
-    cust_sub = conn.execute(csq.get_sql(),
-        (args.customer_id, args.customer_id)).fetchone()
-    if not cust_sub:
-        err(f"Active customer {args.customer_id} not found")
-    args.customer_id = cust_sub["id"]  # normalize to id
     coq = Q.from_(_t_company).select(_t_company.id).where(_t_company.id == P())
     if not conn.execute(coq.get_sql(), (args.company_id,)).fetchone():
         err(f"Company {args.company_id} not found")
+    csq = (Q.from_(_t_customer).select(_t_customer.id, _t_customer.company_id)
+           .where((_t_customer.id == P())
+                  | ((_t_customer.name == P())
+                     & (_t_customer.company_id == P())))
+           .where(_t_customer.status == ValueWrapper("active")))
+    cust_sub = conn.execute(csq.get_sql(),
+        (args.customer_id, args.customer_id, args.company_id)).fetchone()
+    if not cust_sub:
+        err(f"Active customer {args.customer_id} not found")
+    args.customer_id = cust_sub["id"]  # normalize to id
+    if cust_sub["company_id"] != args.company_id:
+        err(f"Customer {args.customer_id} belongs to another company")
 
     items = _parse_json_arg(args.items, "items")
     if not items or not isinstance(items, list):
@@ -3738,13 +4140,11 @@ def update_recurring_template(conn, args):
 
 def list_recurring_templates(conn, args):
     """List recurring invoice templates."""
+    company_id = resolve_scope_company(conn, args.company_id, getattr(args, "company_name", None))
     rt = _t_recurring_template.as_("rt")
     params = []
-    crit = None
-
-    if args.company_id:
-        crit = (rt.company_id == P())
-        params.append(args.company_id)
+    crit = (rt.company_id == P())
+    params.append(company_id)
     if args.customer_id:
         cond = rt.customer_id == P()
         crit = Criterion.all([crit, cond]) if crit else cond
@@ -3982,7 +4382,7 @@ def _invoice_one_template(conn, template_id, as_of_date):
 
     # Auto-submit the invoice
     # We need to do this inline since we cannot call argparse again
-    fiscal_year = _get_fiscal_year(conn, next_date)
+    fiscal_year = get_fiscal_year(conn, next_date, company_id=tmpl_dict["company_id"])
     cost_center_id = _get_cost_center(conn, company_id)
     receivable_account_id = _get_receivable_account(conn, company_id)
     income_account_id = _get_income_account(conn, company_id)
@@ -4252,13 +4652,13 @@ def get_blanket_order(conn, args):
 
 def list_blanket_orders(conn, args):
     """List blanket sales orders."""
+    company_id = resolve_scope_company(conn, args.company_id, getattr(args, "company_name", None))
     bo = _t_blanket_order.as_("bo")
     params = []
     crit = (bo.blanket_order_type == ValueWrapper("selling"))
 
-    if args.company_id:
-        crit = Criterion.all([crit, bo.company_id == P()])
-        params.append(args.company_id)
+    crit = Criterion.all([crit, bo.company_id == P()])
+    params.append(company_id)
     if args.customer_id:
         crit = Criterion.all([crit, bo.customer_id == P()])
         params.append(args.customer_id)
@@ -4437,14 +4837,7 @@ def create_so_from_blanket(conn, args):
 
 def status_action(conn, args):
     """Selling summary for a company."""
-    company_id = args.company_id
-    if not company_id:
-        cq = Q.from_(_t_company).select(_t_company.id).limit(1)
-        row = conn.execute(cq.get_sql()).fetchone()
-        if not row:
-            err("No company found. Create one with erpclaw first.",
-                 suggestion="Run 'tutorial' to create a demo company, or 'setup company' to create your own.")
-        company_id = row["id"]
+    company_id = resolve_scope_company(conn, args.company_id, getattr(args, "company_name", None))
 
     # Customer count
     ccq = (Q.from_(_t_customer).select(fn.Count("*").as_("cnt"))
@@ -4529,6 +4922,12 @@ def import_customers(conn, args):
     from erpclaw_lib.csv_import import validate_csv, parse_csv_rows
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
 
+    cust_company_q = Q.from_(_t_company).select(_t_company.default_currency).where(_t_company.id == P())
+    cust_company_row = conn.execute(cust_company_q.get_sql(), (company_id,)).fetchone()
+    if not cust_company_row:
+        err(f"Company {company_id} not found")
+    company_currency = cust_company_row["default_currency"]
+
     errors = validate_csv(csv_real, "customer")
     if errors:
         err(f"CSV validation failed: {'; '.join(errors)}")
@@ -4537,9 +4936,24 @@ def import_customers(conn, args):
     if not rows:
         err("CSV file is empty")
 
+    import csv
+    with open(csv_real, "r", newline="", encoding="utf-8-sig") as handle:
+        raw_rows = list(csv.DictReader(handle))
+    raw_currencies = [(row.get("default_currency") or "") for row in raw_rows]
+    raw_types = [row.get("customer_type") for row in raw_rows]
+    normalised_types = []
+    for pos, raw in enumerate(raw_types, start=1):
+        if raw is None or not raw.strip():
+            normalised_types.append("company")
+        else:
+            norm = raw.strip().lower()
+            if norm not in ("company", "individual"):
+                err(f"Row {pos}: customer_type '{raw}' must be company or individual")
+            normalised_types.append(norm)
+
     imported = 0
     skipped = 0
-    for row in rows:
+    for index, row in enumerate(rows):
         name = row.get("name", "")
 
         # Check for duplicate
@@ -4552,7 +4966,12 @@ def import_customers(conn, args):
             continue
 
         customer_id = str(uuid.uuid4())
-        naming = get_next_name(conn, "customer")
+        try:
+            naming = get_next_name(conn, "customer", company_id=company_id)
+        except ValueError:
+            naming = None
+        cell = (raw_currencies[index] or "").strip() if index < len(raw_currencies) else ""
+        currency = row.get("default_currency") if cell else company_currency
         c_ins = (Q.into(_t_customer)
                  .columns("id", "name", "naming_series", "customer_type",
                            "territory", "default_currency", "email", "phone",
@@ -4560,9 +4979,9 @@ def import_customers(conn, args):
                  .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(), P()))
         conn.execute(c_ins.get_sql(),
             (customer_id, name, naming,
-             row.get("customer_type", "Company"),
+             normalised_types[index],
              row.get("territory"),
-             row.get("default_currency", "USD"),
+             currency,
              row.get("email"), row.get("phone"), row.get("tax_id"),
              company_id),
         )
@@ -4866,6 +5285,29 @@ def list_intercompany_invoices(conn, args):
     ok({"invoices": invoices, "total": len(invoices)})
 
 
+def _reverse_stock_or_refuse(conn, voucher_type, voucher_id, posting_date, label):
+    """Reverse a voucher's stock ledger entries, refusing on failure.
+
+    Zero active rows is normal (an update_stock invoice of non-stock items
+    posts no SLE rows), so return [] without calling reverse_sle_entries.
+    A failed reversal rolls back every write of the action and refuses.
+    """
+    active_q = (Q.from_(_t_stock_ledger)
+                .select(fn.Count("*").as_("cnt"))
+                .where(_t_stock_ledger.voucher_type == P())
+                .where(_t_stock_ledger.voucher_id == P())
+                .where(_t_stock_ledger.is_cancelled == 0))
+    active = conn.execute(active_q.get_sql(), (voucher_type, voucher_id)).fetchone()["cnt"]
+    if not active:
+        return []
+    try:
+        return reverse_sle_entries(conn, voucher_type, voucher_id, posting_date)
+    except ValueError as e:
+        conn.rollback()
+        sys.stderr.write(f"[erpclaw-selling] {e}\n")
+        err(f"{label} failed: {e}")
+
+
 def cancel_intercompany_invoice(conn, args):
     """Cancel an intercompany sales invoice and cascade to the mirror purchase invoice.
 
@@ -4887,8 +5329,81 @@ def cancel_intercompany_invoice(conn, args):
     posting_date = si["posting_date"]
     source_company_id = si["company_id"]
 
-    # --- Cancel the Sales Invoice (source company) ---
+    # --- Pre-head refusals, on the rows read above. A refused request takes
+    # no head. Same order and messages as the re-check under the heads. ---
     si_status = si["status"]
+    if si_status == "cancelled":
+        # Already cancelled: the source leg is complete, so it is never
+        # re-run here (no source writes; si_*_reversals stay 0). An open
+        # mirror is still finished exactly as below; otherwise refuse
+        # before any write.
+        mirror = None
+        if pi_id:
+            piq = (Q.from_(_t_purchase_invoice).select(_t_purchase_invoice.star)
+                   .where(_t_purchase_invoice.id == P()))
+            mirror = conn.execute(piq.get_sql(), (pi_id,)).fetchone()
+        if not (mirror and mirror["status"] in ("draft", "submitted",
+                                                "overdue", "partially_paid")):
+            err(f"Sales invoice {si_id} is already cancelled; nothing was written")
+    elif si_status not in ("submitted", "overdue", "partially_paid"):
+        err(f"Cannot cancel sales invoice in status: {si_status}")
+
+    # The mirror bill's company (a plain read; none when pi_id is empty or
+    # the bill is missing), then both heads before the first write of
+    # either leg, in ascending company order.
+    mirror_company_id = None
+    if pi_id:
+        piq = (Q.from_(_t_purchase_invoice).select(_t_purchase_invoice.star)
+               .where(_t_purchase_invoice.id == P()))
+        _head_mirror = conn.execute(piq.get_sql(), (pi_id,)).fetchone()
+        if _head_mirror:
+            mirror_company_id = _head_mirror["company_id"]
+    _head_companies = [source_company_id]
+    if mirror_company_id:
+        _head_companies = _head_companies + [mirror_company_id]
+    take_chain_heads(conn, _head_companies)
+
+    # --- Re-read under the heads and re-run every refusal. Every later step
+    # is decided from these rows. Plain reads, no row locks. ---
+    si = conn.execute(siq.get_sql(), (si_id,)).fetchone()
+    if not si:
+        conn.rollback()
+        err(f"Sales invoice not found: {si_id}")
+    if si["is_intercompany"] != 1:
+        conn.rollback()
+        err("Sales invoice is not an intercompany invoice")
+    piq = (Q.from_(_t_purchase_invoice).select(_t_purchase_invoice.star)
+           .where(_t_purchase_invoice.id == P()))
+    pi = conn.execute(piq.get_sql(), (pi_id,)).fetchone() if pi_id else None
+    if (si["intercompany_reference_id"] or None) != (pi_id or None):
+        if pi_id:
+            _changed_status = pi["status"] if pi else "missing"
+            _changed_pi = pi_id
+        else:
+            _swapped = conn.execute(piq.get_sql(), (si["intercompany_reference_id"],)).fetchone() if si["intercompany_reference_id"] else None
+            _changed_status = _swapped["status"] if _swapped else "missing"
+            _changed_pi = si["intercompany_reference_id"]
+        conn.rollback()
+        err(f"Mirror purchase invoice {_changed_pi} changed while cancelling (status '{_changed_status}'); nothing was written")
+    if pi is not None and pi["company_id"] not in _head_companies:
+        conn.rollback()
+        err(f"Mirror purchase invoice {pi_id} changed while cancelling (status '{pi['status']}'); nothing was written")
+    si_status = si["status"]
+    if si_status == "cancelled":
+        if not (pi is not None and pi["status"] in ("draft", "submitted",
+                                                   "overdue", "partially_paid")):
+            conn.rollback()
+            err(f"Sales invoice {si_id} is already cancelled; nothing was written")
+    elif si_status not in ("submitted", "overdue", "partially_paid"):
+        conn.rollback()
+        err(f"Cannot cancel sales invoice in status: {si_status}")
+
+    # Decided from the re-read rows from here on.
+    pi_id = si["intercompany_reference_id"]
+    posting_date = si["posting_date"]
+    source_company_id = si["company_id"]
+
+    # --- Cancel the Sales Invoice (source company) ---
     si_gl_reversals = 0
     si_sle_reversals = 0
     si_release = {}
@@ -4896,20 +5411,24 @@ def cancel_intercompany_invoice(conn, args):
     if si_status in ("submitted", "overdue", "partially_paid"):
         voucher_type = "credit_note" if si["is_return"] else "sales_invoice"
 
-        # Reverse GL (includes COGS entries — reverses all for the voucher)
+        # Reverse GL (includes COGS entries — reverses all for the voucher).
+        # A failed reversal rolls the whole action back and refuses: a cancel
+        # that did not reverse must never read cancelled (m323).
         try:
             rev_gl = reverse_gl_entries(conn, voucher_type, si_id, posting_date)
             si_gl_reversals = len(rev_gl)
-        except ValueError:
-            pass  # No GL entries to reverse
+        except ValueError as e:
+            conn.rollback()
+            sys.stderr.write(f"[erpclaw-selling] {e}\n")
+            err(f"GL reversal failed: {e}")
 
-        # Reverse SLE if applicable
+        # Reverse SLE if applicable. A failed reversal rolls the whole
+        # action back and refuses: a cancel that did not reverse must never
+        # read cancelled.
         if si["update_stock"]:
-            try:
-                rev_sle = reverse_sle_entries(conn, voucher_type, si_id, posting_date)
-                si_sle_reversals = len(rev_sle)
-            except ValueError:
-                pass
+            rev_sle = _reverse_stock_or_refuse(
+                conn, voucher_type, si_id, posting_date, "SLE reversal")
+            si_sle_reversals = len(rev_sle)
 
         # Release the allocations this cancel voids (M46/F1) — same rule and
         # same shared lib as cancel-sales-invoice.
@@ -4923,35 +5442,52 @@ def cancel_intercompany_invoice(conn, args):
                   .where(_t_payment_ledger.voucher_id == P()))
         conn.execute(ple_uq.get_sql(), (voucher_type, si_id))
 
-        # Update SI status
+        # Update SI status (compare-and-set: a concurrent status change
+        # refuses with the fresh status and nothing written).
         si_uq = (Q.update(_t_sales_invoice)
                  .set("status", ValueWrapper("cancelled"))
                  .set("outstanding_amount", ValueWrapper("0"))
-                 .where(_t_sales_invoice.id == P()))
-        conn.execute(si_uq.get_sql(), (si_id,))
+                 .where(_t_sales_invoice.id == P())
+                 .where(_t_sales_invoice.status.isin([ValueWrapper("submitted"), ValueWrapper("overdue"), ValueWrapper("partially_paid")])))
+        _si_flip = conn.execute(si_uq.get_sql(), (si_id,))
+        if _si_flip.rowcount == 0:
+            conn.rollback()
+            _fresh_si = conn.execute(siq.get_sql(), (si_id,)).fetchone()
+            if not _fresh_si:
+                err(f"Sales invoice not found: {si_id}")
+            err(f"Cannot cancel sales invoice in status: {_fresh_si['status']}")
     elif si_status == "cancelled":
-        pass  # Already cancelled
-    else:
-        err(f"Cannot cancel sales invoice in status: {si_status}")
+        # Already cancelled with an open mirror (decided under the heads
+        # above): the source leg stays complete, only the mirror leg runs.
+        pass
 
     # --- Cancel the mirror Purchase Invoice (target company) ---
     pi_gl_reversals = 0
     pi_sle_reversals = 0
     if pi_id:
-        piq = (Q.from_(_t_purchase_invoice).select(_t_purchase_invoice.star)
-               .where(_t_purchase_invoice.id == P()))
-        pi = conn.execute(piq.get_sql(), (pi_id,)).fetchone()
+        # Decided from the row re-read under the heads above.
         if pi and pi["status"] in ("submitted", "overdue", "partially_paid"):
             pi_voucher = "debit_note" if pi["is_return"] else "purchase_invoice"
             pi_posting = pi["posting_date"]
 
-            # Reverse PI GL
-            rev_pi_gl = reverse_gl_entries(conn, pi_voucher, pi_id, pi_posting)
+            # Reverse PI GL. Same guarantee as the source leg (m323): a
+            # failed mirror reversal rolls the whole action back and refuses.
+            try:
+                rev_pi_gl = reverse_gl_entries(
+                    conn, pi_voucher, pi_id, pi_posting)
+            except ValueError as e:
+                conn.rollback()
+                sys.stderr.write(f"[erpclaw-selling] {e}\n")
+                err(f"Mirror purchase invoice GL reversal failed: {e}")
             pi_gl_reversals = len(rev_pi_gl)
 
-            # Reverse PI SLE if applicable
+            # Reverse PI SLE if applicable. Same guarantee as the
+            # source leg: a failed mirror reversal rolls the whole action
+            # back and refuses.
             if pi["update_stock"]:
-                rev_pi_sle = reverse_sle_entries(conn, pi_voucher, pi_id, pi_posting)
+                rev_pi_sle = _reverse_stock_or_refuse(
+                    conn, pi_voucher, pi_id, pi_posting,
+                    "Mirror purchase invoice SLE reversal")
                 pi_sle_reversals = len(rev_pi_sle)
 
             # Release the mirror bill's allocations too (M46/F1).
@@ -4966,12 +5502,19 @@ def cancel_intercompany_invoice(conn, args):
                          .where(_t_payment_ledger.voucher_id == P()))
             conn.execute(pi_ple_uq.get_sql(), (pi_voucher, pi_id))
 
-            # Update PI status
+            # Update PI status (compare-and-set: a concurrent change to
+            # the mirror refuses the whole action with nothing written).
             pi_uq = (Q.update(_t_purchase_invoice)
                      .set("status", ValueWrapper("cancelled"))
                      .set("outstanding_amount", ValueWrapper("0"))
-                     .where(_t_purchase_invoice.id == P()))
-            conn.execute(pi_uq.get_sql(), (pi_id,))
+                     .where(_t_purchase_invoice.id == P())
+                     .where(_t_purchase_invoice.status.isin([ValueWrapper("submitted"), ValueWrapper("overdue"), ValueWrapper("partially_paid")])))
+            _pi_flip = conn.execute(pi_uq.get_sql(), (pi_id,))
+            if _pi_flip.rowcount == 0:
+                conn.rollback()
+                _fresh_pi = conn.execute(piq.get_sql(), (pi_id,)).fetchone()
+                _fresh_pi_status = _fresh_pi["status"] if _fresh_pi else "missing"
+                err(f"Mirror purchase invoice {pi_id} changed while cancelling (status '{_fresh_pi_status}'); nothing was written")
         elif pi and pi["status"] == "draft":
             # Just delete the draft PI and its items
             dq1 = (Q.from_(_t_purchase_invoice_item).delete()
@@ -5073,6 +5616,9 @@ def amend_sales_order(conn, args):
 
     so_dict = row_to_dict(so)
 
+    dimensions_text = _resolve_dimensions_text(
+        conn, args, so_dict.get("dimensions_json"))
+
     # Cancel original SO
     uq_cancel = (Q.update(_t_sales_order)
                  .set("status", ValueWrapper("cancelled"))
@@ -5114,15 +5660,15 @@ def amend_sales_order(conn, args):
               .columns("id", "customer_id", "order_date", "delivery_date",
                         "total_amount", "tax_amount", "grand_total",
                         "tax_template_id", "status", "company_id",
-                        "amended_from")
+                        "dimensions_json", "amended_from")
               .insert(P(), P(), P(), P(), P(), P(), P(), P(),
-                      ValueWrapper("draft"), P(), P()))
+                      ValueWrapper("draft"), P(), P(), P()))
     conn.execute(so_ins.get_sql(),
         (new_so_id, so_dict["customer_id"], so_dict["order_date"],
          so_dict.get("delivery_date"),
          str(total_amount), str(tax_amount), str(grand_total),
          so_dict.get("tax_template_id"), so_dict["company_id"],
-         args.sales_order_id),
+         dimensions_text, args.sales_order_id),
     )
 
     soi_ins = (Q.into(_t_sales_order_item)
@@ -5406,7 +5952,7 @@ def add_packing_slip(conn, args):
 
         # Check total packed qty across all packing slips for this DN item
         existing_q = (Q.from_(_t_packing_slip_item)
-                      .select(fn.Sum(_t_packing_slip_item.qty_packed))
+                      .select(fn.Coalesce(DecimalSum(_t_packing_slip_item.qty_packed), ValueWrapper("0")))
                       .where(_t_packing_slip_item.delivery_note_item_id == P()))
         existing = conn.execute(existing_q.get_sql(), (dni_id,)).fetchone()
         already_packed = to_decimal(str(existing[0])) if existing and existing[0] else Decimal("0")
@@ -5494,17 +6040,16 @@ def list_packing_slips(conn, args):
 
     Optional: --delivery-note-id, --company-id
     """
+    company_id = resolve_scope_company(conn, args.company_id, getattr(args, "company_name", None))
     ps = _t_packing_slip.as_("ps")
     q = Q.from_(ps).select(ps.star)
     params = []
+    q = q.where(ps.company_id == P())
+    params.append(company_id)
 
     if args.delivery_note_id:
         q = q.where(ps.delivery_note_id == P())
         params.append(args.delivery_note_id)
-
-    if args.company_id:
-        q = q.where(ps.company_id == P())
-        params.append(args.company_id)
 
     q = q.orderby(ps.created_at, order=Order.desc)
     limit = int(args.limit) if args.limit else 20
@@ -5513,6 +6058,23 @@ def list_packing_slips(conn, args):
 
     rows = conn.execute(q.get_sql(), params).fetchall()
     ok({"packing_slips": [row_to_dict(r) for r in rows], "count": len(rows)})
+
+
+def _resolve_company_flag(conn, args):
+    """Resolve --company (name or id) into args.company_id.
+
+    Actions that read only company_id would otherwise ignore the flag, so
+    main() calls this once before dispatch. An id passed through --company
+    keeps working: a bound read checks whether the value is exactly an
+    existing company.id first, and only otherwise resolves it as an exact
+    company name (a miss refuses).
+    """
+    if getattr(args, "company_name", None) and not getattr(args, "company_id", None):
+        probe = (Q.from_(_t_company).select(_t_company.id).where(_t_company.id == P()))
+        if conn.execute(probe.get_sql(), (args.company_name,)).fetchone():
+            args.company_id = args.company_name
+            return
+        args.company_id = resolve_company_id(conn, None, args.company_name)
 
 
 # ---------------------------------------------------------------------------
@@ -5555,8 +6117,10 @@ ACTIONS = {
     "run-dunning-cycle": run_dunning_cycle,
     "list-dunning-runs": list_dunning_runs,
     "cancel-sales-invoice": cancel_sales_invoice,
+    "delete-sales-invoice": delete_sales_invoice,
     "create-credit-note": create_credit_note,
     "list-credit-notes": list_credit_notes,
+    # RETIRED — routable on purpose; answers with a steer and writes nothing.
     "update-invoice-outstanding": update_invoice_outstanding,
     "add-sales-partner": add_sales_partner,
     "list-sales-partners": list_sales_partners,
@@ -5617,6 +6181,7 @@ def main():
     # Common fields
     parser.add_argument("--name")
     parser.add_argument("--company-id")
+    parser.add_argument("--company", dest="company_name", default=None)
     parser.add_argument("--csv-path")
     parser.add_argument("--posting-date")
     parser.add_argument("--items")  # JSON
@@ -5674,6 +6239,13 @@ def main():
     # Warehouse override
     parser.add_argument("--warehouse-id")
 
+    # Accounting dimensions (m712): header-level tags carried to the ledger
+    parser.add_argument("--dimensions", default=None)
+    parser.add_argument("--dimension-key", dest="dimension_key",
+                        action="append", default=None)
+    parser.add_argument("--dimension-value", dest="dimension_value",
+                        action="append", default=None)
+
     # Status filter (for list queries)
     parser.add_argument("--status", dest="doc_status")
 
@@ -5686,12 +6258,16 @@ def main():
     parser.add_argument("--custom-fields", default=None,
                         help='User-defined fields as a JSON object, e.g. \'{"priority": "Gold"}\'')
 
-    args, unknown = parser.parse_known_args()
+    raw = sys.argv[1:]
+    try:
+        parse_argv, _auth_id = authority_gate.split_authorization_id(raw)
+    except ValueError:
+        err(INPUT_INVALID)
+    args, unknown = parser.parse_known_args(parse_argv)
     check_unknown_args(parser, unknown)
     check_input_lengths(args)
 
-    db_path = args.db_path or DEFAULT_DB_PATH
-    ensure_db_exists(db_path)
+    db_path = getattr(args, "db_path", None)   # None unless --db-path was given
     conn = get_connection(db_path)
 
     # Dependency check
@@ -5702,12 +6278,22 @@ def main():
         conn.close()
         sys.exit(1)
 
+    def _handler(handle):
+        _resolve_company_flag(handle, args)
+        return ACTIONS[args.action](handle, args)
+
     try:
-        ACTIONS[args.action](conn, args)
+        authority_gate.run(conn, args.action, raw, _handler, option_strings=[s for a in parser._actions for s in a.option_strings], repeatable_options=[s for a in parser._actions if isinstance(a, argparse._AppendAction) for s in a.option_strings])
+    except authority_gate.AuthorityRefusal as refusal:
+        conn.rollback()
+        err(refusal.args[0], suggestion=authority_gate.SUGGESTIONS.get(refusal.args[0]))
     except Exception as e:
+        if isinstance(e, ValueError) and e.args == (INPUT_INVALID,):
+            conn.rollback()
+            err(INPUT_INVALID)
         conn.rollback()
         sys.stderr.write(f"[erpclaw-selling] {e}\n")
-        err("An unexpected error occurred")
+        err(unexpected_error_message(e))
     finally:
         conn.close()
 

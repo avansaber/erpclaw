@@ -9,8 +9,7 @@ one assertion each, and it was always the same one:
 That is the M38 shape. Each of these four actions rewrites `journal_entry_line`
 rows, and `amend-journal-entry` reverses posted `gl_entry` rows, so a routability
 assert says nothing about whether the books end up right. The classifier that
-found them is `scripts/test_depth_audit.py`; the register row is
-`planning/wave_g/F21_TEST_DEPTH_REGISTER_2026-08-11.json`.
+found them is `scripts/test_depth_audit.py`.
 
 Every pin below drives the REAL action against a fresh core DB and asserts exact
 Decimals on the rows the action left behind, plus one refusal path per action.

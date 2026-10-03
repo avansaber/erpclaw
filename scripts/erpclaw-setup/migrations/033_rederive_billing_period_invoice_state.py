@@ -45,8 +45,7 @@ UPDATE nor an audit row. Read it back with
 
 This one is worth stating plainly: the migration RE-DERIVES a state flag from
 another table, so without the trail there is no record anywhere that the flag was
-ever anything else. Convention + gate:
-planning/simlogs/m102_SIM_2026-08-12.md.
+ever anything else.
 """
 import argparse
 import importlib.util

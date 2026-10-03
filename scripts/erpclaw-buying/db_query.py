@@ -23,7 +23,7 @@ try:
     import importlib.util
     if importlib.util.find_spec("erpclaw_lib") is None:
         sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
-    from erpclaw_lib.db import get_connection, ensure_db_exists, DEFAULT_DB_PATH
+    from erpclaw_lib.db import get_connection, unexpected_error_message
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.validation import check_input_lengths
     from erpclaw_lib.naming import get_next_name
@@ -35,16 +35,24 @@ try:
         create_perpetual_inventory_gl,
         reprice_stock_valuation,
     )
-    from erpclaw_lib.gl_posting import insert_gl_entries, reverse_gl_entries
+    from erpclaw_lib.gl_posting import insert_gl_entries, reverse_gl_entries, take_chain_heads
     from erpclaw_lib.cwip_posting import (
         get_under_construction_asset, resolve_cwip_account, record_cwip_accumulation,
         reverse_cwip_accumulations,
+    )
+    from erpclaw_lib.dimensions import (
+        parse_dimension_input,
+        validate_document_dimensions,
+        dimensions_json_text,
     )
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.custom_fields import store_from_arg, merge_into_response
     from erpclaw_lib.dependencies import check_required_tables
+    from erpclaw_lib.query_helpers import get_default_cost_center, get_fiscal_year, resolve_company_id, resolve_scope_company
     from erpclaw_lib.query import Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL, DecimalSum, DecimalAbs, dynamic_update, line_order, scalar_max, now
+    from erpclaw_lib import authority_gate
+    from erpclaw_lib.authorization_consumption import INPUT_INVALID
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
     from erpclaw_lib.vendor.pypika.terms import LiteralValue, ValueWrapper
 except ImportError:
@@ -57,6 +65,24 @@ except ImportError:
 REQUIRED_TABLES = ["company", "account", "item"]
 
 VALID_FREQUENCIES = ("weekly", "monthly", "quarterly", "semi_annually", "annually")
+
+
+def _dimension_input(args):
+    try:
+        return parse_dimension_input(
+            getattr(args, "dimensions", None),
+            getattr(args, "dimension_key", None),
+            getattr(args, "dimension_value", None))
+    except ValueError as e:
+        err(str(e))
+
+
+def _validate_dims_before_write(conn, obj):
+    if obj:
+        try:
+            validate_document_dimensions(conn, obj)
+        except ValueError as e:
+            err(str(e))
 
 # ---------------------------------------------------------------------------
 # PyPika table references (for new features)
@@ -88,26 +114,8 @@ def _parse_json_arg(value, name):
         err(f"Invalid JSON for --{name}: {value}")
 
 
-def _get_fiscal_year(conn, posting_date: str) -> str | None:
-    fy_t = Table("fiscal_year")
-    q = (Q.from_(fy_t)
-         .select(fy_t.name)
-         .where(fy_t.start_date <= P())
-         .where(fy_t.end_date >= P())
-         .where(fy_t.is_closed == 0))
-    fy = conn.execute(q.get_sql(), (posting_date, posting_date)).fetchone()
-    return fy["name"] if fy else None
-
-
 def _get_cost_center(conn, company_id: str) -> str | None:
-    cc_t = Table("cost_center")
-    q = (Q.from_(cc_t)
-         .select(cc_t.id)
-         .where(cc_t.company_id == P())
-         .where(cc_t.is_group == 0)
-         .limit(1))
-    cc = conn.execute(q.get_sql(), (company_id,)).fetchone()
-    return cc["id"] if cc else None
+    return get_default_cost_center(conn, company_id)
 
 
 def _today() -> str:
@@ -156,6 +164,212 @@ def _calculate_tax(conn, tax_template_id, subtotal):
     return round_currency(total_tax), details
 
 
+def _order_line_net(label, amount, item):
+    """Split a purchase-order line gross amount into discount parts.
+
+    No database access. `amount` is the already rounded Decimal gross;
+    `item` is the line dict, which may carry `discount_percentage` or
+    `discount_amount` (money), never both. Returns
+    (stored_pct, net_amount, discount), all rounded Decimals.
+    """
+    has_pct = "discount_percentage" in item and item["discount_percentage"] is not None
+    has_amt = "discount_amount" in item and item["discount_amount"] is not None
+    if has_pct and has_amt:
+        err(f"Item {label}: give discount_percentage or discount_amount, not both")
+    if has_amt:
+        d = to_decimal(item["discount_amount"])
+        if d < 0:
+            err(f"Item {label}: discount_amount must not be negative")
+        discount = round_currency(d)
+        net_amount = amount - discount
+        if amount == 0:
+            stored_pct = round_currency(Decimal("0"))
+        else:
+            stored_pct = round_currency(discount / amount * Decimal("100"))
+    else:
+        raw_pct = item.get("discount_percentage", "0")
+        if raw_pct is None:
+            raw_pct = "0"
+        pct = to_decimal(raw_pct)
+        if pct < 0 or pct >= 100:
+            err(f"Item {label}: discount_percentage must be at least 0 and less than 100")
+        net_amount = round_currency(amount * (Decimal("1") - pct / Decimal("100")))
+        stored_pct = round_currency(pct)
+        discount = round_currency(amount - net_amount)
+    if discount > 0 and discount >= amount:
+        err(f"Item {label}: discount {discount} must be less than the line amount {amount}")
+    return stored_pct, net_amount, discount
+
+
+def discount_share(D, Q, prior_qty, prior_disc, q):
+    """Share of an order line's discount carried by a receipt line.
+
+    Pure function, no database access. All arguments are Decimals.
+    `D` is the order line discount, `Q` its quantity, `prior_qty` and
+    `prior_disc` the quantity and discount already covered by prior
+    documents, and `q` this line's quantity. Covered units carry `D/Q`
+    rounded to the cent; the line completing `Q` takes the remainder so
+    covered lines sum to `D` exactly; excess units carry the per-unit share.
+    """
+    D = to_decimal(D)
+    Q = to_decimal(Q)
+    prior_qty = to_decimal(prior_qty)
+    prior_disc = to_decimal(prior_disc)
+    q = to_decimal(q)
+    if Q == 0:
+        return round_currency(Decimal("0"))
+    covered = min(q, max(Q - prior_qty, Decimal("0")))
+    excess = q - covered
+    if covered > 0 and prior_qty + covered == Q:
+        d_cov = D - prior_disc
+    else:
+        d_cov = round_currency(D * covered / Q)
+    return round_currency(d_cov + round_currency(D * excess / Q))
+
+
+def _discount_text(value):
+    """Stored text for a discount share: str(value), zero as "0"."""
+    if value == 0:
+        return "0"
+    return str(value)
+
+
+def _receipt_prior_sums(conn, purchase_order_item_id):
+    """Prior (qty, discount) over submitted receipt lines for one order line.
+
+    PyPika with bound parameters; sums in Python Decimal, never in SQL.
+    """
+    pri_t = Table("purchase_receipt_item")
+    pr_t = Table("purchase_receipt")
+    q = (Q.from_(pri_t)
+         .join(pr_t).on(pr_t.id == pri_t.purchase_receipt_id)
+         .select(pri_t.quantity, pri_t.discount_amount)
+         .where(pri_t.purchase_order_item_id == P())
+         .where(pr_t.status == ValueWrapper("submitted")))
+    rows = conn.execute(q.get_sql(), (purchase_order_item_id,)).fetchall()
+    qty = Decimal("0")
+    disc = Decimal("0")
+    for r in rows:
+        qty += to_decimal(r["quantity"])
+        disc += to_decimal(r["discount_amount"])
+    return qty, disc
+
+
+def _preview_line_discount(conn, poi_row, qty, intra_qty, intra_disc):
+    """Preview share for one receipt line, accumulating intra-document prior."""
+    po_item_id = poi_row["id"]
+    qty = to_decimal(qty)
+    order_qty = to_decimal(poi_row["quantity"])
+    order_disc = round_currency(
+        to_decimal(poi_row["amount"]) - to_decimal(poi_row["net_amount"]))
+    sub_qty, sub_disc = _receipt_prior_sums(conn, po_item_id)
+    prior_qty = sub_qty + intra_qty.get(po_item_id, Decimal("0"))
+    prior_disc = sub_disc + intra_disc.get(po_item_id, Decimal("0"))
+    share = discount_share(order_disc, order_qty, prior_qty, prior_disc, qty)
+    intra_qty[po_item_id] = intra_qty.get(po_item_id, Decimal("0")) + qty
+    intra_disc[po_item_id] = intra_disc.get(po_item_id, Decimal("0")) + share
+    return share
+
+
+def _bill_prior_sums(conn, purchase_order_item_id):
+    """Prior (qty, discount) over posted bill lines for one order line.
+
+    PyPika with bound parameters; sums in Python Decimal, never in SQL.
+    Counts only non-return invoices with a posted status.
+    """
+    pii_t = Table("purchase_invoice_item")
+    pi_t = Table("purchase_invoice")
+    q = (Q.from_(pii_t)
+         .join(pi_t).on(pi_t.id == pii_t.purchase_invoice_id)
+         .select(pii_t.quantity, pii_t.discount_amount)
+         .where(pii_t.purchase_order_item_id == P())
+         .where(pi_t.is_return == 0)
+         .where(pi_t.status.isin([P(), P(), P(), P()])))
+    rows = conn.execute(
+        q.get_sql(),
+        (purchase_order_item_id,
+         "submitted", "partially_paid", "paid", "overdue")).fetchall()
+    qty = Decimal("0")
+    disc = Decimal("0")
+    for r in rows:
+        qty += to_decimal(r["quantity"])
+        disc += to_decimal(r["discount_amount"])
+    return qty, disc
+
+
+def _return_prior_sums(conn, return_against_id, item_id):
+    """Prior returned (qty, discount) for one billed item, as positives.
+
+    PyPika with bound parameters; sums in Python Decimal, never in SQL.
+    Counts return lines on posted debit notes against the bill; stored
+    return quantities and discounts are negative, so both sums are negated.
+    """
+    pii_t = Table("purchase_invoice_item")
+    pi_t = Table("purchase_invoice")
+    q = (Q.from_(pii_t)
+         .join(pi_t).on(pi_t.id == pii_t.purchase_invoice_id)
+         .select(pii_t.quantity, pii_t.discount_amount)
+         .where(pii_t.item_id == P())
+         .where(pi_t.return_against == P())
+         .where(pi_t.is_return == 1)
+         .where(pi_t.status != ValueWrapper("draft"))
+         .where(pi_t.status != ValueWrapper("cancelled")))
+    rows = conn.execute(q.get_sql(), (item_id, return_against_id)).fetchall()
+    ret_qty = Decimal("0")
+    ret_disc = Decimal("0")
+    for r in rows:
+        ret_qty -= to_decimal(r["quantity"])
+        ret_disc -= to_decimal(r["discount_amount"])
+    return ret_qty, ret_disc
+
+
+def _preview_bill_discount(conn, poi_row, qty, intra_qty, intra_disc):
+    """Preview share for one bill line, accumulating intra-document prior."""
+    po_item_id = poi_row["id"]
+    qty = to_decimal(qty)
+    order_qty = to_decimal(poi_row["quantity"])
+    order_disc = round_currency(
+        to_decimal(poi_row["amount"]) - to_decimal(poi_row["net_amount"]))
+    sub_qty, sub_disc = _bill_prior_sums(conn, po_item_id)
+    prior_qty = sub_qty + intra_qty.get(po_item_id, Decimal("0"))
+    prior_disc = sub_disc + intra_disc.get(po_item_id, Decimal("0"))
+    share = discount_share(order_disc, order_qty, prior_qty, prior_disc, qty)
+    intra_qty[po_item_id] = intra_qty.get(po_item_id, Decimal("0")) + qty
+    intra_disc[po_item_id] = intra_disc.get(po_item_id, Decimal("0")) + share
+    return share
+
+
+def check_fifo_discounted_net(conn, item_id, net, qty_text):
+    """Refuse a discounted stock line no per-unit rate can hold.
+
+    Shared by receipt submit and stock-moving bill submit: `net` is the
+    line's discounted net as a Decimal, `qty_text` its stored quantity
+    string. Only discounted lines reach here. When the item is FIFO-valued
+    and `round_currency(net / qty) * qty != net`, no per-unit rate
+    reproduces the net, so the caller refuses loudly instead of booking a
+    rounded rate. Returns the refusal message, or None when the net
+    divides. Never exits: receipt submit reports it through `err()`,
+    while bill submit raises `_SubmitRefused` so an in-process caller
+    (such as the recurring-bill generator) is not killed mid-run.
+    """
+    item_t = Table("item")
+    q = (Q.from_(item_t).select(item_t.valuation_method)
+         .where(item_t.id == P()))
+    row = conn.execute(q.get_sql(), (item_id,)).fetchone()
+    if row is None:
+        return None
+    if (row["valuation_method"] or "moving_average") != "fifo":
+        return None
+    qty = to_decimal(qty_text)
+    if qty == 0:
+        return None
+    if round_currency(net / qty) * qty != net:
+        return (f"Item {item_id} is FIFO-valued and its discounted net {net:.2f} "
+                f"for {qty_text} units cannot be held at a per-unit rate; "
+                f"receive it undiscounted or wait for FIFO layer values")
+    return None
+
+
 # ---------------------------------------------------------------------------
 # 1. add-supplier
 # ---------------------------------------------------------------------------
@@ -168,9 +382,11 @@ def add_supplier(conn, args):
         err("--company-id is required")
 
     company_t = Table("company")
-    q = Q.from_(company_t).select(company_t.id).where(company_t.id == P())
-    if not conn.execute(q.get_sql(), (args.company_id,)).fetchone():
+    q = Q.from_(company_t).select(company_t.id, company_t.default_currency).where(company_t.id == P())
+    company_row = conn.execute(q.get_sql(), (args.company_id,)).fetchone()
+    if not company_row:
         err(f"Company {args.company_id} not found")
+    company_currency = company_row["default_currency"]
 
     supplier_type = args.supplier_type or "company"
     if supplier_type not in ("company", "individual"):
@@ -194,14 +410,15 @@ def add_supplier(conn, args):
         q = (Q.into(s_t)
              .columns("id", "name", "supplier_group", "supplier_type",
                       "payment_terms_id", "tax_id", "is_1099_vendor",
-                      "primary_address", "email", "phone", "status", "company_id")
+                      "primary_address", "email", "phone", "status",
+                      "default_currency", "company_id")
              .insert(P(), P(), P(), P(), P(), P(), P(), P(),
-                     P(), P(), ValueWrapper("active"), P()))
+                     P(), P(), ValueWrapper("active"), P(), P()))
         conn.execute(q.get_sql(),
             (supplier_id, args.name, args.supplier_group, supplier_type,
              args.payment_terms_id, args.tax_id, is_1099,
              primary_address, getattr(args, "email", None),
-             getattr(args, "phone", None), args.company_id))
+             getattr(args, "phone", None), company_currency, args.company_id))
     except sqlite3.IntegrityError as e:
         sys.stderr.write(f"[erpclaw-buying] {e}\n")
         err("Supplier creation failed — check for duplicates or invalid data")
@@ -282,13 +499,25 @@ def get_supplier(conn, args):
     if not args.supplier_id:
         err("--supplier-id is required")
 
+    scope_company_id = None
+    if getattr(args, "company_id", None) or getattr(args, "company_name", None):
+        scope_company_id = resolve_scope_company(conn, getattr(args, "company_id", None), getattr(args, "company_name", None))
+
     s_t = Table("supplier")
-    q = (Q.from_(s_t).select(s_t.star)
-         .where((s_t.id == P()) | (s_t.name == P())))
-    supplier = conn.execute(q.get_sql(),
-                            (args.supplier_id, args.supplier_id)).fetchone()
+    if scope_company_id:
+        q = (Q.from_(s_t).select(s_t.star)
+             .where((s_t.id == P()) | ((s_t.name == P()) & (s_t.company_id == P()))))
+        supplier = conn.execute(q.get_sql(),
+                                (args.supplier_id, args.supplier_id, scope_company_id)).fetchone()
+    else:
+        q = (Q.from_(s_t).select(s_t.star)
+             .where((s_t.id == P()) | (s_t.name == P())))
+        supplier = conn.execute(q.get_sql(),
+                                (args.supplier_id, args.supplier_id)).fetchone()
     if not supplier:
         err(f"Supplier {args.supplier_id} not found")
+    if scope_company_id and supplier["company_id"] != scope_company_id:
+        err(f"Supplier {args.supplier_id} belongs to another company")
 
     data = row_to_dict(supplier)
 
@@ -313,6 +542,7 @@ def get_supplier(conn, args):
 
 def list_suppliers(conn, args):
     """List suppliers with filtering."""
+    company_id = resolve_scope_company(conn, args.company_id, getattr(args, "company_name", None))
     s = Table("supplier").as_("s")
     params = []
 
@@ -321,10 +551,9 @@ def list_suppliers(conn, args):
               .select(s.id, s.name, s.supplier_group, s.supplier_type,
                       s.tax_id, s.is_1099_vendor, s.status, s.company_id))
 
-    if args.company_id:
-        count_q = count_q.where(s.company_id == P())
-        data_q = data_q.where(s.company_id == P())
-        params.append(args.company_id)
+    count_q = count_q.where(s.company_id == P())
+    data_q = data_q.where(s.company_id == P())
+    params.append(company_id)
     if args.supplier_group:
         count_q = count_q.where(s.supplier_group == P())
         data_q = data_q.where(s.supplier_group == P())
@@ -452,16 +681,16 @@ def submit_material_request(conn, args):
 
 def list_material_requests(conn, args):
     """List material requests."""
+    company_id = resolve_scope_company(conn, args.company_id, getattr(args, "company_name", None))
     mr = Table("material_request").as_("mr")
     params = []
 
     count_q = Q.from_(mr).select(fn.Count("*"))
     data_q = Q.from_(mr).select(mr.star)
 
-    if args.company_id:
-        count_q = count_q.where(mr.company_id == P())
-        data_q = data_q.where(mr.company_id == P())
-        params.append(args.company_id)
+    count_q = count_q.where(mr.company_id == P())
+    data_q = data_q.where(mr.company_id == P())
+    params.append(company_id)
     if args.request_type:
         rtype = args.request_type
         if rtype == "transfer":
@@ -643,16 +872,16 @@ def submit_rfq(conn, args):
 
 def list_rfqs(conn, args):
     """List RFQs."""
+    company_id = resolve_scope_company(conn, args.company_id, getattr(args, "company_name", None))
     r = Table("request_for_quotation").as_("r")
     params = []
 
     count_q = Q.from_(r).select(fn.Count("*"))
     data_q = Q.from_(r).select(r.star)
 
-    if args.company_id:
-        count_q = count_q.where(r.company_id == P())
-        data_q = data_q.where(r.company_id == P())
-        params.append(args.company_id)
+    count_q = count_q.where(r.company_id == P())
+    data_q = data_q.where(r.company_id == P())
+    params.append(company_id)
     if args.rfq_status:
         count_q = count_q.where(r.status == P())
         data_q = data_q.where(r.status == P())
@@ -928,9 +1157,11 @@ def add_purchase_order(conn, args):
 
     sup_t = Table("supplier")
     q = (Q.from_(sup_t).select(sup_t.star)
-         .where((sup_t.id == P()) | (sup_t.name == P())))
+         .where((sup_t.id == P())
+                | ((sup_t.name == P()) & (sup_t.company_id == P()))))
     supplier = conn.execute(q.get_sql(),
-                            (args.supplier_id, args.supplier_id)).fetchone()
+                            (args.supplier_id, args.supplier_id,
+                             args.company_id)).fetchone()
     if not supplier:
         err(f"Supplier {args.supplier_id} not found")
     args.supplier_id = supplier["id"]  # normalize to id
@@ -941,6 +1172,8 @@ def add_purchase_order(conn, args):
     q = Q.from_(company_t).select(company_t.id).where(company_t.id == P())
     if not conn.execute(q.get_sql(), (args.company_id,)).fetchone():
         err(f"Company {args.company_id} not found")
+    if supplier["company_id"] != args.company_id:
+        err(f"Supplier {args.supplier_id} belongs to another company")
 
     items = _parse_json_arg(args.items, "items")
     if not items or not isinstance(items, list):
@@ -952,6 +1185,7 @@ def add_purchase_order(conn, args):
 
     # Validate items and compute totals
     item_rows = []
+    line_discounts = []
     for i, item in enumerate(items):
         item_id = item.get("item_id")
         if not item_id:
@@ -963,15 +1197,15 @@ def add_purchase_order(conn, args):
         if rate <= 0:
             err(f"Item {i}: rate must be > 0")
 
-        discount_pct = to_decimal(item.get("discount_percentage", "0"))
         amount = round_currency(qty * rate)
-        net_amount = round_currency(amount * (Decimal("1") - discount_pct / Decimal("100")))
+        stored_pct, net_amount, line_discount = _order_line_net(i, amount, item)
         total_amount += net_amount
+        line_discounts.append(str(line_discount))
 
         item_rows.append((
             str(uuid.uuid4()), po_id, item_id, str(round_currency(qty)),
             item.get("uom"), str(round_currency(rate)), str(amount),
-            str(round_currency(discount_pct)), str(net_amount),
+            str(stored_pct), str(net_amount),
             item.get("warehouse_id"), item.get("required_date"),
         ))
 
@@ -979,17 +1213,22 @@ def add_purchase_order(conn, args):
     tax_amount, tax_details = _calculate_tax(conn, args.tax_template_id, total_amount)
     grand_total = round_currency(total_amount + tax_amount)
 
+    dims_given = _dimension_input(args)
+    dims_obj = dims_given if dims_given is not None else {}
+    _validate_dims_before_write(conn, dims_obj)
+    dims_text = dimensions_json_text(dims_obj)
+
     # Insert parent first
     po_t = Table("purchase_order")
     q = (Q.into(po_t)
          .columns("id", "supplier_id", "order_date", "total_amount",
                   "tax_amount", "grand_total", "tax_template_id", "status",
-                  "company_id")
-         .insert(P(), P(), P(), P(), P(), P(), P(), ValueWrapper("draft"), P()))
+                  "company_id", "dimensions_json")
+         .insert(P(), P(), P(), P(), P(), P(), P(), ValueWrapper("draft"), P(), P()))
     conn.execute(q.get_sql(),
         (po_id, args.supplier_id, posting_date,
          str(round_currency(total_amount)), str(round_currency(tax_amount)),
-         str(grand_total), args.tax_template_id, args.company_id))
+         str(grand_total), args.tax_template_id, args.company_id, dims_text))
 
     # Insert items
     poi_t = Table("purchase_order_item")
@@ -1004,7 +1243,8 @@ def add_purchase_order(conn, args):
 
     audit(conn, "erpclaw-buying", "add-purchase-order", "purchase_order", po_id,
            new_values={"supplier_id": args.supplier_id,
-                       "grand_total": str(grand_total)})
+                       "grand_total": str(grand_total),
+                       "line_discounts": line_discounts})
     conn.commit()
     ok({"purchase_order_id": po_id,
          "total_amount": str(round_currency(total_amount)),
@@ -1037,12 +1277,17 @@ def update_purchase_order(conn, args):
     if not items or not isinstance(items, list):
         err("--items must be a non-empty JSON array")
 
-    # Delete old items and re-insert
-    poi_t = Table("purchase_order_item")
-    q = Q.from_(poi_t).delete().where(poi_t.purchase_order_id == P())
-    conn.execute(q.get_sql(), (args.purchase_order_id,))
+    dims_given = _dimension_input(args)
+    old_dims_text = po["dimensions_json"] if po["dimensions_json"] else "{}"
+    if dims_given is not None:
+        _validate_dims_before_write(conn, dims_given)
+        new_dims_text = dimensions_json_text(dims_given)
+    else:
+        new_dims_text = None
 
-    total_amount = Decimal("0")
+    # Validate every new line before the DELETE so a refusal writes nothing.
+    validated = []
+    line_discounts = []
     for i, item in enumerate(items):
         item_id = item.get("item_id")
         if not item_id:
@@ -1053,10 +1298,18 @@ def update_purchase_order(conn, args):
         rate = to_decimal(item.get("rate", "0"))
         if rate <= 0:
             err(f"Item {i}: rate must be > 0")
-
-        discount_pct = to_decimal(item.get("discount_percentage", "0"))
         amount = round_currency(qty * rate)
-        net_amount = round_currency(amount * (Decimal("1") - discount_pct / Decimal("100")))
+        stored_pct, net_amount, line_discount = _order_line_net(i, amount, item)
+        line_discounts.append(str(line_discount))
+        validated.append((item_id, qty, rate, amount, stored_pct, net_amount, item))
+
+    # Delete old items and re-insert
+    poi_t = Table("purchase_order_item")
+    q = Q.from_(poi_t).delete().where(poi_t.purchase_order_id == P())
+    conn.execute(q.get_sql(), (args.purchase_order_id,))
+
+    total_amount = Decimal("0")
+    for item_id, qty, rate, amount, stored_pct, net_amount, item in validated:
         total_amount += net_amount
 
         # raw SQL — reuse same INSERT pattern for PO items
@@ -1068,26 +1321,47 @@ def update_purchase_order(conn, args):
             (str(uuid.uuid4()), args.purchase_order_id, item_id,
              str(round_currency(qty)), item.get("uom"),
              str(round_currency(rate)), str(amount),
-             str(round_currency(discount_pct)), str(net_amount),
+             str(stored_pct), str(net_amount),
              item.get("warehouse_id"), item.get("required_date")),
         )
 
     tax_amount, _ = _calculate_tax(conn, po["tax_template_id"], total_amount)
     grand_total = round_currency(total_amount + tax_amount)
 
-    q = (Q.update(po_t)
-         .set(po_t.total_amount, P())
-         .set(po_t.tax_amount, P())
-         .set(po_t.grand_total, P())
-         .set(po_t.updated_at, now())
-         .where(po_t.id == P()))
-    conn.execute(q.get_sql(),
-        (str(round_currency(total_amount)), str(round_currency(tax_amount)),
-         str(grand_total), args.purchase_order_id))
+    if new_dims_text is not None:
+        q = (Q.update(po_t)
+             .set(po_t.total_amount, P())
+             .set(po_t.tax_amount, P())
+             .set(po_t.grand_total, P())
+             .set(po_t.dimensions_json, P())
+             .set(po_t.updated_at, now())
+             .where(po_t.id == P()))
+        conn.execute(q.get_sql(),
+            (str(round_currency(total_amount)), str(round_currency(tax_amount)),
+             str(grand_total), new_dims_text, args.purchase_order_id))
+    else:
+        q = (Q.update(po_t)
+             .set(po_t.total_amount, P())
+             .set(po_t.tax_amount, P())
+             .set(po_t.grand_total, P())
+             .set(po_t.updated_at, now())
+             .where(po_t.id == P()))
+        conn.execute(q.get_sql(),
+            (str(round_currency(total_amount)), str(round_currency(tax_amount)),
+             str(grand_total), args.purchase_order_id))
 
-    audit(conn, "erpclaw-buying", "update-purchase-order", "purchase_order",
-           args.purchase_order_id,
-           new_values={"grand_total": str(grand_total)})
+    if new_dims_text is not None:
+        audit(conn, "erpclaw-buying", "update-purchase-order", "purchase_order",
+               args.purchase_order_id,
+               old_values={"dimensions_json": old_dims_text},
+               new_values={"grand_total": str(grand_total),
+                           "dimensions_json": new_dims_text,
+                           "line_discounts": line_discounts})
+    else:
+        audit(conn, "erpclaw-buying", "update-purchase-order", "purchase_order",
+               args.purchase_order_id,
+               new_values={"grand_total": str(grand_total),
+                           "line_discounts": line_discounts})
     conn.commit()
     ok({"purchase_order_id": args.purchase_order_id,
          "total_amount": str(round_currency(total_amount)),
@@ -1148,6 +1422,7 @@ def get_purchase_order(conn, args):
 
 def list_purchase_orders(conn, args):
     """List purchase orders."""
+    company_id = resolve_scope_company(conn, args.company_id, getattr(args, "company_name", None))
     po = Table("purchase_order").as_("po")
     s = Table("supplier").as_("s")
     params = []
@@ -1157,10 +1432,9 @@ def list_purchase_orders(conn, args):
               .left_join(s).on(s.id == po.supplier_id)
               .select(po.star, s.name.as_("supplier_name")))
 
-    if args.company_id:
-        count_q = count_q.where(po.company_id == P())
-        data_q = data_q.where(po.company_id == P())
-        params.append(args.company_id)
+    count_q = count_q.where(po.company_id == P())
+    data_q = data_q.where(po.company_id == P())
+    params.append(company_id)
     if args.supplier_id:
         count_q = count_q.where(po.supplier_id == P())
         data_q = data_q.where(po.supplier_id == P())
@@ -1385,6 +1659,9 @@ def create_purchase_receipt(conn, args):
 
     total_qty = Decimal("0")
     receipt_items = []
+    _disc_intra_qty = {}
+    _disc_intra_disc = {}
+    _disc_audit = []
 
     if items_arg:
         # Partial receipt
@@ -1420,12 +1697,19 @@ def create_purchase_receipt(conn, args):
             amount = round_currency(qty * rate)
             total_qty += qty
 
+            _share = _preview_line_discount(
+                conn, poi, qty, _disc_intra_qty, _disc_intra_disc)
+            _line_id = str(uuid.uuid4())
+            _disc_audit.append({"line": _line_id,
+                                "discount_amount": _discount_text(_share),
+                                "net": str(round_currency(amount - _share))})
             receipt_items.append((
-                str(uuid.uuid4()), pr_id, poi["item_id"],
+                _line_id, pr_id, poi["item_id"],
                 str(round_currency(qty)), poi["uom"], po_item_id,
                 item.get("warehouse_id") or poi["warehouse_id"],
                 item.get("batch_id"), item.get("serial_numbers"),
                 str(round_currency(rate)), str(amount),
+                _discount_text(_share),
             ))
     else:
         # Full receipt: copy all unreceived PO items
@@ -1441,40 +1725,65 @@ def create_purchase_receipt(conn, args):
             amount = round_currency(remaining * rate)
             total_qty += remaining
 
+            _share = _preview_line_discount(
+                conn, poi, remaining, _disc_intra_qty, _disc_intra_disc)
+            _line_id = str(uuid.uuid4())
+            _disc_audit.append({"line": _line_id,
+                                "discount_amount": _discount_text(_share),
+                                "net": str(round_currency(amount - _share))})
             receipt_items.append((
-                str(uuid.uuid4()), pr_id, poi["item_id"],
+                _line_id, pr_id, poi["item_id"],
                 str(round_currency(remaining)), poi["uom"], poi["id"],
                 poi["warehouse_id"], None, None,
                 str(round_currency(rate)), str(amount),
+                _discount_text(_share),
             ))
 
     if not receipt_items:
         err("No items to receive (all PO items already fully received)")
 
+    dims_given = _dimension_input(args)
+    if dims_given is not None:
+        dims_obj = dims_given
+        dims_text = dimensions_json_text(dims_given)
+    else:
+        parent_text = po["dimensions_json"] if po["dimensions_json"] else "{}"
+        dims_text = parent_text
+        try:
+            dims_obj = json.loads(parent_text)
+        except (ValueError, TypeError):
+            dims_obj = {}
+        if not isinstance(dims_obj, dict):
+            dims_obj = {}
+    _validate_dims_before_write(conn, dims_obj)
+
     # Insert parent first
     pr_t = Table("purchase_receipt")
     q = (Q.into(pr_t)
          .columns("id", "supplier_id", "posting_date", "purchase_order_id",
-                  "status", "total_qty", "company_id")
-         .insert(P(), P(), P(), P(), ValueWrapper("draft"), P(), P()))
+                  "status", "total_qty", "company_id", "dimensions_json")
+         .insert(P(), P(), P(), P(), ValueWrapper("draft"), P(), P(), P()))
     conn.execute(q.get_sql(),
         (pr_id, po["supplier_id"], posting_date, args.purchase_order_id,
-         str(round_currency(total_qty)), po["company_id"]))
+         str(round_currency(total_qty)), po["company_id"], dims_text))
 
     # Insert items
     pri_t = Table("purchase_receipt_item")
     pri_q = (Q.into(pri_t)
              .columns("id", "purchase_receipt_id", "item_id", "quantity",
                       "uom", "purchase_order_item_id", "warehouse_id",
-                      "batch_id", "serial_numbers", "rate", "amount")
-             .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(), P(), P()))
+                      "batch_id", "serial_numbers", "rate", "amount",
+                      "discount_amount")
+             .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(), P(), P(),
+                     P()))
     pri_sql = pri_q.get_sql()
     for row_params in receipt_items:
         conn.execute(pri_sql, row_params)
 
     audit(conn, "erpclaw-buying", "create-purchase-receipt", "purchase_receipt", pr_id,
            new_values={"purchase_order_id": args.purchase_order_id,
-                       "item_count": len(receipt_items)})
+                       "item_count": len(receipt_items),
+                       "line_discounts": _disc_audit})
     conn.commit()
     ok({"purchase_receipt_id": pr_id, "total_qty": str(round_currency(total_qty)),
          "item_count": len(receipt_items)})
@@ -1516,6 +1825,7 @@ def get_purchase_receipt(conn, args):
 
 def list_purchase_receipts(conn, args):
     """List purchase receipts."""
+    company_id = resolve_scope_company(conn, args.company_id, getattr(args, "company_name", None))
     pr = Table("purchase_receipt").as_("pr")
     s = Table("supplier").as_("s")
     params = []
@@ -1525,10 +1835,9 @@ def list_purchase_receipts(conn, args):
               .left_join(s).on(s.id == pr.supplier_id)
               .select(pr.star, s.name.as_("supplier_name")))
 
-    if args.company_id:
-        count_q = count_q.where(pr.company_id == P())
-        data_q = data_q.where(pr.company_id == P())
-        params.append(args.company_id)
+    count_q = count_q.where(pr.company_id == P())
+    data_q = data_q.where(pr.company_id == P())
+    params.append(company_id)
     if args.supplier_id:
         count_q = count_q.where(pr.supplier_id == P())
         data_q = data_q.where(pr.supplier_id == P())
@@ -1595,9 +1904,125 @@ def submit_purchase_receipt(conn, args):
     if not items:
         err("Purchase receipt has no items")
 
-    fiscal_year = _get_fiscal_year(conn, posting_date)
+    fiscal_year = get_fiscal_year(conn, posting_date, company_id=company_id)
     cost_center_id = _get_cost_center(conn, company_id)
     naming = get_next_name(conn, "purchase_receipt", company_id=company_id)
+
+    take_chain_heads(conn, [company_id])
+
+    # Update PO received_qty (moved ahead of the SLE build so the head take
+    # precedes every prior-sum read below)
+    for item_row in items:
+        item = row_to_dict(item_row)
+        if item.get("purchase_order_item_id"):
+            # raw SQL — CAST arithmetic expression not expressible in PyPika
+            conn.execute(
+                """UPDATE purchase_order_item
+                   SET received_qty = CAST(
+                       CAST(received_qty AS NUMERIC) + CAST(? AS NUMERIC) AS TEXT)
+                   WHERE id = ?""",
+                (item["quantity"], item["purchase_order_item_id"]),
+            )
+
+    # Re-derive every order-linked line's discount share (rule of record).
+    # A changed value is written to the draft line; lines are re-read below.
+    _poi_cache = {}
+    _intra_qty = {}
+    _intra_disc = {}
+    _rederived = []
+    _rederived_old = {}
+    _completing_pois = {}
+    poi_t = Table("purchase_order_item")
+    for item_row in items:
+        item = row_to_dict(item_row)
+        _po_item_id = item.get("purchase_order_item_id")
+        if not _po_item_id:
+            continue
+        if _po_item_id not in _poi_cache:
+            _pq = (Q.from_(poi_t).select(poi_t.star)
+                   .where(poi_t.id == P()))
+            _poi_cache[_po_item_id] = conn.execute(
+                _pq.get_sql(), (_po_item_id,)).fetchone()
+        _poi = _poi_cache[_po_item_id]
+        if _poi is None:
+            continue
+        _Q = to_decimal(_poi["quantity"])
+        _D = round_currency(
+            to_decimal(_poi["amount"]) - to_decimal(_poi["net_amount"]))
+        _q = to_decimal(item["quantity"])
+        _sub_qty, _sub_disc = _receipt_prior_sums(conn, _po_item_id)
+        _prior_qty = _sub_qty + _intra_qty.get(_po_item_id, Decimal("0"))
+        _prior_disc = _sub_disc + _intra_disc.get(_po_item_id, Decimal("0"))
+        _covered = min(_q, max(_Q - _prior_qty, Decimal("0")))
+        if _covered > 0 and _prior_qty + _covered == _Q:
+            _completing_pois[_po_item_id] = (_Q, _D)
+        _new_val = discount_share(_D, _Q, _prior_qty, _prior_disc, _q)
+        # Legacy overflow: a retroactive order discount (set after earlier
+        # receipts posted) that swallows this line refuses here, after the
+        # received_qty UPDATE above and before anything posts, so a rollback
+        # leaves the order line exactly as it was.
+        _line_amount = to_decimal(item.get("amount") or "0")
+        if _new_val > 0 and _new_val >= _line_amount:
+            err(f"Item {item.get('item_id')}: the remaining order discount {_new_val:.2f} "
+                f"is not less than this line's amount {_line_amount:.2f}; cancel and "
+                f"re-receive the earlier receipts of this order line so the discount "
+                f"is spread, then retry")
+        _new_text = _discount_text(_new_val)
+        _old_text = item.get("discount_amount") or "0"
+        _intra_qty[_po_item_id] = (_intra_qty.get(_po_item_id, Decimal("0"))
+                                   + _q)
+        _intra_disc[_po_item_id] = (_intra_disc.get(_po_item_id, Decimal("0"))
+                                    + _new_val)
+        if _new_text != _old_text:
+            _uq = (Q.update(pri_t)
+                   .set(pri_t.discount_amount, P())
+                   .where(pri_t.id == P()))
+            conn.execute(_uq.get_sql(), (_new_text, item["id"]))
+            _rederived.append({"line": item["id"],
+                               "old": _old_text, "new": _new_text})
+            _rederived_old[item["id"]] = _old_text
+    _true_up = False
+    for _po_item_id, (_Q, _D) in _completing_pois.items():
+        _sib_q = (Q.from_(pri_t)
+                  .join(pr_t).on(pr_t.id == pri_t.purchase_receipt_id)
+                  .select(pri_t.quantity, pri_t.discount_amount)
+                  .where(pri_t.purchase_order_item_id == P())
+                  .where(pr_t.status == ValueWrapper("submitted"))
+                  .orderby(pr_t.created_at)
+                  .orderby(line_order(pri_t)))
+        _sibs = conn.execute(_sib_q.get_sql(), (_po_item_id,)).fetchall()
+        _run_qty = Decimal("0")
+        _run_disc = Decimal("0")
+        for _sib in _sibs:
+            _sq = to_decimal(_sib["quantity"])
+            _sd_text = _sib["discount_amount"] or "0"
+            if _sd_text == "0":
+                if discount_share(_D, _Q, _run_qty, _run_disc, _sq) != 0:
+                    _true_up = True
+                    break
+            _run_qty += _sq
+            _run_disc += to_decimal(_sd_text)
+        if _true_up:
+            break
+    q = (Q.from_(pri_t).select(pri_t.star)
+         .where(pri_t.purchase_receipt_id == P())
+         .orderby(line_order(pri_t)))
+    items = conn.execute(q.get_sql(), (args.purchase_receipt_id,)).fetchall()
+    if not items:
+        err("Purchase receipt has no items")
+
+    # A discounted FIFO line whose net no per-unit rate can hold refuses
+    # before anything posts.
+    for item_row in items:
+        item = row_to_dict(item_row)
+        _fifo_disc = to_decimal(item.get("discount_amount") or "0")
+        if _fifo_disc != 0:
+            _fifo_msg = check_fifo_discounted_net(
+                conn, item.get("item_id"),
+                round_currency(to_decimal(item.get("amount") or "0") - _fifo_disc),
+                item.get("quantity"))
+            if _fifo_msg is not None:
+                err(_fifo_msg)
 
     # Build SLE entries (positive qty into warehouse)
     sle_entries = []
@@ -1615,7 +2040,7 @@ def submit_purchase_receipt(conn, args):
         if not warehouse_id:
             err(f"No warehouse specified for item {item['item_id']} and no company default")
 
-        sle_entries.append({
+        _sle_entry = {
             "item_id": item["item_id"],
             "warehouse_id": warehouse_id,
             "actual_qty": str(round_currency(qty)),
@@ -1626,7 +2051,13 @@ def submit_purchase_receipt(conn, args):
             # FINDING-010 / ADR-0014: GRN is a true external receipt — it must carry
             # a positive cost (the PO line rate), never silently book inventory at $0.
             "require_rate": True,
-        })
+        }
+        # A discounted line values stock at exactly its net.
+        _line_disc = to_decimal(item.get("discount_amount") or "0")
+        if _line_disc != 0:
+            _sle_entry["incoming_value"] = str(
+                to_decimal(item.get("amount") or "0") - _line_disc)
+        sle_entries.append(_sle_entry)
 
     # Insert SLE
     try:
@@ -1650,15 +2081,36 @@ def submit_purchase_receipt(conn, args):
     sle_rows = conn.execute(q.get_sql(), (args.purchase_receipt_id,)).fetchall()
     sle_dicts = [row_to_dict(r) for r in sle_rows]
 
+    _pr_dims_raw = pr_dict.get("dimensions_json") or "{}"
     try:
-        gl_entries = create_perpetual_inventory_gl(
-            conn, sle_dicts,
-            voucher_type="purchase_receipt",
-            voucher_id=args.purchase_receipt_id,
-            posting_date=posting_date,
-            company_id=company_id,
-            cost_center_id=cost_center_id,
-        )
+        _pr_dims_obj = json.loads(_pr_dims_raw)
+    except (ValueError, TypeError):
+        _pr_dims_obj = {}
+    if not isinstance(_pr_dims_obj, dict):
+        _pr_dims_obj = {}
+    if _pr_dims_obj.get("cost_center"):
+        cost_center_id = _pr_dims_obj["cost_center"]
+
+    try:
+        if _pr_dims_obj:
+            gl_entries = create_perpetual_inventory_gl(
+                conn, sle_dicts,
+                voucher_type="purchase_receipt",
+                voucher_id=args.purchase_receipt_id,
+                posting_date=posting_date,
+                company_id=company_id,
+                cost_center_id=cost_center_id,
+                dimensions=dict(_pr_dims_obj),
+            )
+        else:
+            gl_entries = create_perpetual_inventory_gl(
+                conn, sle_dicts,
+                voucher_type="purchase_receipt",
+                voucher_id=args.purchase_receipt_id,
+                posting_date=posting_date,
+                company_id=company_id,
+                cost_center_id=cost_center_id,
+            )
     except ValueError as e:
         sys.stderr.write(f"[erpclaw-buying] {e}\n")
         err(f"GL posting failed: {e}")
@@ -1680,19 +2132,6 @@ def submit_purchase_receipt(conn, args):
             sys.stderr.write(f"[erpclaw-buying] {e}\n")
             err(f"GL posting failed: {e}")
 
-    # Update PO received_qty
-    for item_row in items:
-        item = row_to_dict(item_row)
-        if item.get("purchase_order_item_id"):
-            # raw SQL — CAST arithmetic expression not expressible in PyPika
-            conn.execute(
-                """UPDATE purchase_order_item
-                   SET received_qty = CAST(
-                       CAST(received_qty AS NUMERIC) + CAST(? AS NUMERIC) AS TEXT)
-                   WHERE id = ?""",
-                (item["quantity"], item["purchase_order_item_id"]),
-            )
-
     # Update PO status
     if pr_dict.get("purchase_order_id"):
         _update_po_receipt_status(conn, pr_dict["purchase_order_id"])
@@ -1705,15 +2144,38 @@ def submit_purchase_receipt(conn, args):
          .where(pr_t.id == P()))
     conn.execute(q.get_sql(), (naming, args.purchase_receipt_id))
 
-    audit(conn, "erpclaw-buying", "submit-purchase-receipt", "purchase_receipt",
-           args.purchase_receipt_id,
-           new_values={"naming_series": naming,
-                       "sle_count": len(sle_ids), "gl_count": len(gl_ids)})
+    _submit_line_discounts = []
+    for item_row in items:
+        item = row_to_dict(item_row)
+        _d = item.get("discount_amount") or "0"
+        _a = item.get("amount") or "0"
+        _submit_line_discounts.append({
+            "line": item["id"], "discount_amount": _d,
+            "net": str(round_currency(to_decimal(_a) - to_decimal(_d)))})
+    _submit_new = {"naming_series": naming,
+                   "sle_count": len(sle_ids), "gl_count": len(gl_ids),
+                   "line_discounts": _submit_line_discounts}
+    if _rederived:
+        _submit_new["discount_rederived"] = _rederived
+    if _rederived:
+        audit(conn, "erpclaw-buying", "submit-purchase-receipt",
+               "purchase_receipt", args.purchase_receipt_id,
+               old_values={"discount_amount": _rederived_old},
+               new_values=_submit_new)
+    else:
+        audit(conn, "erpclaw-buying", "submit-purchase-receipt",
+               "purchase_receipt", args.purchase_receipt_id,
+               new_values=_submit_new)
     conn.commit()
-    ok({"purchase_receipt_id": args.purchase_receipt_id,
-         "naming_series": naming, "status": "submitted",
-         "sle_entries_created": len(sle_ids),
-         "gl_entries_created": len(gl_ids)})
+    _resp = {"purchase_receipt_id": args.purchase_receipt_id,
+             "naming_series": naming, "status": "submitted",
+             "sle_entries_created": len(sle_ids),
+             "gl_entries_created": len(gl_ids)}
+    if _rederived:
+        _resp["discount_rederived"] = _rederived
+    if _true_up:
+        _resp["discount_true_up"] = True
+    ok(_resp)
 
 
 def _update_po_receipt_status(conn, purchase_order_id):
@@ -1845,6 +2307,27 @@ def cancel_purchase_receipt(conn, args):
          "gl_reversals": len(reversal_gl_ids)})
 
 
+def _document_currency(conn, supplier_row, company_id):
+    if supplier_row is not None:
+        try:
+            raw = supplier_row["default_currency"]
+        except (KeyError, IndexError, TypeError, ValueError):
+            raw = None
+        if raw is not None and str(raw).strip() != "":
+            return str(raw).strip()
+    co_t = Table("company")
+    coq = Q.from_(co_t).select(co_t.default_currency).where(co_t.id == P())
+    row = conn.execute(coq.get_sql(), (company_id,)).fetchone()
+    if row is not None:
+        try:
+            craw = row["default_currency"]
+        except (KeyError, IndexError, TypeError, ValueError):
+            craw = None
+        if craw is not None and str(craw).strip() != "":
+            return str(craw).strip()
+    return "USD"
+
+
 # ---------------------------------------------------------------------------
 # 25. create-purchase-invoice
 # ---------------------------------------------------------------------------
@@ -1879,6 +2362,9 @@ def create_purchase_invoice(conn, args):
     pi_id = str(uuid.uuid4())
     pi_items = []
     total_amount = Decimal("0")
+    _bill_line_discounts = []
+    _bill_intra_qty = {}
+    _bill_intra_disc = {}
 
     po_t = Table("purchase_order")
     poi_t = Table("purchase_order_item")
@@ -1908,7 +2394,9 @@ def create_purchase_invoice(conn, args):
             if not pr_id_arg:
                 pr_id_arg = receipt_row["id"]
 
-        q = Q.from_(poi_t).select(poi_t.star).where(poi_t.purchase_order_id == P())
+        q = (Q.from_(poi_t).select(poi_t.star)
+             .where(poi_t.purchase_order_id == P())
+             .orderby(line_order(poi_t)))
         po_items = conn.execute(q.get_sql(), (po_id,)).fetchall()
         for poi_row in po_items:
             poi = row_to_dict(poi_row)
@@ -1919,12 +2407,20 @@ def create_purchase_invoice(conn, args):
                 continue
             rate = to_decimal(poi["rate"])
             amount = round_currency(remaining * rate)
-            total_amount += amount
+            _share = _preview_bill_discount(
+                conn, poi, remaining, _bill_intra_qty, _bill_intra_disc)
+            total_amount += round_currency(amount - _share)
+            _line_id = str(uuid.uuid4())
+            _bill_line_discounts.append({
+                "line": _line_id,
+                "discount_amount": _discount_text(_share),
+                "net": str(round_currency(amount - _share))})
             pi_items.append((
-                str(uuid.uuid4()), pi_id, poi["item_id"],
+                _line_id, pi_id, poi["item_id"],
                 str(round_currency(remaining)), poi["uom"],
                 str(round_currency(rate)), str(amount),
                 None, None, None, poi["id"], None,
+                _discount_text(_share),
             ))
 
     elif pr_id_arg:
@@ -1933,25 +2429,36 @@ def create_purchase_invoice(conn, args):
         pr = conn.execute(q.get_sql(), (pr_id_arg,)).fetchone()
         if not pr:
             err(f"Purchase receipt {pr_id_arg} not found")
+        if pr["status"] != "submitted":
+            err(f"Cannot create a bill from receipt {pr_id_arg}: it is '{pr['status']}' (must be 'submitted')")
         supplier_id = pr["supplier_id"]
         company_id = pr["company_id"]
         update_stock = 0  # Stock already moved via GRN
 
         pri_t_lookup = Table("purchase_receipt_item")
-        q = Q.from_(pri_t_lookup).select(pri_t_lookup.star).where(pri_t_lookup.purchase_receipt_id == P())
+        q = (Q.from_(pri_t_lookup).select(pri_t_lookup.star)
+             .where(pri_t_lookup.purchase_receipt_id == P())
+             .orderby(line_order(pri_t_lookup)))
         pr_items = conn.execute(q.get_sql(), (pr_id_arg,)).fetchall()
         for pri_row in pr_items:
             pri = row_to_dict(pri_row)
             qty = to_decimal(pri["quantity"])
             rate = to_decimal(pri["rate"])
             amount = round_currency(qty * rate)
-            total_amount += amount
+            _rcpt_disc = pri.get("discount_amount") or "0"
+            total_amount += round_currency(amount - to_decimal(_rcpt_disc))
+            _line_id = str(uuid.uuid4())
+            _bill_line_discounts.append({
+                "line": _line_id,
+                "discount_amount": _rcpt_disc,
+                "net": str(round_currency(amount - to_decimal(_rcpt_disc)))})
             pi_items.append((
-                str(uuid.uuid4()), pi_id, pri["item_id"],
+                _line_id, pi_id, pri["item_id"],
                 str(round_currency(qty)), pri.get("uom"),
                 str(round_currency(rate)), str(amount),
                 None, None, None,
                 pri.get("purchase_order_item_id"), pri["id"],
+                _rcpt_disc,
             ))
 
     else:
@@ -1974,28 +2481,84 @@ def create_purchase_invoice(conn, args):
             if rate <= 0:
                 err(f"Item {i}: rate must be > 0")
             amount = round_currency(qty * rate)
-            total_amount += amount
+            _raw_disc = item.get("discount_amount", "0")
+            if _raw_disc is None:
+                _raw_disc = "0"
+            _given_disc = to_decimal(_raw_disc)
+            if _given_disc < 0:
+                err(f"Item {i}: discount_amount must not be negative")
+            _disc = round_currency(_given_disc)
+            if _disc > 0 and _disc >= amount:
+                err(f"Item {i}: discount {_disc} must be less than the line amount {amount}")
+            total_amount += round_currency(amount - _disc)
+            _line_id = str(uuid.uuid4())
+            _bill_line_discounts.append({
+                "line": _line_id,
+                "discount_amount": _discount_text(_disc),
+                "net": str(round_currency(amount - _disc))})
             pi_items.append((
-                str(uuid.uuid4()), pi_id, item_id,
+                _line_id, pi_id, item_id,
                 str(round_currency(qty)), item.get("uom"),
                 str(round_currency(rate)), str(amount),
                 item.get("expense_account_id"), item.get("cost_center_id"),
                 item.get("project_id"), None, None,
+                _discount_text(_disc),
             ))
 
     if not pi_items:
         err("No items for invoice")
 
-    # Validate supplier
+    if not po_id and not pr_id_arg:
+        # Standalone bill: the company must exist before the party is
+        # checked, so an unknown company is not reported as a party mismatch.
+        co_t = Table("company")
+        coq = Q.from_(co_t).select(co_t.id).where(co_t.id == P())
+        if not conn.execute(coq.get_sql(), (company_id,)).fetchone():
+            err(f"Company {company_id} not found")
+
+    # Validate supplier. Derived paths inherit supplier and company from the
+    # parent; a parent that already mixes companies is refused here, before
+    # the first write.
     sup_t = Table("supplier")
     q = Q.from_(sup_t).select(sup_t.star).where(sup_t.id == P())
     supplier = conn.execute(q.get_sql(), (supplier_id,)).fetchone()
     if not supplier:
         err(f"Supplier {supplier_id} not found")
+    if supplier["company_id"] != company_id:
+        err(f"Supplier {supplier_id} belongs to another company")
+
+    currency = _document_currency(conn, supplier, company_id)
 
     # Calculate tax
     tax_amount, tax_details = _calculate_tax(conn, tax_template_id, total_amount)
     grand_total = round_currency(total_amount + tax_amount)
+
+    dims_given = _dimension_input(args)
+    if dims_given is not None:
+        dims_obj = dims_given
+        dims_text = dimensions_json_text(dims_given)
+    elif po_id:
+        parent_text = po["dimensions_json"] if po["dimensions_json"] else "{}"
+        dims_text = parent_text
+        try:
+            dims_obj = json.loads(parent_text)
+        except (ValueError, TypeError):
+            dims_obj = {}
+        if not isinstance(dims_obj, dict):
+            dims_obj = {}
+    elif pr_id_arg:
+        parent_text = pr["dimensions_json"] if pr["dimensions_json"] else "{}"
+        dims_text = parent_text
+        try:
+            dims_obj = json.loads(parent_text)
+        except (ValueError, TypeError):
+            dims_obj = {}
+        if not isinstance(dims_obj, dict):
+            dims_obj = {}
+    else:
+        dims_obj = {}
+        dims_text = dimensions_json_text({})
+    _validate_dims_before_write(conn, dims_obj)
 
     # Insert parent first
     pi_t = Table("purchase_invoice")
@@ -2004,14 +2567,16 @@ def create_purchase_invoice(conn, args):
                   "total_amount", "tax_amount", "grand_total",
                   "outstanding_amount", "tax_template_id", "status",
                   "purchase_order_id", "purchase_receipt_id",
-                  "update_stock", "cwip_asset_id", "company_id")
+                  "update_stock", "cwip_asset_id", "company_id",
+                  "currency", "exchange_rate", "dimensions_json")
          .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(),
-                 ValueWrapper("draft"), P(), P(), P(), P(), P()))
+                 ValueWrapper("draft"), P(), P(), P(), P(), P(), P(), P(), P()))
     conn.execute(q.get_sql(),
         (pi_id, supplier_id, posting_date, due_date,
          str(round_currency(total_amount)), str(round_currency(tax_amount)),
          str(grand_total), str(grand_total),
-         tax_template_id, po_id, pr_id_arg, update_stock, cwip_asset_id, company_id))
+         tax_template_id, po_id, pr_id_arg, update_stock, cwip_asset_id, company_id,
+         currency, "1", dims_text))
 
     # Insert items
     pii_t = Table("purchase_invoice_item")
@@ -2019,8 +2584,10 @@ def create_purchase_invoice(conn, args):
              .columns("id", "purchase_invoice_id", "item_id", "quantity",
                       "uom", "rate", "amount", "expense_account_id",
                       "cost_center_id", "project_id",
-                      "purchase_order_item_id", "purchase_receipt_item_id")
-             .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(), P(), P(), P()))
+                      "purchase_order_item_id", "purchase_receipt_item_id",
+                      "discount_amount")
+             .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(), P(), P(),
+                     P(), P()))
     pii_sql = pii_q.get_sql()
     for row_params in pi_items:
         conn.execute(pii_sql, row_params)
@@ -2028,12 +2595,14 @@ def create_purchase_invoice(conn, args):
     audit(conn, "erpclaw-buying", "create-purchase-invoice", "purchase_invoice", pi_id,
            new_values={"supplier_id": supplier_id,
                        "grand_total": str(grand_total),
-                       "update_stock": update_stock})
+                       "update_stock": update_stock,
+                       "line_discounts": _bill_line_discounts})
     conn.commit()
     ok({"purchase_invoice_id": pi_id,
          "total_amount": str(round_currency(total_amount)),
          "tax_amount": str(round_currency(tax_amount)),
          "grand_total": str(grand_total),
+         "currency": currency,
          "update_stock": update_stock})
 
 
@@ -2055,7 +2624,32 @@ def update_purchase_invoice(conn, args):
         err(f"Cannot update: invoice is '{pi['status']}' (must be 'draft')",
              suggestion="Cancel the document first, then make changes.")
 
+    dims_given = _dimension_input(args)
+    old_dims_text = pi["dimensions_json"] if pi["dimensions_json"] else "{}"
+    is_return_row = bool(pi["is_return"]) if "is_return" in pi.keys() else False
+    if is_return_row:
+        orig_t = Table("purchase_invoice")
+        oq = Q.from_(orig_t).select(orig_t.star).where(orig_t.id == P())
+        orig_row = conn.execute(oq.get_sql(), (pi["return_against"],)).fetchone()
+        orig_text = orig_row["dimensions_json"] if orig_row and orig_row["dimensions_json"] else "{}"
+        if dims_given is not None and dimensions_json_text(dims_given) != orig_text:
+            err(f"Debit note dimensions must match the original invoice's ({orig_text})")
+        new_dims_text = dimensions_json_text(dims_given) if dims_given is not None else None
+    else:
+        if dims_given is not None:
+            _validate_dims_before_write(conn, dims_given)
+            new_dims_text = dimensions_json_text(dims_given)
+        else:
+            new_dims_text = None
+
     updated_fields = []
+
+    if new_dims_text is not None:
+        q = (Q.update(pi_t)
+             .set(pi_t.dimensions_json, P())
+             .where(pi_t.id == P()))
+        conn.execute(q.get_sql(), (new_dims_text, args.purchase_invoice_id))
+        updated_fields.append("dimensions_json")
 
     if args.due_date is not None:
         q = (Q.update(pi_t)
@@ -2070,6 +2664,15 @@ def update_purchase_invoice(conn, args):
             err("--items must be a non-empty JSON array")
 
         pii_t = Table("purchase_invoice_item")
+        _guard_q = (Q.from_(pii_t)
+                    .select(pii_t.discount_amount,
+                            pii_t.purchase_order_item_id)
+                    .where(pii_t.purchase_invoice_id == P()))
+        for _grow in conn.execute(
+                _guard_q.get_sql(), (args.purchase_invoice_id,)).fetchall():
+            if (to_decimal(_grow["discount_amount"] or "0") != 0
+                    or _grow["purchase_order_item_id"]):
+                err(f"Cannot replace the lines of bill {args.purchase_invoice_id}: it carries order-derived lines; create the bill again from its order or receipt")
         q = Q.from_(pii_t).delete().where(pii_t.purchase_invoice_id == P())
         conn.execute(q.get_sql(), (args.purchase_invoice_id,))
 
@@ -2121,9 +2724,16 @@ def update_purchase_invoice(conn, args):
          .where(pi_t.id == P()))
     conn.execute(q.get_sql(), (args.purchase_invoice_id,))
 
-    audit(conn, "erpclaw-buying", "update-purchase-invoice", "purchase_invoice",
-           args.purchase_invoice_id,
-           new_values={"updated_fields": updated_fields})
+    if new_dims_text is not None:
+        audit(conn, "erpclaw-buying", "update-purchase-invoice", "purchase_invoice",
+               args.purchase_invoice_id,
+               old_values={"dimensions_json": old_dims_text},
+               new_values={"updated_fields": updated_fields,
+                           "dimensions_json": new_dims_text})
+    else:
+        audit(conn, "erpclaw-buying", "update-purchase-invoice", "purchase_invoice",
+               args.purchase_invoice_id,
+               new_values={"updated_fields": updated_fields})
     conn.commit()
     ok({"purchase_invoice_id": args.purchase_invoice_id,
          "updated_fields": updated_fields})
@@ -2138,11 +2748,17 @@ def get_purchase_invoice(conn, args):
     if not args.purchase_invoice_id:
         err("--purchase-invoice-id is required")
 
+    scope_company_id = None
+    if getattr(args, "company_id", None) or getattr(args, "company_name", None):
+        scope_company_id = resolve_scope_company(conn, getattr(args, "company_id", None), getattr(args, "company_name", None))
+
     pi_t = Table("purchase_invoice")
     q = Q.from_(pi_t).select(pi_t.star).where(pi_t.id == P())
     pi = conn.execute(q.get_sql(), (args.purchase_invoice_id,)).fetchone()
     if not pi:
         err(f"Purchase invoice {args.purchase_invoice_id} not found")
+    if scope_company_id and pi["company_id"] != scope_company_id:
+        err(f"Purchase invoice {args.purchase_invoice_id} belongs to another company")
 
     data = row_to_dict(pi)
 
@@ -2173,6 +2789,7 @@ def get_purchase_invoice(conn, args):
 
 def list_purchase_invoices(conn, args):
     """List purchase invoices."""
+    company_id = resolve_scope_company(conn, args.company_id, getattr(args, "company_name", None))
     pi = Table("purchase_invoice").as_("pi")
     s = Table("supplier").as_("s")
     params = []
@@ -2182,10 +2799,9 @@ def list_purchase_invoices(conn, args):
               .left_join(s).on(s.id == pi.supplier_id)
               .select(pi.star, s.name.as_("supplier_name")))
 
-    if args.company_id:
-        count_q = count_q.where(pi.company_id == P())
-        data_q = data_q.where(pi.company_id == P())
-        params.append(args.company_id)
+    count_q = count_q.where(pi.company_id == P())
+    data_q = data_q.where(pi.company_id == P())
+    params.append(company_id)
     if args.supplier_id:
         count_q = count_q.where(pi.supplier_id == P())
         data_q = data_q.where(pi.supplier_id == P())
@@ -2332,19 +2948,21 @@ def _validate_three_way_match(conn, purchase_invoice_id, items, company_id):
 # 29. submit-purchase-invoice
 # ---------------------------------------------------------------------------
 
-def submit_purchase_invoice(conn, args):
+class _SubmitRefused(Exception):
+    pass
+
+
+def _submit_purchase_invoice_in_txn(conn, purchase_invoice_id, remarks=None) -> dict:
     """Submit purchase invoice: expense GL + AP + tax GL + PLE.
     If update_stock=1, also creates SLE + inventory GL."""
-    if not args.purchase_invoice_id:
-        err("--purchase-invoice-id is required")
 
     pi_t = Table("purchase_invoice")
     q = Q.from_(pi_t).select(pi_t.star).where(pi_t.id == P())
-    pi = conn.execute(q.get_sql(), (args.purchase_invoice_id,)).fetchone()
+    pi = conn.execute(q.get_sql(), (purchase_invoice_id,)).fetchone()
     if not pi:
-        err(f"Purchase invoice {args.purchase_invoice_id} not found")
+        raise _SubmitRefused(f"Purchase invoice {purchase_invoice_id} not found")
     if pi["status"] != "draft":
-        err(f"Cannot submit: invoice is '{pi['status']}' (must be 'draft')")
+        raise _SubmitRefused(f"Cannot submit: invoice is '{pi['status']}' (must be 'draft')")
 
     pi_dict = row_to_dict(pi)
     company_id = pi_dict["company_id"]
@@ -2353,33 +2971,228 @@ def submit_purchase_invoice(conn, args):
     update_stock = pi_dict.get("update_stock", 1)
     is_return = bool(pi_dict.get("is_return", 0))
     voucher_type = "debit_note" if is_return else "purchase_invoice"
+    try:
+        _dims_obj = json.loads(pi_dict.get("dimensions_json") or "{}")
+    except (ValueError, TypeError):
+        _dims_obj = {}
+    if not isinstance(_dims_obj, dict):
+        _dims_obj = {}
+    _tag_dims = bool(_dims_obj)
 
     # Verify supplier
     sup_t = Table("supplier")
     q = Q.from_(sup_t).select(sup_t.star).where(sup_t.id == P())
     supplier = conn.execute(q.get_sql(), (supplier_id,)).fetchone()
     if not supplier:
-        err(f"Supplier {supplier_id} not found")
+        raise _SubmitRefused(f"Supplier {supplier_id} not found")
 
     pii_t = Table("purchase_invoice_item")
     q = Q.from_(pii_t).select(pii_t.star).where(pii_t.purchase_invoice_id == P())
-    items = conn.execute(q.get_sql(), (args.purchase_invoice_id,)).fetchall()
+    items = conn.execute(q.get_sql(), (purchase_invoice_id,)).fetchall()
     if not items:
-        err("Purchase invoice has no items")
+        raise _SubmitRefused("Purchase invoice has no items")
 
     # --- 3-Way Match Validation (PO - GRN - Invoice) ---
     # Only applies to non-return invoices linked to a PO
     if not is_return and pi_dict.get("purchase_order_id"):
         try:
             _validate_three_way_match(
-                conn, args.purchase_invoice_id, items, company_id,
+                conn, purchase_invoice_id, items, company_id,
             )
         except ValueError as e:
-            err(str(e))
+            raise _SubmitRefused(str(e))
 
-    fiscal_year = _get_fiscal_year(conn, posting_date)
-    cost_center_id = _get_cost_center(conn, company_id)
+    fiscal_year = get_fiscal_year(conn, posting_date, company_id=company_id)
+    cost_center_id = _dims_obj.get("cost_center") or _get_cost_center(conn, company_id)
     naming = get_next_name(conn, "purchase_invoice", company_id=company_id)
+
+    take_chain_heads(conn, [company_id])
+
+    # Decide under the head: the bill may have been deleted or moved out
+    # of draft while waiting on the ledger lock. Refuse with the same
+    # messages as the pre-head reads, before any ledger or document write.
+    _under_head_q = Q.from_(pi_t).select(pi_t.star).where(pi_t.id == P())
+    _under_head = conn.execute(
+        _under_head_q.get_sql(), (purchase_invoice_id,)).fetchone()
+    if not _under_head:
+        raise _SubmitRefused(f"Purchase invoice {purchase_invoice_id} not found")
+    if _under_head["status"] != "draft":
+        raise _SubmitRefused(
+            f"Cannot submit: invoice is '{_under_head['status']}' (must be 'draft')")
+
+    # Advance invoiced_qty up front (moved ahead of the discount
+    # re-derivation so the head take precedes every prior-sum read below).
+    # _update_po_invoice_status still runs at the end of submit.
+    if not is_return and pi_dict.get("purchase_order_id"):
+        for item_row in items:
+            item = row_to_dict(item_row)
+            if item.get("purchase_order_item_id"):
+                # raw SQL — CAST arithmetic expression not expressible in PyPika
+                conn.execute(
+                    """UPDATE purchase_order_item
+                       SET invoiced_qty = CAST(
+                           CAST(invoiced_qty AS NUMERIC) + CAST(? AS NUMERIC) AS TEXT)
+                       WHERE id = ?""",
+                    (item["quantity"], item["purchase_order_item_id"]),
+                )
+    if is_return and pi_dict.get("return_against"):
+        _touch_q = (Q.update(pi_t)
+                    .set(pi_t.updated_at, now())
+                    .where(pi_t.id == P()))
+        conn.execute(_touch_q.get_sql(), (pi_dict["return_against"],))
+
+    # Re-derive every bill line's discount share (rule of record). A
+    # receipt-linked line must still match its receipt line exactly; an
+    # order-linked line without a receipt link is re-derived; a return line
+    # is re-derived as the negated share of its matched billed line.
+    # Changed values are written to the draft lines; lines are re-read below.
+    _poi_cache = {}
+    _bill_match_cache = {}
+    _bill_intra_qty = {}
+    _bill_intra_disc = {}
+    _ret_intra_qty = {}
+    _ret_intra_disc = {}
+    _rederived = []
+    _rederived_old = {}
+    _poi_t = Table("purchase_order_item")
+    _pri_t = Table("purchase_receipt_item")
+    if is_return:
+        _against = pi_dict.get("return_against")
+        for item_row in items:
+            item = row_to_dict(item_row)
+            _item_id = item["item_id"]
+            if _item_id not in _bill_match_cache:
+                if _against:
+                    _mq = (Q.from_(pii_t).select(pii_t.star)
+                           .where(pii_t.purchase_invoice_id == P())
+                           .where(pii_t.item_id == P())
+                           .orderby(line_order(pii_t)))
+                    _bill_match_cache[_item_id] = conn.execute(
+                        _mq.get_sql(), (_against, _item_id)).fetchall()
+                else:
+                    _bill_match_cache[_item_id] = []
+            _Dbill = Decimal("0")
+            _Qbill = Decimal("0")
+            for _m in _bill_match_cache[_item_id]:
+                if to_decimal(_m["discount_amount"] or "0") != 0:
+                    _Dbill = to_decimal(_m["discount_amount"])
+                    _Qbill = to_decimal(_m["quantity"])
+                    break
+            _qpos = -to_decimal(item["quantity"])
+            if _against:
+                _sub_qty, _sub_disc = _return_prior_sums(
+                    conn, _against, _item_id)
+            else:
+                _sub_qty, _sub_disc = Decimal("0"), Decimal("0")
+            _prior_qty = _sub_qty + _ret_intra_qty.get(_item_id, Decimal("0"))
+            _prior_disc = _sub_disc + _ret_intra_disc.get(_item_id, Decimal("0"))
+            _new_val = -discount_share(
+                _Dbill, _Qbill, _prior_qty, _prior_disc, _qpos)
+            _new_text = _discount_text(_new_val)
+            _old_text = item.get("discount_amount") or "0"
+            _ret_intra_qty[_item_id] = (
+                _ret_intra_qty.get(_item_id, Decimal("0")) + _qpos)
+            _ret_intra_disc[_item_id] = (
+                _ret_intra_disc.get(_item_id, Decimal("0")) + (-_new_val))
+            if _new_text != _old_text:
+                _uq = (Q.update(pii_t)
+                       .set(pii_t.discount_amount, P())
+                       .where(pii_t.id == P()))
+                conn.execute(_uq.get_sql(), (_new_text, item["id"]))
+                _rederived.append({"line": item["id"],
+                                   "old": _old_text, "new": _new_text})
+                _rederived_old[item["id"]] = _old_text
+    else:
+        for item_row in items:
+            item = row_to_dict(item_row)
+            if item.get("purchase_receipt_item_id"):
+                _rq = (Q.from_(_pri_t).select(_pri_t.discount_amount)
+                       .where(_pri_t.id == P()))
+                _rrow = conn.execute(
+                    _rq.get_sql(),
+                    (item["purchase_receipt_item_id"],)).fetchone()
+                if _rrow is not None:
+                    _bill_d = item.get("discount_amount") or "0"
+                    _receipt_d = _rrow["discount_amount"] or "0"
+                    if to_decimal(_bill_d) != to_decimal(_receipt_d):
+                        raise _SubmitRefused(
+                            f"Bill line for item {item['item_id']}: discount {_bill_d} differs from its receipt line discount {_receipt_d}; a bill derived from a receipt carries the receipt's discount")
+                continue
+            _po_item_id = item.get("purchase_order_item_id")
+            if not _po_item_id:
+                continue
+            if _po_item_id not in _poi_cache:
+                _pq = (Q.from_(_poi_t).select(_poi_t.star)
+                       .where(_poi_t.id == P()))
+                _poi_cache[_po_item_id] = conn.execute(
+                    _pq.get_sql(), (_po_item_id,)).fetchone()
+            _poi = _poi_cache[_po_item_id]
+            if _poi is None:
+                continue
+            _Q = to_decimal(_poi["quantity"])
+            _D = round_currency(
+                to_decimal(_poi["amount"]) - to_decimal(_poi["net_amount"]))
+            _q = to_decimal(item["quantity"])
+            _sub_qty, _sub_disc = _bill_prior_sums(conn, _po_item_id)
+            _prior_qty = _sub_qty + _bill_intra_qty.get(
+                _po_item_id, Decimal("0"))
+            _prior_disc = _sub_disc + _bill_intra_disc.get(
+                _po_item_id, Decimal("0"))
+            _new_val = discount_share(_D, _Q, _prior_qty, _prior_disc, _q)
+            # Legacy overflow: a retroactive order discount (set after
+            # earlier receipts posted) that swallows this line refuses
+            # here, after the invoiced_qty UPDATE above and before anything
+            # posts, so a rollback leaves the order line exactly as it was.
+            _bill_line_amount = to_decimal(item.get("amount") or "0")
+            if _new_val > 0 and _new_val >= _bill_line_amount:
+                raise _SubmitRefused(
+                    f"Item {item.get('item_id')}: the remaining order discount {_new_val:.2f} "
+                    f"is not less than this line's amount {_bill_line_amount:.2f}; cancel and "
+                    f"re-receive the earlier receipts of this order line so the discount "
+                    f"is spread, then retry")
+            _new_text = _discount_text(_new_val)
+            _old_text = item.get("discount_amount") or "0"
+            _bill_intra_qty[_po_item_id] = (
+                _bill_intra_qty.get(_po_item_id, Decimal("0")) + _q)
+            _bill_intra_disc[_po_item_id] = (
+                _bill_intra_disc.get(_po_item_id, Decimal("0")) + _new_val)
+            if _new_text != _old_text:
+                _uq = (Q.update(pii_t)
+                       .set(pii_t.discount_amount, P())
+                       .where(pii_t.id == P()))
+                conn.execute(_uq.get_sql(), (_new_text, item["id"]))
+                _rederived.append({"line": item["id"],
+                                   "old": _old_text, "new": _new_text})
+                _rederived_old[item["id"]] = _old_text
+    q = Q.from_(pii_t).select(pii_t.star).where(pii_t.purchase_invoice_id == P())
+    items = conn.execute(q.get_sql(), (purchase_invoice_id,)).fetchall()
+
+    # A re-derivation that moved any line reprices a stale draft header at
+    # the net before any ledger row is written; the three locals below then
+    # read the repriced header, so tax, payable and payment legs post net.
+    if _rederived:
+        _repriced_total = round_currency(sum((
+            to_decimal(row_to_dict(_r).get("amount") or "0")
+            - to_decimal(row_to_dict(_r).get("discount_amount") or "0")
+            for _r in items), Decimal("0")))
+        if is_return:
+            _repriced_tax = Decimal("0")
+        else:
+            _repriced_tax, _ = _calculate_tax(
+                conn, pi_dict.get("tax_template_id"), _repriced_total)
+        _repriced_grand = round_currency(_repriced_total + _repriced_tax)
+        _hu = (Q.update(pi_t)
+               .set(pi_t.total_amount, P())
+               .set(pi_t.tax_amount, P())
+               .set(pi_t.grand_total, P())
+               .set(pi_t.outstanding_amount, P())
+               .where(pi_t.id == P()))
+        conn.execute(_hu.get_sql(),
+            (str(round_currency(_repriced_total)), str(round_currency(_repriced_tax)),
+             str(_repriced_grand), str(_repriced_grand), purchase_invoice_id))
+        pi_dict["total_amount"] = str(round_currency(_repriced_total))
+        pi_dict["tax_amount"] = str(round_currency(_repriced_tax))
+        pi_dict["grand_total"] = str(_repriced_grand)
 
     total_amount = to_decimal(pi_dict["total_amount"])
     tax_amount = to_decimal(pi_dict["tax_amount"])
@@ -2394,12 +3207,28 @@ def submit_purchase_invoice(conn, args):
     cwip_acct = None
     if cwip_asset_id:
         if is_return:
-            err("--cwip-asset-id bills cannot be returns/debit notes.")
+            raise _SubmitRefused("--cwip-asset-id bills cannot be returns/debit notes.")
         try:
             cwip_asset = get_under_construction_asset(conn, cwip_asset_id)
             cwip_acct = resolve_cwip_account(conn, cwip_asset_id, company_id)
         except ValueError as e:
-            err(str(e))
+            raise _SubmitRefused(str(e))
+
+    # A discounted FIFO line on a stock-moving non-return bill refuses
+    # before anything posts, exactly as receipt submit does; a return is
+    # outgoing and never takes an incoming value.
+    if update_stock and not is_return:
+        for item_row in items:
+            item = row_to_dict(item_row)
+            _bill_fifo_disc = to_decimal(item.get("discount_amount") or "0")
+            if _bill_fifo_disc != 0:
+                _bill_fifo_msg = check_fifo_discounted_net(
+                    conn, item.get("item_id"),
+                    round_currency(to_decimal(item.get("amount") or "0")
+                                   - _bill_fifo_disc),
+                    item.get("quantity"))
+                if _bill_fifo_msg is not None:
+                    raise _SubmitRefused(_bill_fifo_msg)
 
     # --- Build GL entries ---
     gl_entries = []
@@ -2428,7 +3257,8 @@ def submit_purchase_invoice(conn, args):
     # 1. DR: SRNB (if receipt-linked) or Expense accounts (per item or default)
     for item_row in items:
         item = row_to_dict(item_row)
-        amount = abs(to_decimal(item["amount"]))
+        amount = abs(to_decimal(item["amount"])
+                     - to_decimal(item.get("discount_amount") or "0"))
         if amount <= 0:
             continue
         # Use SRNB when clearing a receipt accrual; expense otherwise
@@ -2453,8 +3283,17 @@ def submit_purchase_invoice(conn, args):
             # CWIP cost bill: capitalise the item to construction-in-progress.
             debit_acct = cwip_acct
         if not debit_acct:
-            err(f"No expense account for item {item['item_id']} and no company default")
+            raise _SubmitRefused(f"No expense account for item {item['item_id']} and no company default")
         item_cc = item.get("cost_center_id") or cost_center_id
+        # Line wins: a line's own cost center replaces the document tag's
+        # cost_center in that leg's dimensions before posting, so step 13
+        # sees one cost center on the leg.
+        if _tag_dims:
+            _leg_dims = dict(_dims_obj)
+            if item.get("cost_center_id") and "cost_center" in _leg_dims:
+                _leg_dims["cost_center"] = item["cost_center_id"]
+        else:
+            _leg_dims = None
         if is_return:
             # Debit note: CR expense/SRNB (reverse the original DR)
             gl_entries.append({
@@ -2463,6 +3302,7 @@ def submit_purchase_invoice(conn, args):
                 "credit": str(round_currency(amount)),
                 "cost_center_id": item_cc,
                 "fiscal_year": fiscal_year,
+                **({"dimensions": _leg_dims} if _leg_dims is not None else {}),
             })
         else:
             gl_entries.append({
@@ -2471,6 +3311,7 @@ def submit_purchase_invoice(conn, args):
                 "credit": "0",
                 "cost_center_id": item_cc,
                 "fiscal_year": fiscal_year,
+                **({"dimensions": _leg_dims} if _leg_dims is not None else {}),
             })
 
     # 2. DR: Input Tax (if tax exists) — for returns, use abs() and CR
@@ -2497,6 +3338,7 @@ def submit_purchase_invoice(conn, args):
                         "debit": "0",
                         "credit": str(round_currency(line_tax)),
                         "fiscal_year": fiscal_year,
+                        **({"dimensions": dict(_dims_obj)} if _tag_dims else {}),
                     })
                 else:
                     gl_entries.append({
@@ -2504,6 +3346,7 @@ def submit_purchase_invoice(conn, args):
                         "debit": str(round_currency(line_tax)),
                         "credit": "0",
                         "fiscal_year": fiscal_year,
+                        **({"dimensions": dict(_dims_obj)} if _tag_dims else {}),
                     })
                 remaining_tax -= line_tax
         # If any rounding remainder, add to last tax account
@@ -2525,7 +3368,7 @@ def submit_purchase_invoice(conn, args):
         payable_row = conn.execute(q.get_sql(), (company_id,)).fetchone()
         payable_acct = payable_row["id"] if payable_row else None
     if not payable_acct:
-        err("No payable account found for company")
+        raise _SubmitRefused("No payable account found for company")
 
     abs_grand_total = abs(grand_total)
     if is_return:
@@ -2537,6 +3380,7 @@ def submit_purchase_invoice(conn, args):
             "party_type": "supplier",
             "party_id": supplier_id,
             "fiscal_year": fiscal_year,
+            **({"dimensions": dict(_dims_obj)} if _tag_dims else {}),
         })
     else:
         gl_entries.append({
@@ -2546,6 +3390,7 @@ def submit_purchase_invoice(conn, args):
             "party_type": "supplier",
             "party_id": supplier_id,
             "fiscal_year": fiscal_year,
+            **({"dimensions": dict(_dims_obj)} if _tag_dims else {}),
         })
 
     # Insert GL entries
@@ -2555,14 +3400,15 @@ def submit_purchase_invoice(conn, args):
             gl_ids = insert_gl_entries(
                 conn, gl_entries,
                 voucher_type=voucher_type,
-                voucher_id=args.purchase_invoice_id,
+                voucher_id=purchase_invoice_id,
                 posting_date=posting_date,
                 company_id=company_id,
-                remarks=f"{'Debit Note' if is_return else 'Purchase Invoice'} {naming}",
+                remarks=(remarks if remarks is not None
+                         else f"{'Debit Note' if is_return else 'Purchase Invoice'} {naming}"),
             )
         except ValueError as e:
             sys.stderr.write(f"[erpclaw-buying] {e}\n")
-            err(f"GL posting failed: {e}")
+            raise _SubmitRefused(f"GL posting failed: {e}")
 
     # S3 CWIP hook (AVA-43): record the accumulation against the routed CWIP leg
     # in this same submit transaction. gl_ids[0] is the first item's DR CWIP leg.
@@ -2572,12 +3418,12 @@ def submit_purchase_invoice(conn, args):
             cwip_accum_id = record_cwip_accumulation(
                 conn, cwip_asset, abs(total_amount),
                 source_voucher_type="purchase_invoice",
-                source_voucher_id=args.purchase_invoice_id,
+                source_voucher_id=purchase_invoice_id,
                 gl_entry_id=gl_ids[0], accumulated_at=posting_date,
                 notes=f"Purchase invoice {naming}")
         except ValueError as e:
             sys.stderr.write(f"[erpclaw-buying] {e}\n")
-            err(f"CWIP accumulation failed: {e}")
+            raise _SubmitRefused(f"CWIP accumulation failed: {e}")
 
     # --- SLE if update_stock=1 ---
     sle_ids = []
@@ -2613,7 +3459,7 @@ def submit_purchase_invoice(conn, args):
             if not warehouse_id:
                 continue  # Skip if no warehouse
 
-            sle_entries.append({
+            _bill_sle_entry = {
                 "item_id": item["item_id"],
                 "warehouse_id": warehouse_id,
                 "actual_qty": str(round_currency(qty)),
@@ -2622,20 +3468,27 @@ def submit_purchase_invoice(conn, args):
                 # FINDING-010 / ADR-0014: bill-posts-stock is a true external receipt —
                 # it must carry the bill line rate, never silently book inventory at $0.
                 "require_rate": True,
-            })
+            }
+            # A discounted line on a stock-moving non-return bill values
+            # stock at exactly its net; a return is outgoing and takes none.
+            _bill_sle_disc = to_decimal(item.get("discount_amount") or "0")
+            if not is_return and _bill_sle_disc != 0:
+                _bill_sle_entry["incoming_value"] = str(
+                    to_decimal(item.get("amount") or "0") - _bill_sle_disc)
+            sle_entries.append(_bill_sle_entry)
 
         if sle_entries:
             try:
                 sle_ids = insert_sle_entries(
                     conn, sle_entries,
                     voucher_type=voucher_type,
-                    voucher_id=args.purchase_invoice_id,
+                    voucher_id=purchase_invoice_id,
                     posting_date=posting_date,
                     company_id=company_id,
                 )
             except ValueError as e:
                 sys.stderr.write(f"[erpclaw-buying] {e}\n")
-                err(f"SLE posting failed: {e}")
+                raise _SubmitRefused(f"SLE posting failed: {e}")
 
             # Inventory GL for SLE (DR Stock In Hand / CR Stock Received Not Billed)
             sle_t = Table("stock_ledger_entry")
@@ -2644,20 +3497,31 @@ def submit_purchase_invoice(conn, args):
                  .where(sle_t.voucher_id == P())
                  .where(sle_t.is_cancelled == 0))
             sle_rows = conn.execute(q.get_sql(),
-                (voucher_type, args.purchase_invoice_id)).fetchall()
+                (voucher_type, purchase_invoice_id)).fetchall()
             sle_dicts = [row_to_dict(r) for r in sle_rows]
             try:
-                inv_gl = create_perpetual_inventory_gl(
-                    conn, sle_dicts,
-                    voucher_type=voucher_type,
-                    voucher_id=args.purchase_invoice_id,
-                    posting_date=posting_date,
-                    company_id=company_id,
-                    cost_center_id=cost_center_id,
-                )
+                if _tag_dims:
+                    inv_gl = create_perpetual_inventory_gl(
+                        conn, sle_dicts,
+                        voucher_type=voucher_type,
+                        voucher_id=purchase_invoice_id,
+                        posting_date=posting_date,
+                        company_id=company_id,
+                        cost_center_id=cost_center_id,
+                        dimensions=dict(_dims_obj),
+                    )
+                else:
+                    inv_gl = create_perpetual_inventory_gl(
+                        conn, sle_dicts,
+                        voucher_type=voucher_type,
+                        voucher_id=purchase_invoice_id,
+                        posting_date=posting_date,
+                        company_id=company_id,
+                        cost_center_id=cost_center_id,
+                    )
             except ValueError as e:
                 sys.stderr.write(f"[erpclaw-buying] {e}\n")
-                err(f"GL posting failed: {e}")
+                raise _SubmitRefused(f"GL posting failed: {e}")
             if inv_gl:
                 for gle in inv_gl:
                     gle["fiscal_year"] = fiscal_year
@@ -2668,7 +3532,7 @@ def submit_purchase_invoice(conn, args):
                     cogs_gl_ids = insert_gl_entries(
                         conn, inv_gl,
                         voucher_type=voucher_type,
-                        voucher_id=args.purchase_invoice_id,
+                        voucher_id=purchase_invoice_id,
                         posting_date=posting_date,
                         company_id=company_id,
                         remarks=stock_remark,
@@ -2677,7 +3541,7 @@ def submit_purchase_invoice(conn, args):
                     gl_ids.extend(cogs_gl_ids)
                 except ValueError as e:
                     sys.stderr.write(f"[erpclaw-buying] {e}\n")
-                    err(f"Stock GL posting failed: {e}")
+                    raise _SubmitRefused(f"Stock GL posting failed: {e}")
 
     # --- Create PLE (Payment Ledger Entry) ---
     ple_id = str(uuid.uuid4())
@@ -2685,67 +3549,103 @@ def submit_purchase_invoice(conn, args):
     # against_voucher points to the original invoice being returned against
     if is_return:
         ple_against_type = "purchase_invoice"
-        ple_against_id = pi_dict.get("return_against") or args.purchase_invoice_id
+        ple_against_id = pi_dict.get("return_against") or purchase_invoice_id
         ple_amount = str(round_currency(-abs_grand_total))  # Negative to reduce payable
     else:
         ple_against_type = "purchase_invoice"
-        ple_against_id = args.purchase_invoice_id
+        ple_against_id = purchase_invoice_id
         ple_amount = str(round_currency(grand_total))
-    ple_remark = f"{'Debit Note' if is_return else 'Purchase Invoice'} {naming}"
+    ple_remark = (remarks if remarks is not None
+                  else f"{'Debit Note' if is_return else 'Purchase Invoice'} {naming}")
     ple_t = Table("payment_ledger_entry")
     q = (Q.into(ple_t)
          .columns("id", "posting_date", "account_id", "party_type", "party_id",
                   "voucher_type", "voucher_id", "against_voucher_type",
                   "against_voucher_id", "amount", "amount_in_account_currency",
-                  "remarks")
+                  "currency", "remarks")
          .insert(P(), P(), P(), ValueWrapper("supplier"), P(), P(), P(), P(), P(),
-                 P(), P(), P()))
+                 P(), P(), P(), P()))
     conn.execute(q.get_sql(),
         (ple_id, posting_date, payable_acct, supplier_id,
-         voucher_type, args.purchase_invoice_id,
+         voucher_type, purchase_invoice_id,
          ple_against_type, ple_against_id,
-         ple_amount, ple_amount, ple_remark))
+         ple_amount, ple_amount, pi_dict.get("currency") or "USD", ple_remark))
 
-    # Update PO invoiced_qty if linked
+    # invoiced_qty was advanced right after the chain-head take above;
+    # only the PO status roll-up remains here.
     if pi_dict.get("purchase_order_id"):
-        for item_row in items:
-            item = row_to_dict(item_row)
-            if item.get("purchase_order_item_id"):
-                # raw SQL — CAST arithmetic expression not expressible in PyPika
-                conn.execute(
-                    """UPDATE purchase_order_item
-                       SET invoiced_qty = CAST(
-                           CAST(invoiced_qty AS NUMERIC) + CAST(? AS NUMERIC) AS TEXT)
-                       WHERE id = ?""",
-                    (item["quantity"], item["purchase_order_item_id"]),
-                )
         _update_po_invoice_status(conn, pi_dict["purchase_order_id"])
 
-    # Update invoice status
+    # Update invoice status (compare-and-set on the decided draft state:
+    # a concurrent submit, cancel or delete wins instead of posting twice).
     q = (Q.update(pi_t)
          .set(pi_t.status, ValueWrapper("submitted"))
          .set(pi_t.naming_series, P())
          .set(pi_t.updated_at, now())
-         .where(pi_t.id == P()))
-    conn.execute(q.get_sql(), (naming, args.purchase_invoice_id))
+         .where(pi_t.id == P())
+         .where(pi_t.status == ValueWrapper("draft")))
+    _status_cur = conn.execute(q.get_sql(), (naming, purchase_invoice_id))
+    if _status_cur.rowcount == 0:
+        _lost_q = Q.from_(pi_t).select(pi_t.star).where(pi_t.id == P())
+        _lost = conn.execute(
+            _lost_q.get_sql(), (purchase_invoice_id,)).fetchone()
+        if not _lost:
+            raise _SubmitRefused(
+                f"Purchase invoice {purchase_invoice_id} not found")
+        raise _SubmitRefused(
+            f"Cannot submit: invoice is '{_lost['status']}' (must be 'draft')")
 
+    _submit_line_discounts = []
+    for item_row in items:
+        item = row_to_dict(item_row)
+        _d = item.get("discount_amount") or "0"
+        _a = item.get("amount") or "0"
+        _submit_line_discounts.append({
+            "line": item["id"], "discount_amount": _d,
+            "net": str(round_currency(to_decimal(_a) - to_decimal(_d)))})
+    _submit_new = {"naming_series": naming, "is_return": is_return,
+                   "voucher_type": voucher_type,
+                   "gl_count": len(gl_ids), "sle_count": len(sle_ids),
+                   "update_stock": update_stock,
+                   "line_discounts": _submit_line_discounts}
+    if _rederived:
+        _submit_new["discount_rederived"] = _rederived
     audit_action = "submit-debit-note" if is_return else "submit-purchase-invoice"
-    audit(conn, "erpclaw-buying", audit_action, "purchase_invoice",
-           args.purchase_invoice_id,
-           new_values={"naming_series": naming, "is_return": is_return,
-                       "voucher_type": voucher_type,
-                       "gl_count": len(gl_ids), "sle_count": len(sle_ids),
-                       "update_stock": update_stock})
-    conn.commit()
-    resp = {"purchase_invoice_id": args.purchase_invoice_id,
+    if _rederived:
+        audit(conn, "erpclaw-buying", audit_action, "purchase_invoice",
+               purchase_invoice_id,
+               old_values={"discount_amount": _rederived_old},
+               new_values=_submit_new)
+    else:
+        audit(conn, "erpclaw-buying", audit_action, "purchase_invoice",
+               purchase_invoice_id,
+               new_values=_submit_new)
+    resp = {"purchase_invoice_id": purchase_invoice_id,
             "naming_series": naming, "status": "submitted",
             "is_return": is_return, "voucher_type": voucher_type,
             "gl_entries_created": len(gl_ids),
             "sle_entries_created": len(sle_ids),
             "update_stock": bool(update_stock)}
+    if _rederived:
+        resp["discount_rederived"] = _rederived
     if cwip_accum_id:
         resp["cwip_asset_id"] = cwip_asset_id
         resp["cwip_accumulation_id"] = cwip_accum_id
+    return resp
+
+
+def submit_purchase_invoice(conn, args):
+    """Submit purchase invoice: expense GL + AP + tax GL + PLE.
+    If update_stock=1, also creates SLE + inventory GL."""
+    if not args.purchase_invoice_id:
+        err("--purchase-invoice-id is required")
+
+    try:
+        resp = _submit_purchase_invoice_in_txn(conn, args.purchase_invoice_id)
+    except _SubmitRefused as e:
+        conn.rollback()
+        err(str(e))
+    conn.commit()
     ok(resp)
 
 
@@ -2793,6 +3693,30 @@ def _update_po_invoice_status(conn, purchase_order_id):
 # 30. cancel-purchase-invoice
 # ---------------------------------------------------------------------------
 
+def _reverse_purchase_stock_or_refuse(conn, voucher_type, voucher_id, posting_date, label):
+    """Reverse a voucher's stock ledger entries, refusing on failure.
+
+    Zero active rows is normal (an update_stock bill of non-stock items
+    posts no SLE rows), so return [] without calling reverse_sle_entries.
+    A failed reversal rolls back every write of the action and refuses.
+    """
+    _t_sle = Table("stock_ledger_entry")
+    active_q = (Q.from_(_t_sle)
+                .select(fn.Count("*").as_("cnt"))
+                .where(_t_sle.voucher_type == P())
+                .where(_t_sle.voucher_id == P())
+                .where(_t_sle.is_cancelled == 0))
+    active = conn.execute(active_q.get_sql(), (voucher_type, voucher_id)).fetchone()["cnt"]
+    if not active:
+        return []
+    try:
+        return reverse_sle_entries(conn, voucher_type, voucher_id, posting_date)
+    except ValueError as e:
+        conn.rollback()
+        sys.stderr.write(f"[erpclaw-buying] {e}\n")
+        err(f"{label} failed: {e}")
+
+
 def cancel_purchase_invoice(conn, args):
     """Cancel a submitted purchase invoice: reverse GL + PLE. If update_stock, reverse SLE."""
     if not args.purchase_invoice_id:
@@ -2807,20 +3731,36 @@ def cancel_purchase_invoice(conn, args):
         err(f"Cannot cancel: invoice is '{pi['status']}' "
              f"(must be 'submitted', 'overdue', or 'partially_paid')")
 
+    take_chain_heads(conn, [pi["company_id"]])
+
+    pi = conn.execute(q.get_sql(), (args.purchase_invoice_id,)).fetchone()
+    if not pi:
+        conn.rollback()
+        err(f"Purchase invoice {args.purchase_invoice_id} not found")
+    if pi["status"] not in ("submitted", "overdue", "partially_paid"):
+        conn.rollback()
+        err(f"Cannot cancel: invoice is '{pi['status']}' "
+             f"(must be 'submitted', 'overdue', or 'partially_paid')")
+
     pi_dict = row_to_dict(pi)
     posting_date = pi_dict["posting_date"]
     update_stock = pi_dict.get("update_stock", 0)
+    is_return = bool(pi_dict.get("is_return", 0))
+    cancel_voucher_type = "debit_note" if is_return else "purchase_invoice"
 
     # Reverse GL
     try:
         reversal_gl_ids = reverse_gl_entries(
             conn,
-            voucher_type="purchase_invoice",
+            voucher_type=cancel_voucher_type,
             voucher_id=args.purchase_invoice_id,
             posting_date=posting_date,
         )
-    except ValueError:
-        reversal_gl_ids = []
+    except ValueError as e:
+        if to_decimal(pi_dict.get("grand_total", "0")) == 0:
+            reversal_gl_ids = []
+        else:
+            err(f"GL reversal failed: {e}")
 
     # Stock/COGS GL entries (entry_set="cogs") are reversed by the same call above
     # since reverse_gl_entries finds ALL entries for (voucher_type, voucher_id)
@@ -2833,15 +3773,7 @@ def cancel_purchase_invoice(conn, args):
     # Reverse SLE if update_stock
     reversal_sle_ids = []
     if update_stock:
-        try:
-            reversal_sle_ids = reverse_sle_entries(
-                conn,
-                voucher_type="purchase_invoice",
-                voucher_id=args.purchase_invoice_id,
-                posting_date=posting_date,
-            )
-        except ValueError:
-            reversal_sle_ids = []
+        reversal_sle_ids = _reverse_purchase_stock_or_refuse(conn, cancel_voucher_type, args.purchase_invoice_id, posting_date, "SLE reversal")
 
     # Release the payment allocations this cancel voids (M46/F1). Cash applied
     # to a bill that no longer exists in the books is not applied cash: the
@@ -2851,16 +3783,16 @@ def cancel_purchase_invoice(conn, args):
     # buying never writes payments' tables itself.
     from erpclaw_lib.payment_clearing import release_allocations_on_document
     release = release_allocations_on_document(
-        conn, "purchase_invoice", args.purchase_invoice_id)
+        conn, cancel_voucher_type, args.purchase_invoice_id)
 
     # Cancel PLE entries
     ple_t = Table("payment_ledger_entry")
     q = (Q.update(ple_t)
          .set(ple_t.delinked, 1)
          .set(ple_t.updated_at, now())
-         .where(ple_t.voucher_type == ValueWrapper("purchase_invoice"))
+         .where(ple_t.voucher_type == P())
          .where(ple_t.voucher_id == P()))
-    conn.execute(q.get_sql(), (args.purchase_invoice_id,))
+    conn.execute(q.get_sql(), (cancel_voucher_type, args.purchase_invoice_id))
 
     # Reverse PO invoiced_qty if linked
     if pi_dict.get("purchase_order_id"):
@@ -2883,10 +3815,21 @@ def cancel_purchase_invoice(conn, args):
     q = (Q.update(pi_t)
          .set(pi_t.status, ValueWrapper("cancelled"))
          .set(pi_t.updated_at, now())
-         .where(pi_t.id == P()))
-    conn.execute(q.get_sql(), (args.purchase_invoice_id,))
+         .where(pi_t.id == P())
+         .where(pi_t.status.isin([ValueWrapper("submitted"), ValueWrapper("overdue"), ValueWrapper("partially_paid")])))
+    _cancel_cur = conn.execute(q.get_sql(), (args.purchase_invoice_id,))
+    if _cancel_cur.rowcount == 0:
+        conn.rollback()
+        _fresh = conn.execute(
+            Q.from_(pi_t).select(pi_t.status).where(pi_t.id == P()).get_sql(),
+            (args.purchase_invoice_id,)).fetchone()
+        if _fresh is None:
+            err(f"Purchase invoice {args.purchase_invoice_id} not found")
+        err(f"Cannot cancel: invoice is '{_fresh['status']}' "
+             f"(must be 'submitted', 'overdue', or 'partially_paid')")
 
-    audit(conn, "erpclaw-buying", "cancel-purchase-invoice", "purchase_invoice",
+    audit_action = "cancel-debit-note" if is_return else "cancel-purchase-invoice"
+    audit(conn, "erpclaw-buying", audit_action, "purchase_invoice",
            args.purchase_invoice_id,
            new_values={"reversed": True})
     conn.commit()
@@ -2925,6 +3868,10 @@ def create_debit_note(conn, args):
         err(f"Cannot create debit note: invoice status is '{orig['status']}'")
 
     orig_dict = row_to_dict(orig)
+    orig_dims_text = orig["dimensions_json"] if orig["dimensions_json"] else "{}"
+    dims_given = _dimension_input(args)
+    if dims_given is not None and dimensions_json_text(dims_given) != orig_dims_text:
+        err(f"Debit note dimensions must match the original invoice's ({orig_dims_text})")
     items = _parse_json_arg(args.items, "items")
     if not items or not isinstance(items, list):
         err("--items must be a non-empty JSON array")
@@ -2932,19 +3879,38 @@ def create_debit_note(conn, args):
     dn_id = str(uuid.uuid4())
     posting_date = args.posting_date or _today()
     total_amount = Decimal("0")
+    _dn_line_discounts = []
+    _ret_intra_qty = {}
+    _ret_intra_disc = {}
 
+    pii_t = Table("purchase_invoice_item")
+    _oq = (Q.from_(pii_t).select(pii_t.star)
+           .where(pii_t.purchase_invoice_id == P())
+           .orderby(line_order(pii_t)))
+    _orig_lines = conn.execute(
+        _oq.get_sql(), (args.against_invoice_id,)).fetchall()
+    _orig_by_item = {}
+    for _ol in _orig_lines:
+        _orig_by_item.setdefault(_ol["item_id"], []).append(_ol)
+    _orig_has_discount = any(
+        to_decimal(_ol["discount_amount"] or "0") != 0
+        for _ol in _orig_lines)
+
+    currency = orig_dict.get("currency") or "USD"
+    exchange_rate = orig_dict.get("exchange_rate") or "1"
     # Insert parent (is_return=1, negative amounts)
     q = (Q.into(pi_t)
          .columns("id", "supplier_id", "posting_date", "total_amount",
                   "tax_amount", "grand_total", "outstanding_amount", "status",
-                  "is_return", "return_against", "update_stock", "company_id")
+                  "is_return", "return_against", "update_stock", "company_id",
+                  "currency", "exchange_rate", "dimensions_json")
          .insert(P(), P(), P(), ValueWrapper("0"), ValueWrapper("0"),
                  ValueWrapper("0"), ValueWrapper("0"), ValueWrapper("draft"),
-                 1, P(), P(), P()))
+                 1, P(), P(), P(), P(), P(), P()))
     conn.execute(q.get_sql(),
         (dn_id, orig_dict["supplier_id"], posting_date,
          args.against_invoice_id, orig_dict.get("update_stock", 0),
-         orig_dict["company_id"]))
+         orig_dict["company_id"], currency, exchange_rate, orig_dims_text))
 
     for i, item in enumerate(items):
         item_id = item.get("item_id")
@@ -2953,10 +3919,18 @@ def create_debit_note(conn, args):
         qty = to_decimal(item.get("qty", "0"))
         if qty <= 0:
             err(f"Item {i}: qty must be > 0")
+        _matches = _orig_by_item.get(item_id, [])
+        if len(_matches) > 1 and _orig_has_discount:
+            err(f"Item {i}: item appears on more than one discounted line of the bill; it cannot be returned by item")
+        _matched = _matches[0] if len(_matches) == 1 else None
+        _matched_disc = (to_decimal(_matched["discount_amount"] or "0")
+                         if _matched is not None else Decimal("0"))
+        if (_matched is not None and _matched_disc != 0
+                and to_decimal(item.get("rate", "0")) > 0):
+            err(f"Item {i}: the billed line carries a discount; omit rate so the return uses the billed net")
         rate = to_decimal(item.get("rate", "0"))
         if rate <= 0:
             # Look up rate from original invoice
-            pii_t = Table("purchase_invoice_item")
             q = (Q.from_(pii_t).select(pii_t.rate)
                  .where(pii_t.purchase_invoice_id == P())
                  .where(pii_t.item_id == P())
@@ -2970,15 +3944,38 @@ def create_debit_note(conn, args):
         # Negate for return
         neg_qty = -qty
         neg_amount = round_currency(neg_qty * rate)
-        total_amount += neg_amount
+
+        if _matched is not None and _matched_disc != 0:
+            _Dbill = _matched_disc
+            _Qbill = to_decimal(_matched["quantity"])
+        else:
+            _Dbill = Decimal("0")
+            _Qbill = Decimal("0")
+        _sub_qty, _sub_disc = _return_prior_sums(
+            conn, args.against_invoice_id, item_id)
+        _prior_qty = _sub_qty + _ret_intra_qty.get(item_id, Decimal("0"))
+        _prior_disc = _sub_disc + _ret_intra_disc.get(item_id, Decimal("0"))
+        _share = discount_share(_Dbill, _Qbill, _prior_qty, _prior_disc, qty)
+        _neg_share = -_share
+        total_amount += round_currency(neg_amount - _neg_share)
+        _disc_text = _discount_text(_neg_share)
+        _ret_intra_qty[item_id] = (
+            _ret_intra_qty.get(item_id, Decimal("0")) + qty)
+        _ret_intra_disc[item_id] = (
+            _ret_intra_disc.get(item_id, Decimal("0")) + _share)
+        _dn_line_id = str(uuid.uuid4())
+        _dn_line_discounts.append({
+            "line": _dn_line_id, "discount_amount": _disc_text,
+            "net": str(round_currency(neg_amount - _neg_share))})
 
         conn.execute(
             """INSERT INTO purchase_invoice_item
-               (id, purchase_invoice_id, item_id, quantity, rate, amount)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (str(uuid.uuid4()), dn_id, item_id,
+               (id, purchase_invoice_id, item_id, quantity, rate, amount,
+                discount_amount)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (_dn_line_id, dn_id, item_id,
              str(round_currency(neg_qty)), str(round_currency(rate)),
-             str(neg_amount)),
+             str(neg_amount), _disc_text),
         )
 
     grand_total = total_amount  # Already negative
@@ -2995,7 +3992,8 @@ def create_debit_note(conn, args):
     audit(conn, "erpclaw-buying", "create-debit-note", "purchase_invoice", dn_id,
            new_values={"against_invoice_id": args.against_invoice_id,
                        "reason": args.reason,
-                       "total_amount": str(round_currency(total_amount))})
+                       "total_amount": str(round_currency(total_amount)),
+                       "line_discounts": _dn_line_discounts})
     conn.commit()
     ok({"debit_note_id": dn_id,
          "against_invoice_id": args.against_invoice_id,
@@ -3003,86 +4001,35 @@ def create_debit_note(conn, args):
 
 
 # ---------------------------------------------------------------------------
-# 32. update-invoice-outstanding (cross-skill)
+# 32. update-invoice-outstanding — RETIRED (M776)
+#
+# The buying handler (routed as update-purchase-outstanding) reduced a bill's
+# outstanding_amount and appended a payment_ledger_entry adjustment row with NO
+# general-ledger posting: one call moved a balance the books never saw, while
+# the summary-versus-detail checks stayed green because both of their sides
+# moved together. It had no production caller — payments clears documents
+# in-process through erpclaw_lib.payment_clearing — so the "called by
+# erpclaw-payments" line in the old docstring was false.
+#
+# The action name stays ROUTABLE on purpose (Nik ruling 2026-08-13: retired
+# actions STEER to their replacement, the M63-C shape). An agent or an old
+# script that asks for a balance move gets one JSON error naming the flows
+# that do the job, instead of "Unknown action". The old handler BODY stays
+# deleted: its control flow was ok()/err(), which print JSON to stdout and
+# sys.exit(), so no in-process caller could ever have used it.
+#
+# Pinned by buying/tests/test_receipt_invoice.py
+# (TestUpdateInvoiceOutstandingRetired: steer + nothing-lands).
 # ---------------------------------------------------------------------------
 
 def update_invoice_outstanding(conn, args):
-    """Cross-skill: called by erpclaw-payments to reduce outstanding."""
-    if not args.purchase_invoice_id:
-        err("--purchase-invoice-id is required")
-    if not args.amount:
-        err("--amount is required")
-
-    pi_t = Table("purchase_invoice")
-    q = Q.from_(pi_t).select(pi_t.star).where(pi_t.id == P())
-    pi = conn.execute(q.get_sql(), (args.purchase_invoice_id,)).fetchone()
-    if not pi:
-        err(f"Purchase invoice {args.purchase_invoice_id} not found")
-
-    payment_amount = to_decimal(args.amount)
-    if payment_amount <= 0:
-        err("--amount must be > 0")
-
-    # Summary ≡ detail (INV-25, ADR-0031): this action moves the SUMMARY
-    # (outstanding_amount), so it must move the DETAIL (payment_ledger_entry)
-    # in the SAME transaction — sweep W6 re-disposition, QA round-1 DEFECT 1.
-    # Reuse the invoice's posting-time PLE row for voucher bucket / account /
-    # currency so the adjustment nets inside INV-25's own-voucher branch and is
-    # swept by the same cancel-delink predicate. Looked up BEFORE any write so
-    # a broken-ledger invoice (no active posting row) errors with zero writes.
-    src_ple = conn.execute(
-        """SELECT voucher_type, account_id, currency FROM payment_ledger_entry
-           WHERE voucher_id = ?
-             AND voucher_type IN ('purchase_invoice', 'debit_note')
-             AND delinked = 0
-           ORDER BY created_at LIMIT 1""",
-        (args.purchase_invoice_id,)).fetchone()
-    if src_ple is None:
-        err(f"Purchase invoice {args.purchase_invoice_id} has no active payment "
-            "ledger posting; cannot apply a payment against it (summary and "
-            "detail must move together, INV-25)")
-
-    # Delegate compute-and-write to the neutral payment-clearing lib so this
-    # action and erpclaw-payments share ONE canonical clearing rule (no drift).
-    # Decision 2: over-payment now REJECTS (was silently clamped to 0) to match
-    # selling and surface real allocation errors instead of hiding them.
-    try:
-        from erpclaw_lib.payment_clearing import apply_payment_to_document
-        res = apply_payment_to_document(
-            conn, "purchase_invoice", args.purchase_invoice_id, args.amount)
-    except ValueError as e:
-        err(str(e))
-
-    # Adjustment PLE row (−applied) in the invoice's own voucher bucket, same
-    # transaction as the outstanding write. PyPika — mirrors the submit-time
-    # PLE insert idiom above ('supplier' literal); all values bound params.
-    adj_ple_id = str(uuid.uuid4())
-    adj_amount = str(round_currency(-payment_amount))
-    adj_ple_t = Table("payment_ledger_entry")
-    adj_q = (Q.into(adj_ple_t)
-             .columns("id", "posting_date", "account_id", "party_type",
-                      "party_id", "voucher_type", "voucher_id", "amount",
-                      "amount_in_account_currency", "currency", "remarks")
-             .insert(P(), P(), P(), ValueWrapper("supplier"), P(), P(), P(),
-                     P(), P(), P(), P()))
-    conn.execute(adj_q.get_sql(),
-        (adj_ple_id, _today(), src_ple["account_id"], pi["supplier_id"],
-         src_ple["voucher_type"], args.purchase_invoice_id,
-         adj_amount, adj_amount, src_ple["currency"],
-         f"Payment applied to purchase_invoice {args.purchase_invoice_id} "
-         f"via update-purchase-outstanding"))
-
-    audit(conn, "erpclaw-buying", "update-invoice-outstanding", "purchase_invoice",
-           args.purchase_invoice_id,
-           new_values={"payment_amount": str(payment_amount),
-                       "new_outstanding": res["outstanding_amount"],
-                       "new_status": res["status"],
-                       "payment_ledger_entry_id": adj_ple_id})
-    conn.commit()
-    ok({"purchase_invoice_id": args.purchase_invoice_id,
-         "outstanding_amount": res["outstanding_amount"],
-         "status": res["status"],
-         "payment_ledger_entry_id": adj_ple_id})
+    """RETIRED — see the block above. Steers to the payment, credit-note and write-off flows."""
+    from erpclaw_lib.payment_clearing import RETIRED_OUTSTANDING_STEER
+    err(
+        "'update-purchase-outstanding' has been retired: it moved a document's "
+        "balance with no ledger posting.",
+        suggestion=RETIRED_OUTSTANDING_STEER,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -3106,6 +4053,12 @@ def add_landed_cost_voucher(conn, args):
     if not charges or not isinstance(charges, list):
         err("--charges must be a non-empty JSON array")
 
+    seen_pr_ids = []
+    for pr_id in pr_ids:
+        if pr_id in seen_pr_ids:
+            err(f"Purchase receipt {pr_id} is listed more than once")
+        seen_pr_ids.append(pr_id)
+
     # Validate receipts and gather items
     pr_t = Table("purchase_receipt")
     pr_q = (Q.from_(pr_t).select(pr_t.star)
@@ -3122,6 +4075,8 @@ def add_landed_cost_voucher(conn, args):
         pr = conn.execute(pr_sql, (pr_id,)).fetchone()
         if not pr:
             err(f"Purchase receipt {pr_id} not found or not submitted")
+        if pr["company_id"] != args.company_id:
+            err(f"Purchase receipt {pr_id} belongs to another company")
         items = conn.execute(pri_sql, (pr_id,)).fetchall()
         for item_row in items:
             all_items.append(row_to_dict(item_row))
@@ -3129,13 +4084,78 @@ def add_landed_cost_voucher(conn, args):
     if not all_items:
         err("No items found in the specified purchase receipts")
 
-    # Calculate total qty and value for allocation
+    # Calculate total qty and value for allocation (value on the net basis:
+    # amount minus the receipt line's share of the order-line discount)
+    def _lcv_net(it):
+        return to_decimal(it["amount"]) - to_decimal(
+            it.get("discount_amount") or "0")
     total_qty = sum(to_decimal(it["quantity"]) for it in all_items)
-    total_value = sum(to_decimal(it["amount"]) for it in all_items)
+    total_value = sum(_lcv_net(it) for it in all_items)
 
     lcv_id = str(uuid.uuid4())
     posting_date = _today()
     total_landed_cost = Decimal("0")
+
+    # Pre-write check: every charge must credit an account that can hold the
+    # carrier's bill (the expense account the bill was recorded against, or an
+    # accrual liability the bill will later clear). Refuse before anything is
+    # written so a late refusal cannot leave voucher/charge/item rows behind.
+    _lcv_acct_t = Table("account")
+    _lcv_acct_q = Q.from_(_lcv_acct_t).select(_lcv_acct_t.star).where(_lcv_acct_t.id == P())
+    _lcv_acct_sql = _lcv_acct_q.get_sql()
+    _lcv_acct_names = []
+    for c_idx, charge in enumerate(charges):
+        _lcv_amt = to_decimal(charge.get("amount", "0"))
+        if _lcv_amt <= 0:
+            err(f"Charge {c_idx}: amount must be > 0")
+        _lcv_exp_id = charge.get("expense_account_id")
+        if not _lcv_exp_id:
+            err(f"Charge {c_idx}: expense_account_id is required "
+                "(landed cost capitalisation must credit an expense/clearing account)")
+        _lcv_found = conn.execute(_lcv_acct_sql, (_lcv_exp_id,)).fetchone()
+        if not _lcv_found:
+            err(f"Charge {c_idx}: account {_lcv_exp_id} not found")
+        _lcv_acct = row_to_dict(_lcv_found)
+        _lcv_name = _lcv_acct["name"]
+        if _lcv_acct["company_id"] != args.company_id:
+            err(f"Charge {c_idx}: account '{_lcv_name}' belongs to a different company")
+        if _lcv_acct["is_group"]:
+            err(f"Charge {c_idx}: account '{_lcv_name}' is a group account")
+        if _lcv_acct["disabled"]:
+            err(f"Charge {c_idx}: account '{_lcv_name}' is disabled")
+        _lcv_root = _lcv_acct["root_type"]
+        _lcv_type = _lcv_acct.get("account_type")
+        if _lcv_type == "":
+            _lcv_type = None
+        _lcv_accepted = ((_lcv_root == "expense" and (_lcv_type is None or _lcv_type == "expense"))
+                         or (_lcv_root == "liability" and _lcv_type is None))
+        if not _lcv_accepted:
+            _lcv_kind = _lcv_type.replace("_", " ") if _lcv_type else _lcv_root
+            err(f"Charge {c_idx}: account '{_lcv_name}' ({_lcv_kind}) cannot hold a carrier's bill; "
+                "credit the expense account the carrier's bill was recorded against, "
+                "or an accrual liability the bill will clear")
+        _lcv_acct_names.append(_lcv_name)
+
+    # Resolve the company's stock account once, still before any write.
+    _lcv_stock_t = Table("account")
+    _lcv_stock_q = (Q.from_(_lcv_stock_t).select(_lcv_stock_t.id)
+         .where(_lcv_stock_t.account_type == ValueWrapper("stock"))
+         .where(_lcv_stock_t.company_id == P())
+         .where(_lcv_stock_t.is_group == 0)
+         .limit(1))
+    _lcv_stock_row = conn.execute(_lcv_stock_q.get_sql(), (args.company_id,)).fetchone()
+    stock_acct_id = _lcv_stock_row["id"] if _lcv_stock_row else None
+    if not stock_acct_id:
+        err(f"No Stock-in-Hand account (account_type='stock') found for "
+            f"company {args.company_id}; cannot capitalise landed cost")
+
+    _lcv_notes = []
+    for c_idx, charge in enumerate(charges):
+        _lcv_desc = charge.get("description", f"Charge {c_idx + 1}")
+        _lcv_notes.append(
+            f"The carrier's bill for '{_lcv_desc}' must already be recorded against "
+            f"'{_lcv_acct_names[c_idx]}'; this voucher moves that cost into stock "
+            "and records nothing owed.")
 
     # Insert parent first
     lcv_t = Table("landed_cost_voucher")
@@ -3144,7 +4164,7 @@ def add_landed_cost_voucher(conn, args):
          .insert(P(), P(), ValueWrapper("0"), ValueWrapper("submitted"), P()))
     conn.execute(q.get_sql(), (lcv_id, posting_date, args.company_id))
 
-    fiscal_year = _get_fiscal_year(conn, posting_date)
+    fiscal_year = get_fiscal_year(conn, posting_date, company_id=args.company_id)
     cost_center_id = _get_cost_center(conn, args.company_id)
     gl_entries = []
 
@@ -3188,7 +4208,7 @@ def add_landed_cost_voucher(conn, args):
                 else:
                     proportion = Decimal("1") / Decimal(str(len(all_items)))
             else:  # value
-                item_value = to_decimal(item["amount"])
+                item_value = _lcv_net(item)
                 if total_value > 0:
                     proportion = item_value / total_value
                 else:
@@ -3200,7 +4220,17 @@ def add_landed_cost_voucher(conn, args):
                 allocated_amount = round_currency(charge_amount * proportion)
             allocated_so_far += allocated_amount
 
-            original_rate = to_decimal(item["rate"])
+            _lcv_disc = to_decimal(item.get("discount_amount") or "0")
+            if _lcv_disc == 0:
+                original_rate = to_decimal(item["rate"])
+            else:
+                item_qty = to_decimal(item["quantity"])
+                _lcv_net_amount = to_decimal(item["amount"]) - _lcv_disc
+                if item_qty != 0:
+                    original_rate = round_currency(
+                        _lcv_net_amount / item_qty)
+                else:
+                    original_rate = to_decimal(item["rate"])
             item_qty = to_decimal(item["quantity"])
             per_unit_charge = round_currency(allocated_amount / item_qty) if item_qty > 0 else Decimal("0")
             final_rate = round_currency(original_rate + per_unit_charge)
@@ -3218,22 +4248,6 @@ def add_landed_cost_voucher(conn, args):
                  str(final_rate)))
 
         # GL: DR Stock In Hand / CR Expense account for this charge
-        # Find stock account
-        acct_t = Table("account")
-        q = (Q.from_(acct_t).select(acct_t.id)
-             .where(acct_t.account_type == ValueWrapper("stock"))
-             .where(acct_t.company_id == P())
-             .where(acct_t.is_group == 0)
-             .limit(1))
-        stock_acct = conn.execute(q.get_sql(), (args.company_id,)).fetchone()
-        stock_acct_id = stock_acct["id"] if stock_acct else None
-
-        # Same INV-24 rule as expense_account_id above: silently skipping the
-        # GL debit while the SLE valuation half posts would desync the books.
-        if not stock_acct_id:
-            err(f"No Stock-in-Hand account (account_type='stock') found for "
-                f"company {args.company_id}; cannot capitalise landed cost")
-
         gl_entries.append({
             "account_id": stock_acct_id,
             "debit": str(round_currency(charge_amount)),
@@ -3268,6 +4282,7 @@ def add_landed_cost_voucher(conn, args):
             )
         except ValueError as e:
             sys.stderr.write(f"[erpclaw-buying] {e}\n")
+            conn.rollback()
             err(f"GL posting failed: {e}")
 
     # --- Valuation half (D1 / ADR-0030): reprice the stock subledger so the GL
@@ -3288,7 +4303,8 @@ def add_landed_cost_voucher(conn, args):
     ok({"landed_cost_voucher_id": lcv_id,
          "total_landed_cost": str(round_currency(total_landed_cost)),
          "gl_entries_created": len(gl_ids),
-         "sle_repricings": reprice_count})
+         "sle_repricings": reprice_count,
+         "notes": _lcv_notes})
 
 
 def _reprice_landed_cost(conn, lcv_id, company_id, posting_date, fiscal_year, negate=False):
@@ -3416,12 +4432,113 @@ def get_landed_cost_voucher(conn, args):
     result["items"] = [row_to_dict(r) for r in items]
     ok(result)
 
+def list_landed_cost_voucher_anomalies(conn, args):
+    """List submitted vouchers naming another company's receipt line or repeating a line."""
+    company_id = resolve_scope_company(conn, args.company_id, getattr(args, "company_name", None))
+
+    limit = int(args.limit or "20")
+    offset = int(args.offset or "0")
+
+    lcv_t = Table("landed_cost_voucher")
+    lci_t = Table("landed_cost_item")
+    lcc_t = Table("landed_cost_charge")
+    pri_t = Table("purchase_receipt_item")
+    pr_t = Table("purchase_receipt")
+
+    vq = (Q.from_(lcv_t)
+          .select(lcv_t.id, lcv_t.naming_series, lcv_t.posting_date)
+          .where(lcv_t.company_id == P())
+          .where(lcv_t.status == ValueWrapper("submitted")))
+    info = {}
+    for row in conn.execute(vq.get_sql(), (company_id,)).fetchall():
+        detail = row_to_dict(row)
+        info[detail["id"]] = detail
+
+    anomalies = []
+    if info:
+        vids = sorted(info)
+        oq = (Q.from_(lci_t)
+              .join(lcv_t).on(lci_t.landed_cost_voucher_id == lcv_t.id)
+              .join(pri_t).on(pri_t.id == lci_t.purchase_receipt_item_id)
+              .join(pr_t).on(pr_t.id == pri_t.purchase_receipt_id)
+              .select(lci_t.landed_cost_voucher_id,
+                      pr_t.id.as_("pr_id"),
+                      pri_t.id.as_("line_id"))
+              .where(lcv_t.company_id == P())
+              .where(lcv_t.status == ValueWrapper("submitted"))
+              .where(pr_t.company_id != lcv_t.company_id))
+        other = {}
+        for row in conn.execute(oq.get_sql(), (company_id,)).fetchall():
+            found = row_to_dict(row)
+            key = (found["landed_cost_voucher_id"], found["pr_id"])
+            other.setdefault(key, set()).add(found["line_id"])
+        for (vid, prid), lines in other.items():
+            if vid not in info:
+                continue
+            anomalies.append({
+                "landed_cost_voucher_id": vid,
+                "naming_series": info[vid]["naming_series"],
+                "posting_date": info[vid]["posting_date"],
+                "kind": "other-company-receipt",
+                "purchase_receipt_id": prid,
+                "purchase_receipt_item_ids": sorted(lines)})
+
+        cq = (Q.from_(lcc_t)
+              .select(lcc_t.landed_cost_voucher_id, fn.Count("*").as_("cnt"))
+              .where(lcc_t.landed_cost_voucher_id.isin([P() for _ in vids]))
+              .groupby(lcc_t.landed_cost_voucher_id))
+        charges = {}
+        for row in conn.execute(cq.get_sql(), tuple(vids)).fetchall():
+            counted = row_to_dict(row)
+            charges[counted["landed_cost_voucher_id"]] = int(counted["cnt"])
+
+        iq = (Q.from_(lci_t)
+              .join(pri_t).on(pri_t.id == lci_t.purchase_receipt_item_id)
+              .select(lci_t.landed_cost_voucher_id,
+                      lci_t.purchase_receipt_item_id,
+                      pri_t.purchase_receipt_id.as_("pr_id"),
+                      fn.Count("*").as_("cnt"))
+              .where(lci_t.purchase_receipt_item_id.notnull())
+              .where(lci_t.landed_cost_voucher_id.isin([P() for _ in vids]))
+              .groupby(lci_t.landed_cost_voucher_id,
+                       lci_t.purchase_receipt_item_id,
+                       pri_t.purchase_receipt_id))
+        repeated = {}
+        for row in conn.execute(iq.get_sql(), tuple(vids)).fetchall():
+            tallied = row_to_dict(row)
+            vid = tallied["landed_cost_voucher_id"]
+            if vid not in info:
+                continue
+            allowed = charges.get(vid, 0)
+            if allowed < 1:
+                allowed = 1
+            if int(tallied["cnt"]) > allowed:
+                key = (vid, tallied["pr_id"])
+                repeated.setdefault(key, set()).add(tallied["purchase_receipt_item_id"])
+        for (vid, prid), lines in repeated.items():
+            anomalies.append({
+                "landed_cost_voucher_id": vid,
+                "naming_series": info[vid]["naming_series"],
+                "posting_date": info[vid]["posting_date"],
+                "kind": "repeated-receipt-item",
+                "purchase_receipt_id": prid,
+                "purchase_receipt_item_ids": sorted(lines)})
+
+    anomalies.sort(key=lambda entry: (entry["landed_cost_voucher_id"],
+                                      entry["kind"],
+                                      entry["purchase_receipt_id"]))
+    anomalies.sort(key=lambda entry: entry["posting_date"], reverse=True)
+    total_count = len(anomalies)
+    ok({"company_id": company_id,
+        "anomalies": anomalies[offset:offset + limit],
+        "total_count": total_count})
+
 
 def cancel_landed_cost_voucher(conn, args):
     """Cancel a submitted landed cost voucher: reverse the GL AND the SLE valuation.
 
     Cancel = reverse, never edit. Reverses the constitutional GL posting
-    (reverse_gl_entries → active mirror rows, originals flagged is_cancelled=1)
+    (reverse_gl_entries → flagged mirror rows, originals flagged is_cancelled=1)
     and reverses the valuation half through the shared repricing helper with a
     negated delta (which also restores any FIFO layer rate bumps). INV-24 stays
     green because both the GL stock movement and the SLE value delta net to zero.
@@ -3441,7 +4558,7 @@ def cancel_landed_cost_voucher(conn, args):
     lcv_dict = row_to_dict(lcv)
     company_id = lcv_dict["company_id"]
     posting_date = lcv_dict["posting_date"]
-    fiscal_year = _get_fiscal_year(conn, posting_date)
+    fiscal_year = get_fiscal_year(conn, posting_date, company_id=company_id)
 
     # Reverse the SLE valuation half (negated delta + FIFO layer restore).
     reprice_count = _reprice_landed_cost(conn, args.landed_cost_voucher_id,
@@ -3550,15 +4667,7 @@ def update_three_way_match_policy(conn, args):
 
 def status_action(conn, args):
     """Buying summary for a company."""
-    company_id = args.company_id
-    if not company_id:
-        company_t = Table("company")
-        q = Q.from_(company_t).select(company_t.id).limit(1)
-        row = conn.execute(q.get_sql()).fetchone()
-        if not row:
-            err("No company found. Create one with erpclaw first.",
-                 suggestion="Run 'tutorial' to create a demo company, or 'setup company' to create your own.")
-        company_id = row["id"]
+    company_id = resolve_scope_company(conn, args.company_id, getattr(args, "company_name", None))
 
     sup_t = Table("supplier")
     q = (Q.from_(sup_t)
@@ -3631,6 +4740,13 @@ def import_suppliers(conn, args):
     if not os.path.isfile(csv_real):
         err(f"File not found: {csv_path}")
 
+    company_t = Table("company")
+    company_q = Q.from_(company_t).select(company_t.default_currency).where(company_t.id == P())
+    company_row = conn.execute(company_q.get_sql(), (company_id,)).fetchone()
+    if not company_row:
+        err(f"Company {company_id} not found")
+    company_currency = company_row["default_currency"]
+
     from erpclaw_lib.csv_import import validate_csv, parse_csv_rows
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
 
@@ -3642,9 +4758,24 @@ def import_suppliers(conn, args):
     if not rows:
         err("CSV file is empty")
 
+    import csv
+    with open(csv_real, "r", newline="", encoding="utf-8-sig") as handle:
+        raw_rows = list(csv.DictReader(handle))
+    raw_currencies = [(row.get("default_currency") or "") for row in raw_rows]
+    raw_types = [row.get("supplier_type") for row in raw_rows]
+    normalised_types = []
+    for pos, raw in enumerate(raw_types, start=1):
+        if raw is None or not raw.strip():
+            normalised_types.append("company")
+        else:
+            norm = raw.strip().lower()
+            if norm not in ("company", "individual"):
+                err(f"Row {pos}: supplier_type '{raw}' must be company or individual")
+            normalised_types.append(norm)
+
     imported = 0
     skipped = 0
-    for row in rows:
+    for index, row in enumerate(rows):
         name = row.get("name", "")
 
         sup_t = Table("supplier")
@@ -3657,17 +4788,21 @@ def import_suppliers(conn, args):
             continue
 
         supplier_id = str(uuid.uuid4())
-        naming = get_next_name(conn, "supplier")
+        try:
+            naming = get_next_name(conn, "supplier", company_id=company_id)
+        except ValueError:
+            naming = None
+        cell = (raw_currencies[index] or "").strip() if index < len(raw_currencies) else ""
+        currency = row.get("default_currency") if cell else company_currency
         q = (Q.into(sup_t)
              .columns("id", "name", "naming_series", "supplier_type",
-                      "country", "default_currency", "email", "phone",
+                      "default_currency", "email", "phone",
                       "tax_id", "company_id")
-             .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(), P()))
+             .insert(P(), P(), P(), P(), P(), P(), P(), P(), P()))
         conn.execute(q.get_sql(),
             (supplier_id, name, naming,
-             row.get("supplier_type", "Company"),
-             row.get("country"),
-             row.get("default_currency", "USD"),
+             normalised_types[index],
+             currency,
              row.get("email"), row.get("phone"), row.get("tax_id"),
              company_id))
         imported += 1
@@ -3901,13 +5036,13 @@ def get_blanket_po(conn, args):
 
 def list_blanket_pos(conn, args):
     """List blanket purchase orders."""
+    company_id = resolve_scope_company(conn, args.company_id, getattr(args, "company_name", None))
     bo = _t_blanket_order.as_("bo")
     params = []
     crit = (bo.blanket_order_type == ValueWrapper("buying"))
 
-    if args.company_id:
-        crit = Criterion.all([crit, bo.company_id == P()])
-        params.append(args.company_id)
+    crit = Criterion.all([crit, bo.company_id == P()])
+    params.append(company_id)
     if args.supplier_id:
         crit = Criterion.all([crit, bo.supplier_id == P()])
         params.append(args.supplier_id)
@@ -3975,6 +5110,11 @@ def create_po_from_blanket(conn, args):
     if not items or not isinstance(items, list):
         err("--items must be a non-empty JSON array")
 
+    dims_given = _dimension_input(args)
+    dims_obj = dims_given if dims_given is not None else {}
+    _validate_dims_before_write(conn, dims_obj)
+    dims_text = dimensions_json_text(dims_obj)
+
     po_id = str(uuid.uuid4())
     posting_date = args.posting_date or today
     total_amount = Decimal("0")
@@ -4021,12 +5161,12 @@ def create_po_from_blanket(conn, args):
     q = (Q.into(po_t)
          .columns("id", "supplier_id", "order_date", "total_amount",
                   "tax_amount", "grand_total", "tax_template_id", "status",
-                  "company_id")
-         .insert(P(), P(), P(), P(), P(), P(), P(), ValueWrapper("draft"), P()))
+                  "company_id", "dimensions_json")
+         .insert(P(), P(), P(), P(), P(), P(), P(), ValueWrapper("draft"), P(), P()))
     conn.execute(q.get_sql(),
         (po_id, supplier_id, posting_date,
          str(total_amount), str(round_currency(tax_amount)),
-         str(grand_total), args.tax_template_id, company_id))
+         str(grand_total), args.tax_template_id, company_id, dims_text))
 
     # Insert PO items
     poi_t = Table("purchase_order_item")
@@ -4127,6 +5267,21 @@ def create_po_from_so(conn, args):
         err("No items have a default supplier configured. "
             "Set up item_supplier mappings first.")
 
+    dims_given = _dimension_input(args)
+    if dims_given is not None:
+        dims_obj = dims_given
+        dims_text = dimensions_json_text(dims_given)
+    else:
+        parent_text = so["dimensions_json"] if so["dimensions_json"] else "{}"
+        dims_text = parent_text
+        try:
+            dims_obj = json.loads(parent_text)
+        except (ValueError, TypeError):
+            dims_obj = {}
+        if not isinstance(dims_obj, dict):
+            dims_obj = {}
+    _validate_dims_before_write(conn, dims_obj)
+
     # Create one PO per supplier
     pos_created = []
     posting_date = args.posting_date or _today()
@@ -4167,12 +5322,12 @@ def create_po_from_so(conn, args):
         q = (Q.into(po_t)
              .columns("id", "supplier_id", "order_date", "total_amount",
                       "tax_amount", "grand_total", "tax_template_id", "status",
-                      "company_id")
-             .insert(P(), P(), P(), P(), P(), P(), P(), ValueWrapper("draft"), P()))
+                      "company_id", "dimensions_json")
+             .insert(P(), P(), P(), P(), P(), P(), P(), ValueWrapper("draft"), P(), P()))
         conn.execute(q.get_sql(),
             (po_id, sup_id, posting_date,
              str(total_amount), str(round_currency(tax_amount)),
-             str(grand_total), args.tax_template_id, company_id))
+             str(grand_total), args.tax_template_id, company_id, dims_text))
 
         # Insert PO items
         poi_t = Table("purchase_order_item")
@@ -4217,7 +5372,8 @@ def create_po_from_material_request(conn, args):
     Optional --items JSON = per-line overrides, keyed by
     material_request_item_id or item_id:
       {"item_id": ..., "qty": ..., "rate": ..., "warehouse_id": ...,
-       "uom": ..., "required_date": ..., "discount_percentage": ...}
+       "uom": ..., "required_date": ..., "discount_percentage": ...,
+       "discount_amount": ...}
     An override qty of 0 skips the line (partial ordering — a later call
     orders the remainder). Rate resolution mirrors add-purchase-order's
     rate-must-be-positive contract: explicit override, else the item's
@@ -4302,6 +5458,7 @@ def create_po_from_material_request(conn, args):
     posting_date = args.posting_date or _today()
     total_amount = Decimal("0")
     po_item_rows = []
+    line_discounts = []
     line_updates = []          # (mri_id, new ordered_qty TEXT)
     ordered_lines = []         # response detail
     total_requested = Decimal("0")
@@ -4345,18 +5502,18 @@ def create_po_from_material_request(conn, args):
                 "last purchase rate or standard rate; pass a rate override "
                 "in --items")
 
-        discount_pct = to_decimal(str(ov.get("discount_percentage", "0")))
         amount = round_currency(qty * rate)
-        net_amount = round_currency(
-            amount * (Decimal("1") - discount_pct / Decimal("100")))
+        stored_pct, net_amount, line_discount = _order_line_net(
+            line["item_id"], amount, ov)
         total_amount += net_amount
+        line_discounts.append(str(line_discount))
 
         po_item_rows.append((
             str(uuid.uuid4()), po_id, line["item_id"],
             str(round_currency(qty)),
             ov.get("uom") or line["uom"] or item["stock_uom"],
             str(round_currency(rate)), str(amount),
-            str(round_currency(discount_pct)), str(net_amount),
+            str(stored_pct), str(net_amount),
             ov.get("warehouse_id") or line["warehouse_id"],
             ov.get("required_date") or line["required_date"] or mr["required_date"],
         ))
@@ -4375,6 +5532,11 @@ def create_po_from_material_request(conn, args):
         err("Nothing to order: every line is either fully ordered "
             "or skipped by overrides")
 
+    dims_given = _dimension_input(args)
+    dims_obj = dims_given if dims_given is not None else {}
+    _validate_dims_before_write(conn, dims_obj)
+    dims_text = dimensions_json_text(dims_obj)
+
     tax_amount, _ = _calculate_tax(conn, args.tax_template_id, total_amount)
     grand_total = round_currency(total_amount + tax_amount)
 
@@ -4383,12 +5545,12 @@ def create_po_from_material_request(conn, args):
     q = (Q.into(po_t)
          .columns("id", "supplier_id", "order_date", "total_amount",
                   "tax_amount", "grand_total", "tax_template_id", "status",
-                  "company_id")
-         .insert(P(), P(), P(), P(), P(), P(), P(), ValueWrapper("draft"), P()))
+                  "company_id", "dimensions_json")
+         .insert(P(), P(), P(), P(), P(), P(), P(), ValueWrapper("draft"), P(), P()))
     conn.execute(q.get_sql(),
         (po_id, supplier_id, posting_date,
          str(round_currency(total_amount)), str(round_currency(tax_amount)),
-         str(grand_total), args.tax_template_id, mr["company_id"]))
+         str(grand_total), args.tax_template_id, mr["company_id"], dims_text))
 
     poi_t = Table("purchase_order_item")
     poi_q = (Q.into(poi_t)
@@ -4421,7 +5583,8 @@ def create_po_from_material_request(conn, args):
            new_values={"material_request_id": args.material_request_id,
                        "supplier_id": supplier_id,
                        "grand_total": str(grand_total),
-                       "material_request_status": new_status})
+                       "material_request_status": new_status,
+                       "line_discounts": line_discounts})
     conn.commit()
     ok({"purchase_order_id": po_id,
          "material_request_id": args.material_request_id,
@@ -4454,21 +5617,24 @@ def add_recurring_bill_template(conn, args):
     if args.frequency not in VALID_FREQUENCIES:
         err(f"--frequency must be one of: {', '.join(VALID_FREQUENCIES)}")
 
-    # Validate supplier
-    sup_t = Table("supplier")
-    sq = (Q.from_(sup_t).select(sup_t.id)
-          .where((sup_t.id == P()) | (sup_t.name == P()))
-          .where(sup_t.status == ValueWrapper("active")))
-    sup = conn.execute(sq.get_sql(),
-        (args.supplier_id, args.supplier_id)).fetchone()
-    if not sup:
-        err(f"Active supplier {args.supplier_id} not found")
-    supplier_id = sup["id"]
-
     company_t = Table("company")
     cq = Q.from_(company_t).select(company_t.id).where(company_t.id == P())
     if not conn.execute(cq.get_sql(), (args.company_id,)).fetchone():
         err(f"Company {args.company_id} not found")
+
+    # Validate supplier
+    sup_t = Table("supplier")
+    sq = (Q.from_(sup_t).select(sup_t.id, sup_t.company_id)
+          .where((sup_t.id == P())
+                 | ((sup_t.name == P()) & (sup_t.company_id == P())))
+          .where(sup_t.status == ValueWrapper("active")))
+    sup = conn.execute(sq.get_sql(),
+        (args.supplier_id, args.supplier_id, args.company_id)).fetchone()
+    if not sup:
+        err(f"Active supplier {args.supplier_id} not found")
+    supplier_id = sup["id"]
+    if sup["company_id"] != args.company_id:
+        err(f"Supplier {supplier_id} belongs to another company")
 
     items = _parse_json_arg(args.items, "items")
     if not items or not isinstance(items, list):
@@ -4517,18 +5683,117 @@ def add_recurring_bill_template(conn, args):
 
 
 # ---------------------------------------------------------------------------
+# update-recurring-bill-template
+# ---------------------------------------------------------------------------
+
+def update_recurring_bill_template(conn, args):
+    """Update a recurring bill (AP invoice) template.
+
+    Closes the draft-then-activate lifecycle: a draft template never
+    generates, so activate it (status active) before generate-recurring-bills
+    can pick it up; pause or cancel it to stop generation. Mirrors selling's
+    update_recurring_template field by field. Every refusal comes before the
+    first UPDATE or DELETE.
+    """
+    if not args.template_id:
+        err("--template-id is required")
+
+    rtq = (Q.from_(_t_recurring_bill_template).select(_t_recurring_bill_template.star)
+           .where(_t_recurring_bill_template.id == P()))
+    rt = conn.execute(rtq.get_sql(), (args.template_id,)).fetchone()
+    if not rt:
+        err(f"Recurring bill template {args.template_id} not found")
+    old_status = row_to_dict(rt).get("status")
+    if old_status == "cancelled":
+        err(f"Recurring bill template {args.template_id} is 'cancelled' and cannot be changed")
+
+    if args.frequency is not None:
+        if args.frequency not in VALID_FREQUENCIES:
+            err(f"--frequency must be one of: {', '.join(VALID_FREQUENCIES)}")
+
+    if args.template_status is not None:
+        if args.template_status not in ("active", "paused", "cancelled"):
+            err("--template-status must be 'active', 'paused', or 'cancelled'")
+
+    parsed_items = None
+    if args.items:
+        parsed_items = _parse_json_arg(args.items, "items")
+        if not parsed_items or not isinstance(parsed_items, list):
+            err("--items must be a non-empty JSON array")
+        for i, item in enumerate(parsed_items):
+            if not isinstance(item, dict) or not item.get("item_id"):
+                err(f"Item {i}: item_id is required")
+
+    updated_fields = []
+    if args.frequency is not None:
+        updated_fields.append("frequency")
+    if args.template_status is not None:
+        updated_fields.append("status")
+    if args.items:
+        updated_fields.append("items")
+
+    if not updated_fields:
+        err("No fields to update")
+
+    if args.frequency is not None:
+        uq = (Q.update(_t_recurring_bill_template)
+              .set("frequency", P())
+              .set("updated_at", now())
+              .where(_t_recurring_bill_template.id == P()))
+        conn.execute(uq.get_sql(), (args.frequency, args.template_id))
+
+    if args.template_status is not None:
+        uq2 = (Q.update(_t_recurring_bill_template)
+               .set("status", P())
+               .set("updated_at", now())
+               .where(_t_recurring_bill_template.id == P()))
+        conn.execute(uq2.get_sql(), (args.template_status, args.template_id))
+
+    if args.items:
+        dq = (Q.from_(_t_recurring_bill_template_item).delete()
+              .where(_t_recurring_bill_template_item.template_id == P()))
+        conn.execute(dq.get_sql(), (args.template_id,))
+
+        rti_ins = (Q.into(_t_recurring_bill_template_item)
+                   .columns("id", "template_id", "item_id", "quantity", "uom",
+                             "rate", "amount")
+                   .insert(P(), P(), P(), P(), P(), P(), P()))
+        rti_ins_sql = rti_ins.get_sql()
+        for i, item in enumerate(parsed_items):
+            item_id = item.get("item_id")
+            if not item_id:
+                err(f"Item {i}: item_id is required")
+            qty = to_decimal(item.get("qty", "0"))
+            rate = to_decimal(item.get("rate", "0"))
+            amount = round_currency(qty * rate)
+
+            conn.execute(rti_ins_sql,
+                (str(uuid.uuid4()), args.template_id, item_id,
+                 str(round_currency(qty)), item.get("uom"),
+                 str(round_currency(rate)), str(amount)),
+            )
+
+    if args.template_status is not None:
+        audit(conn, "erpclaw-buying", "update-recurring-bill-template", "recurring_bill_template",
+               args.template_id, old_values={"status": old_status},
+               new_values={"updated_fields": updated_fields, "status": args.template_status})
+    else:
+        audit(conn, "erpclaw-buying", "update-recurring-bill-template", "recurring_bill_template",
+               args.template_id, new_values={"updated_fields": updated_fields})
+    conn.commit()
+    ok({"template_id": args.template_id, "updated_fields": updated_fields})
+
+
+# ---------------------------------------------------------------------------
 # list-recurring-bill-templates
 # ---------------------------------------------------------------------------
 
 def list_recurring_bill_templates(conn, args):
     """List recurring bill templates."""
+    company_id = resolve_scope_company(conn, args.company_id, getattr(args, "company_name", None))
     rt = _t_recurring_bill_template.as_("rt")
-    params = []
-    crit = None
-
-    if args.company_id:
-        crit = (rt.company_id == P())
-        params.append(args.company_id)
+    params = [company_id]
+    crit = (rt.company_id == P())
     if args.supplier_id:
         cond = rt.supplier_id == P()
         crit = Criterion.all([crit, cond]) if crit else cond
@@ -4632,20 +5897,26 @@ def generate_recurring_bills(conn, args):
 
             pi_id = str(uuid.uuid4())
 
+            sup_t = Table("supplier")
+            supq = Q.from_(sup_t).select(sup_t.star).where(sup_t.id == P())
+            supplier_row = conn.execute(supq.get_sql(), (supplier_id,)).fetchone()
+            currency = _document_currency(conn, supplier_row, company_id)
+
             # Create purchase invoice
             pi_t = Table("purchase_invoice")
             pi_ins = (Q.into(pi_t)
                        .columns("id", "supplier_id", "posting_date", "due_date",
                                  "total_amount", "tax_amount", "grand_total",
                                  "outstanding_amount", "tax_template_id",
-                                 "status", "update_stock", "company_id")
+                                 "status", "update_stock", "company_id",
+                                 "currency", "exchange_rate")
                        .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(),
-                               ValueWrapper("draft"), 0, P()))
+                               ValueWrapper("draft"), 0, P(), P(), P()))
             conn.execute(pi_ins.get_sql(),
                 (pi_id, supplier_id, next_date, due_date,
                  str(total_amount), str(tax_amount), str(grand_total),
                  str(grand_total), tmpl_dict.get("tax_template_id"),
-                 company_id))
+                 company_id, currency, "1"))
 
             pii_t = Table("purchase_invoice_item")
             pii_ins = (Q.into(pii_t)
@@ -4663,81 +5934,11 @@ def generate_recurring_bills(conn, args):
 
             # Auto-submit if configured
             if auto_submit:
-                naming = get_next_name(conn, "purchase_invoice", company_id=company_id)
-
-                # GL posting for auto-submitted invoices
-                payable_account = _get_payable_account(conn, company_id)
-                expense_account = _get_expense_account(conn, company_id)
-
-                if payable_account and expense_account:
-                    fiscal_year = _get_fiscal_year(conn, next_date)
-                    cost_center_id = _get_cost_center(conn, company_id)
-
-                    gl_entries = [
-                        {
-                            "account_id": expense_account,
-                            "debit": str(round_currency(total_amount)),
-                            "credit": "0",
-                            "cost_center_id": cost_center_id,
-                            "fiscal_year": fiscal_year,
-                        },
-                        {
-                            "account_id": payable_account,
-                            "debit": "0",
-                            "credit": str(round_currency(grand_total)),
-                            "party_type": "supplier",
-                            "party_id": supplier_id,
-                            "fiscal_year": fiscal_year,
-                        },
-                    ]
-
-                    try:
-                        insert_gl_entries(
-                            conn, gl_entries,
-                            voucher_type="purchase_invoice",
-                            voucher_id=pi_id,
-                            posting_date=next_date,
-                            company_id=company_id,
-                            remarks=f"Recurring Bill from template {template_id}",
-                        )
-                    except ValueError as e:
-                        sys.stderr.write(f"[erpclaw-buying] {e}\n")
-                        errors.append({"template_id": template_id,
-                                       "error": "GL posting failed"})
-                        conn.rollback()
-                        continue
-
-                    # Voucher-level PLE (+grand_total) — same row submit-purchase-
-                    # invoice posts. Without it an auto-submitted recurring bill
-                    # carries outstanding=grand_total with a zero PLE net, breaking
-                    # INV-25 (AR/AP summary ≡ detail) on a legitimate flow and
-                    # INV-22 the day the bill is paid (S1.4 writer-sweep fix W13,
-                    # planning/simlogs/wavef-s14-inv25_SIM_2026-07-25.md).
-                    rb_ple_t = Table("payment_ledger_entry")
-                    rb_ple_q = (Q.into(rb_ple_t)
-                                .columns("id", "posting_date", "account_id",
-                                         "party_type", "party_id",
-                                         "voucher_type", "voucher_id",
-                                         "against_voucher_type",
-                                         "against_voucher_id", "amount",
-                                         "amount_in_account_currency", "remarks")
-                                .insert(P(), P(), P(), ValueWrapper("supplier"),
-                                        P(), P(), P(), P(), P(), P(), P(), P()))
-                    rb_ple_amount = str(round_currency(grand_total))
-                    conn.execute(rb_ple_q.get_sql(),
-                        (str(uuid.uuid4()), next_date, payable_account,
-                         supplier_id, "purchase_invoice", pi_id,
-                         "purchase_invoice", pi_id,
-                         rb_ple_amount, rb_ple_amount,
-                         f"Recurring Bill from template {template_id}"))
-
-                uq_pi = (Q.update(pi_t)
-                         .set("status", ValueWrapper("submitted"))
-                         .set("naming_series", P())
-                         .set("updated_at", now())
-                         .where(pi_t.id == P()))
-                conn.execute(uq_pi.get_sql(), (naming, pi_id))
-                status = "submitted"
+                submit_resp = _submit_purchase_invoice_in_txn(
+                    conn, pi_id,
+                    remarks=f"Recurring Bill from template {template_id}")
+                naming = submit_resp["naming_series"]
+                status = submit_resp["status"]
 
             # Update template dates
             new_next = _next_bill_date(next_date, frequency)
@@ -4749,12 +5950,17 @@ def generate_recurring_bills(conn, args):
             conn.execute(uq_rt.get_sql(), (next_date, new_next, template_id))
 
             # Check if template is completed
+            template_completed = False
             if tmpl_dict.get("end_date") and new_next > tmpl_dict["end_date"]:
                 uq_comp = (Q.update(_t_recurring_bill_template)
                            .set("status", ValueWrapper("completed"))
                            .set("updated_at", now())
                            .where(_t_recurring_bill_template.id == P()))
                 conn.execute(uq_comp.get_sql(), (template_id,))
+                template_completed = True
+
+            conn.commit()
+            if template_completed:
                 templates_completed += 1
 
             bills_generated.append({
@@ -4767,6 +5973,7 @@ def generate_recurring_bills(conn, args):
             })
 
         except Exception as e:
+            conn.rollback()
             errors.append({"template_id": template_id,
                            "error": str(e)})
             continue
@@ -4920,6 +6127,17 @@ def set_item_purchase_uom(conn, args):
 # Action dispatch
 # ---------------------------------------------------------------------------
 
+def _resolve_company_flag(conn, args):
+    """Resolve --company (name or id) into args.company_id."""
+    if getattr(args, "company_name", None) and not getattr(args, "company_id", None):
+        c = Table("company")
+        probe = (Q.from_(c).select(c.id).where(c.id == P()))
+        if conn.execute(probe.get_sql(), (args.company_name,)).fetchone():
+            args.company_id = args.company_name
+            return
+        args.company_id = resolve_company_id(conn, None, args.company_name)
+
+
 ACTIONS = {
     "add-supplier": add_supplier,
     "update-supplier": update_supplier,
@@ -4955,10 +6173,12 @@ ACTIONS = {
     "submit-purchase-invoice": submit_purchase_invoice,
     "cancel-purchase-invoice": cancel_purchase_invoice,
     "create-debit-note": create_debit_note,
+    # RETIRED — routable on purpose; answers with a steer and writes nothing.
     "update-invoice-outstanding": update_invoice_outstanding,
     "add-landed-cost-voucher": add_landed_cost_voucher,
     "list-landed-cost-vouchers": list_landed_cost_vouchers,
     "get-landed-cost-voucher": get_landed_cost_voucher,
+    "list-landed-cost-voucher-anomalies": list_landed_cost_voucher_anomalies,
     "cancel-landed-cost-voucher": cancel_landed_cost_voucher,
     "import-suppliers": import_suppliers,
     "update-receipt-tolerance": update_receipt_tolerance,
@@ -4972,6 +6192,7 @@ ACTIONS = {
     "add-recurring-bill-template": add_recurring_bill_template,
     "list-recurring-bill-templates": list_recurring_bill_templates,
     "generate-recurring-bills": generate_recurring_bills,
+    "update-recurring-bill-template": update_recurring_bill_template,
 
     # --- Sprint 7: Multi-UOM ---
     "set-item-purchase-uom": set_item_purchase_uom,
@@ -4997,6 +6218,7 @@ def main():
     parser.add_argument("--email")
     parser.add_argument("--phone")
     parser.add_argument("--company-id")
+    parser.add_argument("--company", dest="company_name", default=None)
     parser.add_argument("--csv-path")
 
     # Material request
@@ -5073,6 +6295,12 @@ def main():
     parser.add_argument("--purchase-uom")
     parser.add_argument("--conversion-factor")
 
+    parser.add_argument("--dimensions", default=None)
+    parser.add_argument("--dimension-key", dest="dimension_key",
+                        action="append", default=None)
+    parser.add_argument("--dimension-value", dest="dimension_value",
+                        action="append", default=None)
+
     # Common
     parser.add_argument("--items")  # JSON
     parser.add_argument("--search")
@@ -5083,12 +6311,16 @@ def main():
     parser.add_argument("--custom-fields", default=None,
                         help='User-defined fields as a JSON object, e.g. \'{"rating": "A"}\'')
 
-    args, unknown = parser.parse_known_args()
+    raw = sys.argv[1:]
+    try:
+        parse_argv, _auth_id = authority_gate.split_authorization_id(raw)
+    except ValueError:
+        err(INPUT_INVALID)
+    args, unknown = parser.parse_known_args(parse_argv)
     check_unknown_args(parser, unknown)
     check_input_lengths(args)
 
-    db_path = args.db_path or DEFAULT_DB_PATH
-    ensure_db_exists(db_path)
+    db_path = getattr(args, "db_path", None)   # None unless --db-path was given
     conn = get_connection(db_path)
 
     # Dependency check
@@ -5099,12 +6331,22 @@ def main():
         conn.close()
         sys.exit(1)
 
+    def _handler(handle):
+        _resolve_company_flag(handle, args)
+        return ACTIONS[args.action](handle, args)
+
     try:
-        ACTIONS[args.action](conn, args)
+        authority_gate.run(conn, args.action, raw, _handler, option_strings=[s for a in parser._actions for s in a.option_strings], repeatable_options=[s for a in parser._actions if isinstance(a, argparse._AppendAction) for s in a.option_strings])
+    except authority_gate.AuthorityRefusal as refusal:
+        conn.rollback()
+        err(refusal.args[0], suggestion=authority_gate.SUGGESTIONS.get(refusal.args[0]))
     except Exception as e:
+        if isinstance(e, ValueError) and e.args == (INPUT_INVALID,):
+            conn.rollback()
+            err(INPUT_INVALID)
         conn.rollback()
         sys.stderr.write(f"[erpclaw-buying] {e}\n")
-        err("An unexpected error occurred")
+        err(unexpected_error_message(e))
     finally:
         conn.close()
 

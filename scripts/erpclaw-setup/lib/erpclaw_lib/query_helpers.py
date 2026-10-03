@@ -10,7 +10,23 @@ import sys
 # codebase uses; raw `pypika` is NOT importable here). fn.Lower(field) == P()
 # is the proven cross-DB case-insensitive pattern (see resolve_item, FINDING-008
 # / FINDING-005/006). Never .ilike()/COLLATE NOCASE — those break Postgres.
-from erpclaw_lib.query import Q as _Q, Table as _T, fn as _fn, P as _P
+from erpclaw_lib.query import Q as _Q, Table as _T, fn as _fn, P as _P, Case as _Case, Order as _Order
+
+
+def _refuse(payload: dict) -> None:
+    """Print a standard error envelope on stdout and exit 1.
+
+    Every refusal carries ``status``, ``error`` and ``message`` (``message``
+    repeats ``error``); every other key of ``payload`` passes through
+    unchanged. Prints with ``print(json.dumps(...))`` and exits with
+    ``sys.exit(1)``, the historical call shape, so harnesses patching
+    ``sys.exit`` see no difference.
+    """
+    data = {"status": "error"}
+    data.update(payload)
+    data["message"] = data["error"]
+    print(json.dumps(data))
+    sys.exit(1)
 
 
 def resolve_company_id(conn, company_id: str | None = None,
@@ -26,6 +42,13 @@ def resolve_company_id(conn, company_id: str | None = None,
          we never post one company's books to another (wrong-entity failure).
       3. Neither: sole-company auto-detect (unchanged) — single company is
          returned automatically; multiple companies emit a helpful error.
+
+    At ACTIVE the neither-given branch answers from the acting principal's
+    scope instead of the install: one in-scope company returns automatically,
+    several in scope refuse as ambiguous listing those companies, and none
+    in scope refuses.
+
+    Every refusal carries ``status``, ``error`` and ``message``.
 
     Args:
         conn: SQLite/Postgres connection with dict-like row access.
@@ -54,30 +77,84 @@ def resolve_company_id(conn, company_id: str | None = None,
         if len(rows) == 1:
             return rows[0]["id"]
         # 0 rows (UNIQUE name means >1 is impossible) -> loud, actionable.
-        avail = conn.execute(
-            "SELECT name FROM company ORDER BY name LIMIT 25").fetchall()
+        avail_q = _Q.from_(c).select(c.name).orderby(c.name).limit(25)
+        avail = conn.execute(avail_q.get_sql()).fetchall()
         names = [r["name"] for r in avail]
-        print(json.dumps({
+        _refuse({
             "error": f"Company '{term}' not found.",
             "available_companies": names,
             "suggestion": ("Use one of the available company names exactly, "
-                           "or run 'list-companies' to see them.")}))
-        sys.exit(1)
+                           "or run 'list-companies' to see them.")})
 
-    # 3. Neither given -> sole-company auto-detect (unchanged behavior).
-    rows = conn.execute(
-        "SELECT id, name FROM company ORDER BY name LIMIT 10").fetchall()
+    # 3. Neither given -> sole-company auto-detect (unchanged behavior
+    # at STAGED); at ACTIVE the acting principal's scope replaces the
+    # install-wide rule.
+    from erpclaw_lib import actor as _actor
+    from erpclaw_lib import company_scope as _company_scope
+    try:
+        scope = _company_scope.resolution_scope(conn, _actor.current())
+    except _company_scope.ScopeRefused as exc:
+        _refuse({"error": exc.code})
+    if scope is None:
+        c = _T("company")
+        scope_q = _Q.from_(c).select(c.id, c.name).orderby(c.name).limit(10)
+        rows = conn.execute(scope_q.get_sql()).fetchall()
+        if not rows:
+            _refuse({"error": "No company found. Create one first.",
+                     "suggestion": "Run 'tutorial' to create a demo company, or 'setup company' to create your own."})
+        if len(rows) == 1:
+            return rows[0]["id"]
+        companies = [{"id": r["id"], "name": r["name"]} for r in rows]
+        _refuse({"error": "Multiple companies found. Please specify the company by name.",
+                 "companies": companies,
+                 "suggestion": "Pass the company name (e.g. --company \"Acme\"), or use --company-id with one of the IDs above."})
+    ids = sorted(scope)
+    c = _T("company")
+    scope_q = (_Q.from_(c).select(c.id, c.name)
+               .where(c.id.isin([_P() for _ in ids]))
+               .orderby(c.name).limit(10))
+    rows = conn.execute(scope_q.get_sql(), ids).fetchall()
     if not rows:
-        print(json.dumps({"error": "No company found. Create one first.",
-                          "suggestion": "Run 'tutorial' to create a demo company, or 'setup company' to create your own."}))
-        sys.exit(1)
+        _refuse({"error": _company_scope.REFUSAL_CODE})
     if len(rows) == 1:
         return rows[0]["id"]
     companies = [{"id": r["id"], "name": r["name"]} for r in rows]
-    print(json.dumps({"error": "Multiple companies found. Please specify the company by name.",
-                      "companies": companies,
-                      "suggestion": "Pass the company name (e.g. --company \"Acme\"), or use --company-id with one of the IDs above."}))
-    sys.exit(1)
+    _refuse({"error": _company_scope.SCOPE_AMBIGUOUS,
+             "companies": companies,
+             "suggestion": "Pass the company name (e.g. --company \"Acme\"), or use --company-id with one of the IDs above."})
+
+
+def resolve_scope_company(conn, company_id: str | None = None,
+                         company_name: str | None = None) -> str:
+    """Resolve the company scope of a list or report.
+
+    A list or report that takes an optional company uses the only company
+    when exactly one exists and refuses when there are none or more than
+    one. An explicit company id that does not exist is refused, never
+    answered with an empty page. A given ``company_name`` is ignored when
+    ``company_id`` is given. This helper is for lists and reports; write
+    paths keep :func:`resolve_company_id`.
+
+    Args:
+        conn: SQLite/Postgres connection with dict-like row access.
+        company_id: Explicit UUID (may be None/empty); when truthy it is
+            checked against the company table.
+        company_name: Human company name from NL (may be None/empty).
+
+    Returns:
+        A valid company UUID string.
+
+    Raises:
+        SystemExit: via JSON error on stdout for every non-resolving case.
+    """
+    if company_id:
+        c = _T("company")
+        q = _Q.from_(c).select(c.id).where(c.id == _P())
+        rows = conn.execute(q.get_sql(), [company_id]).fetchall()
+        if rows:
+            return company_id
+        _refuse({"error": "Company not found: %s" % company_id})
+    return resolve_company_id(conn, None, company_name)
 
 
 def resolve_account_by_name(conn, company_id: str,
@@ -160,39 +237,78 @@ def resolve_account_by_name(conn, company_id: str,
     sys.exit(1)
 
 
-def get_fiscal_year(conn, posting_date: str) -> str | None:
+def get_fiscal_year(conn, posting_date: str, company_id: str) -> str | None:
     """Return the fiscal year name for a posting date, or None.
 
-    Looks for an open fiscal year whose date range covers *posting_date*.
+    Company scoping is mandatory: only the posting company's open years
+    count. The legacy cross-company lookup is gone. A None or empty
+    ``company_id`` raises ``ValueError``.
 
     Args:
         conn: SQLite connection with row_factory = sqlite3.Row.
         posting_date: ISO 8601 date string (YYYY-MM-DD).
+        company_id: UUID of the posting company (required).
 
     Returns:
         The fiscal year ``name`` string, or ``None`` if no matching open
         fiscal year exists.
+
+    Raises:
+        ValueError: If ``company_id`` is None or empty.
     """
+    if not company_id:
+        raise ValueError("get_fiscal_year needs the posting company")
     fy = conn.execute(
-        "SELECT name FROM fiscal_year WHERE start_date <= ? AND end_date >= ? AND is_closed = 0",
-        (posting_date, posting_date),
+        "SELECT name FROM fiscal_year WHERE company_id = ? AND start_date <= ? AND end_date >= ? AND is_closed = 0",
+        (company_id, posting_date, posting_date),
     ).fetchone()
     return fy["name"] if fy else None
 
 
 def get_default_cost_center(conn, company_id: str) -> str | None:
-    """Return the first non-group cost center ID for a company, or None.
+    """Return the company's default cost center ID, or None.
+
+    The company's configured default cost center is used when it names a
+    non-group cost center of that company; otherwise the company's non-group
+    cost centers are ordered with rows missing a creation timestamp last,
+    then by creation timestamp, name and id, and the first row is used.
 
     Args:
         conn: SQLite connection with row_factory = sqlite3.Row.
         company_id: UUID of the company.
 
     Returns:
-        The cost center ``id`` string, or ``None`` if no leaf cost centre
-        exists for the company.
+        The cost center ``id`` string, or ``None`` when the company has no
+        non-group cost center.
     """
-    cc = conn.execute(
-        "SELECT id FROM cost_center WHERE company_id = ? AND is_group = 0 LIMIT 1",
-        (company_id,),
-    ).fetchone()
-    return cc["id"] if cc else None
+    co = _T("company")
+    q = _Q.from_(co).select(co.default_cost_center_id).where(co.id == _P())
+    row = conn.execute(q.get_sql(), (company_id,)).fetchone()
+    default_id = row["default_cost_center_id"] if row else None
+    if default_id:
+        cc = _T("cost_center")
+        q = (
+            _Q.from_(cc)
+            .select(cc.id)
+            .where(cc.id == _P())
+            .where(cc.company_id == _P())
+            .where(cc.is_group == 0)
+        )
+        hit = conn.execute(q.get_sql(), (default_id, company_id)).fetchone()
+        if hit:
+            return hit["id"]
+    cc = _T("cost_center")
+    null_last = _Case().when(cc.created_at.isnull(), 1).else_(0)
+    q = (
+        _Q.from_(cc)
+        .select(cc.id)
+        .where(cc.company_id == _P())
+        .where(cc.is_group == 0)
+        .orderby(null_last)
+        .orderby(cc.created_at)
+        .orderby(cc.name)
+        .orderby(cc.id)
+        .limit(1)
+    )
+    hit = conn.execute(q.get_sql(), (company_id,)).fetchone()
+    return hit["id"] if hit else None

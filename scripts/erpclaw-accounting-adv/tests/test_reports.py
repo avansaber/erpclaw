@@ -21,11 +21,23 @@ class TestStandardsComplianceDashboard:
         assert "intercompany" in result
         assert "consolidation" in result
 
-    def test_dashboard_no_company(self, conn, env):
+    def test_dashboard_no_company_refuses(self, conn, env):
         result = call_action(mod.standards_compliance_dashboard, conn, ns(
             company_id=None,
         ))
-        assert is_ok(result)
+        assert is_error(result)
+        rows = conn.execute(
+            "SELECT id, name FROM company ORDER BY name").fetchall()
+        assert result == {
+            "status": "error",
+            "error": ("Multiple companies found. "
+                      "Please specify the company by name."),
+            "message": ("Multiple companies found. "
+                        "Please specify the company by name."),
+            "companies": [{"id": r["id"], "name": r["name"]} for r in rows],
+            "suggestion": ("Pass the company name (e.g. --company \"Acme\"), "
+                           "or use --company-id with one of the IDs above."),
+        }
 
 
 class TestStatus:

@@ -20,17 +20,30 @@ Usage:
         customer_id="...",
         items=[{"description": "Monthly rent", "qty": "1", "rate": "2500.00"}],
     )
-    invoice_id = result["sales_invoice"]["id"]
+    invoice_id = result["sales_invoice_id"]
 
     # Low-level: call any action on any skill
     result = call_skill_action("erpclaw", "list-customers",
                                {"--company-id": company_id})
 """
 import json
+import os
 import subprocess
+import sys
 from typing import Optional
 
+from erpclaw_lib import actor
 from erpclaw_lib.dependencies import resolve_skill_script, check_subprocess_target
+
+
+def child_interpreter() -> str:
+    """Interpreter for child skill actions.
+
+    Returns the interpreter running this process so a child action
+    inherits the caller's environment. Falls back to "python3" when
+    the running interpreter is unknown.
+    """
+    return sys.executable or "python3"
 
 
 class CrossSkillError(Exception):
@@ -57,7 +70,7 @@ def call_skill_action(
 
     Args:
         skill_name: e.g. 'erpclaw'
-        action: e.g. 'add-sales-invoice'
+        action: e.g. 'create-sales-invoice'
         args: Dict of CLI arguments. Keys should include '--' prefix.
               e.g. {"--customer-id": "abc", "--items": '[...]'}
         db_path: Optional non-default DB path to pass through.
@@ -77,7 +90,7 @@ def call_skill_action(
             action=action,
         )
 
-    cmd = ["python3", script_path, "--action", action]
+    cmd = [child_interpreter(), script_path, "--action", action]
 
     if args:
         for key, value in args.items():
@@ -91,6 +104,7 @@ def call_skill_action(
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=timeout,
+            env=actor.child_env(os.environ, "%s:%s" % (skill_name, action)),
         )
     except subprocess.TimeoutExpired:
         raise CrossSkillError(
@@ -174,15 +188,45 @@ def create_invoice(
         timeout: Subprocess timeout.
 
     Returns:
-        Full response dict from erpclaw, typically:
-        {"status": "ok", "sales_invoice": {"id": "...", "name": "INV-..."}}
+        The selling module's flat response dict, unchanged:
+        {"status": "ok", "sales_invoice_id": "...", "grand_total": ...}
 
     Raises:
         CrossSkillError: If selling skill not installed or invoice creation fails.
+            Also raised when project_id or remarks is passed: neither is
+            carried by create-sales-invoice, so passing one is refused loudly
+            instead of being dropped silently.
     """
+    if project_id is not None:
+        raise CrossSkillError(
+            "create_invoice: project_id is not carried by create-sales-invoice; "
+            "remove it or put the text on the vertical's own record",
+            skill="erpclaw",
+            action="create-sales-invoice",
+        )
+    if remarks is not None:
+        raise CrossSkillError(
+            "create_invoice: remarks is not carried by create-sales-invoice; "
+            "remove it or put the text on the vertical's own record",
+            skill="erpclaw",
+            action="create-sales-invoice",
+        )
+    resolved_items = []
+    service_item_id = None
+    for item in items:
+        if item.get("item_id"):
+            resolved_items.append(dict(item))
+            continue
+        if service_item_id is None:
+            service_item_id = ensure_service_item(
+                company_id, db_path=db_path, timeout=timeout,
+            )
+        line = dict(item)
+        line["item_id"] = service_item_id
+        resolved_items.append(line)
     args = {
         "--customer-id": customer_id,
-        "--items": json.dumps(items),
+        "--items": json.dumps(resolved_items),
     }
     if company_id:
         args["--company-id"] = company_id
@@ -190,14 +234,72 @@ def create_invoice(
         args["--posting-date"] = posting_date
     if due_date:
         args["--due-date"] = due_date
-    if project_id:
-        args["--project-id"] = project_id
-    if remarks:
-        args["--remarks"] = remarks
 
     return call_skill_action(
-        "erpclaw", "add-sales-invoice",
+        "erpclaw", "create-sales-invoice",
         args=args, db_path=db_path, timeout=timeout,
+    )
+
+
+_SERVICE_ITEM_CACHE = {}
+
+
+def ensure_service_item(
+    company_id,
+    db_path=None,
+    timeout=30,
+    *,
+    item_code=None,
+    item_name="Vertical Service",
+) -> str:
+    """Return the id of the company-scoped generic service item.
+
+    The selling module refuses invoice lines without an item_id, but verticals
+    carry no item reference — so description-only lines bill against one
+    generic service item per company, created through the inventory add-item
+    action and never by writing the item table directly (this library opens no
+    database connection; everything goes through actions).
+
+    On an add-item refusal (most likely a duplicate code from a concurrent or
+    earlier invoice), the item is looked up by code through the inventory
+    list-items action (--search filter) and the existing id is reused. Results
+    are cached per (company_id, item_code, db_path) so one invoice with many
+    lines makes one lookup.
+
+    Raises:
+        CrossSkillError: If neither path yields an id.
+    """
+    code = item_code or (f"SVC-{company_id}" if company_id else "SVC-DEFAULT")
+    key = (company_id, code, db_path)
+    if key in _SERVICE_ITEM_CACHE:
+        return _SERVICE_ITEM_CACHE[key]
+    try:
+        created = call_skill_action(
+            "erpclaw", "add-item",
+            args={"--item-code": code, "--item-name": item_name,
+                  "--item-type": "service"},
+            db_path=db_path, timeout=timeout,
+        )
+    except CrossSkillError:
+        created = None
+    if created is not None:
+        new_id = created.get("item_id") or created.get("id")
+        if new_id:
+            _SERVICE_ITEM_CACHE[key] = new_id
+            return new_id
+    found = call_skill_action(
+        "erpclaw", "list-items",
+        args={"--search": code},
+        db_path=db_path, timeout=timeout,
+    )
+    for row in found.get("items", []) or []:
+        if row.get("item_code") == code and row.get("id"):
+            _SERVICE_ITEM_CACHE[key] = row["id"]
+            return row["id"]
+    raise CrossSkillError(
+        f"ensure_service_item: no service item for code {code}",
+        skill="erpclaw",
+        action="list-items",
     )
 
 
@@ -222,9 +324,12 @@ def submit_invoice(
     Raises:
         CrossSkillError: On failure.
     """
+    # submit-sales-invoice is a gated high-impact action: the foundation
+    # router requires a per-invocation --user-confirmed and strips it before
+    # forwarding, so the selling parser never sees it.
     return call_skill_action(
         "erpclaw", "submit-sales-invoice",
-        args={"--invoice-id": invoice_id},
+        args={"--sales-invoice-id": invoice_id, "--user-confirmed": None},
         db_path=db_path, timeout=timeout,
     )
 
@@ -246,26 +351,62 @@ def create_purchase_invoice(
 ) -> dict:
     """Create a Purchase Invoice via erpclaw.
 
+    This is the standard way for verticals to generate purchase invoices.
+    Creates a draft invoice that can be submitted separately.
+
     Args:
         supplier_id: The supplier to invoice.
-        items: List of item dicts with description, qty, rate.
-        company_id: Company ID.
-        posting_date: Invoice date.
-        due_date: Payment due date.
-        project_id: Link to project.
-        remarks: Free-text remarks.
+        items: List of item dicts, each with at minimum:
+               {"description": str, "qty": str, "rate": str}
+               Optional: {"item_id": str, "uom": str}
+        company_id: Company ID (passed if needed).
+        posting_date: Invoice date (YYYY-MM-DD). Defaults to today in skill.
+        due_date: Payment due date (YYYY-MM-DD).
+        project_id: Link invoice to a project.
+        remarks: Free-text remarks on the invoice.
         db_path: Non-default DB path.
         timeout: Subprocess timeout.
 
     Returns:
-        Response dict from erpclaw.
+        The buying module's flat response dict, unchanged:
+        {"status": "ok", "purchase_invoice_id": "...", "grand_total": ...}
 
     Raises:
-        CrossSkillError: On failure.
+        CrossSkillError: If buying skill not installed or invoice creation fails.
+            Also raised when project_id or remarks is passed: neither is
+            carried by create-purchase-invoice, so passing one is refused loudly
+            instead of being dropped silently.
     """
+    if project_id is not None:
+        raise CrossSkillError(
+            "create_purchase_invoice: project_id is not carried by create-purchase-invoice; "
+            "remove it or put the text on the vertical's own record",
+            skill="erpclaw",
+            action="create-purchase-invoice",
+        )
+    if remarks is not None:
+        raise CrossSkillError(
+            "create_purchase_invoice: remarks is not carried by create-purchase-invoice; "
+            "remove it or put the text on the vertical's own record",
+            skill="erpclaw",
+            action="create-purchase-invoice",
+        )
+    resolved_items = []
+    service_item_id = None
+    for item in items:
+        if item.get("item_id"):
+            resolved_items.append(dict(item))
+            continue
+        if service_item_id is None:
+            service_item_id = ensure_service_item(
+                company_id, db_path=db_path, timeout=timeout,
+            )
+        line = dict(item)
+        line["item_id"] = service_item_id
+        resolved_items.append(line)
     args = {
         "--supplier-id": supplier_id,
-        "--items": json.dumps(items),
+        "--items": json.dumps(resolved_items),
     }
     if company_id:
         args["--company-id"] = company_id
@@ -273,13 +414,9 @@ def create_purchase_invoice(
         args["--posting-date"] = posting_date
     if due_date:
         args["--due-date"] = due_date
-    if project_id:
-        args["--project-id"] = project_id
-    if remarks:
-        args["--remarks"] = remarks
 
     return call_skill_action(
-        "erpclaw", "add-purchase-invoice",
+        "erpclaw", "create-purchase-invoice",
         args=args, db_path=db_path, timeout=timeout,
     )
 

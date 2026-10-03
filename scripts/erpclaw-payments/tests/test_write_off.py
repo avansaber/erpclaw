@@ -183,22 +183,43 @@ def _post_invoice_gl(conn, env, voucher_type, voucher_id, amount, *,
     ledger row but no GL, which is right for the F2 suite and wrong here: F17a's
     claims are GL claims, and INV-01/02/17 measure a fixture rather than a book
     unless the invoice's own pair exists.
+
+    The legs are stamped with the company's fiscal year covering the posting
+    date below (a parameterised PyPika query): taking the first year row
+    goes wrong as soon as a second year exists, which
+    ``_ensure_open_fy_for_today`` inserts whenever today leaves the
+    fixture's span. Zero or overlapping years covering the date raise.
     """
     sys.path.insert(0, os.path.join(os.path.dirname(_SCRIPTS_DIR), "scripts",
                                     "erpclaw-setup", "lib"))
     from erpclaw_lib.gl_posting import insert_gl_entries
+    from erpclaw_lib.query import P, Q, Table
+    posting_date = "2026-06-01"
+    fy = Table("fiscal_year")
+    fy_query = (Q.from_(fy).select(fy.name)
+                .where(fy.company_id == P())
+                .where(fy.start_date <= P())
+                .where(fy.end_date >= P()))
+    fy_rows = conn.execute(fy_query.get_sql(),
+                           (env["company_id"], posting_date,
+                            posting_date)).fetchall()
+    if len(fy_rows) != 1:
+        raise RuntimeError(
+            "expected exactly one fiscal year covering %r for company %r, "
+            "found %d" % (posting_date, env["company_id"], len(fy_rows)))
+    fy_name = fy_rows[0][0]
     control_leg = {"account_id": control,
                    "debit": amount if control_debit else "0",
                    "credit": "0" if control_debit else amount,
                    "party_type": party_type, "party_id": party_id,
-                   "fiscal_year": "FY"}
+                   "fiscal_year": fy_name}
     other_leg = {"account_id": other,
                  "debit": "0" if control_debit else amount,
                  "credit": amount if control_debit else "0",
-                 "cost_center_id": env["cc"], "fiscal_year": "FY"}
+                 "cost_center_id": env["cc"], "fiscal_year": fy_name}
     insert_gl_entries(conn, [control_leg, other_leg],
                       voucher_type=voucher_type, voucher_id=voucher_id,
-                      posting_date="2026-06-01", company_id=env["company_id"],
+                      posting_date=posting_date, company_id=env["company_id"],
                       remarks=f"{voucher_type} {voucher_id}")
     conn.commit()
 
@@ -548,6 +569,40 @@ def test_an_invoice_in_a_closed_year_can_still_be_written_off(conn, env):
     assert _gl_legs(conn, "sales_invoice", si2, "write_off") == []
 
 
+def test_invoice_gl_uses_the_fiscal_year_covering_the_posting_date(conn, env):
+    """The invoice legs carry the year covering 2026-06-01, not the first row.
+
+    A decoy year that does not cover the posting date is inserted ahead of
+    the fixture's year, so an unordered first-row lookup returns the decoy
+    first and stamps both legs with it. The helper must select by date.
+    """
+    fixture_row = conn.execute(
+        "SELECT id, name, start_date, end_date FROM fiscal_year "
+        "WHERE company_id = ?", (env["company_id"],)).fetchone()
+    fixture_id, fixture_name = fixture_row[0], fixture_row[1]
+    fixture_start, fixture_end = fixture_row[2], fixture_row[3]
+    conn.execute("DELETE FROM fiscal_year WHERE id = ?", (fixture_id,))
+    conn.execute(
+        "INSERT INTO fiscal_year (id, name, start_date, end_date, is_closed, "
+        " company_id) VALUES (?, 'FY-DECOY', '2025-01-01', '2025-12-31', 0, ?)",
+        (str(uuid.uuid4()), env["company_id"]))
+    conn.execute(
+        "INSERT INTO fiscal_year (id, name, start_date, end_date, is_closed, "
+        " company_id) VALUES (?, ?, ?, ?, 0, ?)",
+        (fixture_id, fixture_name, fixture_start, fixture_end,
+         env["company_id"]))
+    conn.commit()
+    si = _ar_invoice(conn, env, "1000.00")
+    years = [row[0] for row in conn.execute(
+        "SELECT fiscal_year FROM gl_entry WHERE voucher_type = ? "
+        "AND voucher_id = ?", ("sales_invoice", si)).fetchall()]
+    assert len(years) == 2, \
+        "expected the invoice's own GL pair, got %r" % (years,)
+    assert years == [fixture_name, fixture_name], \
+        "both legs must carry %r, never FY-DECOY, got %r" % (fixture_name,
+                                                             years)
+
+
 # ── pin 4 — F17b: `write_off` as a deduction taken AT PAYMENT TIME ───────────
 #
 # The OTHER case the roadmap row named, and a different mechanism entirely: real
@@ -678,6 +733,69 @@ def test_refuses_over_application(conn, env):
                      amount="1000.01", account=env["bad_debt"])
     assert is_error(res) and "exceeds outstanding" in res["message"]
     assert _outstanding(conn, "sales_invoice", si) == D("1000.00")
+    assert _gl_legs(conn, "sales_invoice", si, "write_off") == []
+
+
+def _freeze_company(conn, company_id, till="2026-12-31"):
+    """Set the frozen-till date through its owning action (erpclaw-setup).
+
+    ``update-company`` owns the company row; tests must not write it raw.
+    """
+    setup_mod = _load_sibling("erpclaw-setup")
+    frozen = call_action(setup_mod.update_company, conn, ns(
+        company_id=company_id, accounts_frozen_till_date=till))
+    assert is_ok(frozen), frozen
+    return frozen
+
+
+def _outstanding_raw(conn, table, doc_id):
+    return conn.execute(
+        f"SELECT outstanding_amount FROM {table} WHERE id = ?",
+        (doc_id,)).fetchone()[0]
+
+
+def test_dual_failure_reports_the_ledger_error_first(conn, env):
+    """Ledger-first lock order: an input failing BOTH validations reports GL.
+
+    Over-application (clearing rule) dated in a frozen period (ledger step
+    10): the ledger posts first, so the frozen-period refusal surfaces where
+    the clearing refusal used to. Either failure alone keeps its old text
+    (see test_refuses_over_application and the step-10 pins); nothing is
+    written either way.
+    """
+    si = _ar_invoice(conn, env, "1000.00")
+    _freeze_company(conn, env["company_id"])
+    res = _write_off(conn, voucher_type="sales_invoice", voucher_id=si,
+                     amount="1000.01", account=env["bad_debt"],
+                     posting_date="2026-06-01")
+    assert is_error(res)
+    assert "GL posting failed" in res["message"]
+    assert "frozen" in res["message"].lower()
+    assert "exceeds outstanding" not in res["message"]
+    assert _outstanding_raw(conn, "sales_invoice", si) == "1000.00"
+    assert _gl_legs(conn, "sales_invoice", si, "write_off") == []
+
+
+def test_frozen_period_write_off_reports_step_10_exact_text(conn, env):
+    """A valid amount dated inside the frozen period reports step 10 exactly.
+
+    The frozen-till date is set through ``update-company`` (the owning
+    action). The message below is the full validator text observed on a real
+    refusal, prefixed by the action's "GL posting failed: " wrapper; nothing
+    is written either way.
+    """
+    si = _ar_invoice(conn, env, "1000.00")
+    _freeze_company(conn, env["company_id"])
+    res = _write_off(conn, voucher_type="sales_invoice", voucher_id=si,
+                     amount="340.00", account=env["bad_debt"],
+                     posting_date="2026-06-01")
+    assert is_error(res)
+    assert res["message"] == (
+        "GL posting failed: GL Validation Step 10 Failed: "
+        "Accounts are frozen till 2026-12-31. "
+        "Posting date 2026-06-01 is within the frozen period. "
+        "Role 'None' required")
+    assert _outstanding_raw(conn, "sales_invoice", si) == "1000.00"
     assert _gl_legs(conn, "sales_invoice", si, "write_off") == []
 
 
@@ -877,6 +995,49 @@ def test_pg_lane_write_off_invoice(monkeypatch):
         assert is_error(second)
         assert "already carries a write-off of 340.00" in second["message"]
 
-        _all_green(pg_conn, *_CORE)
+        from erpclaw_lib.gl_invariants import check_gl_invariants
+        pg_check = check_gl_invariants(pg_url)
+        assert pg_check["result"] == "pass", (
+            "portable ledger check failed: %s" % (pg_check.get("violations"),))
     finally:
         pg_conn.close()
+
+
+def test_write_off_stamps_the_invoice_company_year(conn, env):
+    """The write-off legs carry the invoice company's year, never another's.
+
+    Another company's open year over the write-off date is seeded FIRST with
+    an earlier start_date, so a company-less first-row lookup stamps the
+    decoy; the company-scoped lookup stamps the invoice company's own year.
+    """
+    fixture_row = conn.execute(
+        "SELECT id, name, start_date, end_date FROM fiscal_year "
+        "WHERE company_id = ?", (env["company_id"],)).fetchone()
+    fixture_id, fixture_name = fixture_row[0], fixture_row[1]
+    fixture_start, fixture_end = fixture_row[2], fixture_row[3]
+    conn.execute("DELETE FROM fiscal_year WHERE id = ?", (fixture_id,))
+    other_cid = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO company (id, name, abbr) VALUES (?, ?, ?)",
+        (other_cid, "Other Co %s" % other_cid[:6],
+         "OT%s" % other_cid[:4]))
+    conn.execute(
+        "INSERT INTO fiscal_year (id, name, start_date, end_date, is_closed, "
+        " company_id) VALUES (?, 'FY-OTHER-WO', '2025-07-01', '2026-12-31', 0, ?)",
+        (str(uuid.uuid4()), other_cid))
+    conn.execute(
+        "INSERT INTO fiscal_year (id, name, start_date, end_date, is_closed, "
+        " company_id) VALUES (?, ?, ?, ?, 0, ?)",
+        (fixture_id, fixture_name, fixture_start, fixture_end,
+         env["company_id"]))
+    conn.commit()
+    si = _ar_invoice(conn, env, "1000.00")
+    assert is_ok(_write_off(conn, voucher_type="sales_invoice", voucher_id=si,
+                            amount="340.00", account=env["bad_debt"],
+                            posting_date="2026-06-15"))
+    years = [row[0] for row in conn.execute(
+        "SELECT fiscal_year FROM gl_entry WHERE voucher_type = ? "
+        "AND voucher_id = ? AND entry_set = 'write_off' ORDER BY id",
+        ("sales_invoice", si)).fetchall()]
+    assert len(years) == 2
+    assert years == [fixture_name, fixture_name]

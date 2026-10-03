@@ -6,7 +6,7 @@ the generated contract assert that the action dispatches. Opening balances are
 the first numbers in a customer's books, and an FX revaluation moves unrealised
 gain/loss into the P&L, so "it dispatched" is not coverage of either.
 
-Register rows: `planning/wave_g/F21_TEST_DEPTH_REGISTER_2026-08-11.json`
+Register rows:
 (`import-opening-balances`, `revalue-foreign-balances`; both
 `routability-only`, ledger reach `gl_entry`).
 """
@@ -15,7 +15,7 @@ from decimal import Decimal
 import pytest
 from gl_helpers import (call_action, is_error, is_ok, load_db_query, ns,
                         seed_account, seed_company, seed_cost_center,
-                        seed_customer, seed_fiscal_year, _uuid)
+                        seed_currency, seed_customer, seed_fiscal_year, _uuid)
 
 gl = load_db_query()
 
@@ -172,9 +172,11 @@ def fx_env(conn):
         " '1.10', 'journal_entry', ?, 'primary', 0)",
         (_uuid(), eur_bank, _uuid()))
     # exchange_rate.from_currency/to_currency are FKs into `currency`.
+    # seed_currency() routes through insert_or_ignore() so the seed runs on
+    # PostgreSQL too (SQLite spells it INSERT OR IGNORE; PostgreSQL needs ON
+    # CONFLICT DO NOTHING). Money untouched: currency codes only, no amounts.
     for code, name in (("USD", "US Dollar"), ("EUR", "Euro")):
-        conn.execute("INSERT OR IGNORE INTO currency (code, name) VALUES (?, ?)",
-                     (code, name))
+        seed_currency(conn, code, name)
     conn.execute(
         "INSERT INTO exchange_rate (id, from_currency, to_currency, rate, "
         " effective_date) VALUES (?, 'EUR', 'USD', '1.25', ?)", (_uuid(), AS_OF))
@@ -191,11 +193,18 @@ def test_revaluation_posts_the_exact_unrealised_gain(conn, fx_env):
     assert res["total_gain_loss"] == "150.00"
     assert res["accounts_processed"] == 1
     reval = res["revaluations"][0]
-    # Decimal comparison, not string: the balances come back from a SQL SUM and
-    # carry no fixed scale ("1000"), while the posted amounts do ("150.00").
+    # Exact text scale: the balances come back from the exact-decimal sum at
+    # their stored number of places ("1000.00"), while the posted amounts
+    # do too ("150.00"). new_base_balance already rounded to two places via
+    # the base-currency conversion, so its scale never changed; txn_balance
+    # and old_base_balance moved from "1000"/"1100" (numeric-cast sum) to
+    # "1000.00"/"1100.00" (exact-decimal text sum) on SQLite.
     assert D(reval["txn_balance"]) == D("1000.00")
     assert D(reval["old_base_balance"]) == D("1100.00")
     assert D(reval["new_base_balance"]) == D("1250.00")
+    assert reval["txn_balance"] == "1000.00"
+    assert reval["old_base_balance"] == "1100.00"
+    assert reval["new_base_balance"] == "1250.00"
     assert D(reval["gain_loss"]) == D("150.00")
     assert D(reval["exchange_rate"]) == D("1.25")
 
@@ -260,3 +269,36 @@ def test_revaluation_is_refused_without_an_fx_account_configured(conn, fx_env):
     assert conn.execute(
         "SELECT COUNT(*) FROM gl_entry WHERE voucher_type = "
         "'exchange_rate_revaluation'").fetchone()[0] == 0
+
+
+def test_currency_seed_rendering_per_dialect(monkeypatch):
+    """Each dialect renders the portable currency seed in its own spelling.
+
+    Pure string question: no connection is opened, so this runs
+    unconditionally on either backend leg.
+    """
+    from erpclaw_lib.query import insert_or_ignore
+    monkeypatch.setenv("ERPCLAW_DB_DIALECT", "sqlite")
+    sqlite_form = insert_or_ignore(
+        "INSERT OR IGNORE INTO currency (code, name) VALUES (?, ?)")
+    assert sqlite_form == \
+        "INSERT OR IGNORE INTO currency (code, name) VALUES (?, ?)"
+    monkeypatch.setenv("ERPCLAW_DB_DIALECT", "postgresql")
+    pg_form = insert_or_ignore(
+        "INSERT OR IGNORE INTO currency (code, name) VALUES (?, ?)")
+    assert "OR IGNORE" not in pg_form
+    assert pg_form.rstrip().endswith("ON CONFLICT DO NOTHING")
+
+
+def test_currency_seed_is_routed_for_the_configured_dialect(conn):
+    """The live currency seed runs on the configured backend, duplicates ignored.
+
+    Uses the real configured dialect (no override): the helper renders the
+    SQLite form on the SQLite leg and the PostgreSQL form on the PostgreSQL
+    leg, so the same seed the fx_env fixture runs stays green on both.
+    """
+    seed_currency(conn, "USD", "US Dollar")
+    seed_currency(conn, "USD", "US Dollar")
+    row = conn.execute(
+        "SELECT name FROM currency WHERE code = ?", ("USD",)).fetchone()
+    assert row["name"] == "US Dollar"

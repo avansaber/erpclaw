@@ -16,6 +16,8 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
+    from erpclaw_lib.query import DecimalSum, P, Q, Table, fn
+    from erpclaw_lib.query_helpers import resolve_company_id, resolve_scope_company
 
     ENTITY_PREFIXES.setdefault("consolidation_group", "CGRP-")
 except ImportError:
@@ -90,10 +92,10 @@ def add_consolidation_group(conn, args):
 # 2. list-consolidation-groups
 # ===========================================================================
 def list_consolidation_groups(conn, args):
+    company_id = resolve_scope_company(conn, getattr(args, "company_id", None), getattr(args, "company_name", None))
     where, params = ["1=1"], []
-    if getattr(args, "company_id", None):
-        where.append("company_id = ?")
-        params.append(args.company_id)
+    where.append("company_id = ?")
+    params.append(company_id)
     if getattr(args, "group_status", None):
         where.append("group_status = ?")
         params.append(args.group_status)
@@ -216,7 +218,7 @@ def run_consolidation(conn, args):
 #
 # The unit of "already eliminated" is (group, period, source transaction), which
 # is why the row carries source_ic_transaction_id. Coarser keys were measured and
-# rejected in planning/simlogs/m95_SIM_2026-08-12.md §1: a (group, period) key
+# rejected: a (group, period) key
 # cannot let new activity through, and any key derived from the row's CONTENT
 # collapses two real transactions of the same shape (same from/to/type/amount
 # produces byte-identical rows) and silently under-eliminates.
@@ -403,6 +405,12 @@ def add_currency_translation(conn, args):
     amount = getattr(args, "amount", None)
     if not amount:
         err("--amount is required")
+    try:
+        valid = Decimal(amount).is_finite()
+    except Exception:
+        valid = False
+    if not valid:
+        err(f"Invalid amount: {amount}")
 
     debit_account = getattr(args, "debit_account", None) or "CTA - Debit"
     credit_account = getattr(args, "credit_account", None) or "CTA - Credit"
@@ -511,11 +519,29 @@ def consolidation_summary(conn, args):
         (group_id,)
     ).fetchone()[0]
 
-    by_type = conn.execute("""
-        SELECT entry_type, COUNT(*) as cnt, SUM(CAST(amount AS NUMERIC)) as total
-        FROM advacct_elimination_entry WHERE group_id = ?
-        GROUP BY entry_type
-    """, (group_id,)).fetchall()
+    _elim_t = Table("advacct_elimination_entry")
+    _by_type_q = (
+        Q.from_(_elim_t)
+        .select(
+            _elim_t.entry_type,
+            fn.Count("*").as_("cnt"),
+            fn.Coalesce(DecimalSum(_elim_t.amount), "0").as_("total"),
+        )
+        .where(_elim_t.group_id == P())
+        .groupby(_elim_t.entry_type)
+    )
+    by_type = conn.execute(_by_type_q.get_sql(), (group_id,)).fetchall()
+
+    _by_type_out = {}
+    for _row in by_type:
+        _data = row_to_dict(_row)
+        _raw = _data.get("total")
+        if _raw is None:
+            _raw = "0"
+        _by_type_out[_data["entry_type"]] = {
+            "count": _data["cnt"],
+            "total": str(Decimal(str(_raw)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+        }
 
     ok({
         "report": "consolidation_summary",
@@ -525,7 +551,7 @@ def consolidation_summary(conn, args):
         "consolidation_currency": group["consolidation_currency"],
         "entity_count": entity_count,
         "elimination_count": elimination_count,
-        "eliminations_by_type": {r[0]: {"count": r[1], "total": str(Decimal(str(r[2])).quantize(Decimal("0.01")))} for r in by_type} if by_type else {},
+        "eliminations_by_type": _by_type_out,
     })
 
 
@@ -550,9 +576,6 @@ def consolidation_summary(conn, args):
 # fully audited removal is the consented opposite. These rows live in the
 # consolidation layer only (init_schema's own note: group elimination never
 # reaches `gl_entry`), so the immutable-GL rules are untouched.
-#
-# Plan home: planning/pending_items.md M114 (Nik go 2026-08-14);
-# SIM: planning/simlogs/m114_SIM_2026-08-14.md.
 # ===========================================================================
 
 _SURPLUS_WHERE = ("entry_type = 'ic_elimination' "

@@ -297,6 +297,23 @@ def onboard(conn, args):
         })
         return
 
+    # Authenticate and validate every module manifest before consulting or
+    # mutating installation state. `_install_module_inner` also requires the
+    # verified-map marker, so a future caller cannot silently reintroduce the
+    # lenient-loader bypass.
+    sys.path.insert(0, SCRIPT_DIR)
+    from module_manager import (
+        _RegistrySignatureError,
+        _install_module_inner,
+        _load_registry_strict,
+        _registry_to_dict,
+    )
+    try:
+        registry = _load_registry_strict(force_refresh=True)
+    except _RegistrySignatureError as e:
+        err(f"Registry verification failed; refusing profile installation: {e}")
+    modules_by_name = _registry_to_dict(registry)
+
     # Check which modules are already installed
     installed_rows = conn.execute(
         "SELECT name FROM erpclaw_module WHERE install_status = 'installed'"
@@ -306,22 +323,6 @@ def onboard(conn, args):
     installed = []
     skipped = []
     failed = []
-
-    # Import module_manager for install functionality
-    sys.path.insert(0, SCRIPT_DIR)
-    from module_manager import _load_registry, _install_module_inner
-
-    registry = _load_registry()
-    # Handle dict-keyed registry
-    modules_raw = registry.get("modules", {})
-    if isinstance(modules_raw, dict):
-        modules_by_name = {}
-        for name, info in modules_raw.items():
-            info_copy = dict(info)
-            info_copy.setdefault("name", name)
-            modules_by_name[name] = info_copy
-    else:
-        modules_by_name = {m["name"]: m for m in modules_raw}
 
     for module_name in modules_to_install:
         if module_name in already_installed:
@@ -337,19 +338,13 @@ def onboard(conn, args):
             result = _install_module_inner(install_args, conn, modules_by_name, depth=0)
             installed.append(result)
             already_installed.add(module_name)
-        except SystemExit:
-            # ok()/err() in sub-calls trigger sys.exit — reconnect
-            conn = get_connection()
-            # Check if it actually succeeded
-            check = conn.execute(
-                "SELECT install_status FROM erpclaw_module WHERE name = ?",
-                (module_name,)
-            ).fetchone()
-            if check and check["install_status"] == "installed":
-                installed.append({"module": module_name, "note": "installed"})
-                already_installed.add(module_name)
-            else:
-                failed.append({"module": module_name, "error": "installation interrupted"})
+        except SystemExit as e:
+            # The inner function returns normally on success; SystemExit is
+            # therefore an err()/integrity refusal, never success.
+            failed.append({
+                "module": module_name,
+                "error": f"installation refused (exit {e.code})",
+            })
         except Exception as e:
             failed.append({"module": module_name, "error": str(e)})
 
@@ -367,17 +362,11 @@ def onboard(conn, args):
                 result = _install_module_inner(install_args, conn, modules_by_name, depth=0)
                 installed.append(result)
                 already_installed.add(region_module)
-            except SystemExit:
-                conn = get_connection()
-                check = conn.execute(
-                    "SELECT install_status FROM erpclaw_module WHERE name = ?",
-                    (region_module,)
-                ).fetchone()
-                if check and check["install_status"] == "installed":
-                    installed.append({"module": region_module, "note": "installed (regional)"})
-                    already_installed.add(region_module)
-                else:
-                    failed.append({"module": region_module, "error": "installation interrupted"})
+            except SystemExit as e:
+                failed.append({
+                    "module": region_module,
+                    "error": f"installation refused (exit {e.code})",
+                })
             except Exception as e:
                 failed.append({"module": region_module, "error": str(e)})
 

@@ -93,7 +93,16 @@ CREATE TABLE IF NOT EXISTS audit_log (
     entity_id       TEXT,
     old_values      TEXT,   -- JSON
     new_values      TEXT,   -- JSON
-    description     TEXT
+    description     TEXT,
+    actor_os_account TEXT,
+    actor_channel TEXT,
+    actor_principal_claim TEXT,
+    actor_status TEXT,
+    actor_hop TEXT,
+    authorization_id TEXT,
+    authorization_status TEXT,
+    scope_company_ids TEXT,
+    scope_status TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp);
@@ -337,7 +346,7 @@ CREATE TABLE IF NOT EXISTS account (
     -- account_type validity is sourced from account_type_registry (M0, 2026-05-30),
     -- not a hardcoded CHECK, so new types can be registered at runtime. NULL stays
     -- allowed (group/structural accounts). Enforced app-side in erpclaw-gl add-account
-    -- / update-account against the registry; seeded by init_db() + seed-registry-defaults.
+    -- / update-account against the registry; seeded by init_db() + add-account-type.
     account_type    TEXT,
     currency        TEXT NOT NULL DEFAULT 'USD',
     is_group        INTEGER NOT NULL DEFAULT 0 CHECK(is_group IN (0,1)),
@@ -422,6 +431,7 @@ CREATE INDEX IF NOT EXISTS idx_gl_entry_is_cancelled ON gl_entry(is_cancelled);
 -- previously added only by migration 001; in the base DDL now so fresh installs
 -- match migrated DBs (M0 phase 2).
 CREATE INDEX IF NOT EXISTS idx_gl_entry_project ON gl_entry(project_id);
+CREATE INDEX IF NOT EXISTS idx_gl_entry_sequence ON gl_entry(sequence);
 
 CREATE TABLE IF NOT EXISTS fiscal_year (
     id              TEXT PRIMARY KEY,
@@ -511,7 +521,8 @@ CREATE TABLE IF NOT EXISTS journal_entry (
     cwip_asset_id   TEXT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    dimensions_json TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS idx_journal_entry_status ON journal_entry(status);
@@ -528,7 +539,8 @@ CREATE TABLE IF NOT EXISTS journal_entry_line (
     credit          TEXT NOT NULL DEFAULT '0',
     cost_center_id  TEXT REFERENCES cost_center(id) ON DELETE RESTRICT,
     project_id      TEXT,
-    remark          TEXT
+    remark          TEXT,
+    dimensions_json TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS idx_jel_journal ON journal_entry_line(journal_entry_id);
@@ -557,7 +569,8 @@ CREATE TABLE IF NOT EXISTS recurring_journal_template (
     status          TEXT NOT NULL DEFAULT 'active'
                     CHECK(status IN ('active','paused','completed')),
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    dimensions_json TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS idx_rjt_company ON recurring_journal_template(company_id);
@@ -609,7 +622,8 @@ CREATE TABLE IF NOT EXISTS payment_entry (
     -- dedicated advance liability/asset sub-account, the account is recorded here
     -- so allocate-payment knows to post the offsetting reclassification. NULL =
     -- not routed (legacy/AR-control behavior).
-    advance_account_id TEXT REFERENCES account(id) ON DELETE RESTRICT
+    advance_account_id TEXT REFERENCES account(id) ON DELETE RESTRICT,
+    dimensions_json TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS idx_payment_entry_status ON payment_entry(status);
@@ -824,6 +838,7 @@ CREATE INDEX IF NOT EXISTS idx_twe_category ON tax_withholding_entry(category_id
 # SKILL: erpclaw-selling
 # Tables: customer, quotation, quotation_item, sales_order, sales_order_item,
 #         delivery_note, delivery_note_item, sales_invoice, sales_invoice_item,
+#         intercompany_account_map,
 #         price_list, item_price, pricing_rule, sales_partner, blanket_order,
 #         blanket_order_item, recurring_invoice_template, recurring_invoice_template_item
 # ---------------------------------------------------------------------------
@@ -970,7 +985,8 @@ CREATE TABLE IF NOT EXISTS quotation (
     terms_and_conditions TEXT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    dimensions_json TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS idx_quotation_status ON quotation(status);
@@ -1018,7 +1034,8 @@ CREATE TABLE IF NOT EXISTS sales_order (
     closed_by       TEXT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    dimensions_json TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS idx_sales_order_status ON sales_order(status);
@@ -1055,7 +1072,8 @@ CREATE TABLE IF NOT EXISTS delivery_note (
     total_qty       TEXT NOT NULL DEFAULT '0',
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    dimensions_json TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS idx_delivery_note_status ON delivery_note(status);
@@ -1105,7 +1123,10 @@ CREATE TABLE IF NOT EXISTS sales_invoice (
     amended_from    TEXT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    is_intercompany INTEGER NOT NULL DEFAULT 0 CHECK(is_intercompany IN (0,1)),
+    intercompany_reference_id TEXT,
+    dimensions_json TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS idx_sales_invoice_status ON sales_invoice(status);
@@ -1130,6 +1151,16 @@ CREATE TABLE IF NOT EXISTS sales_invoice_item (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sii_invoice ON sales_invoice_item(sales_invoice_id);
+
+CREATE TABLE IF NOT EXISTS intercompany_account_map (
+    id              TEXT PRIMARY KEY,
+    source_company_id TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
+    target_company_id TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
+    source_account_id TEXT NOT NULL REFERENCES account(id) ON DELETE RESTRICT,
+    target_account_id TEXT NOT NULL REFERENCES account(id) ON DELETE RESTRICT,
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(source_company_id, target_company_id, source_account_id)
+);
 
 CREATE TABLE IF NOT EXISTS sales_partner (
     id              TEXT PRIMARY KEY,
@@ -1186,7 +1217,8 @@ CREATE TABLE IF NOT EXISTS recurring_invoice_template (
                     CHECK(status IN ('draft','active','paused','completed','cancelled')),
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    dimensions_json TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS recurring_invoice_template_item (
@@ -1400,7 +1432,8 @@ CREATE TABLE IF NOT EXISTS purchase_order (
     delivery_address TEXT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    dimensions_json TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS idx_purchase_order_status ON purchase_order(status);
@@ -1439,7 +1472,8 @@ CREATE TABLE IF NOT EXISTS purchase_receipt (
     total_qty       TEXT NOT NULL DEFAULT '0',
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    dimensions_json TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS idx_purchase_receipt_status ON purchase_receipt(status);
@@ -1458,7 +1492,9 @@ CREATE TABLE IF NOT EXISTS purchase_receipt_item (
     rate            TEXT NOT NULL DEFAULT '0',
     amount          TEXT NOT NULL DEFAULT '0',
     rejected_qty    TEXT NOT NULL DEFAULT '0',
-    rejected_warehouse_id TEXT
+    rejected_warehouse_id TEXT,
+    -- discount_amount is the line's share of the order-line discount in money; last so a fresh install and a migrated one have the same column order.
+    discount_amount TEXT NOT NULL DEFAULT '0'
 );
 
 CREATE INDEX IF NOT EXISTS idx_pri_receipt ON purchase_receipt_item(purchase_receipt_id);
@@ -1492,7 +1528,10 @@ CREATE TABLE IF NOT EXISTS purchase_invoice (
     cwip_asset_id   TEXT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    is_intercompany INTEGER NOT NULL DEFAULT 0 CHECK(is_intercompany IN (0,1)),
+    intercompany_reference_id TEXT,
+    dimensions_json TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS idx_purchase_invoice_status ON purchase_invoice(status);
@@ -1512,7 +1551,9 @@ CREATE TABLE IF NOT EXISTS purchase_invoice_item (
     cost_center_id  TEXT REFERENCES cost_center(id) ON DELETE RESTRICT,
     project_id      TEXT,
     purchase_order_item_id TEXT,
-    purchase_receipt_item_id TEXT
+    purchase_receipt_item_id TEXT,
+    -- discount_amount is the line's share of the order-line discount in money; last so a fresh install and a migrated one have the same column order.
+    discount_amount TEXT NOT NULL DEFAULT '0'
 );
 
 CREATE INDEX IF NOT EXISTS idx_pii_invoice ON purchase_invoice_item(purchase_invoice_id);
@@ -1526,7 +1567,8 @@ CREATE TABLE IF NOT EXISTS landed_cost_voucher (
                     CHECK(status IN ('draft','submitted','cancelled')),
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    dimensions_json TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS landed_cost_item (
@@ -1571,7 +1613,8 @@ CREATE TABLE IF NOT EXISTS recurring_bill_template (
                     CHECK(status IN ('draft','active','paused','completed','cancelled')),
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    dimensions_json TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS recurring_bill_template_item (
@@ -1705,7 +1748,8 @@ CREATE TABLE IF NOT EXISTS stock_entry (
                     CHECK(status IN ('draft','submitted','cancelled')),
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    dimensions_json TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS idx_stock_entry_status ON stock_entry(status);
@@ -1833,7 +1877,8 @@ CREATE TABLE IF NOT EXISTS stock_reconciliation (
     difference_amount TEXT NOT NULL DEFAULT '0',
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    dimensions_json TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS stock_reconciliation_item (
@@ -2647,7 +2692,8 @@ CREATE TABLE IF NOT EXISTS expense_claim (
     payment_entry_id TEXT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    dimensions_json TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS idx_expense_claim_employee ON expense_claim(employee_id);
@@ -2851,7 +2897,8 @@ CREATE TABLE IF NOT EXISTS payroll_run (
     payment_entry_id TEXT,
     company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    dimensions_json TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS idx_payroll_run_status ON payroll_run(status);
@@ -4078,7 +4125,8 @@ CREATE TABLE IF NOT EXISTS stock_revaluation (
     status            TEXT NOT NULL DEFAULT 'submitted'
                       CHECK(status IN ('submitted','cancelled')),
     created_at        TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at        TEXT DEFAULT CURRENT_TIMESTAMP
+    updated_at        TEXT DEFAULT CURRENT_TIMESTAMP,
+    dimensions_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_stock_reval_item ON stock_revaluation(item_id, warehouse_id);
 CREATE INDEX IF NOT EXISTS idx_stock_reval_company ON stock_revaluation(company_id);
@@ -4431,7 +4479,7 @@ ALL_DDL_BLOCKS = [
 # of migration 001's 21 types + the 3 Wave-1 prerequisites (capital_work_in_progress
 # for S3, goodwill for L1, revaluation_reserve for M7) + disposal_gain_loss (M94).
 # Kept in sync with migration 003 (the first 24) and migration 035 (the 25th).
-# Idempotent seed via init_db() (fresh installs) + seed-registry-defaults.
+# Idempotent seed via init_db() (fresh installs) + add-account-type.
 ACCOUNT_TYPE_REGISTRY_SEED = [
     ("bank", "erpclaw-gl", "Bank"),
     ("cash", "erpclaw-gl", "Cash"),
@@ -4469,7 +4517,7 @@ ACCOUNT_TYPE_REGISTRY_SEED = [
 ]
 
 # Canonical voucher_type_registry seed (M0 phase 2). Mirror of migration 001's
-# full set (23 gl_entry + 10 stock_ledger_entry + 4 payment_allocation), keyed by
+# full set (23 gl_entry + 10 stock_ledger_entry + 5 payment_allocation), keyed by
 # (voucher_type, skill_name, label, target_table). Sources voucher_type validity
 # now that the gl_entry CHECK is dropped. Seeded in init_db() so fresh installs
 # match migrated DBs. Kept in sync with migration 004.
@@ -4504,6 +4552,19 @@ VOUCHER_TYPE_REGISTRY_SEED = [
     # was never seeded, so the post always failed the registry gate. Kept here for
     # fresh installs; existing DBs get it from migration 029.
     ("landed_cost_voucher", "erpclaw-buying", "Landed Cost Voucher", "gl_entry"),
+    # FoodClaw posts these two voucher types through insert_gl_entries.
+    # Fresh installs seed them here; existing installs get them from migration 042.
+    ("food_catering_revenue", "foodclaw", "Catering Revenue", "gl_entry"),
+    ("food_franchise_royalty", "foodclaw", "Franchise Royalty", "gl_entry"),
+    # revenue_recognition posts its voucher from recognize-schedule-entry, with the
+    # schedule entry id as the voucher id; existing installs get it from migration 043.
+    ("revenue_recognition", "erpclaw-accounting-adv", "Revenue Recognition", "gl_entry"),
+    # LegalClaw posts these four trust voucher types through insert_gl_entries.
+    # Fresh installs seed them here; existing installs get them from migration 049.
+    ("Trust Deposit", "legalclaw", "Trust Deposit", "gl_entry"),
+    ("Trust Disbursement", "legalclaw", "Trust Disbursement", "gl_entry"),
+    ("Trust Transfer", "legalclaw", "Trust Transfer", "gl_entry"),
+    ("Trust Interest", "legalclaw", "Trust Interest", "gl_entry"),
     # target_table = stock_ledger_entry
     ("stock_entry", "erpclaw-inventory", "Stock Entry", "stock_ledger_entry"),
     ("purchase_receipt", "erpclaw-buying", "Purchase Receipt", "stock_ledger_entry"),
@@ -4525,6 +4586,8 @@ VOUCHER_TYPE_REGISTRY_SEED = [
     ("purchase_invoice", "erpclaw-buying", "Purchase Invoice", "payment_allocation"),
     ("credit_note", "erpclaw-selling", "Credit Note", "payment_allocation"),
     ("debit_note", "erpclaw-buying", "Debit Note", "payment_allocation"),
+    # expense_claim pays through payment_allocation; existing DBs get it from migration 050.
+    ("expense_claim", "erpclaw-hr", "Expense Claim", "payment_allocation"),
 ]
 
 # Canonical party_type_registry seed (M0 phase 2).
@@ -4675,14 +4738,25 @@ def _init_db_postgres(db_path: str) -> None:
     so the schema_version stamp uses ``now()`` here. Verification counts come
     from ``information_schema`` rather than ``sqlite_master``.
 
-    On this branch ``db_path`` is the connection URL and therefore carries the
-    database password, so every message built from it is redacted (F11) — both
+    On this branch ``db_path`` is the connection URL or ``None``, meaning the
+    configured target, and therefore carries the database password, so every
+    message built from it is redacted (F11) — both
     the success line and the connection-failure line, which keeps the host /
     port / user / database context an operator needs and drops only the secret.
     """
     from erpclaw_lib.db import get_connection
+    from erpclaw_lib.db import require_pg_url
+    _pg_target = db_path or os.environ.get("ERPCLAW_DB_URL") or os.environ.get("ERPCLAW_DB_PATH")
+    if _pg_target:
+        if db_path:
+            _pg_source = "--db-path"
+        elif os.environ.get("ERPCLAW_DB_URL"):
+            _pg_source = "ERPCLAW_DB_URL"
+        else:
+            _pg_source = "ERPCLAW_DB_PATH"
+        require_pg_url(_pg_target, source=_pg_source)
 
-    safe_url = redact_db_url(db_path)
+    safe_url = redact_db_url(db_path or os.environ.get("ERPCLAW_DB_URL") or "the configured target")
     try:
         conn = get_connection(db_path)  # PgConnectionWrapper: timeouts + decimal_sum set
     except Exception as e:  # noqa: BLE001 — re-raised with redacted context
@@ -4702,8 +4776,16 @@ def _init_db_postgres(db_path: str) -> None:
                 )
         conn.commit()
 
+        from erpclaw_lib import seam as _seam
+        from erpclaw_lib.gl_chain_schema import METADATA as _GL_CHAIN_METADATA
+        _seam.provision(_GL_CHAIN_METADATA, db_path)
+
         _seed_defaults(conn)
         conn.commit()
+
+        from erpclaw_lib import seam
+        seam.provision_authority_core(db_path)
+        seam.provision_authority_envelope(db_path)
 
         table_count = conn.execute(
             "SELECT COUNT(*) FROM information_schema.tables "
@@ -4722,8 +4804,12 @@ def _init_db_postgres(db_path: str) -> None:
         conn.close()
 
 
-def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
+def init_db(db_path: str = None) -> None:
     """Initialize the ERPClaw database with all tables.
+
+    ``db_path`` is optional: ``None`` means the configured target
+    (``ERPCLAW_DB_PATH`` or the built-in default on SQLite, ``ERPCLAW_DB_URL``
+    on PostgreSQL).
 
     SQLite (default): build a fresh file DB via ``sqlite3`` + ``executescript``.
     PostgreSQL (``ERPCLAW_DB_DIALECT=postgresql``): provision the same schema on
@@ -4739,6 +4825,9 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
     if dialect == "postgresql":
         _init_db_postgres(db_path)
         return
+
+    if db_path is None:
+        db_path = os.environ.get("ERPCLAW_DB_PATH") or DEFAULT_DB_PATH
 
     # Ensure the directory exists
     db_dir = os.path.dirname(db_path)
@@ -4773,8 +4862,16 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         conn.commit()
 
         # Seed default roles + M0 registries (shared with the Postgres path).
+        from erpclaw_lib import seam as _seam
+        from erpclaw_lib.gl_chain_schema import METADATA as _GL_CHAIN_METADATA
+        _seam.provision(_GL_CHAIN_METADATA, db_path)
+
         _seed_defaults(conn)
         conn.commit()
+
+        from erpclaw_lib import seam
+        seam.provision_authority_core(db_path)
+        seam.provision_authority_envelope(db_path)
 
         # Verify: count tables
         cursor = conn.execute(
@@ -4802,8 +4899,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Initialize ERPClaw database")
     parser.add_argument(
         "--db-path",
-        default=DEFAULT_DB_PATH,
-        help=f"Path to SQLite database (default: {DEFAULT_DB_PATH})"
+        default=None,
+        help=f"Database target (default: the configured target, {DEFAULT_DB_PATH} on SQLite)"
     )
     args = parser.parse_args()
     init_db(args.db_path)

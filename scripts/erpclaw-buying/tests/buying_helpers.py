@@ -30,7 +30,8 @@ if ERPCLAW_LIB not in sys.path:
     if importlib.util.find_spec("erpclaw_lib") is None:
         sys.path.insert(0, ERPCLAW_LIB)
 
-from erpclaw_lib.db import setup_pragmas
+from erpclaw_lib.db import setup_pragmas, get_dialect, get_connection
+from erpclaw_lib.query import insert_or_ignore
 
 
 def load_db_query():
@@ -42,7 +43,87 @@ def load_db_query():
     return mod
 
 
-def init_all_tables(db_path: str):
+PG_TEST_DB_PREFIX = "erpclaw_muse_t_"
+PG_TEST_DB_ALLOWLIST = ("erpclaw_integration", "erpclaw_muse_test_b")
+
+
+def assert_pg_test_database(test_url=None) -> str:
+    """Refuse unless the PostgreSQL test database name is expendable.
+
+    Returns the database named by ``ERPCLAW_PG_TEST_URL`` when it starts
+    with ``erpclaw_muse_t_`` or is one of the allowlisted integration
+    databases; raises ``RuntimeError`` otherwise. Runs before any
+    connection is opened, so a refused target issues no SQL at all.
+    """
+    from urllib.parse import urlparse
+    url = test_url if test_url is not None else os.environ.get("ERPCLAW_PG_TEST_URL")
+    if not url:
+        raise RuntimeError(
+            "refusing to reset the shared schema: ERPCLAW_PG_TEST_URL is "
+            "not set, so the reset target is unknown")
+    dbname = urlparse(url).path.strip("/")
+    if not dbname:
+        raise RuntimeError(
+            "refusing to reset the shared schema: ERPCLAW_PG_TEST_URL "
+            "names no database")
+    if not (dbname.startswith(PG_TEST_DB_PREFIX)
+            or dbname in PG_TEST_DB_ALLOWLIST):
+        raise RuntimeError(
+            "refusing to reset the shared schema: database %r is not an "
+            "expendable test database (must start with %r or be one of %r)"
+            % (dbname, PG_TEST_DB_PREFIX, list(PG_TEST_DB_ALLOWLIST)))
+    return dbname
+
+
+def _reset_pg_schema():
+    """Drop and recreate the shared ``public`` schema on PostgreSQL.
+
+    Per-test isolation for the PostgreSQL branch: ``DROP SCHEMA public
+    CASCADE`` clears every table left by the previous test in one
+    statement. The guard above runs first and refuses any database whose
+    name is not an expendable test database; no host/port comparison is
+    made (the fixture sets ``ERPCLAW_DB_URL`` from ``ERPCLAW_PG_TEST_URL``
+    itself, so comparing the two would prove nothing).
+    """
+    assert_pg_test_database()
+    conn = get_connection()
+    try:
+        conn.execute("DROP SCHEMA IF EXISTS public CASCADE")
+        conn.execute("CREATE SCHEMA public")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _init_pg_schema():
+    """Provision the schema on the configured PostgreSQL target.
+
+    Reset the shared schema, then run ``init_schema.init_db(None)`` so
+    the seam resolves the configured target (``ERPCLAW_DB_URL``) instead
+    of a file path.
+    """
+    _reset_pg_schema()
+    spec = importlib.util.spec_from_file_location("init_schema", INIT_SCHEMA_PATH)
+    schema_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(schema_mod)
+    schema_mod.init_db(None)
+
+
+def init_all_tables(db_path=None):
+    """Create all ERPClaw core tables using init_schema.init_db().
+
+    SQLite (default): ``db_path`` is the file to build — unchanged.
+    PostgreSQL: the shared schema is reset (see ``_reset_pg_schema``) and
+    ``init_db`` receives ``None`` so the seam resolves the configured
+    target (``ERPCLAW_DB_URL``) instead of being handed a file path.
+    """
+    if get_dialect() == "postgresql":
+        _reset_pg_schema()
+        spec = importlib.util.spec_from_file_location("init_schema", INIT_SCHEMA_PATH)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.init_db(None)
+        return
     spec = importlib.util.spec_from_file_location("init_schema", INIT_SCHEMA_PATH)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -59,7 +140,15 @@ class _DecimalSum:
         return str(self.total)
 
 
-def get_conn(db_path: str) -> sqlite3.Connection:
+def get_conn(db_path=None):
+    """Return a database connection with FK enabled and Row-style access.
+
+    SQLite (default): a ``sqlite3.Connection`` on ``db_path`` — unchanged.
+    PostgreSQL: the foundation ``get_connection()``; ``db_path`` is
+    ignored because the seam resolves the configured target.
+    """
+    if get_dialect() == "postgresql":
+        return get_connection()
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     setup_pragmas(conn)
@@ -191,10 +280,10 @@ def seed_naming_series(conn, company_id):
         ("journal_entry", "JE-", 0),
     ]
     for entity_type, prefix, current in series:
-        conn.execute(
+        conn.execute(insert_or_ignore(
             """INSERT OR IGNORE INTO naming_series
                (id, entity_type, prefix, current_value, company_id)
-               VALUES (?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?)"""),
             (_uuid(), entity_type, prefix, current, company_id)
         )
     conn.commit()

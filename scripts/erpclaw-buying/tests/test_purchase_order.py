@@ -9,6 +9,7 @@ from decimal import Decimal
 from buying_helpers import (
     call_action, ns, is_error, is_ok, load_db_query,
 )
+from erpclaw_lib.query import P, Q, Table, fn
 
 mod = load_db_query()
 
@@ -84,12 +85,47 @@ class TestUpdatePurchaseOrder:
 class TestGetPurchaseOrder:
     def test_get_with_items(self, conn, env):
         po = _create_po(conn, env)
+        before = {}
+        for name in ("purchase_order", "purchase_order_item", "audit_log"):
+            table = Table(name)
+            q = Q.from_(table).select(fn.Count("*").as_("n"))
+            before[name] = conn.execute(q.get_sql()).fetchone()["n"]
         result = call_action(mod.get_purchase_order, conn, ns(
             purchase_order_id=po["purchase_order_id"],
             company_id=env["company_id"],
         ))
         assert is_ok(result)
         assert "items" in result
+
+        # Deepened (m478): get-purchase-order is read-only, so the response
+        # must repeat the stored header and lines exactly — 10 x 50.00 with
+        # no tax — and no table may gain a row.
+        po_id = po["purchase_order_id"]
+        po_t = Table("purchase_order")
+        poi_t = Table("purchase_order_item")
+        q = Q.from_(po_t).select(po_t.star).where(po_t.id == P())
+        stored = conn.execute(q.get_sql(), (po_id,)).fetchone()
+        assert (result["total_amount"], result["tax_amount"],
+                result["grand_total"]) == ("500.00", "0.00", "500.00")
+        assert (stored["total_amount"], stored["tax_amount"],
+                stored["grand_total"]) == ("500.00", "0.00", "500.00")
+        assert result["document_status"] == stored["status"] == "draft"
+        q = (Q.from_(poi_t)
+             .select(poi_t.item_id, poi_t.quantity, poi_t.rate, poi_t.amount)
+             .where(poi_t.purchase_order_id == P()))
+        lines = conn.execute(q.get_sql(), (po_id,)).fetchall()
+        assert [(r["item_id"], r["quantity"], r["rate"], r["amount"])
+                for r in lines] == [
+            (env["item1"], "10.00", "50.00", "500.00")]
+        assert [(i["item_id"], i["quantity"], i["rate"], i["amount"])
+                for i in result["items"]] == [
+            (env["item1"], "10.00", "50.00", "500.00")]
+        assert result["purchase_receipts"] == []
+        assert result["purchase_invoices"] == []
+        for name in ("purchase_order", "purchase_order_item", "audit_log"):
+            table = Table(name)
+            q = Q.from_(table).select(fn.Count("*").as_("n"))
+            assert conn.execute(q.get_sql()).fetchone()["n"] == before[name]
 
     def test_get_nonexistent_fails(self, conn, env):
         result = call_action(mod.get_purchase_order, conn, ns(

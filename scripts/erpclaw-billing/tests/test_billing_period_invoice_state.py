@@ -400,7 +400,7 @@ def test_migration_033_reports_protected_and_null_link_not_touched(conn, env, db
 # 033 RE-DERIVES a state flag from another table. Without a trail there is no
 # record anywhere that the flag was ever anything else: `updated_at` says when,
 # not what, and the per-period report goes to a terminal (and, through the
-# runner, to stderr — see M99). SIM: planning/simlogs/m102_SIM_2026-08-12.md.
+# runner, to stderr — see M99).
 
 def _stale_invoiced(conn, env, period_id, inv_status,
                     invoiced_at="2026-06-15 00:00:00"):

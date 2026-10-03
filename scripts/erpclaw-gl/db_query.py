@@ -21,8 +21,8 @@ try:
     import importlib.util
     if importlib.util.find_spec("erpclaw_lib") is None:
         sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
-    from erpclaw_lib.db import get_connection, ensure_db_exists, DEFAULT_DB_PATH
-    from erpclaw_lib.decimal_utils import to_decimal
+    from erpclaw_lib.db import get_connection, db_integrity_error
+    from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.validation import check_input_lengths
     from erpclaw_lib.gl_posting import (
         validate_gl_entries,
@@ -36,8 +36,8 @@ try:
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.dependencies import check_required_tables
-    from erpclaw_lib.query_helpers import resolve_company_id
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL, DecimalSum, DecimalAbs, dynamic_update, now, rowid_col, json_get
+    from erpclaw_lib.query_helpers import resolve_company_id, resolve_scope_company
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL, DecimalSum, DecimalAbs, dynamic_update, now, rowid_col, json_get, gl_legacy_order_recoverable
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
     from erpclaw_lib.vendor.pypika.terms import LiteralValue, ValueWrapper
 except ImportError:
@@ -50,6 +50,21 @@ REQUIRED_TABLES = ["company"]
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(SKILL_DIR, "assets")
 CHARTS_DIR = os.path.join(ASSETS_DIR, "charts")
+
+# Default company accounts filled from a freshly loaded chart (m721).
+# Maps chart template -> company default column -> account number in the
+# template. 5350 Miscellaneous Expense is the template's general catch-all
+# expense leaf, hence the default expense account.
+CHART_DEFAULT_ACCOUNT_NUMBERS = {
+    "us_gaap": {
+        "default_receivable_account_id": "1121",
+        "default_payable_account_id": "2111",
+        "default_income_account_id": "4110",
+        "default_expense_account_id": "5350",
+        "default_bank_account_id": "1112",
+        "default_cash_account_id": "1111",
+    }
+}
 
 # account_types that must be leaf (posting) accounts, never groups. Shared by
 # add-account and update-account (M94) so a type that cannot be created on a
@@ -131,6 +146,18 @@ ACCOUNT_TYPE_ROOT_TYPES = {
 }
 
 
+def _account_type_registered_message(conn, account_type):
+    """Return the refusal text for an unregistered account_type, or None if valid."""
+    known = conn.execute(
+        "SELECT 1 FROM account_type_registry WHERE account_type = ? AND is_active = 1",
+        (account_type,),
+    ).fetchone()
+    if not known:
+        return (f"account_type '{account_type}' is not a registered, active type. Register it "
+                f"with add-account-type.")
+    return None
+
+
 def _assert_account_type_registered(conn, account_type):
     """Refuse an account_type that is not registered and active (M0, 2026-05-30).
 
@@ -138,13 +165,21 @@ def _assert_account_type_registered(conn, account_type):
     creation and update-account asks it at retyping, so the two surfaces cannot
     disagree about what a legal type is.
     """
-    known = conn.execute(
-        "SELECT 1 FROM account_type_registry WHERE account_type = ? AND is_active = 1",
-        (account_type,),
-    ).fetchone()
-    if not known:
-        err(f"account_type '{account_type}' is not a registered, active type. Register it "
-            f"(add-account-type) or run seed-registry-defaults.")
+    message = _account_type_registered_message(conn, account_type)
+    if message is not None:
+        err(message)
+
+
+def _root_type_coherent_message(account_type, root_type, account_name):
+    """Return the refusal text for an incoherent (type, root) pair, or None if coherent."""
+    allowed = ACCOUNT_TYPE_ROOT_TYPES.get(account_type)
+    if not allowed or root_type in allowed:
+        return None
+    reads = " or ".join(sorted(allowed))
+    return (f"account_type '{account_type}' belongs on a root_type of {reads}, "
+            f"but '{account_name}' has root_type '{root_type}'. That combination "
+            f"leaves the account on the {root_type} side of the books while every "
+            f"report that filters on account_type reads it as {account_type}.")
 
 
 def _assert_root_type_coherent(account_type, root_type, account_name, remedy):
@@ -158,15 +193,9 @@ def _assert_root_type_coherent(account_type, root_type, account_name, remedy):
 
     Unknown types pass: see ACCOUNT_TYPE_ROOT_TYPES on why silence beats a guess.
     """
-    allowed = ACCOUNT_TYPE_ROOT_TYPES.get(account_type)
-    if not allowed or root_type in allowed:
-        return
-    reads = " or ".join(sorted(allowed))
-    err(f"account_type '{account_type}' belongs on a root_type of {reads}, "
-        f"but '{account_name}' has root_type '{root_type}'. That combination "
-        f"leaves the account on the {root_type} side of the books while every "
-        f"report that filters on account_type reads it as {account_type}.",
-        suggestion=remedy)
+    message = _root_type_coherent_message(account_type, root_type, account_name)
+    if message is not None:
+        err(message, suggestion=remedy)
 
 
 
@@ -254,7 +283,60 @@ def setup_chart_of_accounts(conn, args):
     audit(conn, "erpclaw-gl", "import", "account", company_id,
            new_values={"template": template, "accounts_created": created})
     conn.commit()
-    ok({"accounts_created": created, "template": template, "company_id": company_id})
+    company_defaults_set = {}
+    defaults_map = CHART_DEFAULT_ACCOUNT_NUMBERS.get(template)
+    if defaults_map:
+        t_defaults = Table("company")
+        q_defaults = (
+            Q.from_(t_defaults)
+            .select(
+                t_defaults.default_receivable_account_id,
+                t_defaults.default_payable_account_id,
+                t_defaults.default_income_account_id,
+                t_defaults.default_expense_account_id,
+                t_defaults.default_bank_account_id,
+                t_defaults.default_cash_account_id,
+            )
+            .where(t_defaults.id == P())
+        )
+        company_row = conn.execute(q_defaults.get_sql(), (company_id,)).fetchone()
+        if company_row is not None:
+            child_args = {"--company-id": company_id}
+            for column, account_number in defaults_map.items():
+                current = company_row[column]
+                if current is not None and current != "":
+                    continue
+                account_id = number_to_id.get(account_number)
+                if account_id is None:
+                    continue
+                child_args["--" + column.replace("_", "-")] = account_id
+                company_defaults_set[column] = account_number
+            if len(child_args) > 1:
+                from erpclaw_lib.cross_skill import call_skill_action, CrossSkillError
+                try:
+                    call_skill_action(
+                        "erpclaw", "update-company",
+                        args=child_args,
+                        db_path=getattr(args, "db_path", None),
+                    )
+                except CrossSkillError as e:
+                    ok({
+                        "accounts_created": created,
+                        "template": template,
+                        "company_id": company_id,
+                        "company_defaults_set": {},
+                        "company_defaults_error": str(e),
+                        "suggestion": (
+                            "Could not set the company default accounts automatically; "
+                            "run update-company with --default-receivable-account-id, "
+                            "--default-payable-account-id, --default-income-account-id, "
+                            "--default-expense-account-id, --default-bank-account-id and "
+                            "--default-cash-account-id to set them by hand."
+                        ),
+                    })
+                    return
+    ok({"accounts_created": created, "template": template, "company_id": company_id,
+        "company_defaults_set": company_defaults_set})
 
 
 # ---------------------------------------------------------------------------
@@ -325,7 +407,8 @@ def add_account(conn, args):
         audit(conn, "erpclaw-gl", "create", "account", acct_id,
                new_values={"name": name, "root_type": root_type, "account_type": account_type})
         conn.commit()
-    except sqlite3.IntegrityError as e:
+    except db_integrity_error(conn) as e:
+        conn.rollback()
         sys.stderr.write(f"[erpclaw-gl] {e}\n")
         err("Account creation failed — check for duplicates or invalid data")
 
@@ -493,6 +576,12 @@ def get_account(conn, args):
     if not acct_id:
         err("--account-id is required")
 
+    scope_company_id = None
+    if getattr(args, "company_id", None) or getattr(args, "company_name", None):
+        scope_company_id = resolve_scope_company(
+            conn, getattr(args, "company_id", None),
+            getattr(args, "company_name", None))
+
     t_account = Table("account")
     t_gl = Table("gl_entry")
 
@@ -503,6 +592,8 @@ def get_account(conn, args):
              suggestion="Use 'list accounts' to see available accounts.")
 
     acct = row_to_dict(row)
+    if scope_company_id is not None and acct["company_id"] != scope_company_id:
+        err(f"Account {acct_id} belongs to another company")
 
     # Include balance
     as_of = args.as_of_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -741,7 +832,8 @@ def add_fiscal_year(conn, args):
         audit(conn, "erpclaw-gl", "create", "fiscal_year", fy_id,
                new_values={"name": name, "start_date": start_date, "end_date": end_date})
         conn.commit()
-    except sqlite3.IntegrityError as e:
+    except db_integrity_error(conn) as e:
+        conn.rollback()
         sys.stderr.write(f"[erpclaw-gl] {e}\n")
         err("Fiscal year creation failed — check for duplicates or invalid data")
 
@@ -798,28 +890,36 @@ def validate_period_close(conn, args):
 
     company_id = fy["company_id"]
 
-    # Calculate P&L for the period — raw SQL for expression arithmetic in SELECT
-    # raw SQL — SELECT uses column arithmetic (decimal_sum(credit) - decimal_sum(debit))
-    income = conn.execute(
-        """SELECT COALESCE(decimal_sum(g.credit), '0') - COALESCE(decimal_sum(g.debit), '0') as total
+    # Calculate P&L for the period. decimal_sum returns exact Decimal text; the
+    # debit/credit difference is taken in Python, because subtracting the two
+    # sums inside SQL makes the database do floating-point arithmetic on money.
+    # raw SQL — COALESCE(decimal_sum(...)) aggregates with JOIN
+    income_row = conn.execute(
+        """SELECT COALESCE(decimal_sum(g.credit), '0') as total_credit,
+                  COALESCE(decimal_sum(g.debit), '0') as total_debit
            FROM gl_entry g JOIN account a ON g.account_id = a.id
            WHERE a.root_type = 'income' AND a.company_id = ?
              AND g.posting_date >= ? AND g.posting_date <= ?
              AND g.is_cancelled = 0""",
         (company_id, fy["start_date"], fy["end_date"]),
-    ).fetchone()["total"]
+    ).fetchone()
+    income = round_currency(to_decimal(str(income_row["total_credit"]))
+                            - to_decimal(str(income_row["total_debit"])))
 
-    # raw SQL — SELECT uses column arithmetic (decimal_sum(debit) - decimal_sum(credit))
-    expense = conn.execute(
-        """SELECT COALESCE(decimal_sum(g.debit), '0') - COALESCE(decimal_sum(g.credit), '0') as total
+    # raw SQL — COALESCE(decimal_sum(...)) aggregates with JOIN
+    expense_row = conn.execute(
+        """SELECT COALESCE(decimal_sum(g.debit), '0') as total_debit,
+                  COALESCE(decimal_sum(g.credit), '0') as total_credit
            FROM gl_entry g JOIN account a ON g.account_id = a.id
            WHERE a.root_type = 'expense' AND a.company_id = ?
              AND g.posting_date >= ? AND g.posting_date <= ?
              AND g.is_cancelled = 0""",
         (company_id, fy["start_date"], fy["end_date"]),
-    ).fetchone()["total"]
+    ).fetchone()
+    expense = round_currency(to_decimal(str(expense_row["total_debit"]))
+                             - to_decimal(str(expense_row["total_credit"])))
 
-    net_income = Decimal(str(income)) - Decimal(str(expense))
+    net_income = income - expense
 
     # Check trial balance
     # raw SQL — COALESCE(decimal_sum(...)) aggregate with JOIN
@@ -834,8 +934,8 @@ def validate_period_close(conn, args):
 
     ok({
         "fiscal_year": fy["name"],
-        "income_total": str(Decimal(str(income))),
-        "expense_total": str(Decimal(str(expense))),
+        "income_total": str(income),
+        "expense_total": str(expense),
         "net_income": str(net_income),
         "trial_balance_balanced": balanced,
     })
@@ -883,107 +983,109 @@ def close_fiscal_year(conn, args):
 
     company_id = fy["company_id"]
 
-    # raw SQL — SELECT uses column arithmetic (decimal_sum(credit) - decimal_sum(debit))
-    income = conn.execute(
-        """SELECT COALESCE(decimal_sum(g.credit), '0') - COALESCE(decimal_sum(g.debit), '0')
+    # The house posting path (insert_gl_entries) requires a cost centre on
+    # every P&L leg and stamps the company's base currency on each row. Read
+    # both up front and refuse BEFORE any write when there is no default
+    # cost centre to post the P&L legs to.
+    t_company = Table("company")
+    q = (Q.from_(t_company)
+         .select(t_company.default_currency, t_company.default_cost_center_id)
+         .where(t_company.id == P()))
+    company = conn.execute(q.get_sql(), (company_id,)).fetchone()
+    base_currency = (company["default_currency"]
+                     if company and company["default_currency"] else "USD")
+    default_cc = company["default_cost_center_id"] if company else None
+    if not default_cc:
+        err("Company has no default cost centre — "
+            "set default_cost_center_id before closing the fiscal year")
+
+    # P&L legs are summed separately and subtracted in Python with Decimal.
+    # Subtracting the two TEXT sums inside SQL needs a text-minus-text
+    # operator, which PostgreSQL does not provide (operator does not exist:
+    # text - text), so the arithmetic lives here — same shape as
+    # validate_period_close above, exact Decimal throughout, no float.
+    # raw SQL — COALESCE(decimal_sum(...)) aggregates with JOIN
+    income_row = conn.execute(
+        """SELECT COALESCE(decimal_sum(g.credit), '0') as total_credit,
+                  COALESCE(decimal_sum(g.debit), '0') as total_debit
            FROM gl_entry g JOIN account a ON g.account_id = a.id
            WHERE a.root_type = 'income' AND a.company_id = ?
              AND g.posting_date >= ? AND g.posting_date <= ?
              AND g.is_cancelled = 0""",
         (company_id, fy["start_date"], fy["end_date"]),
-    ).fetchone()[0]
+    ).fetchone()
+    income = Decimal(str(income_row["total_credit"])) - Decimal(str(income_row["total_debit"]))
 
-    # raw SQL — SELECT uses column arithmetic (decimal_sum(debit) - decimal_sum(credit))
-    expense = conn.execute(
-        """SELECT COALESCE(decimal_sum(g.debit), '0') - COALESCE(decimal_sum(g.credit), '0')
+    # raw SQL — COALESCE(decimal_sum(...)) aggregates with JOIN
+    expense_row = conn.execute(
+        """SELECT COALESCE(decimal_sum(g.debit), '0') as total_debit,
+                  COALESCE(decimal_sum(g.credit), '0') as total_credit
            FROM gl_entry g JOIN account a ON g.account_id = a.id
            WHERE a.root_type = 'expense' AND a.company_id = ?
              AND g.posting_date >= ? AND g.posting_date <= ?
              AND g.is_cancelled = 0""",
         (company_id, fy["start_date"], fy["end_date"]),
-    ).fetchone()[0]
+    ).fetchone()
+    expense = Decimal(str(expense_row["total_debit"])) - Decimal(str(expense_row["total_credit"]))
 
-    net_pl = Decimal(str(income)) - Decimal(str(expense))
+    net_pl = income - expense
 
-    # Create period closing voucher
+    # Create period closing voucher and post the closing legs in ONE
+    # transaction: the voucher, every ledger row, the fiscal-year flag and
+    # the audit row commit together or not at all. A validation refusal from
+    # the house posting path rolls everything back and surfaces its message.
     pcv_id = str(uuid.uuid4())
-    q = (Q.into(t_pcv)
-         .columns("id", "fiscal_year_id", "posting_date", "closing_account_id",
-                   "net_pl_amount", "status", "company_id")
-         .insert(P(), P(), P(), P(), P(), ValueWrapper("submitted"), P()))
-    conn.execute(q.get_sql(),
-        (pcv_id, fy_id, posting_date, closing_account_id, str(net_pl), company_id))
+    try:
+        q = (Q.into(t_pcv)
+             .columns("id", "fiscal_year_id", "posting_date", "closing_account_id",
+                       "net_pl_amount", "status", "company_id")
+             .insert(P(), P(), P(), P(), P(), ValueWrapper("submitted"), P()))
+        conn.execute(q.get_sql(),
+            (pcv_id, fy_id, posting_date, closing_account_id, str(net_pl), company_id))
 
-    # Post closing GL entries: net P&L → retained earnings
-    entries = []
-    if net_pl > 0:
-        # Net income: DR Income Summary, CR Retained Earnings
-        entries = [
-            {"account_id": closing_account_id, "debit": "0", "credit": str(net_pl)},
-        ]
-        # We need a balancing debit — use a temporary income summary or
-        # directly post: DR income accounts, CR retained earnings
-        # Simplified: single net entry
-        # Find an income account to debit (or use closing account both sides)
-        # Actually for period closing: DR P&L = CR Retained Earnings for net income
-        # In ERPNext this posts a single pair:
-        entries = [
-            {"account_id": closing_account_id, "debit": "0", "credit": str(net_pl)},
-        ]
-        # Need a balancing entry — use income total account or an expense placeholder
-        # Simplest correct approach: post the net as a pair
-        # DR: Temporary/P&L summary account → CR: Retained Earnings
-        # For simplicity, we'll use the closing account itself (debit & credit net to the amount)
-        # Actually the standard approach is to zero out all income and expense accounts
-        # into retained earnings. Let's do net approach:
-        # If net_pl positive (profit): CR retained earnings, DR comes from zeroing income/expense
-        # For a simple implementation: one closing entry
-        pass
-    elif net_pl < 0:
-        pass
+        # Zero out each P&L account into retained earnings through the house
+        # posting path (ONE insert_gl_entries call inside _close_pl_accounts).
+        # Accounts whose own net is zero write no row; a zero company net
+        # still closes every non-zero account.
+        gl_ids = _close_pl_accounts(conn, company_id, fy, closing_account_id,
+                                     pcv_id, posting_date,
+                                     base_currency, default_cc)
+        gl_entries_created = len(gl_ids)
 
-    # Simple net approach: post a single journal-style pair
-    # The closing entry transfers net P&L to retained earnings
-    # We need SOME account on the other side. Use a "Period Closing" voucher type.
-    # ERPNext creates entries per-account, but our simplified approach:
-    # Post entries only if there's a net amount
-    gl_entries_created = 0
-    if net_pl != 0:
-        abs_pl = abs(net_pl)
-        # Find any income account for balancing
-        if net_pl > 0:
-            # Profit: credit retained earnings, need a debit somewhere
-            # Standard: debit each income account, credit each expense account → net to RE
-            # Simplified: use period_closing voucher_type with closing_account on both sides
-            # is wrong. Let's collect income/expense totals per account and close them.
-            gl_ids = _close_pl_accounts(conn, company_id, fy, closing_account_id,
-                                         pcv_id, posting_date)
-            gl_entries_created = len(gl_ids)
-        else:
-            gl_ids = _close_pl_accounts(conn, company_id, fy, closing_account_id,
-                                         pcv_id, posting_date)
-            gl_entries_created = len(gl_ids)
+        # Close the fiscal year
+        q = (Q.update(t_fy)
+             .set(Field("is_closed"), 1)
+             .set(Field("updated_at"), now())
+             .where(t_fy.id == P()))
+        conn.execute(q.get_sql(), (fy_id,))
 
-    # Close the fiscal year
-    q = (Q.update(t_fy)
-         .set(Field("is_closed"), 1)
-         .set(Field("updated_at"), now())
-         .where(t_fy.id == P()))
-    conn.execute(q.get_sql(), (fy_id,))
-
-    audit(conn, "erpclaw-gl", "close", "fiscal_year", fy_id,
-           new_values={"pcv_id": pcv_id, "net_pl": str(net_pl)})
-    conn.commit()
+        audit(conn, "erpclaw-gl", "close", "fiscal_year", fy_id,
+               new_values={"pcv_id": pcv_id, "net_pl": str(net_pl)})
+        conn.commit()
+    except ValueError as e:
+        conn.rollback()
+        err(str(e))
 
     ok({"status": "submitted", "pcv_id": pcv_id, "net_pl_transferred": str(net_pl),
          "gl_entries_created": gl_entries_created, "fiscal_year_closed": True})
 
 
-def _close_pl_accounts(conn, company_id, fy, closing_account_id, pcv_id, posting_date):
-    """Zero out all income and expense accounts into retained earnings."""
-    gl_ids = []
+def _close_pl_accounts(conn, company_id, fy, closing_account_id, pcv_id, posting_date,
+                       base_currency="USD", cost_center_id=None):
+    """Zero out all income and expense accounts into retained earnings.
 
-    # raw SQL — LEFT JOIN with conditions, GROUP BY, HAVING with != comparison
+    Collects every closing leg first — same accounts, same amounts, same
+    retained-earnings leg as before — then posts them with ONE
+    insert_gl_entries call (voucher_type period_closing, entry set primary)
+    so the house validation, cost centres, checksum chain and currency all
+    apply. A second call for the same voucher is refused by the helper's
+    idempotency check. Returns the posted gl_entry ids.
+    """
+    # raw SQL — LEFT JOIN with conditions, GROUP BY, HAVING with != comparison.
+    # The HAVING repeats the full aggregate instead of the SELECT alias:
+    # SQLite resolves aliases there but PostgreSQL does not, so the alias
+    # form errors the close on that backend. CAST AS NUMERIC keeps the
+    # zero test exact on both (TEXT '0.00' must equal 0, not just '0').
     pl_accounts = conn.execute(
         """SELECT a.id, a.root_type,
                   COALESCE(decimal_sum(g.debit), '0') as total_debit,
@@ -995,25 +1097,16 @@ def _close_pl_accounts(conn, company_id, fy, closing_account_id, pcv_id, posting
            WHERE a.root_type IN ('income', 'expense') AND a.company_id = ?
              AND a.is_group = 0
            GROUP BY a.id
-           HAVING total_debit != 0 OR total_credit != 0""",
+           HAVING CAST(COALESCE(decimal_sum(g.debit), '0') AS NUMERIC) != 0
+               OR CAST(COALESCE(decimal_sum(g.credit), '0') AS NUMERIC) != 0""",
         (fy["start_date"], fy["end_date"], company_id),
     ).fetchall()
 
-    t_gl = Table("gl_entry")
-    _gl_cols = ("id", "posting_date", "account_id", "debit", "credit",
-                "debit_base", "credit_base", "currency", "exchange_rate",
-                "fiscal_year", "voucher_type", "voucher_id")
-    _gl_insert = (Q.into(t_gl).columns(*_gl_cols)
-                  .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(), P(), P(), P())
-                  .get_sql())
-
+    legs = []
     for acct in pl_accounts:
         net = Decimal(str(acct["total_debit"])) - Decimal(str(acct["total_credit"]))
         if net == 0:
             continue
-
-        entry_id = str(uuid.uuid4())
-        re_entry_id = str(uuid.uuid4())
 
         if acct["root_type"] == "income":
             # Income accounts have credit balance -> debit to zero
@@ -1023,23 +1116,27 @@ def _close_pl_accounts(conn, company_id, fy, closing_account_id, pcv_id, posting
                 continue
             if income_net > 0:
                 # DR income account, CR retained earnings
-                conn.execute(_gl_insert,
-                    (entry_id, posting_date, acct["id"], str(income_net), "0",
-                     str(income_net), "0", "USD", "1", fy["name"], "period_closing", pcv_id))
-                conn.execute(_gl_insert,
-                    (re_entry_id, posting_date, closing_account_id, "0", str(income_net),
-                     "0", str(income_net), "USD", "1", fy["name"], "period_closing", pcv_id))
-                gl_ids.extend([entry_id, re_entry_id])
+                legs.append({"account_id": acct["id"],
+                             "debit": str(income_net), "credit": "0",
+                             "currency": base_currency, "exchange_rate": "1",
+                             "fiscal_year": fy["name"],
+                             "cost_center_id": cost_center_id})
+                legs.append({"account_id": closing_account_id,
+                             "debit": "0", "credit": str(income_net),
+                             "currency": base_currency, "exchange_rate": "1",
+                             "fiscal_year": fy["name"]})
             else:
                 # Unusual: income account has debit balance -> credit to zero
                 abs_net = abs(income_net)
-                conn.execute(_gl_insert,
-                    (entry_id, posting_date, acct["id"], "0", str(abs_net),
-                     "0", str(abs_net), "USD", "1", fy["name"], "period_closing", pcv_id))
-                conn.execute(_gl_insert,
-                    (re_entry_id, posting_date, closing_account_id, str(abs_net), "0",
-                     str(abs_net), "0", "USD", "1", fy["name"], "period_closing", pcv_id))
-                gl_ids.extend([entry_id, re_entry_id])
+                legs.append({"account_id": acct["id"],
+                             "debit": "0", "credit": str(abs_net),
+                             "currency": base_currency, "exchange_rate": "1",
+                             "fiscal_year": fy["name"],
+                             "cost_center_id": cost_center_id})
+                legs.append({"account_id": closing_account_id,
+                             "debit": str(abs_net), "credit": "0",
+                             "currency": base_currency, "exchange_rate": "1",
+                             "fiscal_year": fy["name"]})
         else:
             # Expense accounts have debit balance -> credit to zero
             expense_net = Decimal(str(acct["total_debit"])) - Decimal(str(acct["total_credit"]))
@@ -1047,25 +1144,35 @@ def _close_pl_accounts(conn, company_id, fy, closing_account_id, pcv_id, posting
                 continue
             if expense_net > 0:
                 # CR expense account, DR retained earnings
-                conn.execute(_gl_insert,
-                    (entry_id, posting_date, acct["id"], "0", str(expense_net),
-                     "0", str(expense_net), "USD", "1", fy["name"], "period_closing", pcv_id))
-                conn.execute(_gl_insert,
-                    (re_entry_id, posting_date, closing_account_id, str(expense_net), "0",
-                     str(expense_net), "0", "USD", "1", fy["name"], "period_closing", pcv_id))
-                gl_ids.extend([entry_id, re_entry_id])
+                legs.append({"account_id": acct["id"],
+                             "debit": "0", "credit": str(expense_net),
+                             "currency": base_currency, "exchange_rate": "1",
+                             "fiscal_year": fy["name"],
+                             "cost_center_id": cost_center_id})
+                legs.append({"account_id": closing_account_id,
+                             "debit": str(expense_net), "credit": "0",
+                             "currency": base_currency, "exchange_rate": "1",
+                             "fiscal_year": fy["name"]})
             else:
                 # Unusual: expense has credit balance
                 abs_net = abs(expense_net)
-                conn.execute(_gl_insert,
-                    (entry_id, posting_date, acct["id"], str(abs_net), "0",
-                     str(abs_net), "0", "USD", "1", fy["name"], "period_closing", pcv_id))
-                conn.execute(_gl_insert,
-                    (re_entry_id, posting_date, closing_account_id, "0", str(abs_net),
-                     "0", str(abs_net), "USD", "1", fy["name"], "period_closing", pcv_id))
-                gl_ids.extend([entry_id, re_entry_id])
+                legs.append({"account_id": acct["id"],
+                             "debit": str(abs_net), "credit": "0",
+                             "currency": base_currency, "exchange_rate": "1",
+                             "fiscal_year": fy["name"],
+                             "cost_center_id": cost_center_id})
+                legs.append({"account_id": closing_account_id,
+                             "debit": "0", "credit": str(abs_net),
+                             "currency": base_currency, "exchange_rate": "1",
+                             "fiscal_year": fy["name"]})
 
-    return gl_ids
+    if not legs:
+        return []
+    return insert_gl_entries(conn, legs, voucher_type="period_closing",
+                             voucher_id=pcv_id, posting_date=posting_date,
+                             company_id=company_id,
+                             remarks=f"Period close {fy['name']}",
+                             entry_set="primary")
 
 
 # ---------------------------------------------------------------------------
@@ -1088,37 +1195,47 @@ def reopen_fiscal_year(conn, args):
     if not fy["is_closed"]:
         err(f"Fiscal year '{fy['name']}' is not closed")
 
-    # Reverse the period closing voucher entries
-    q = (Q.from_(t_pcv).select(t_pcv.id)
+    # Reverse the period closing voucher entries through the house
+    # reversal path: mirror rows are inserted and both the originals and the
+    # mirrors carry is_cancelled = 1. A close whose profit-and-loss
+    # accounts were each already zero wrote no ledger rows, so there is
+    # nothing to reverse for its voucher.
+    q = (Q.from_(t_pcv).select(t_pcv.id, t_pcv.posting_date)
          .where(t_pcv.fiscal_year_id == P())
          .where(t_pcv.status == ValueWrapper("submitted")))
     pcv = conn.execute(q.get_sql(), (fy_id,)).fetchone()
 
     pcv_reversed = False
-    if pcv:
-        # Cancel all GL entries for this PCV
-        q = (Q.update(t_gl)
-             .set(Field("is_cancelled"), 1)
-             .where(t_gl.voucher_type == ValueWrapper("period_closing"))
-             .where(t_gl.voucher_id == P()))
-        conn.execute(q.get_sql(), (pcv["id"],))
+    try:
+        if pcv:
+            q = (Q.from_(t_gl).select(fn.Count("*").as_("cnt"))
+                 .where(t_gl.voucher_type == ValueWrapper("period_closing"))
+                 .where(t_gl.voucher_id == P())
+                 .where(t_gl.is_cancelled == 0))
+            active = conn.execute(q.get_sql(), (pcv["id"],)).fetchone()["cnt"]
+            if active:
+                reverse_gl_entries(conn, "period_closing", pcv["id"],
+                                   pcv["posting_date"])
 
-        q = (Q.update(t_pcv)
-             .set(Field("status"), ValueWrapper("cancelled"))
+            q = (Q.update(t_pcv)
+                 .set(Field("status"), ValueWrapper("cancelled"))
+                 .set(Field("updated_at"), now())
+                 .where(t_pcv.id == P()))
+            conn.execute(q.get_sql(), (pcv["id"],))
+            pcv_reversed = True
+
+        q = (Q.update(t_fy)
+             .set(Field("is_closed"), 0)
              .set(Field("updated_at"), now())
-             .where(t_pcv.id == P()))
-        conn.execute(q.get_sql(), (pcv["id"],))
-        pcv_reversed = True
+             .where(t_fy.id == P()))
+        conn.execute(q.get_sql(), (fy_id,))
 
-    q = (Q.update(t_fy)
-         .set(Field("is_closed"), 0)
-         .set(Field("updated_at"), now())
-         .where(t_fy.id == P()))
-    conn.execute(q.get_sql(), (fy_id,))
-
-    audit(conn, "erpclaw-gl", "reopen", "fiscal_year", fy_id,
-           new_values={"is_closed": 0, "pcv_reversed": pcv_reversed})
-    conn.commit()
+        audit(conn, "erpclaw-gl", "reopen", "fiscal_year", fy_id,
+               new_values={"is_closed": 0, "pcv_reversed": pcv_reversed})
+        conn.commit()
+    except ValueError as e:
+        conn.rollback()
+        err(str(e))
 
     ok({"fiscal_year_id": fy_id, "is_closed": False, "pcv_reversed": pcv_reversed})
 
@@ -1147,7 +1264,8 @@ def add_cost_center(conn, args):
         conn.execute(q.get_sql(), (cc_id, name, parent_id, company_id, is_group))
         audit(conn, "erpclaw-gl", "create", "cost_center", cc_id, new_values={"name": name})
         conn.commit()
-    except sqlite3.IntegrityError as e:
+    except db_integrity_error(conn) as e:
+        conn.rollback()
         sys.stderr.write(f"[erpclaw-gl] {e}\n")
         err("Cost center creation failed — check for duplicates or invalid data")
 
@@ -1224,7 +1342,8 @@ def add_budget(conn, args):
         audit(conn, "erpclaw-gl", "create", "budget", budget_id,
                new_values={"budget_amount": budget_amount, "action_if_exceeded": action_if_exceeded})
         conn.commit()
-    except sqlite3.IntegrityError as e:
+    except db_integrity_error(conn) as e:
+        conn.rollback()
         sys.stderr.write(f"[erpclaw-gl] {e}\n")
         err("Budget creation failed — check for duplicates or invalid data")
 
@@ -1373,24 +1492,29 @@ def check_gl_integrity(conn, args):
     total_credit = Decimal(str(totals["total_credit"]))
     difference = abs(total_debit - total_credit)
 
-    # 2. Chain hash verification
+    # 2. Chain hash verification, ordered by the explicit sequence the
+    # posting path stamps under the chain head. Chained legs with no sequence
+    # predate that column: where the backend records true write order they are
+    # walked first in that order and the sequenced segment continues from
+    # their tail; elsewhere they are counted and left out of the walk. The
+    # head itself is never read here: every link is recomputed from gl_entry.
+    recoverable = gl_legacy_order_recoverable()
+    _seg = Case().when(g.sequence.isnull(), 0).else_(1)
     q = (Q.from_(g).join(a).on(g.account_id == a.id)
          .select(g.posting_date, g.account_id, g.debit, g.credit,
-                 g.voucher_type, g.voucher_id, g.gl_checksum)
+                 g.voucher_type, g.voucher_id, g.gl_checksum, g.sequence,
+                 g.created_at, g.id)
          .where(a.company_id == P())
+         .orderby(_seg)
+         .orderby(g.sequence)
          .orderby(g.created_at).orderby(LiteralValue(rowid_col("g."))))
     entries = conn.execute(q.get_sql(), (company_id,)).fetchall()
 
     chain_intact = True
     broken_links = 0
     total_entries = len(entries)
-    prev_hash = "GENESIS"
 
-    for row in entries:
-        if not row["gl_checksum"]:
-            # Entries created before chain was enabled — skip
-            continue
-
+    def _expected(row, prev_hash):
         hash_input = "|".join([
             row["posting_date"],
             row["account_id"],
@@ -1400,13 +1524,99 @@ def check_gl_integrity(conn, args):
             row["voucher_id"],
             prev_hash,
         ])
-        expected = hashlib.sha256(hash_input.encode("utf-8")).hexdigest()
+        return hashlib.sha256(hash_input.encode("utf-8")).hexdigest()
 
-        if row["gl_checksum"] != expected:
+    legacy_rows = [row for row in entries
+                   if row["gl_checksum"] and row["sequence"] is None]
+    sequenced_rows = [row for row in entries
+                      if row["gl_checksum"] and row["sequence"] is not None]
+    sequenced_count = len(sequenced_rows)
+    legacy_count = len(legacy_rows)
+    pre_sequence_rows = 0 if recoverable else legacy_count
+
+    if recoverable:
+        prev_hash = "GENESIS"
+        for row in legacy_rows:
+            if _expected(row, prev_hash) != row["gl_checksum"]:
+                chain_intact = False
+                broken_links += 1
+            prev_hash = row["gl_checksum"]
+        if sequenced_rows:
+            _seen = {}
+            for row in sequenced_rows:
+                _seen[row["sequence"]] = _seen.get(row["sequence"], 0) + 1
+            for _seq, _n in _seen.items():
+                if _n > 1:
+                    broken_links += _n - 1
+                    chain_intact = False
+            _highest = max(row["sequence"] for row in sequenced_rows)
+            _present = set(_seen)
+            for _missing in range(1, _highest + 1):
+                if _missing not in _present:
+                    broken_links += 1
+                    chain_intact = False
+            for row in sequenced_rows:
+                if _expected(row, prev_hash) != row["gl_checksum"]:
+                    chain_intact = False
+                    broken_links += 1
+                prev_hash = row["gl_checksum"]
+            _stale = 0
+            if sequenced_rows:
+                _h = Table("gl_entry").as_("h")
+                _ha = Table("account").as_("ha")
+                _floor_q = (Q.from_(_h).join(_ha).on(_h.account_id == _ha.id)
+                            .select(fn.Min(LiteralValue(rowid_col("h."))).as_("floor"))
+                            .where(_ha.company_id == P())
+                            .where(_h.gl_checksum.isnotnull())
+                            .where(_h.sequence.notnull()))
+                _floor_row = conn.execute(_floor_q.get_sql(), (company_id,)).fetchone()
+                _floor_val = _floor_row["floor"] if _floor_row else None
+                if _floor_val is not None:
+                    _k = Table("gl_entry").as_("k")
+                    _ka = Table("account").as_("ka")
+                    _pos_q = (Q.from_(_k).join(_ka).on(_k.account_id == _ka.id)
+                              .select(LiteralValue(rowid_col("k.")).as_("pos"))
+                              .where(_ka.company_id == P())
+                              .where(_k.gl_checksum.isnotnull())
+                              .where(_k.sequence.isnull()))
+                    for _pos_row in conn.execute(_pos_q.get_sql(), (company_id,)).fetchall():
+                        if _pos_row["pos"] is not None and _pos_row["pos"] > _floor_val:
+                            _stale += 1
+            if _stale:
+                chain_intact = False
+                broken_links += _stale
+    else:
+        if sequenced_rows:
+            _seen = {}
+            for row in sequenced_rows:
+                _seen[row["sequence"]] = _seen.get(row["sequence"], 0) + 1
+            for _seq, _n in _seen.items():
+                if _n > 1:
+                    broken_links += _n - 1
+                    chain_intact = False
+            _highest = max(row["sequence"] for row in sequenced_rows)
+            _present = set(_seen)
+            for _missing in range(1, _highest + 1):
+                if _missing not in _present:
+                    broken_links += 1
+                    chain_intact = False
+            # The first sequenced leg chains from a legacy tail whose order
+            # was never recorded, so its link cannot be recomputed; the walk
+            # anchors there and verifies every leg after it leg to leg.
+            _anchor_skipped = bool(pre_sequence_rows)
+            prev_hash = "GENESIS"
+            for _index, row in enumerate(sequenced_rows):
+                if _index == 0 and _anchor_skipped:
+                    prev_hash = row["gl_checksum"]
+                    continue
+                if _index == 0:
+                    prev_hash = "GENESIS"
+                if _expected(row, prev_hash) != row["gl_checksum"]:
+                    chain_intact = False
+                    broken_links += 1
+                prev_hash = row["gl_checksum"]
+        if pre_sequence_rows:
             chain_intact = False
-            broken_links += 1
-
-        prev_hash = row["gl_checksum"]
 
     ok({
         "balanced": difference < Decimal("0.01"),
@@ -1416,6 +1626,9 @@ def check_gl_integrity(conn, args):
         "chain_intact": chain_intact,
         "broken_links": broken_links,
         "total_entries": total_entries,
+        "sequenced_rows": sequenced_count,
+        "legacy_rows": legacy_count,
+        "pre_sequence_rows": pre_sequence_rows,
     })
 
 
@@ -1431,6 +1644,12 @@ def get_account_balance_action(conn, args):
     if not as_of:
         err("--as-of-date is required")
 
+    scope_company_id = None
+    if getattr(args, "company_id", None) or getattr(args, "company_name", None):
+        scope_company_id = resolve_scope_company(
+            conn, getattr(args, "company_id", None),
+            getattr(args, "company_name", None))
+
     t_account = Table("account")
     t_gl = Table("gl_entry")
 
@@ -1438,6 +1657,8 @@ def get_account_balance_action(conn, args):
     acct = conn.execute(q.get_sql(), (acct_id,)).fetchone()
     if not acct:
         err(f"Account {acct_id} not found")
+    if scope_company_id is not None and acct["company_id"] != scope_company_id:
+        err(f"Account {acct_id} belongs to another company")
 
     q = (Q.from_(t_gl)
          .select(fn.Coalesce(DecimalSum(t_gl.debit), ValueWrapper("0")).as_("debit_total"),
@@ -1590,20 +1811,28 @@ def revalue_foreign_balances(conn, args):
     for acct in accounts:
         acct_currency = acct["currency"]
 
-        # raw SQL — uses CAST(column AS NUMERIC) which PyPika doesn't support cleanly
-        bal = conn.execute(
-            """SELECT
-                COALESCE(SUM(CAST(debit AS NUMERIC)), 0) as total_debit,
-                COALESCE(SUM(CAST(credit AS NUMERIC)), 0) as total_credit,
-                COALESCE(SUM(CAST(debit_base AS NUMERIC)), 0) as total_debit_base,
-                COALESCE(SUM(CAST(credit_base AS NUMERIC)), 0) as total_credit_base
-               FROM gl_entry
-               WHERE account_id = ? AND is_cancelled = 0 AND posting_date <= ?""",
-            (acct["id"], as_of_date),
-        ).fetchone()
+        # Exact-decimal balances: each leg is summed as text with the
+        # exact-decimal sum helper (text '0' when there are no rows) and the
+        # legs are subtracted in Python with Decimal, so no binary float
+        # ever touches money.
+        t_gl = Table("gl_entry")
+        bal_q = (
+            Q.from_(t_gl)
+            .select(
+                fn.Coalesce(DecimalSum(t_gl.debit), ValueWrapper("0")).as_("total_debit"),
+                fn.Coalesce(DecimalSum(t_gl.credit), ValueWrapper("0")).as_("total_credit"),
+                fn.Coalesce(DecimalSum(t_gl.debit_base), ValueWrapper("0")).as_("total_debit_base"),
+                fn.Coalesce(DecimalSum(t_gl.credit_base), ValueWrapper("0")).as_("total_credit_base"),
+            )
+            .where(t_gl.account_id == P())
+            .where(t_gl.is_cancelled == 0)
+            .where(t_gl.posting_date <= P())
+        )
+        bal = conn.execute(bal_q.get_sql(), (acct["id"], as_of_date)).fetchone()
 
-        txn_balance = to_decimal(str(bal["total_debit"] - bal["total_credit"]))
-        current_base_balance = to_decimal(str(bal["total_debit_base"] - bal["total_credit_base"]))
+        txn_balance = to_decimal(str(bal["total_debit"])) - to_decimal(str(bal["total_credit"]))
+        current_base_balance = (to_decimal(str(bal["total_debit_base"]))
+                                - to_decimal(str(bal["total_credit_base"])))
 
         if txn_balance == 0:
             continue
@@ -1701,6 +1930,15 @@ def import_chart_of_accounts(conn, args):
 
     CSV columns: name, root_type, account_number (opt), account_type (opt),
     parent_name (opt), currency (opt), is_group (opt).
+
+    The whole file is validated before the first write: every data row gets
+    the same registry, root-type coherence and leaf-only checks add-account
+    applies, plus a parent check against accounts that existed before the
+    import and earlier rows of the same file. Any problem refuses the whole
+    file and nothing is written. All inserts and their audit rows commit in
+    one transaction; a write failure rolls back so no partial import survives.
+    One audit row per created account is written exactly as add-account
+    writes it. Rows whose name already exists stay skipped.
     """
     csv_path = args.csv_path
     company_id = args.company_id
@@ -1726,48 +1964,107 @@ def import_chart_of_accounts(conn, args):
     if not rows:
         err("CSV file is empty")
 
-    imported = 0
-    skipped = 0
-    for row in rows:
+    allowed_roots = {"asset", "liability", "equity", "income", "expense"}
+    t_account = Table("account")
+    q_existing = (Q.from_(t_account).select(t_account.name)
+                  .where(t_account.company_id == P()))
+    existing_names = set(
+        r["name"] for r in conn.execute(q_existing.get_sql(), (company_id,)).fetchall())
+
+    problems = []
+    skipped_flags = []
+    seen_names = set()
+    for idx, row in enumerate(rows):
+        n = idx + 2
         name = row.get("name", "")
         root_type = row.get("root_type", "")
-
-        # Check for duplicate
-        t_account = Table("account")
-        q = (Q.from_(t_account).select(t_account.id)
-             .where(t_account.name == P())
-             .where(t_account.company_id == P()))
-        existing = conn.execute(q.get_sql(), (name, company_id)).fetchone()
-        if existing:
-            skipped += 1
+        is_skipped = name in existing_names or name in seen_names
+        skipped_flags.append(is_skipped)
+        if root_type not in allowed_roots:
+            problems.append(
+                f"Row {n}: root_type '{root_type}' must be one of "
+                "asset, liability, equity, income, expense")
+            seen_names.add(name)
             continue
+        account_type = (row.get("account_type") or "").strip()
+        if account_type:
+            registered_message = _account_type_registered_message(conn, account_type)
+            if registered_message is not None:
+                problems.append(f"Row {n}: {registered_message}")
+                seen_names.add(name)
+                continue
+            coherent_message = _root_type_coherent_message(account_type, root_type, name)
+            if coherent_message is not None:
+                problems.append(f"Row {n}: {coherent_message}")
+                seen_names.add(name)
+                continue
+            is_group_row = 1 if row.get("is_group", "0") in ("1", "true", "True") else 0
+            if is_group_row and account_type.lower() in LEAF_ONLY_TYPES:
+                problems.append(
+                    f"Row {n}: account_type '{account_type}' must be a posting "
+                    "(leaf) account, not a group")
+                seen_names.add(name)
+                continue
+        if not is_skipped:
+            parent_name = (row.get("parent_name") or "").strip()
+            if parent_name:
+                if parent_name not in existing_names and parent_name not in seen_names:
+                    problems.append(
+                        f"Row {n}: parent_name '{parent_name}' is not an account "
+                        "of this company or an earlier row of this file")
+                    seen_names.add(name)
+                    continue
+        seen_names.add(name)
+    if problems:
+        err("Chart import refused, nothing was written: " + "; ".join(problems))
 
-        # Resolve parent
-        parent_id = None
-        parent_name = row.get("parent_name")
-        if parent_name:
-            parent = conn.execute(q.get_sql(), (parent_name, company_id)).fetchone()
-            if parent:
-                parent_id = parent["id"]
-
-        is_group = 1 if row.get("is_group", "0") in ("1", "true", "True") else 0
-        balance_dir = "debit_normal"
-        if root_type in ("liability", "equity", "income"):
-            balance_dir = "credit_normal"
-
-        acct_id = str(uuid.uuid4())
-        q_ins = (Q.into(t_account)
-                 .columns("id", "name", "account_number", "parent_id", "root_type",
-                           "account_type", "currency", "is_group", "balance_direction",
-                           "company_id", "depth")
-                 .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(), P(), 0))
-        conn.execute(q_ins.get_sql(),
-            (acct_id, name, row.get("account_number"), parent_id, root_type,
-             row.get("account_type"), row.get("currency", "USD"),
-             is_group, balance_dir, company_id))
-        imported += 1
-
-    conn.commit()
+    q_map = (Q.from_(t_account).select(t_account.id, t_account.name, t_account.depth)
+             .where(t_account.company_id == P()))
+    name_to_id_depth = {
+        r["name"]: (r["id"], r["depth"])
+        for r in conn.execute(q_map.get_sql(), (company_id,)).fetchall()}
+    imported = 0
+    skipped = 0
+    try:
+        for idx, row in enumerate(rows):
+            if skipped_flags[idx]:
+                skipped += 1
+                continue
+            name = row.get("name", "")
+            root_type = row.get("root_type", "")
+            parent_name = (row.get("parent_name") or "").strip()
+            parent_id = None
+            depth = 0
+            if parent_name and parent_name in name_to_id_depth:
+                parent_id, parent_depth = name_to_id_depth[parent_name]
+                depth = parent_depth + 1
+            is_group = 1 if row.get("is_group", "0") in ("1", "true", "True") else 0
+            balance_dir = "debit_normal"
+            if root_type in ("liability", "equity", "income"):
+                balance_dir = "credit_normal"
+            acct_id = str(uuid.uuid4())
+            account_type_value = row.get("account_type")
+            q_ins = (Q.into(t_account)
+                     .columns("id", "name", "account_number", "parent_id", "root_type",
+                               "account_type", "currency", "is_group", "balance_direction",
+                               "company_id", "depth")
+                     .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(), P(), P()))
+            conn.execute(q_ins.get_sql(),
+                (acct_id, name, row.get("account_number"), parent_id, root_type,
+                 account_type_value, row.get("currency", "USD"),
+                 is_group, balance_dir, company_id, depth))
+            audit(conn, "erpclaw-gl", "create", "account", acct_id,
+                   new_values={"name": name, "root_type": root_type,
+                               "account_type": account_type_value})
+            name_to_id_depth[name] = (acct_id, depth)
+            imported += 1
+        conn.commit()
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        err(str(exc))
     ok({"imported": imported, "skipped": skipped, "total_rows": len(rows)})
 
 
@@ -1924,7 +2221,8 @@ def add_dimension(conn, args):
         audit(conn, "erpclaw-gl", "create", "dimension_registry", dim_id,
               new_values={"key": key, "data_type": data_type})
         conn.commit()
-    except sqlite3.IntegrityError as e:
+    except db_integrity_error(conn) as e:
+        conn.rollback()
         sys.stderr.write(f"[erpclaw-gl] {e}\n")
         err(f"Dimension '{key}' already exists")
 
@@ -1946,8 +2244,40 @@ def list_dimensions(conn, args):
     ok({"dimensions": [row_to_dict(r) for r in rows], "count": len(rows)})
 
 
+def _assert_dimension_deactivatable(conn, key, within_days_raw):
+    """Refuse to deactivate a dimension still referenced by recent live GL.
+
+    Shared by deactivate-dimension and update-dimension (when --is-active
+    false is given) so the two surfaces cannot disagree about what recent
+    use blocks deactivation. A dimension referenced by any non-cancelled
+    gl_entry posted within the look-back window (default 90 days,
+    --within-days) is in active use.
+    """
+    within_days = int(within_days_raw or 90)
+    cutoff = (datetime.now(timezone.utc).date()
+              - timedelta(days=within_days)).isoformat()
+    key_sql = str(json_get("dimensions_json", key))  # dialect-aware, key-escaped
+    # key_sql is a json_get fragment (escaped key); cutoff is the only bound value.
+    recent = conn.execute(
+        "SELECT COUNT(*) AS cnt FROM gl_entry "
+        "WHERE is_cancelled = 0 AND " + key_sql + " IS NOT NULL AND posting_date >= ?",
+        (cutoff,),
+    ).fetchone()
+    if recent["cnt"] > 0:
+        err(f"Dimension '{key}' is referenced by {recent['cnt']} live GL "
+            f"entr{'y' if recent['cnt'] == 1 else 'ies'} since {cutoff} "
+            f"(within {within_days} days); cannot deactivate")
+
+
 def update_dimension(conn, args):
-    """Update a dimension's metadata by key. Cannot rename the key itself."""
+    """Update a dimension's metadata by key. Cannot rename the key itself.
+
+    Passing --is-active false applies the same recent-use guard
+    deactivate-dimension applies (same --within-days handling and refusal
+    text): while any non-cancelled GL entry posted inside the look-back
+    window carries the dimension, the whole update is refused and nothing
+    is written.
+    """
     key = (args.key or "").strip()
     if not key:
         err("--key is required")
@@ -1956,6 +2286,9 @@ def update_dimension(conn, args):
     ).fetchone()
     if existing is None:
         err(f"Dimension '{key}' does not exist")
+
+    if getattr(args, "is_active", None) is False:
+        _assert_dimension_deactivatable(conn, key, getattr(args, "within_days", None))
 
     updates, params = [], []
     if args.label is not None:
@@ -2007,20 +2340,7 @@ def deactivate_dimension(conn, args):
     if existing is None:
         err(f"Dimension '{key}' does not exist")
 
-    within_days = int(getattr(args, "within_days", None) or 90)
-    cutoff = (datetime.now(timezone.utc).date()
-              - timedelta(days=within_days)).isoformat()
-    key_sql = str(json_get("dimensions_json", key))  # dialect-aware, key-escaped
-    # key_sql is a json_get fragment (escaped key); cutoff is the only bound value.
-    recent = conn.execute(
-        "SELECT COUNT(*) AS cnt FROM gl_entry "
-        "WHERE is_cancelled = 0 AND " + key_sql + " IS NOT NULL AND posting_date >= ?",
-        (cutoff,),
-    ).fetchone()
-    if recent["cnt"] > 0:
-        err(f"Dimension '{key}' is referenced by {recent['cnt']} live GL "
-            f"entr{'y' if recent['cnt'] == 1 else 'ies'} since {cutoff} "
-            f"(within {within_days} days); cannot deactivate")
+    _assert_dimension_deactivatable(conn, key, getattr(args, "within_days", None))
 
     conn.execute(
         "UPDATE dimension_registry SET is_active = 0, "
@@ -2148,8 +2468,7 @@ def main():
     check_unknown_args(parser, unknown)
     check_input_lengths(args)
 
-    db_path = args.db_path or DEFAULT_DB_PATH
-    ensure_db_exists(db_path)
+    db_path = getattr(args, "db_path", None)   # None unless --db-path was given
     conn = get_connection(db_path)
 
     # Dependency check

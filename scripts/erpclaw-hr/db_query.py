@@ -22,14 +22,15 @@ try:
     import importlib.util
     if importlib.util.find_spec("erpclaw_lib") is None:
         sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
-    from erpclaw_lib.db import get_connection, ensure_db_exists, DEFAULT_DB_PATH
+    from erpclaw_lib.db import get_connection, unexpected_error_message
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.naming import get_next_name
-    from erpclaw_lib.gl_posting import insert_gl_entries, reverse_gl_entries
+    from erpclaw_lib.gl_posting import insert_gl_entries, reverse_gl_entries, take_chain_heads
     from erpclaw_lib.validation import check_input_lengths
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.dependencies import check_required_tables
+    from erpclaw_lib.query_helpers import get_default_cost_center, get_fiscal_year, resolve_company_id, resolve_scope_company
     from erpclaw_lib.query import (
         Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL,
         DecimalSum, DecimalAbs, insert_row, update_row, dynamic_update,
@@ -61,6 +62,14 @@ VALID_EXPENSE_STATUSES = (
     "draft", "submitted", "approved", "rejected", "paid", "cancelled",
 )
 VALID_EXPENSE_TYPES = ("travel", "meals", "accommodation", "supplies", "other")
+# Status changes update-expense-claim-status may make. Submission, approval
+# (which posts the ledger) and rejection have their own actions; a claim is
+# paid only once approved, and only an unposted claim can be cancelled here.
+_EXPENSE_STATUS_UPDATES = {
+    "draft": ("cancelled",),
+    "submitted": ("cancelled",),
+    "approved": ("paid",),
+}
 VALID_LIFECYCLE_EVENTS = (
     "hiring", "confirmation", "promotion", "transfer",
     "separation", "resignation", "retirement",
@@ -68,6 +77,32 @@ VALID_LIFECYCLE_EVENTS = (
 VALID_FILING_STATUSES = (
     "single", "married_jointly", "married_separately", "head_of_household",
 )
+
+_NON_OPERATING_EXPENSE_ACCOUNT_TYPES = {
+    "cost_of_goods_sold": "is a cost of goods sold account",
+    "stock_adjustment": "is a stock adjustment account",
+    "depreciation": "is a depreciation account",
+    "exchange_gain_loss": "is an exchange gain/loss account",
+    "disposal_gain_loss": "is a disposal gain/loss account",
+    "rounding": "is a rounding account",
+}
+
+_OPERATING_EXPENSE_ROOT_TYPE_PROBLEMS = {
+    "asset": "is an asset account",
+    "liability": "is a liability account",
+    "equity": "is an equity account",
+    "income": "is an income account",
+}
+
+
+def _operating_expense_problem(acct):
+    if acct["is_group"]:
+        return "is a group account"
+    if acct["disabled"]:
+        return "is disabled"
+    if acct["root_type"] != "expense":
+        return _OPERATING_EXPENSE_ROOT_TYPE_PROBLEMS.get(acct["root_type"])
+    return _NON_OPERATING_EXPENSE_ACCOUNT_TYPES.get(acct["account_type"])
 
 
 def _parse_json_arg(value, name):
@@ -78,6 +113,61 @@ def _parse_json_arg(value, name):
         return json.loads(value)
     except (json.JSONDecodeError, TypeError):
         err(f"Invalid JSON for --{name}: {value}")
+
+
+def _parse_int_flag(value, flag, *, minimum, default):
+    """Validate one integer CLI flag shared by every HR action that takes it.
+
+    --limit is a positive integer; --offset and --days are non-negative
+    integers. A missing flag keeps its default. Anything else is refused
+    with a message naming the flag, before anything is written.
+    """
+    if value is None or value == "":
+        return default
+    try:
+        parsed = int(str(value).strip())
+    except (ValueError, TypeError, AttributeError):
+        if minimum > 0:
+            err(f"Invalid {flag} '{value}'. Must be a positive integer")
+        err(f"Invalid {flag} '{value}'. Must be a non-negative integer")
+    if not str(value).strip().lstrip("+-").isdigit():
+        if minimum > 0:
+            err(f"Invalid {flag} '{value}'. Must be a positive integer")
+        err(f"Invalid {flag} '{value}'. Must be a non-negative integer")
+    if parsed < minimum:
+        if minimum > 0:
+            err(f"Invalid {flag} '{value}'. Must be a positive integer")
+        err(f"Invalid {flag} '{value}'. Must be a non-negative integer")
+    return parsed
+
+
+def _validate_working_hours(value):
+    """Validate a working-hours quantity and return it quantized to 2 places.
+
+    Absent stays None. Otherwise the value must be a non-negative decimal
+    with at most two places; it is stored quantized to two places.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if text == "":
+        return None
+    if not re.match(r"^[0-9]+(\.[0-9]{1,2})?$", text):
+        err(f"Invalid working_hours '{value}'. Must be a non-negative number with at most two decimal places")
+    try:
+        amount = Decimal(text)
+    except (InvalidOperation, ValueError, AttributeError):
+        err(f"Invalid working_hours '{value}'. Must be a non-negative number with at most two decimal places")
+    if amount.is_nan() or amount.is_infinite():
+        err(f"Invalid working_hours '{value}'. Must be a non-negative number with at most two decimal places")
+    if amount < 0:
+        err(f"Invalid working_hours '{value}'. Must be a non-negative number with at most two decimal places")
+    if amount.as_tuple().exponent < -2:
+        err(f"Invalid working_hours '{value}'. Must be a non-negative number with at most two decimal places")
+    try:
+        return format(amount.quantize(Decimal("0.00")), "f")
+    except InvalidOperation:
+        err(f"Invalid working_hours '{value}'. Must be a non-negative number with at most two decimal places")
 
 
 # --ssn (T1): validated, encrypted at rest, read back as last-4 only.
@@ -105,40 +195,9 @@ def _mask_document_fields(doc):
     return doc
 
 
-def _get_fiscal_year(conn, target_date: str) -> str | None:
-    """Return the fiscal year name for a date, or None if not found."""
-    t = Table("fiscal_year")
-    q = (Q.from_(t)
-         .select(t.name)
-         .where(t.start_date <= P())
-         .where(t.end_date >= P())
-         .where(t.is_closed == 0))
-    fy = conn.execute(q.get_sql(), (target_date, target_date)).fetchone()
-    return fy["name"] if fy else None
-
-
-def _get_fiscal_year_row(conn, target_date: str) -> dict | None:
-    """Return the full fiscal year row for a date, or None."""
-    t = Table("fiscal_year")
-    q = (Q.from_(t)
-         .select(t.id, t.name, t.start_date, t.end_date, t.company_id)
-         .where(t.start_date <= P())
-         .where(t.end_date >= P())
-         .where(t.is_closed == 0))
-    fy = conn.execute(q.get_sql(), (target_date, target_date)).fetchone()
-    return row_to_dict(fy) if fy else None
-
-
 def _get_cost_center(conn, company_id: str) -> str | None:
     """Return the first non-group cost center for a company, or None."""
-    t = Table("cost_center")
-    q = (Q.from_(t)
-         .select(t.id)
-         .where(t.company_id == P())
-         .where(t.is_group == 0)
-         .limit(1))
-    cc = conn.execute(q.get_sql(), (company_id,)).fetchone()
-    return cc["id"] if cc else None
+    return get_default_cost_center(conn, company_id)
 
 
 def _validate_company_exists(conn, company_id: str):
@@ -742,7 +801,7 @@ def get_employee(conn, args):
 
     # Leave balance summary: all allocations for current fiscal year
     today_str = date.today().isoformat()
-    fiscal_year = _get_fiscal_year(conn, today_str)
+    fiscal_year = get_fiscal_year(conn, today_str, company_id=employee["company_id"])
 
     leave_balances = []
     if fiscal_year:
@@ -869,8 +928,8 @@ def list_employees(conn, args):
     count_row = conn.execute(count_q.get_sql(), params).fetchone()
     total_count = count_row[0]
 
-    limit = int(args.limit) if args.limit else 20
-    offset = int(args.offset) if args.offset else 0
+    limit = _parse_int_flag(args.limit, "--limit", minimum=1, default=20)
+    offset = _parse_int_flag(args.offset, "--offset", minimum=0, default=0)
 
     list_q = (base
               .select(e.id, e.naming_series, e.full_name, e.date_of_joining,
@@ -1002,8 +1061,8 @@ def list_departments(conn, args):
     count_row = conn.execute(count_q.get_sql(), params).fetchone()
     total_count = count_row[0]
 
-    limit = int(args.limit) if args.limit else 20
-    offset = int(args.offset) if args.offset else 0
+    limit = _parse_int_flag(args.limit, "--limit", minimum=1, default=20)
+    offset = _parse_int_flag(args.offset, "--offset", minimum=0, default=0)
 
     list_q = (base
               .select(d.id, d.name, d.parent_id, d.company_id,
@@ -1092,8 +1151,8 @@ def list_designations(conn, args):
     ).fetchone()
     total_count = count_row[0]
 
-    limit = int(args.limit) if args.limit else 20
-    offset = int(args.offset) if args.offset else 0
+    limit = _parse_int_flag(args.limit, "--limit", minimum=1, default=20)
+    offset = _parse_int_flag(args.offset, "--offset", minimum=0, default=0)
 
     q = (Q.from_(dt)
          .select(dt.id, dt.name, dt.description, dt.created_at, dt.updated_at)
@@ -1224,8 +1283,8 @@ def list_leave_types(conn, args):
     ).fetchone()
     total_count = count_row[0]
 
-    limit = int(args.limit) if args.limit else 20
-    offset = int(args.offset) if args.offset else 0
+    limit = _parse_int_flag(args.limit, "--limit", minimum=1, default=20)
+    offset = _parse_int_flag(args.offset, "--offset", minimum=0, default=0)
 
     q = (Q.from_(ltt)
          .select(ltt.id, ltt.name, ltt.max_days_allowed, ltt.is_carry_forward,
@@ -1251,6 +1310,7 @@ def add_leave_allocation(conn, args):
     """Allocate leave days to an employee for a fiscal year.
 
     Required: --employee-id, --leave-type-id, --total-leaves, --fiscal-year
+    The fiscal year must be an open year of the employee's company.
     Logic: Calculate remaining = total - used (default 0).
            Handle carry_forward from previous fiscal year if the leave type
            has is_carry_forward enabled.
@@ -1278,10 +1338,14 @@ def add_leave_allocation(conn, args):
 
     # Validate fiscal year exists
     fyt = Table("fiscal_year")
-    q = Q.from_(fyt).select(fyt.id, fyt.name).where(fyt.name == P())
+    q = Q.from_(fyt).select(fyt.name, fyt.company_id, fyt.is_closed).where(fyt.name == P())
     fy_row = conn.execute(q.get_sql(), (args.fiscal_year,)).fetchone()
     if not fy_row:
         err(f"Fiscal year '{args.fiscal_year}' not found")
+    if fy_row["company_id"] != emp["company_id"]:
+        err(f"Fiscal year '{args.fiscal_year}' belongs to another company")
+    if int(fy_row["is_closed"] or 0) != 0:
+        err(f"Fiscal year '{args.fiscal_year}' is closed")
 
     # Check for existing allocation for same employee + leave type + fiscal year
     lat = Table("leave_allocation")
@@ -1392,12 +1456,12 @@ def get_leave_balance(conn, args):
     if not args.employee_id:
         err("--employee-id is required")
 
-    _validate_employee_exists(conn, args.employee_id)
+    emp = _validate_employee_exists(conn, args.employee_id)
 
     # Determine fiscal year
     fiscal_year = args.fiscal_year
     if not fiscal_year:
-        fiscal_year = _get_fiscal_year(conn, date.today().isoformat())
+        fiscal_year = get_fiscal_year(conn, date.today().isoformat(), company_id=emp["company_id"])
         if not fiscal_year:
             err("No open fiscal year found for today's date")
 
@@ -1543,7 +1607,7 @@ def add_leave_application(conn, args):
         )
 
     # Check that sufficient leave balance exists
-    fiscal_year = _get_fiscal_year(conn, args.from_date)
+    fiscal_year = get_fiscal_year(conn, args.from_date, company_id=emp["company_id"])
     if fiscal_year:
         lat = Table("leave_allocation")
         q = (Q.from_(lat)
@@ -1674,6 +1738,11 @@ def approve_leave(conn, args):
     if args.approved_by == app["employee_id"]:
         err("An employee cannot approve their own leave application")
 
+    applicant_t = Table("employee")
+    applicant = conn.execute(
+        Q.from_(applicant_t).select(applicant_t.company_id).where(applicant_t.id == P()).get_sql(),
+        (app["employee_id"],)).fetchone()
+
     total_days = to_decimal(app["total_days"])
     now = _now_iso()
 
@@ -1684,7 +1753,7 @@ def approve_leave(conn, args):
     conn.execute(sql, ("approved", args.approved_by, now, args.leave_application_id))
 
     # Deduct from leave allocation
-    fiscal_year = _get_fiscal_year(conn, app["from_date"])
+    fiscal_year = get_fiscal_year(conn, app["from_date"], company_id=applicant["company_id"])
     if fiscal_year:
         lat = Table("leave_allocation")
         q = (Q.from_(lat)
@@ -1866,8 +1935,8 @@ def list_leave_applications(conn, args):
     count_row = conn.execute(count_q.get_sql(), params).fetchone()
     total_count = count_row[0]
 
-    limit = int(args.limit) if args.limit else 20
-    offset = int(args.offset) if args.offset else 0
+    limit = _parse_int_flag(args.limit, "--limit", minimum=1, default=20)
+    offset = _parse_int_flag(args.offset, "--offset", minimum=0, default=0)
 
     list_q = (Q.from_(la)
               .join(e).on(e.id == la.employee_id)
@@ -1950,6 +2019,10 @@ def mark_attendance(conn, args):
     if early_exit not in (0, 1):
         err("--early-exit must be 0 or 1")
 
+    # Validate working_hours quantity (TEXT): absent stays NULL, otherwise a
+    # non-negative decimal with at most two places, stored quantized.
+    working_hours = _validate_working_hours(args.working_hours)
+
     # Check for duplicate (UNIQUE employee_id + attendance_date)
     at = Table("attendance")
     q = (Q.from_(at).select(at.id)
@@ -1972,7 +2045,7 @@ def mark_attendance(conn, args):
     conn.execute(sql, (
         att_id, args.employee_id, args.date, args.status,
         args.shift, args.check_in_time, args.check_out_time,
-        args.working_hours,
+        working_hours,
         late_entry, early_exit, source, _now_iso(),
     ))
 
@@ -2012,11 +2085,13 @@ def bulk_mark_attendance(conn, args):
     if not args.entries:
         err("--entries is required (JSON array)")
 
-    # Validate date format
+    # Validate date format and no future dates (same rule as mark-attendance)
     try:
-        date.fromisoformat(args.date)
+        bulk_date = date.fromisoformat(args.date)
     except (ValueError, TypeError):
         err(f"Invalid date format: {args.date}. Use YYYY-MM-DD")
+    if bulk_date > date.today():
+        err(f"Cannot mark attendance for a future date ({args.date}). Today is {date.today().isoformat()}")
 
     entries = _parse_json_arg(args.entries, "entries")
     if not isinstance(entries, list) or len(entries) == 0:
@@ -2066,6 +2141,13 @@ def bulk_mark_attendance(conn, args):
             "late_entry": P(), "early_exit": P(), "source": P(), "created_at": P(),
         })
         conn.execute(sql, (att_id, emp_id, args.date, status, 0, 0, source, _now_iso()))
+        audit(conn, "erpclaw-hr", "bulk-mark-attendance", "attendance", att_id,
+               new_values={
+                   "employee_id": emp_id,
+                   "date": args.date,
+                   "status": status,
+               },
+               description=f"Marked attendance: {status} for {emp['full_name']} on {args.date}")
         created += 1
 
     conn.commit()
@@ -2137,8 +2219,8 @@ def list_attendance(conn, args):
         summary_q = summary_q.where(crit)
     summary = conn.execute(summary_q.get_sql(), list(params)).fetchone()
 
-    limit = int(args.limit) if args.limit else 20
-    offset = int(args.offset) if args.offset else 0
+    limit = _parse_int_flag(args.limit, "--limit", minimum=1, default=20)
+    offset = _parse_int_flag(args.offset, "--offset", minimum=0, default=0)
 
     list_q = (Q.from_(a)
               .join(e).on(e.id == a.employee_id)
@@ -2328,7 +2410,7 @@ def add_expense_claim(conn, args):
         # Validate account_id if provided
         if account_id:
             acct_t = Table("account")
-            q = Q.from_(acct_t).select(acct_t.id, acct_t.is_group, acct_t.company_id).where(acct_t.id == P())
+            q = Q.from_(acct_t).select(acct_t.id, acct_t.name, acct_t.root_type, acct_t.account_type, acct_t.is_group, acct_t.disabled, acct_t.company_id).where(acct_t.id == P())
             acct = conn.execute(q.get_sql(), (account_id,)).fetchone()
             if not acct:
                 err(f"Item {i}: account {account_id} not found")
@@ -2336,6 +2418,9 @@ def add_expense_claim(conn, args):
                 err(f"Item {i}: account {account_id} is a group account")
             if acct["company_id"] != args.company_id:
                 err(f"Item {i}: account {account_id} belongs to a different company")
+            problem = _operating_expense_problem(acct)
+            if problem:
+                err(f"Item {i}: account '{acct['name']}' {problem}, not an operating expense account. An expense claim must debit an operating expense account.")
 
         total_amount += amount
         validated_items.append({
@@ -2476,6 +2561,39 @@ def approve_expense_claim(conn, args):
             f"Current status: {claim['status']} (must be 'submitted')"
         )
 
+    try:
+        _approve_payload = _approve_expense_claim_locked(conn, args, claim)
+    except SystemExit:
+        conn.rollback()
+        raise
+    ok(_approve_payload)
+
+
+def _approve_expense_claim_locked(conn, args, claim):
+    """Run the approval reads and writes under the company chain head.
+
+    The caller has already refused a missing claim and a non-submitted
+    claim on a plain read. This takes the company's ledger chain head
+    first, re-reads the claim under it and refuses stale state, then
+    runs the approval body unchanged.
+    """
+    take_chain_heads(conn, [claim["company_id"]])
+
+    _head_ect = Table("expense_claim")
+    claim = conn.execute(
+        Q.from_(_head_ect).select(_head_ect.star).where(_head_ect.id == P()).get_sql(),
+        (args.expense_claim_id,)).fetchone()
+    if not claim:
+        conn.rollback()
+        err(f"Expense claim {args.expense_claim_id} not found")
+
+    if claim["status"] != "submitted":
+        conn.rollback()
+        err(
+            f"Expense claim {args.expense_claim_id} cannot be approved. "
+            f"Current status: {claim['status']} (must be 'submitted')"
+        )
+
     # Validate approved_by is a valid employee
     approver = _validate_employee_exists(conn, args.approved_by)
 
@@ -2499,8 +2617,9 @@ def approve_expense_claim(conn, args):
     # Find a payable account for the CR side
     # First try company's default_payable_account_id
     co_t = Table("company")
-    q = Q.from_(co_t).select(co_t.default_payable_account_id).where(co_t.id == P())
+    q = Q.from_(co_t).select(co_t.default_payable_account_id, co_t.default_currency).where(co_t.id == P())
     company_row = conn.execute(q.get_sql(), (company_id,)).fetchone()
+    claim_currency = company_row["default_currency"] if company_row and company_row["default_currency"] else "USD"
 
     payable_acct = None
     if company_row:
@@ -2532,11 +2651,39 @@ def approve_expense_claim(conn, args):
         conn.rollback()
         err("No payable or liability account found for company. Cannot create GL entries.")
 
-    # Get cost center for expense accounts (P&L accounts require cost center)
-    cost_center_id = _get_cost_center(conn, company_id)
+    # Get cost center for expense accounts (P&L accounts require cost center).
+    # The expense leg follows the employee's own cost center when set: the
+    # employee's payroll cost center first, then the employee's department
+    # cost center, otherwise the company's default cost center.
+    employee_id = claim["employee_id"]
+    cost_center_id = None
+    cost_source = None
+    emp_t = Table("employee")
+    q = Q.from_(emp_t).select(emp_t.company_id, emp_t.payroll_cost_center_id, emp_t.department_id).where(emp_t.id == P())
+    emp = conn.execute(q.get_sql(), (employee_id,)).fetchone()
+    if emp and emp["company_id"] == company_id:
+        if emp["payroll_cost_center_id"]:
+            cost_center_id = emp["payroll_cost_center_id"]
+            cost_source = "payroll"
+        elif emp["department_id"]:
+            dept_t = Table("department")
+            q = Q.from_(dept_t).select(dept_t.cost_center_id).where(dept_t.id == P())
+            dept = conn.execute(q.get_sql(), (emp["department_id"],)).fetchone()
+            if dept and dept["cost_center_id"]:
+                cost_center_id = dept["cost_center_id"]
+                cost_source = "department"
+    if cost_source:
+        cc_t = Table("cost_center")
+        q = (Q.from_(cc_t).select(cc_t.id).where(cc_t.id == P()).where(cc_t.company_id == P()).where(cc_t.is_group == 0))
+        valid = conn.execute(q.get_sql(), (cost_center_id, company_id)).fetchone()
+        if not valid:
+            conn.rollback()
+            err(f"Cannot approve expense claim: employee {employee_id} has {cost_source} cost center {cost_center_id}, which is not a non-group cost center of company {company_id}. Correct the employee's or department's cost center first.")
+    else:
+        cost_center_id = _get_cost_center(conn, company_id)
 
     # Get fiscal year
-    fiscal_year = _get_fiscal_year(conn, posting_date)
+    fiscal_year = get_fiscal_year(conn, posting_date, company_id=company_id)
     if not fiscal_year:
         conn.rollback()
         err(f"No open fiscal year found for posting date {posting_date}")
@@ -2562,6 +2709,53 @@ def approve_expense_claim(conn, args):
         expense_row = conn.execute(q.get_sql(), (company_id,)).fetchone()
         if expense_row:
             default_expense_acct = expense_row["id"]
+
+    debit_needs = []
+    for item in items:
+        if to_decimal(item["amount"]) <= Decimal("0"):
+            continue
+        resolved_id = item["account_id"] or default_expense_acct
+        if not resolved_id:
+            continue
+        debit_needs.append((resolved_id, bool(item["account_id"])))
+    distinct_pairs = sorted(set(debit_needs), key=lambda pair: (str(pair[0]), str(pair[1])))
+    acct_by_id = {}
+    for _rid in sorted(set(_rid for _rid, _is_line in distinct_pairs), key=str):
+        acct_t4 = Table("account")
+        q = Q.from_(acct_t4).select(acct_t4.id, acct_t4.name, acct_t4.root_type, acct_t4.account_type, acct_t4.is_group, acct_t4.disabled, acct_t4.company_id).where(acct_t4.id == P())
+        acct_by_id[_rid] = conn.execute(q.get_sql(), (_rid,)).fetchone()
+    seen_subjects = set()
+    problems = []
+    for _rid, _is_line in distinct_pairs:
+        if _is_line:
+            kind = "line"
+        else:
+            kind = "default"
+        if (kind, _rid) in seen_subjects:
+            continue
+        seen_subjects.add((kind, _rid))
+        acct = acct_by_id[_rid]
+        if acct is None:
+            if _is_line:
+                text = f"line account {_rid} does not exist"
+            else:
+                text = f"the company default expense account {_rid} does not exist"
+            problems.append((_rid, _rid, text))
+            continue
+        if _is_line:
+            subject = f"line account '{acct['name']}'"
+        else:
+            subject = f"the company default expense account '{acct['name']}'"
+        if acct["company_id"] != company_id:
+            problems.append((acct["name"], _rid, f"{subject} belongs to a different company"))
+            continue
+        phrase = _operating_expense_problem(acct)
+        if phrase:
+            problems.append((acct["name"], _rid, f"{subject} {phrase}, not an operating expense account"))
+    if problems:
+        problems = sorted(problems, key=lambda p: (str(p[0]), str(p[1]), str(p[2])))
+        conn.rollback()
+        err(f"Cannot approve expense claim {claim['naming_series']}: {'; '.join(p[2] for p in problems)}. Nothing was posted.")
 
     for item in items:
         item_amount = to_decimal(item["amount"])
@@ -2611,11 +2805,45 @@ def approve_expense_claim(conn, args):
         sys.stderr.write(f"[erpclaw-hr] {e}\n")
         err(f"GL posting failed: {e}")
 
-    # Update expense claim status
+    # Payment-ledger row: the business owes the claimant the claim total until
+    # it is paid. One row under the claim's own voucher, against = the claim,
+    # +total on the payable account credited by the GL above (the
+    # purchase-invoice convention: voucher = against = the document).
+    # Same connection, same transaction, one commit below.
+    ple_id = str(uuid.uuid4())
+    ple_amount = str(round_currency(total_amount))
+    ple_t = Table("payment_ledger_entry")
+    q = (Q.into(ple_t)
+         .columns("id", "posting_date", "account_id", "party_type", "party_id",
+                  "voucher_type", "voucher_id", "against_voucher_type",
+                  "against_voucher_id", "amount", "amount_in_account_currency",
+                  "currency", "remarks")
+         .insert(P(), P(), P(), ValueWrapper("employee"), P(), P(), P(), P(), P(),
+                 P(), P(), P(), P()))
+    conn.execute(q.get_sql(),
+        (ple_id, posting_date, payable_acct, claim["employee_id"],
+         "expense_claim", args.expense_claim_id,
+         "expense_claim", args.expense_claim_id,
+         ple_amount, ple_amount, claim_currency,
+         f"Expense claim {claim['naming_series']} approved"))
+
+    # Update expense claim status (compare-and-set on the status read above)
     sql = update_row("expense_claim",
                      data={"status": P(), "approved_by": P(), "approval_date": P(), "updated_at": P()},
-                     where={"id": P()})
-    conn.execute(sql, ("approved", args.approved_by, now, now, args.expense_claim_id))
+                     where={"id": P(), "status": P()})
+    _status_cur = conn.execute(sql, ("approved", args.approved_by, now, now, args.expense_claim_id, "submitted"))
+    if _status_cur.rowcount == 0:
+        conn.rollback()
+        _fresh_t = Table("expense_claim")
+        _fresh = conn.execute(
+            Q.from_(_fresh_t).select(_fresh_t.star).where(_fresh_t.id == P()).get_sql(),
+            (args.expense_claim_id,)).fetchone()
+        if not _fresh:
+            err(f"Expense claim {args.expense_claim_id} not found")
+        err(
+            f"Expense claim {args.expense_claim_id} cannot be approved. "
+            f"Current status: {_fresh['status']} (must be 'submitted')"
+        )
 
     audit(conn, "erpclaw-hr", "approve-expense-claim", "expense_claim",
            args.expense_claim_id,
@@ -2629,7 +2857,7 @@ def approve_expense_claim(conn, args):
 
     conn.commit()
 
-    ok({
+    return {
         "expense_claim_id": args.expense_claim_id,
         "naming_series": claim["naming_series"],
         "status": "approved",
@@ -2638,11 +2866,12 @@ def approve_expense_claim(conn, args):
         "total_amount": str(round_currency(total_amount)),
         "gl_entry_count": len(gl_ids),
         "gl_entry_ids": gl_ids,
+        "payment_ledger_entry_id": ple_id,
         "message": (
             f"Expense claim {claim['naming_series']} approved with "
             f"{len(gl_ids)} GL entries"
         ),
-    })
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -2676,8 +2905,20 @@ def reject_expense_claim(conn, args):
 
     sql = update_row("expense_claim",
                      data={"status": P(), "updated_at": P()},
-                     where={"id": P()})
-    conn.execute(sql, ("rejected", now, args.expense_claim_id))
+                     where={"id": P(), "status": P()})
+    _status_cur = conn.execute(sql, ("rejected", now, args.expense_claim_id, "submitted"))
+    if _status_cur.rowcount == 0:
+        conn.rollback()
+        _fresh_t = Table("expense_claim")
+        _fresh = conn.execute(
+            Q.from_(_fresh_t).select(_fresh_t.star).where(_fresh_t.id == P()).get_sql(),
+            (args.expense_claim_id,)).fetchone()
+        if not _fresh:
+            err(f"Expense claim {args.expense_claim_id} not found")
+        err(
+            f"Expense claim {args.expense_claim_id} cannot be rejected. "
+            f"Current status: {_fresh['status']} (must be 'submitted')"
+        )
 
     audit(conn, "erpclaw-hr", "reject-expense-claim", "expense_claim",
            args.expense_claim_id,
@@ -2702,11 +2943,18 @@ def reject_expense_claim(conn, args):
 # ---------------------------------------------------------------------------
 
 def update_expense_claim_status(conn, args):
-    """Update expense claim status (cross-skill, used by erpclaw-payments).
+    """Update expense claim status (cross-skill entry point for paid marking).
 
     Required: --expense-claim-id, --status
     Optional: --payment-entry-id
-    Logic: Update status and payment_entry_id. Used to mark as 'paid'.
+    Logic: Update status and payment_entry_id.
+    Only changes no other action owns and no ledger posting depends on are
+    allowed: approved -> paid, and draft or submitted -> cancelled.
+    Approved -> paid is refused here in every case: a claim that posted its
+    payable to the payment ledger is marked paid only when a submitted payment
+    is allocated to it (erpclaw-payments clears it through the neutral
+    payment_clearing lib inside its own transaction), and a claim with no live
+    payable row of its own is refused with the backfill repair guidance.
     """
     if not args.expense_claim_id:
         err("--expense-claim-id is required")
@@ -2723,14 +2971,53 @@ def update_expense_claim_status(conn, args):
         err(f"Expense claim {args.expense_claim_id} not found")
 
     old_status = claim["status"]
+    allowed = _EXPENSE_STATUS_UPDATES.get(old_status, ())
+    if args.status not in allowed:
+        err(
+            f"Expense claim {args.expense_claim_id} cannot change from "
+            f"'{old_status}' to '{args.status}'. "
+            f"Allowed from '{old_status}': {', '.join(allowed) or 'none'}"
+        )
+    if old_status == "approved" and args.status == "paid":
+        ple_t = Table("payment_ledger_entry")
+        own_row = conn.execute(
+            Q.from_(ple_t).select(ple_t.id)
+            .where(ple_t.voucher_type == P())
+            .where(ple_t.voucher_id == P())
+            .where(ple_t.delinked == P()).get_sql(),
+            ("expense_claim", args.expense_claim_id, 0)).fetchone()
+        if own_row is not None:
+            err(
+                f"Expense claim {args.expense_claim_id} is owed to the "
+                f"employee in the payment ledger; it is marked paid when a "
+                f"submitted payment is allocated to it")
+        if own_row is None:
+            err(
+                f"Expense claim {args.expense_claim_id} has no payable in the payment "
+                "ledger; it cannot be marked paid. Run the expense-claim backfill "
+                "migration, or repair the claim's approval ledger if the migration skipped it")
     now = _now_iso()
 
     updates = {"status": args.status, "updated_at": now}
     if args.payment_entry_id:
         updates["payment_entry_id"] = args.payment_entry_id
 
-    sql, params = dynamic_update("expense_claim", updates, where={"id": args.expense_claim_id})
-    conn.execute(sql, params)
+    sql, params = dynamic_update("expense_claim", updates, where={"id": args.expense_claim_id, "status": old_status})
+    _status_cur = conn.execute(sql, params)
+    if _status_cur.rowcount == 0:
+        conn.rollback()
+        _fresh = conn.execute(
+            Q.from_(ect).select(ect.star).where(ect.id == P()).get_sql(),
+            (args.expense_claim_id,)).fetchone()
+        if not _fresh:
+            err(f"Expense claim {args.expense_claim_id} not found")
+        _fresh_status = _fresh["status"]
+        _fresh_allowed = _EXPENSE_STATUS_UPDATES.get(_fresh_status, ())
+        err(
+            f"Expense claim {args.expense_claim_id} cannot change from "
+            f"'{_fresh_status}' to '{args.status}'. "
+            f"Allowed from '{_fresh_status}': {', '.join(_fresh_allowed) or 'none'}"
+        )
 
     audit(conn, "erpclaw-hr", "update-expense-claim-status", "expense_claim",
            args.expense_claim_id,
@@ -2795,8 +3082,8 @@ def list_expense_claims(conn, args):
     count_row = conn.execute(count_q.get_sql(), params).fetchone()
     total_count = count_row[0]
 
-    limit = int(args.limit) if args.limit else 20
-    offset = int(args.offset) if args.offset else 0
+    limit = _parse_int_flag(args.limit, "--limit", minimum=1, default=20)
+    offset = _parse_int_flag(args.offset, "--offset", minimum=0, default=0)
 
     # raw SQL — correlated subquery for item_count not supported by PyPika
     conditions = ["1=1"]
@@ -2979,24 +3266,37 @@ def status_action(conn, args):
 
     # Leave summary (current fiscal year)
     today_str = date.today().isoformat()
-    fiscal_year = _get_fiscal_year(conn, today_str)
+    if args.company_id:
+        fiscal_year = get_fiscal_year(conn, today_str, company_id=args.company_id)
+    else:
+        # No single company's year applies to the all-company summary.
+        fiscal_year = None
 
+    la = Table("leave_application")
+    emp = Table("employee")
+    fy = Table("fiscal_year")
+    q = (
+        Q.from_(la)
+        .join(emp).on(emp.id == la.employee_id)
+        .join(fy).on(fy.company_id == emp.company_id)
+        .select(la.status, fn.Count(la.id).distinct().as_("cnt"))
+        .where(la.status.isin(list(VALID_LEAVE_STATUSES)))
+        .where(fy.is_closed == 0)
+        .where(fy.start_date <= P())
+        .where(fy.end_date >= P())
+        .where(la.from_date >= fy.start_date)
+        .groupby(la.status)
+    )
+    params = [today_str, today_str]
+    if args.company_id:
+        q = q.where(emp.company_id == P())
+        params.append(args.company_id)
+    rows = conn.execute(q.get_sql(), params).fetchall()
+    counts = {r["status"]: r["cnt"] for r in rows}
     leave_summary = {}
-    if fiscal_year:
-        # raw SQL — correlated subquery for fiscal year start date
-        for la_status in VALID_LEAVE_STATUSES:
-            cnt = conn.execute(
-                f"""SELECT COUNT(*) FROM leave_application la
-                    JOIN employee e ON e.id = la.employee_id
-                    WHERE la.status = ?
-                      AND la.from_date >= (
-                          SELECT start_date FROM fiscal_year WHERE name = ?
-                      )
-                    {"AND e.company_id = ?" if args.company_id else ""}""",
-                [la_status, fiscal_year] + ([args.company_id] if args.company_id else []),
-            ).fetchone()[0]
-            if cnt > 0:
-                leave_summary[la_status] = cnt
+    for la_status in VALID_LEAVE_STATUSES:
+        if counts.get(la_status, 0) > 0:
+            leave_summary[la_status] = counts[la_status]
 
     # Attendance summary (current month)
     month_start = date.today().replace(day=1).isoformat()
@@ -3118,6 +3418,11 @@ def add_shift_type(conn, args):
     })
     conn.execute(ins_sql, (shift_id, name, start_time, end_time,
                            company_id, status, now, now))
+
+    audit(conn, "erpclaw-hr", "add-shift-type", "shift_type", shift_id,
+           new_values={"name": name, "company_id": company_id},
+           description=f"Created shift type '{name}'")
+
     conn.commit()
 
     ok({
@@ -3135,20 +3440,17 @@ def list_shift_types(conn, args):
 
     Optional: --company-id, --status, --limit, --offset
     """
+    company_id = resolve_scope_company(conn, args.company_id, getattr(args, "company_name", None))
     st_t = Table("shift_type")
-    q = Q.from_(st_t).select(st_t.star).orderby(st_t.name)
-    params = []
-
-    if args.company_id:
-        q = q.where(st_t.company_id == P())
-        params.append(args.company_id)
+    q = Q.from_(st_t).select(st_t.star).where(st_t.company_id == P()).orderby(st_t.name)
+    params = [company_id]
 
     if args.status:
         q = q.where(st_t.status == P())
         params.append(args.status.strip().lower())
 
-    limit = int(args.limit or 20)
-    offset = int(args.offset or 0)
+    limit = _parse_int_flag(args.limit, "--limit", minimum=1, default=20)
+    offset = _parse_int_flag(args.offset, "--offset", minimum=0, default=0)
     q = q.limit(limit).offset(offset)
 
     rows = conn.execute(q.get_sql(), params).fetchall()
@@ -3174,6 +3476,7 @@ def update_shift_type(conn, args):
     existing = conn.execute(q.get_sql(), (shift_type_id,)).fetchone()
     if not existing:
         err(f"Shift type {shift_type_id} not found")
+    old_values = row_to_dict(existing)
 
     updates = {}
     if args.name:
@@ -3209,9 +3512,15 @@ def update_shift_type(conn, args):
     now = datetime.now(timezone.utc).isoformat()
     updates["updated_at"] = now
 
-    set_clauses = ", ".join(f"{k} = ?" for k in updates)
-    params = list(updates.values()) + [shift_type_id]
-    conn.execute(f"UPDATE shift_type SET {set_clauses} WHERE id = ?", params)
+    sql, params = dynamic_update("shift_type", updates, where={"id": shift_type_id})
+    conn.execute(sql, params)
+
+    changed = {k: v for k, v in updates.items() if k != "updated_at"}
+    audit(conn, "erpclaw-hr", "update-shift-type", "shift_type", shift_type_id,
+           old_values={k: old_values.get(k) for k in changed},
+           new_values=changed,
+           description=f"Updated shift type {shift_type_id}")
+
     conn.commit()
 
     # Re-fetch
@@ -3247,15 +3556,21 @@ def assign_shift(conn, args):
 
     # Validate employee exists
     emp_t = Table("employee")
-    emp_q = Q.from_(emp_t).select(emp_t.id).where(emp_t.id == P())
-    if not conn.execute(emp_q.get_sql(), (employee_id,)).fetchone():
+    emp_q = Q.from_(emp_t).select(emp_t.id, emp_t.company_id).where(emp_t.id == P())
+    emp_row = conn.execute(emp_q.get_sql(), (employee_id,)).fetchone()
+    if not emp_row:
         err(f"Employee {employee_id} not found")
 
     # Validate shift type exists
     st_t = Table("shift_type")
-    st_q = Q.from_(st_t).select(st_t.id).where(st_t.id == P())
-    if not conn.execute(st_q.get_sql(), (shift_type_id,)).fetchone():
+    st_q = Q.from_(st_t).select(st_t.id, st_t.company_id).where(st_t.id == P())
+    st_row = conn.execute(st_q.get_sql(), (shift_type_id,)).fetchone()
+    if not st_row:
         err(f"Shift type {shift_type_id} not found")
+
+    # The employee and the shift type must belong to the same company
+    if emp_row["company_id"] != st_row["company_id"]:
+        err(f"Employee {employee_id} and shift type {shift_type_id} belong to different companies")
 
     # Validate dates
     _validate_date = lambda d, n: None  # date format already enforced by arg parsing
@@ -3282,6 +3597,17 @@ def assign_shift(conn, args):
     })
     conn.execute(ins_sql, (assignment_id, employee_id, shift_type_id,
                            start_date, end_date, status, now, now))
+
+    audit(conn, "erpclaw-hr", "assign-shift", "shift_assignment", assignment_id,
+           new_values={
+               "employee_id": employee_id,
+               "shift_type_id": shift_type_id,
+               "start_date": start_date,
+               "end_date": end_date,
+               "status": status,
+           },
+           description=f"Assigned shift type {shift_type_id} to employee {employee_id} from {start_date}")
+
     conn.commit()
 
     ok({
@@ -3328,8 +3654,8 @@ def list_shift_assignments(conn, args):
         q = q.where(emp_t.company_id == P())
         params.append(args.company_id)
 
-    limit = int(args.limit or 20)
-    offset = int(args.offset or 0)
+    limit = _parse_int_flag(args.limit, "--limit", minimum=1, default=20)
+    offset = _parse_int_flag(args.offset, "--offset", minimum=0, default=0)
     q = q.limit(limit).offset(offset)
 
     rows = conn.execute(q.get_sql(), params).fetchall()
@@ -3618,7 +3944,7 @@ def check_expiring_documents(conn, args):
 
     Optional: --company-id, --days (default 30)
     """
-    days = int(args.days or 30)
+    days = _parse_int_flag(args.days, "--days", minimum=0, default=30)
     today = date.today()
     cutoff = (today + timedelta(days=days)).isoformat()
 
@@ -3707,6 +4033,17 @@ ACTIONS = {
 }
 
 
+def _resolve_company_flag(conn, args):
+    """Resolve --company (name or id) into args.company_id."""
+    if getattr(args, "company_name", None) and not getattr(args, "company_id", None):
+        c = Table("company")
+        probe = (Q.from_(c).select(c.id).where(c.id == P()))
+        if conn.execute(probe.get_sql(), (args.company_name,)).fetchone():
+            args.company_id = args.company_name
+            return
+        args.company_id = resolve_company_id(conn, None, args.company_name)
+
+
 # ---------------------------------------------------------------------------
 # main()
 # ---------------------------------------------------------------------------
@@ -3718,6 +4055,7 @@ def main():
 
     # Entity IDs
     parser.add_argument("--company-id")
+    parser.add_argument("--company", dest="company_name", default=None)
     parser.add_argument("--employee-id")
     parser.add_argument("--department-id")
     parser.add_argument("--designation-id")
@@ -3836,8 +4174,7 @@ def main():
     check_unknown_args(parser, unknown)
     check_input_lengths(args)
 
-    db_path = args.db_path or DEFAULT_DB_PATH
-    ensure_db_exists(db_path)
+    db_path = getattr(args, "db_path", None)   # None unless --db-path was given
     conn = get_connection(db_path)
 
     # Dependency check
@@ -3848,12 +4185,14 @@ def main():
         conn.close()
         sys.exit(1)
 
+    _resolve_company_flag(conn, args)
+
     try:
         ACTIONS[args.action](conn, args)
     except Exception as e:
         conn.rollback()
         sys.stderr.write(f"[erpclaw-hr] {e}\n")
-        err("An unexpected error occurred")
+        err(unexpected_error_message(e))
     finally:
         conn.close()
 

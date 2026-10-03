@@ -13,7 +13,7 @@ ONE type covers both sides deliberately. dispose-asset's root_type check already
 separates the gain side from the loss side, a single combined "Gain/(Loss) on
 Disposal" account is a legitimate chart, and `exchange_gain_loss` is the same
 shape for the same reason (one type over `4230 Exchange Gain` and `5330 Exchange
-Loss`). Full reasoning: planning/simlogs/m94_SIM_2026-08-12.md §1.
+Loss`).
 
 WHAT THIS DOES NOT DO: it does not touch `gl_entry`. Not one row. `gl_entry`
 stores `account_id`, so a disposal already posted follows its account into the
@@ -90,7 +90,7 @@ writes nothing: the trail cannot duplicate. Read it back with
 
 which is what makes the reversal in the paragraph above possible after the
 terminal output is gone: the operator no longer has to remember which accounts
-moved. Convention + gate: planning/simlogs/m102_SIM_2026-08-12.md.
+moved.
 
 THE ONE SKEW THIS RUN CREATES, AND WHY IT IS ANNOUNCED HERE. dispose-asset's
 gain/loss gate lives in erpclaw-ops, an ADDON, and module_manager runs foundation
@@ -110,8 +110,6 @@ no connection-setting statements, no catalog table read by hand, so it works
 unchanged on SQLite and PostgreSQL. Every statement is a FIXED string (migration
 031's rule): no table name, column name or value is ever formatted into SQL.
 
-SIM: planning/simlogs/m94_SIM_2026-08-12.md
-Plan home: planning/pending_items.md row M94.
 
 Usage:
     python3 035_disposal_gain_loss_account_type.py [--db-path PATH] [--report-only]

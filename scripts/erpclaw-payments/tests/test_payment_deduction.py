@@ -117,9 +117,14 @@ def _cancel(conn, pe_id):
     return call_action(mod.cancel_payment, conn, ns(payment_entry_id=pe_id))
 
 
-def _gl_rows(conn, pe_id, cancelled=0):
+def _gl_rows(conn, pe_id, cancelled=None):
+    if cancelled is None:
+        return [dict(r) for r in conn.execute(
+            "SELECT account_id, debit, credit, cost_center_id, is_cancelled, remarks "
+            "FROM gl_entry WHERE voucher_type = 'payment_entry' AND voucher_id = ? "
+            "ORDER BY created_at, id", (pe_id,))]
     return [dict(r) for r in conn.execute(
-        "SELECT account_id, debit, credit, cost_center_id, is_cancelled "
+        "SELECT account_id, debit, credit, cost_center_id, is_cancelled, remarks "
         "FROM gl_entry WHERE voucher_type = 'payment_entry' AND voucher_id = ? "
         "AND is_cancelled = ? ORDER BY created_at, id", (pe_id, cancelled))]
 
@@ -443,6 +448,7 @@ def test_over_clearing_rejected_and_rolled_back(conn):
 # ── 6. Cancel reverses every leg ─────────────────────────────────────────────
 
 def test_cancel_reverses_all_legs(conn):
+    """Deduction legs reverse with the voucher; both legs of a cancellation carry `is_cancelled = 1`."""
     env = build_ar_env(conn)
     si = seed_sales_invoice(conn, env, "1000")
     r = _add_receive(conn, env, "1000",
@@ -460,14 +466,22 @@ def test_cancel_reverses_all_legs(conn):
     assert not is_error(c), c
     assert _pe(conn, pe_id)["status"] == "cancelled"
 
-    # Constitutional reversal: 3 originals flagged cancelled, 3 mirrors active,
-    # and the mirror set swaps every leg exactly — deduction leg included.
-    originals = _gl_rows(conn, pe_id, cancelled=1)
-    mirrors = _gl_rows(conn, pe_id, cancelled=0)
+    # Constitutional reversal: originals and mirrors are both flagged
+    # is_cancelled = 1; mirrors are the rows whose remarks start with
+    # "Reversal of ", and the mirror set swaps every leg exactly —
+    # deduction leg included.
+    rows = _gl_rows(conn, pe_id)
+    assert len(rows) == 6
+    originals = [r for r in rows if not (r["remarks"] or "").startswith("Reversal of ")]
+    mirrors = [r for r in rows if (r["remarks"] or "").startswith("Reversal of ")]
     assert len(originals) == 3 and len(mirrors) == 3
+    assert all(r["is_cancelled"] == 1 for r in rows)
     assert Decimal(_leg(mirrors, env["bank"])["credit"]) == Decimal("980.00")
     assert Decimal(_leg(mirrors, env["discount"])["credit"]) == Decimal("20.00")
     assert Decimal(_leg(mirrors, env["ar"])["debit"]) == Decimal("1000.00")
+    # Reversal-inclusive net over ALL rows is zero on both sides.
+    assert sum((Decimal(r["debit"]) - Decimal(r["credit"]) for r in rows),
+               Decimal("0")) == Decimal("0")
 
     # Document fully restored: the reversal used the APPLIED amount
     # (allocation 980 + deduction share 20), not the bare allocation.

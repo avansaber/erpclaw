@@ -2,6 +2,77 @@
 
 All notable changes to the ERPClaw foundation skill.
 
+## [4.15.1] — 2026-10-03 — company boundaries and ledger discipline
+
+### Added — company boundaries
+- **Lists and reports that used to total every company now need one.** Selling, buying, inventory, payments, journals, HR, payroll and advanced-accounting lists and reports use the installation's sole company automatically, or refuse "Multiple companies found. Please specify the company by name." when more than one exists; a new `--company` flag resolves a company by exact id or case-insensitive name.
+- **Cross-company reads and writes are refused.** `get-account`, `get-account-balance`, `get-journal-entry`, `get-payment`, `get-customer`, `get-sales-invoice`, `get-supplier`, `get-purchase-invoice` and `get-stock-entry` refuse a record of another company than the one given. `add-quotation`, `add-sales-order`, `create-sales-invoice`, `add-purchase-order`, `create-purchase-invoice` and the recurring templates refuse a customer or supplier of another company. A posting now needs an open fiscal year on the posting company itself. Full list: `../../BREAKING_CHANGES.md` BC17-BC22.
+
+### Added — authority groundwork
+- **Principals, company memberships and single-use authorization envelopes** bound to one document, company and amount are in the schema and the administration actions (`issue-authorization`, `revoke-authorization`, `get-authorization`, `grant-`/`deny-`/`revoke-company-membership`, `list-company-memberships`). STAGED is the supported install phase, where nothing changes for the operator; this release has no authenticated production issuer, so the ACTIVE issuance, revocation and envelope-reading actions answer `AUTHORIZATION_ISSUER_UNAVAILABLE`. Payments, journals, selling and buying submit/cancel paths pass through the shared authority gate. See `../../BREAKING_CHANGES.md` BC18.
+- **Read-only storage and read-only MCP sessions.** `ERPCLAW_DB_READONLY=1` opens the database read-only, refuses a path other than the install's own, and skips module, onboarding, dangerous and credential actions with `read_only_session`. `ERPCLAW_MCP_READONLY=1` lists, describes and runs only a pinned set of reads proven to write nothing.
+- **Business audit entries name the record they describe** (skill, action, table, record id), not the company, across selling, buying, inventory, HR, payroll, retail, hospitality, healthclaw and more; they also record the operating-system account and, where available, a claimed actor context and its status. That context is a claim, not an authenticated identity. Migration-written audit rows keep their earlier shape.
+
+### Added — new actions
+- `update-recurring-bill-template` edits a recurring bill template's schedule and items and moves it from draft to active; invalid input is refused before any write.
+- `list-landed-cost-voucher-anomalies` is a read-only report of posted landed-cost vouchers that priced another company's receipt or counted a receipt line twice, from before those were refused; it repairs nothing (reverse with `cancel-landed-cost-voucher`).
+- `delete-sales-invoice` removes a draft sales invoice with no ledger rows or references and needs confirmation, alongside the existing `pos-abandon-posting`.
+
+### Added — MCP containment
+- **Model-supplied `erpclaw_action` arguments cannot carry a routing, confirmation or database-target key** (`action`, `action-name`, `user-confirmed`, `db-path`, `db-url`, `actor`, `actor-id`, `session-token`). A duplicate or abbreviated `--action`/`--force` option on the underlying router call is refused before anything dispatches.
+- **Identity-mutating actions are not dispatchable over MCP at all** (`add-user`, `update-user`, `add-role`, `assign-role`, `revoke-role`, `set-password`, `seed-permissions`, `link-telegram-user`, `unlink-telegram-user`, both spellings of `initialize-database`); they stay available on the direct operator CLI under their existing gate.
+- **A model-facing call can carry an operator-issued authorization in one explicit `authorization_id` field.** A malformed id, or one shorter than 16 characters, is refused before anything runs, and an authorization id never appears in an MCP reply. See `../../BREAKING_CHANGES.md` BC30.
+
+### Changed — confirmation gate
+- **Six actions that pass a confirmation on to a gated child in another module now need `--user-confirmed` themselves:** `transfer-materials-to-subcontractor`, `cancel-subcontract-transfer`, `pos-submit-transaction`, `construction-approve-progress-bill`, `legal-generate-invoice`, `legal-send-invoice`. The flag records the user's own confirmation; it is not a substitute for an authorization envelope. See `../../BREAKING_CHANGES.md` BC29.
+
+### Changed — concurrency
+- **Payment submit/cancel/allocate/reconcile, sales- and purchase-invoice cancel, journal-entry submit/cancel/amend, expense-claim approval, purchase-invoice submit, payroll-run submit/cancel, intercompany-invoice cancel, delivery-note submit/cancel, and stock-entry/stock-reconciliation actions now take their company's ledger lock and re-check their document under it.** A concurrent or stale change is refused instead of posting twice, losing an update, or reversing twice; on a refusal, read the returned error and the document's current state before deciding whether to retry. A per-company ledger chain head records posting order (migration 038 reports any legacy legs it cannot sequence and rewrites none). See `../../BREAKING_CHANGES.md` BC43.
+
+### Changed — dimensions and cost centers
+- **Payments, journal entries, and the selling, buying and inventory documents accept `--dimensions` or repeated `--dimension-key`/`--dimension-value`** and carry them from draft to every ledger leg they post; an unknown or inactive dimension is refused before any write.
+- **A ledger leg that needs a default cost center now uses the company's own default**, or the oldest non-group cost center of that company; an approved expense claim posts on the employee's payroll cost center, else their department's, else the company default, and refuses when that account is a group cost center or belongs to another company.
+
+### Fixed — payments
+- `allocate-payment` refuses a currency mismatch between the payment and the invoice ("currency mismatch: invoice in `<INV>`, payment in `<PAY>`; invoice currency must equal payment currency"); `reconcile-payments` only pairs same-currency documents.
+- `add-payment` refuses a party that does not exist, is of the wrong type, or belongs to another company; every allocation path refuses an unregistered voucher type.
+- A customer refund clears credit notes with the receivable sign and never touches invoices or advances; migration 032 heals existing installs and now skips customer refunds when it does (matters only when upgrading from a release before 032).
+
+### Fixed — expense claims
+- `add-expense-claim` refuses a line on an account that is not an operating expense; `approve-expense-claim` checks every account it would debit before the first ledger leg. An approved claim with no payable row of its own cannot be paid through an allocation ("has no payable in the payment ledger").
+- HR writers record their audit rows in the same transaction as the change they describe, so a failure after the change can no longer leave a change with no audit row.
+
+### Fixed — landed cost and buying
+- `add-landed-cost-voucher` refuses a purchase receipt that belongs to another company, and a receipt listed more than once in the same voucher, before any write; a charge account must be an operating expense account (type expense or untyped) or an untyped accrual liability.
+- A purchase-order line takes `--discount-amount` or `--discount-percentage`, carried through receipt, stock valuation, bill and landed cost.
+
+### Fixed — HR and payroll
+- `add-leave-allocation` refuses a fiscal year that belongs to another company or is closed.
+- `submit-payroll-run` refuses with a named list of missing statutory liability accounts, the amount each needs, and the name to give it, rather than folding the gap into net pay or posting an unbalanced total.
+- Bulk attendance refuses a future date.
+
+### Fixed — accounting and inventory
+- Revenue-contract, performance-obligation and variable-consideration amounts must be finite, non-negative and at most two decimal places; probability must be within 0-100.
+- `generate-revenue-entries` takes `--as-of-date` (default today in UTC) and refuses a malformed or future date, posting only schedule rows due on or before it.
+- Inventory list and report actions refuse non-finite or overflowing numbers and invalid paging parameters.
+
+### Fixed — selling
+- `create-delivery-note` refuses "Nothing left to deliver: invoice `<name>` already moved these goods out of stock" when a stock-moving invoice already shipped what the order has left; a sales order's status follows both its deliveries and its invoices.
+
+### Fixed — read models
+- `get-user` no longer returns `password_hash` in any mode.
+- The setup `--effect` flag shadows the `--effe`/`--effec` abbreviations of `--effective-date`; use the full flag name.
+
+### Fixed
+- **reconcile-payments offers each invoice at what it still owes.** A partly paid invoice used to be offered at its full amount, so the reconcile failed and matched nothing for that customer or supplier; a paid invoice or another company's invoice could also be picked. Candidates now come from each invoice's own outstanding balance, in the right company, oldest first.
+
+### Removed
+- **update-invoice-outstanding and update-purchase-outstanding are retired.** They moved an invoice's balance with no ledger posting, so the books and the customer or supplier ledger could disagree. Calling either now returns a steer: record cash with add-payment and submit-payment (or allocate-payment), reduce an invoice with a credit or debit note, or write off with write-off-invoice.
+
+### Upgrade notes
+- **Foundation migrations 037-051 ship in this release.** Only 037 (cancellation-marking symmetry) and 051 (expense-claim payment-ledger backfill) change existing data; both audit each document they change. A PostgreSQL install that already recorded migrations 001 and 002 as applied does not re-run them under this release; the repair migration for that case is not part of this release. See `../../BREAKING_CHANGES.md`, "Upgrading from v4.15.0 to release candidate 1".
+- **Today's installer uses AvanSaber's signed registry.** Accepting a customer's own publisher key is planned, not shipped in this release.
+
 ## [4.15.0] — 2026-08-15 — correctness floor
 
 **Release gate:** nine end-to-end business scenarios, driven in plain business
@@ -44,17 +115,17 @@ tree. The books-integrity invariants held in every scenario.
 - **No silent non-billing**: `run-billing` reports per-meter rating failures loud; `generate-invoices` marks a period `invoiced` only with a real invoice id (failures stay `rated` for retry with the reason reported).
 - **Crash-safe billing runs**: new `billing_run` + `billing_run_target` registry (migration 030, both dialects). `run-billing`, `generate-recurring-invoices`, and `process-recurring` process one target per transaction; a crash mid-run resumes via the new `resume-billing-run` with zero duplicate documents; failed targets isolate, healthy targets proceed. New actions: `list-billing-runs`, `get-billing-run`, `resume-billing-run`. Delegated resumes carry the caller's database context.
 - **Truthful period rows**: `run-billing` now stamps `billing_period.rate_plan_id` with the plan that actually priced a re-rated open period.
-- **INV-25 always-on invariant** (ADR-0031 Decision 2): for every open AR/AP invoice, `outstanding_amount` must equal its payment-ledger detail net — checked continuously, not only at paid. `update-invoice-outstanding` / `update-purchase-outstanding` co-post the matching ledger detail row in the same transaction; auto-submitted recurring bills post their ledger row.
+- **INV-25 always-on invariant:** for every open AR/AP invoice, `outstanding_amount` must equal its payment-ledger detail net — checked continuously, not only at paid. `update-invoice-outstanding` / `update-purchase-outstanding` co-post the matching ledger detail row in the same transaction; auto-submitted recurring bills post their ledger row.
 - **Riders**: pre-master-key-load environment sanity check in the crypto layer (warn by default, `ERPCLAW_STRICT_ENV=1` to refuse); `cleanup-backups` now requires confirmation (dangerous-action gate); phantom table declarations removed from the dependency map; billing SKILL section counts and homes corrected.
 - erpclaw-growth 2.10.0 (separate module): Wave-F usage-anomaly detector — `consumption_spike` fires on default sweeps via a meter-local recency split; `rate_plan_mismatch` judges each billing period against the plan that priced it with impossible-charge attribution; garbage data skips rows, never company-wide sweeps (migration 006).
 
 ## [4.13.0] — 2026-07-23 — foundation hardening (v4.13.0 stabilization milestone)
 
-Every known books-integrity gap surfaced by the M34 live-agent testing program, closed and machine-guarded. All items shipped behind independent adversarial QA.
+Every known books-integrity gap surfaced by the live-agent testing program, closed and machine-guarded. All items shipped behind independent adversarial QA.
 
 ### Fixed — books integrity
 - **Landed costs now reprice inventory valuation (and post GL at all).** `add-landed-cost-voucher` had been silently broken since the 2026-05-31 voucher-type registry displacement (migration 004): its `voucher_type` was never registered, so every landed-cost GL post failed the registry gate — masked because the feature had no tests. Migration 029 registers the type, and the action now writes zero-quantity stock-ledger valuation rows and updates FIFO layer rates so the goods carry their true landed cost, not just the base receipt rate. `list/get/cancel-landed-cost-voucher` added (cancel = reverse, both GL and valuation).
-- **New constitutional invariant INV-24: stock-account GL ≡ stock-ledger valuation.** For each company, the sum over stock-type GL accounts must equal the sum of stock-ledger valuation movements (reversal-inclusive, exact TEXT-decimal). Any posting path that moves one side without the other now reddens the gate. Fills the long-standing stock-subledger blind spot (the AR/AP subledgers already had this check). See ADR-0030.
+- **New constitutional invariant INV-24: stock-account GL ≡ stock-ledger valuation.** For each company, the sum over stock-type GL accounts must equal the sum of stock-ledger valuation movements (reversal-inclusive, exact TEXT-decimal). Any posting path that moves one side without the other now reddens the gate. Fills the long-standing stock-subledger blind spot (the AR/AP subledgers already had this check).
 - **`revalue-stock` now updates FIFO layer rates.** Previously it repriced only the moving-average valuation, leaving FIFO items to consume at stale layer rates after a revaluation.
 - **Rate-less invoice/order lines no longer silently price at $0.** Line rate now resolves in order: explicit rate, then the customer's default price list, then any enabled selling price list, then the item's standard rate. `--default-price-list-id` added to `add-customer`/`update-customer` (the previously-unused customer price-list link is now live).
 
@@ -69,40 +140,40 @@ Every known books-integrity gap surfaced by the M34 live-agent testing program, 
 - `install-module` no longer writes into the OpenClaw workspace when installed under a non-default `ERPCLAW_HOME` (a Hermes-home install had been touching the other runtime's skill directory), and its response now reports the real created-table count instead of zero.
 - Credit-hold refusal message no longer claims a `--user-confirmed` override that the module layer never honored; it now names the real release path.
 
-## [4.12.3] — 2026-07-21 — SKILL guidance steers (M34 F6/F8)
+## [4.12.3] — 2026-07-21 — SKILL guidance steers
 
 ### Changed
-- **Receiving guidance tightened (M34 F8).** The procure-to-pay receiving note previously permitted a standalone `material_receipt` for purchased goods "unless you restate the unit cost" — but a cost-stated standalone receipt still leaves the purchase order un-received, so a later bill/receipt flow receives the goods again and double-counts stock (reproduced end-to-end via live agent testing: one 100-unit delivery became 200 units on hand). The steer now says NEVER for purchased goods, and instructs checking `list-purchase-orders` before any bare "receive stock" request. The stock-entries catalog row carries the same warning at the point of use. Guidance-only; no action, schema, or GL change. A product-level guard (warn/link when receiving an item with an open PO line) is tracked separately as a build decision.
-- **Catalog-pricing guidance added (M34 F6).** The pricing catalog row now states that an item's default selling price is `add-item`/`update-item --standard-rate`, and that `add-item-price` rows (named price lists) are NOT automatically consulted at invoice time — previously nothing steered between the two overlapping surfaces, and live agent testing showed "set the selling price to X" landing in the unconsulted `item_price` table. Guidance-only.
+- **Receiving guidance tightened.** The procure-to-pay receiving note previously permitted a standalone `material_receipt` for purchased goods "unless you restate the unit cost" — but a cost-stated standalone receipt still leaves the purchase order un-received, so a later bill/receipt flow receives the goods again and double-counts stock (reproduced end-to-end via live agent testing: one 100-unit delivery became 200 units on hand). The steer now says NEVER for purchased goods, and instructs checking `list-purchase-orders` before any bare "receive stock" request. The stock-entries catalog row carries the same warning at the point of use. Guidance-only; no action, schema, or GL change. A product-level guard (warn/link when receiving an item with an open PO line) is tracked separately as a build decision.
+- **Catalog-pricing guidance added.** The pricing catalog row now states that an item's default selling price is `add-item`/`update-item --standard-rate`, and that `add-item-price` rows (named price lists) are NOT automatically consulted at invoice time — previously nothing steered between the two overlapping surfaces, and live agent testing showed "set the selling price to X" landing in the unconsulted `item_price` table. Guidance-only.
 
 ## [4.12.2] — 2026-07-06 — documentation hygiene
 
 ### Changed
 - Internal design-document references in migration docstrings, the table provenance manifest, and repository prose were replaced with stable opaque provenance keys and neutral descriptions. No functional change to any migration, action, or schema (verified by AST comparison); the provenance governance gate keeps full strength through a maintainer-side reference map.
 
-## [4.12.1] — 2026-07-05 — M33 Item 7 rider (upgrade version-row bookkeeping)
+## [4.12.1] — 2026-07-05 — upgrade version-row bookkeeping
 
 ### Fixed
-- **`update-foundation` now heals the `erpclaw_module.version` bookkeeping row (ADR-0028 §2 rider, M33 Item 7).** Since M31, a confirmed `update-foundation` reconciled files and ran pending migrations but never updated the module-version row that `list-modules` reads, so an upgraded ClawHub install under-reported its version indefinitely (fresh installs were unaffected — `install-module` writes the current version). The confirmed-success paths — both the applied path and the in-sync early return — now bump the row to the registry's foundation version, extending ADR-0028's "a run reporting `ok` means files AND schema converged" to include the observable version row. The bump is idempotent, so the in-sync path also HEALS rows left stale by pre-rider upgrades on the next reconcile. It never fires on a dry-run/preview (§2 previews stay read-only) or a failed migration (§3 leaves the DB at the last good migration and exits 1 — never a half-converged `ok`), and is a clean no-op on the DB-less skip (§6). Implements — does not amend — ADR-0028; no schema change, no migration, no new action.
+- **`update-foundation` now heals the `erpclaw_module.version` bookkeeping row.** Since 4.12.0, a confirmed `update-foundation` reconciled files and ran pending migrations but never updated the module-version row that `list-modules` reads, so an upgraded ClawHub install under-reported its version indefinitely (fresh installs were unaffected — `install-module` writes the current version). The confirmed-success paths — both the applied path and the in-sync early return — now bump the row to the registry's foundation version, extending the 4.12.0 rule "a run reporting `ok` means files AND schema converged" to include the observable version row. The bump is idempotent, so the in-sync path also HEALS rows left stale by pre-rider upgrades on the next reconcile. It never fires on a dry-run/preview (previews stay read-only) or a failed migration (the DB stays at the last good migration and the run exits 1 — never a half-converged `ok`), and is a clean no-op on the DB-less skip. No schema change, no migration, no new action.
 - **erpclaw-meta `SKILL_TABLES` stale CRM entry corrected.** The `erpclaw-crm` presence-check row referenced pre-rename table names (`crm_lead`/`crm_opportunity`/`crm_campaign`); the live foundation tables are `lead`/`opportunity`/`campaign`, so the `check-skills` `tables_ok` flag for CRM could never read true. The ratified hygiene rider named `crm_lead` → `lead`; the two adjacent names on the same line were the same staleness and are corrected together so the presence check is actually functional (map-only change; no action, schema, or GL impact).
 
-## [4.12.0] — 2026-07-05 — M31 foundation-hygiene mini-wave
+## [4.12.0] — 2026-07-05 — foundation-hygiene release
 
 ### Fixed
-- **33 shipped actions are now actually reachable through the router (M31 H1).** The meta-router `ACTION_MAP` gained every action defined in the per-domain sub-scripts that it previously could not dispatch — most importantly `migrate` (the documented upgrade path), the whole custom-fields cluster (`add-custom-field` / `list-custom-fields` / `remove-custom-field` / `set-custom-field-value` / `get-custom-field-values`), and credit control (`place-customer-on-hold` and the dunning cycle). Previously these returned "Unknown action" via the router despite being fully built and tested. `hr-status` / `payroll-status` now route via ALIASES to each domain's `status`. A new L0 dispatchability gate (defined ⇒ routable, all modules) makes this bug class structurally unable to ship again.
-- **`update-foundation` now converges files AND schema (ADR-0028).** A confirmed apply-path reconcile applies pending foundation migrations after the file sync (idempotent; loud, per-migration-ledgered failure; explicit skip on uninitialized DBs) — an upgrade can no longer silently skip schema migrations, including on the in-sync retry path. `rollback-foundation` restores files only, never schema (migrations are forward-only). `migrate` joined `DANGEROUS_ACTIONS` beside its `schema-*` siblings. One-time bootstrap note (box-verified): the very first `update-foundation` FROM a pre-4.12.0 version still runs the old in-memory code, so schema converges on the second call (or a follow-up `migrate`); every upgrade from 4.12.0 onward converges in one call.
+- **33 shipped actions are now actually reachable through the router.** The meta-router `ACTION_MAP` gained every action defined in the per-domain sub-scripts that it previously could not dispatch — most importantly `migrate` (the documented upgrade path), the whole custom-fields cluster (`add-custom-field` / `list-custom-fields` / `remove-custom-field` / `set-custom-field-value` / `get-custom-field-values`), and credit control (`place-customer-on-hold` and the dunning cycle). Previously these returned "Unknown action" via the router despite being fully built and tested. `hr-status` / `payroll-status` now route via ALIASES to each domain's `status`. A new L0 dispatchability gate (defined ⇒ routable, all modules) makes this bug class structurally unable to ship again.
+- **`update-foundation` now converges files AND schema.** A confirmed apply-path reconcile applies pending foundation migrations after the file sync (idempotent; loud, per-migration-ledgered failure; explicit skip on uninitialized DBs) — an upgrade can no longer silently skip schema migrations, including on the in-sync retry path. `rollback-foundation` restores files only, never schema (migrations are forward-only). `migrate` joined `DANGEROUS_ACTIONS` beside its `schema-*` siblings. One-time bootstrap note (box-verified): the very first `update-foundation` FROM a pre-4.12.0 version still runs the old in-memory code, so schema converges on the second call (or a follow-up `migrate`); every upgrade from 4.12.0 onward converges in one call.
 
 ### Schema
-- **3 dead tables dropped (M31 H2, migration `028_drop_dead_orphan_tables_2.py`):** `communication`, `erpclaw_module_validation`, `erpclaw_table_ownership` — all verified zero-writer/zero-reader/zero-FK (necessity audit, adversarially QA-confirmed); dialect-aware + idempotent; PostgreSQL-rehearsed at close. Fresh-install table count 776.
-- **Table provenance manifest (`scripts/table_provenance.json`, M31 H3 G1):** every table now declares why it exists (doc ref / parent concept / explicit accepted-risk); a diff-aware L0 gate blocks any NEW provenance-less table — adding a table is now a governance event.
+- **3 dead tables dropped (migration `028_drop_dead_orphan_tables_2.py`):** `communication`, `erpclaw_module_validation`, `erpclaw_table_ownership` — all verified zero-writer/zero-reader/zero-FK (necessity audit, adversarially QA-confirmed); dialect-aware + idempotent; PostgreSQL-rehearsed at close. Fresh-install table count 776.
+- **Table provenance manifest (`scripts/table_provenance.json`):** every table now declares why it exists (doc ref / parent concept / explicit accepted-risk); a diff-aware L0 gate blocks any NEW provenance-less table — adding a table is now a governance event.
 
 ### Added
-- **Shared integration lib modules (M31 H6):** `erpclaw_lib/action_validators.py` (the validators previously duplicated across integration addons), `erpclaw_lib/integration_secrets.py` (AES-256-GCM field crypto with transparent legacy-format read-back), `erpclaw_lib/integration_actions.py` (shared sync-job/GL-rule/reconciliation action bodies; table writes stay with owning modules).
+- **Shared integration lib modules:** `erpclaw_lib/action_validators.py` (the validators previously duplicated across integration addons), `erpclaw_lib/integration_secrets.py` (AES-256-GCM field crypto with transparent legacy-format read-back), `erpclaw_lib/integration_actions.py` (shared sync-job/GL-rule/reconciliation action bodies; table writes stay with owning modules).
 
 ## [4.11.0] — 2026-07-01 — Wave 2 (inventory + warehouse depth)
 
 ### Added
-- **Putaway rules + pick lists + hard, persisted stock reservations (Wave 2 M5, ADR-0026).** Stock promised to one order can no longer be silently drained by another. Reservations are now first-class, persisted, and binding: `add-reservation` / `release-reservation` hold a quantity against an (item, warehouse), and a stock issue (e.g. `material_issue`) that would breach the active reserved quantity is refused with the available-minus-reserved figure and rolls back in one transaction (no partial SLE). `get-projected-qty` nets active reservations against on-hand and is byte-for-byte back-compatible when there are zero reservations. Putaway rules (`add-putaway-rule` / `list-putaway-rules` / `delete-putaway-rule`, `apply-putaway-on-receipt`) route received goods to a target warehouse by item or item group. Pick lists run end to end: `create-pick-list` from a sales order -> `add-pick-list-item` -> `mark-picked` -> `complete-pick-list` (into a delivery note) -> `cancel-pick-list` (releases the reservation). Warehouse-level for V1; bin-level is deliberately deferred (ADR-0026). New tables `putaway_rule`, `pick_list`, `pick_list_item`, `stock_reservation_entry` via foundation migration `025_putaway_pick_reservation.py` (net-new, dialect-aware, idempotent; all quantities Decimal-as-text). PostgreSQL-rehearsed on the box at wave close. (Wave 2 M5)
+- **Putaway rules + pick lists + hard, persisted stock reservations.** Stock promised to one order can no longer be silently drained by another. Reservations are now first-class, persisted, and binding: `add-reservation` / `release-reservation` hold a quantity against an (item, warehouse), and a stock issue (e.g. `material_issue`) that would breach the active reserved quantity is refused with the available-minus-reserved figure and rolls back in one transaction (no partial SLE). `get-projected-qty` nets active reservations against on-hand and is byte-for-byte back-compatible when there are zero reservations. Putaway rules (`add-putaway-rule` / `list-putaway-rules` / `delete-putaway-rule`, `apply-putaway-on-receipt`) route received goods to a target warehouse by item or item group. Pick lists run end to end: `create-pick-list` from a sales order -> `add-pick-list-item` -> `mark-picked` -> `complete-pick-list` (into a delivery note) -> `cancel-pick-list` (releases the reservation). Warehouse-level for V1; bin-level is deliberately deferred. New tables `putaway_rule`, `pick_list`, `pick_list_item`, `stock_reservation_entry` via foundation migration `025_putaway_pick_reservation.py` (net-new, dialect-aware, idempotent; all quantities Decimal-as-text). PostgreSQL-rehearsed before release.
 - **Item-global alternatives / substitutes (Wave 2 S7).** Define substitute items once at the item level instead of repeating them on every bill of materials: `add-item-alternative` / `list-item-alternatives` / `remove-item-alternative`, and `get-best-alternative-for-item` which returns the highest-priority substitute that actually has enough stock at a given warehouse (ties broken by on-hand quantity). Each alternative is directional (A can substitute for B without B substituting for A), ranked by `priority`, and carries a Decimal `conversion_factor`. Manufacturing's BOM substitutes now fall back to these item-global alternatives when a BOM line defines none of its own, so the same substitute list is not maintained twice (cross-module read only; manufacturing gains no new writes). New table `item_alternative` via foundation migration `027_item_alternative_table.py` (net-new, dialect-aware, idempotent, UNIQUE + directional CHECK). PostgreSQL-rehearsed on the box at wave close. (Wave 2 S7)
 - **Stock-entry typed dispatch — 3 new entry types (Wave 2 S6).** `add-stock-entry --entry-type` now handles `repack`, `subcontract` (`send_to_subcontractor`), and `material_consumption` (it previously errored on these three, even though the `stock_entry_type` CHECK already permitted all seven). `repack` consumes input lines and produces output lines within one warehouse and enforces a cost-balance invariant (total input value == total output value within $0.01, Decimal) — an unbalanced repack is refused and rolls back. `send_to_subcontractor` transfers stock out to a `--supplier-warehouse-id` that must be a transit or production warehouse (this is the dispatch path Wave 2 S5's subcontracting transfer emits). `material_consumption` issues raw materials against an active `--work-order-id` (`not_started`/`in_process`), recording the work-order link on the stock entry. Two convenience wrappers: `add-repack-stock-entry` (one-in/one-out repack) and `add-material-consumption` (single raw-material issue). SLE remains immutable and balanced; submit stays a single transaction. No schema change, no migration (the CHECK already had all seven values). (Wave 2 S6)
 - **Inventory anomaly hooks AI1 (Wave 2).** `detect-anomalies` (erpclaw-ai-engine) gains two internal heuristics, bringing `VALID_ANOMALY_TYPES` from 18 to 20: `reservation_over_available` flags an (item, warehouse) whose active `stock_reservation_entry` reserved qty exceeds the on-hand SLE balance (a stock-out is predicted — critical when nothing is on hand, otherwise warning), and `subcontract_receipt_mismatch` flags a `subcontracting_order` whose finished-goods `received_qty` diverges from `materials_transferred` beyond a 5% tolerance (over-receipt = more FG than the transferred materials can yield, critical; a completed order that returned materially less than was transferred = yield loss, warning). Both are internal detectors run by the existing `detect-anomalies` sweep (no new public action) and emit through the shared `_insert_anomaly` helper; they READ M5's `stock_reservation_entry` / the SLE and S5's `subcontracting_order` (cross-module reads) and WRITE only growth's `anomaly` table. All quantities are Decimal-as-text. The `anomaly.anomaly_type` CHECK enum is extended in lockstep (init_db for fresh installs; growth migration `005_wave2_anomaly_types.py` for existing ones — dialect-aware, idempotent, no rebuild dance since `anomaly` has no FK edges). Additive; no new action or table. (Wave 2 AI1)
@@ -117,63 +188,63 @@ Every known books-integrity gap surfaced by the M34 live-agent testing program, 
 ## [4.10.0] — 2026-06-16
 
 ### Added
-- **Hermes runtime port v1 (experimental).** ERPClaw is now runtime-portable from a single source tree via the `ERPCLAW_HOME` defaulting env var (unset = `~/.openclaw/erpclaw`, byte-identical to today — OpenClaw users unaffected). Runs on the Hermes Agent runtime as an experimental hedge via a GitHub tap (`hermes skills tap add avansaber/erpclaw`). OpenClaw stays the primary, supported, ClawHub-distributed runtime; Hermes is best-effort, no SLA, no feature-parity promise. No encrypted-credential actions on Hermes in v1. v1 acceptance: two business-user NL scenarios (company setup + order-to-cash customer payment) graded GREEN on Hermes by the same deterministic oracle as the OpenClaw baseline. See ADR-0017. Registry re-signed to registry_version 61. (Also in this window: a thin stdio MCP server over the db_query routers, ADR-0024, built + QA-green but shipped as optional runtime-reach only — not a feature dependency.)
+- **Hermes runtime port v1 (experimental).** ERPClaw is now runtime-portable from a single source tree via the `ERPCLAW_HOME` defaulting env var (unset = `~/.openclaw/erpclaw`, byte-identical to today — OpenClaw users unaffected). Runs on the Hermes Agent runtime as an experimental hedge via a GitHub tap (`hermes skills tap add avansaber/erpclaw`). OpenClaw stays the primary, supported, ClawHub-distributed runtime; Hermes is best-effort, no SLA, no feature-parity promise. No encrypted-credential actions on Hermes in v1. v1 acceptance: two business-user NL scenarios (company setup + order-to-cash customer payment) graded GREEN on Hermes by the same deterministic oracle as the OpenClaw baseline. Registry re-signed to registry_version 61. (Also in this window: a thin stdio MCP server over the db_query routers, built + QA-green but shipped as optional runtime-reach only — not a feature dependency.)
 
 ## [4.9.0] — 2026-06-15
 
 ### Added
-- **Wave 1B — built-in Sales/CRM depth.** Contacts + Companies, first-class Tasks, customizable Pipelines, Saved views (filterable), global CRM search, and CSV import/export — a "lead → opportunity → quote → order" Sales module (built in `erpclaw-growth`). Foundation gains nullable FK links to the addon's contact/pipeline entities (ADR-0023) via foundation migrations `023_crm_contact_fks.py` + `024_displace_opportunity_stage_check.py`; the shared `table_exists` is now PostgreSQL-correct via the CLI (closes M19). All six pieces (F1–F6) built through the agentic-SDLC org and validated on the live gateway + PostgreSQL.
+- **Wave 1B — built-in Sales/CRM depth.** Contacts + Companies, first-class Tasks, customizable Pipelines, Saved views (filterable), global CRM search, and CSV import/export — a "lead → opportunity → quote → order" Sales module (built in `erpclaw-growth`). Foundation gains nullable FK links to the addon's contact/pipeline entities via foundation migrations `023_crm_contact_fks.py` + `024_displace_opportunity_stage_check.py`; the shared `table_exists` is now PostgreSQL-correct via the CLI. All six pieces were validated on the live gateway + PostgreSQL.
 
 ## [4.8.0] — 2026-06-11
 
 ### Added
-- **Bank statement import + matching (M2, erpclaw-integrations v2.1.0).** Import OFX / CAMT.053 / MT940 / BAI2 statement files with pure-stdlib parsers (no new dependencies), idempotent re-import (`external_id` unique), a rule-based auto-match engine against open invoices/payments, manual match/clear, and `bank-reconciliation-summary`. Tables `bank_statement`/`bank_statement_line`/`bank_match_rule` via foundation migration 020; writes routed through the foundation `erpclaw_lib/bank_import.py` (module write-ownership preserved). `--bank-account-name` resolves accounts by name (FINDING-001 pattern). NL-validated on the live gateway (fin-m2 PASS). (Wave 1 M2)
+- **Bank statement import + matching (erpclaw-integrations v2.1.0).** Import OFX / CAMT.053 / MT940 / BAI2 statement files with pure-stdlib parsers (no new dependencies), idempotent re-import (`external_id` unique), a rule-based auto-match engine against open invoices/payments, manual match/clear, and `bank-reconciliation-summary`. Tables `bank_statement`/`bank_statement_line`/`bank_match_rule` via foundation migration 020; writes routed through the foundation `erpclaw_lib/bank_import.py` (module write-ownership preserved). `--bank-account-name` resolves accounts by name. NL-validated on the live gateway (fin-m2 PASS).
 - **P&L by dimension — natural routing (M6 follow-up).** `profit-and-loss` now accepts an optional `--group-by <dimension>` that returns the statement broken down per accounting-dimension value — `revenue` / `expenses` / `net` per value, income/expense accounts only, with entries that lack the key folded into an explicit `(untagged)` bucket (never dropped). The grouped totals reconcile to the flat statement (`income_total` / `expense_total` / `net_income` retained). Without the flag, output is byte-identical to before. The grouping composes the shared dialect-aware `json_get` GROUP BY (no SQL duplicated from `multi-dim-trial-balance`, which keeps owning whole-trial-balance grouping); an unregistered or deactivated `--group-by` key errors cleanly pointing at `list-dimensions`, and a `--dimension-key/--dimension-value` filter composes as filter-then-group. This makes the agent's natural reach (`profit-and-loss` for "P&L by department") correct instead of routing it to hand-rolled cost-center SQL. Read-only report — no schema, migration, registry, or new-action change. (Wave 1 M6 routing fix)
-- **Anomaly types AI1.** `detect-anomalies` (erpclaw-ai-engine) gains two heuristics, bringing `VALID_ANOMALY_TYPES` from 16 to 18: `asset_book_value_drift` flags assets whose `current_book_value` deviates >5% from the `gross_value − accumulated_depreciation` invariant (critical >25%), and `dimension_tag_drift` flags an `account_type` whose `gl_entry.dimensions_json` tagging is partial for a given key (some entries carry the key, others omit it — read & grouped in Python, dialect-safe, no JSON `GROUP BY`). Both names verbatim for corpus traceability; the `anomaly.anomaly_type` CHECK enum is extended in lockstep. `dimension_tag_drift` consumes M6's `dimensions_json`. Additive; no new action, table, or migration. (Wave 1 AI1 / AVA-42, ships in the deferred Wave 1 bundle)
+- **Anomaly types AI1.** `detect-anomalies` (erpclaw-ai-engine) gains two heuristics, bringing `VALID_ANOMALY_TYPES` from 16 to 18: `asset_book_value_drift` flags assets whose `current_book_value` deviates >5% from the `gross_value − accumulated_depreciation` invariant (critical >25%), and `dimension_tag_drift` flags an `account_type` whose `gl_entry.dimensions_json` tagging is partial for a given key (some entries carry the key, others omit it — read & grouped in Python, dialect-safe, no JSON `GROUP BY`). Both names verbatim for corpus traceability; the `anomaly.anomaly_type` CHECK enum is extended in lockstep. `dimension_tag_drift` consumes M6's `dimensions_json`. Additive; no new action, table, or migration.
 
 ## [4.7.0] — 2026-06-10
 
-Wave 1 Financials depth (partial bundle: P0 + M6 + M7 + S3). Additive only — no breaking changes. M2 and AI1 ship in a later bundle. No ClawHub upload this release (bundled into the next functional release per ADR-0006; ClawHub foundation stays v4.1.6, propagated to the OpenClaw box via signed reconciliation).
+Wave 1 Financials depth (partial bundle: P0 + M6 + M7 + S3). Additive only — no breaking changes. M2 and AI1 ship in a later bundle. No ClawHub upload this release (bundled into the next functional release; ClawHub foundation stays v4.1.6, propagated to the OpenClaw box via signed reconciliation).
 
 ### Added
-- **Multi-dimensional GL (M6).** A `dimension_registry` (seeded `project` / `department` / `cost_center`) now drives optional per-entry GL dimensions. `insert_gl_entries` serializes a `dimensions` dict into the existing `dimensions_json` column (default `'{}'`, so every existing GL caller is byte-unchanged), GL validation gains step 13 (required-dimension enforcement per `account_type` + `uuid_fk` referential-integrity check), and `reverse_gl_entries` preserves the original dimensions on the mirror entry. Four CRUD actions in `erpclaw-gl` (`add-dimension`, `list-dimensions`, `update-dimension`, `deactivate-dimension`; deactivation is blocked while recent live GL references the key) and two new reports in `erpclaw-reports` (`multi-dim-trial-balance --group-by "project,department"`, `dimension-balance-report --dimension K`). `general-ledger` / `profit-and-loss` / `balance-sheet` / `cash-flow` accept repeated `--dimension-key` / `--dimension-value` filters. All dimension SQL routes through `erpclaw_lib.query.json_get()` for dialect-safe extraction (no raw `json_extract` literals). Migration `017`. (Wave 1 M6 / AVA-38)
-- **Asset depth (M7).** Full fixed-asset lifecycle beyond depreciation: `impair-asset` / `reverse-impairment` (write-down to recoverable amount with balanced GL; reverse mirrors the GL and restores book value — cancel-by-reverse, impairment rows are immutable), `capitalize-asset` (initial recognition from purchase cost), and `revalue-asset` (upward/downward revaluation against a revaluation reserve, with depreciation recompute). `complete-maintenance` gains an `--is-capex` branch that capitalizes the cost into the asset (DR Asset / CR Cash) and recomputes the depreciation schedule instead of expensing it. New voucher types `asset_impairment` / `asset_capitalization` / `asset_repair_capex`; `is_capex` column on `asset_maintenance`. Migrations `018` / `019`. (Wave 1 M7 / AVA-39, erpclaw-ops/erpclaw-assets)
-- **Construction-work-in-progress (S3).** A `cwip_cost_accumulation` ledger plus five actions in erpclaw-assets: `add-cwip` (start an `under_construction` asset), `accumulate-cwip-cost` (DR the `capital_work_in_progress` account, per-project via M6's `dimensions_json`), `transfer-cwip-to-asset` (capitalize to `in_use` + start depreciation from the transfer date), `cancel-cwip` (reverse all accumulations; blocked if any cost arrived from a submitted document), and `list-cwip-projects`. `create-purchase-invoice` (erpclaw-buying) and `add-journal-entry` (erpclaw-journals) accept an optional `--cwip-asset-id` that routes the GL leg to the CWIP account and records a `cwip_cost_accumulation` row in the same transaction. The existing `gl_posting.py` guard that rejects a direct JE to a CWIP account is now reachable. New voucher type `cwip_capitalization`. Migration `021`. (Wave 1 S3 / AVA-41, AVA-43)
+- **Multi-dimensional GL (M6).** A `dimension_registry` (seeded `project` / `department` / `cost_center`) now drives optional per-entry GL dimensions. `insert_gl_entries` serializes a `dimensions` dict into the existing `dimensions_json` column (default `'{}'`, so every existing GL caller is byte-unchanged), GL validation gains step 13 (required-dimension enforcement per `account_type` + `uuid_fk` referential-integrity check), and `reverse_gl_entries` preserves the original dimensions on the mirror entry. Four CRUD actions in `erpclaw-gl` (`add-dimension`, `list-dimensions`, `update-dimension`, `deactivate-dimension`; deactivation is blocked while recent live GL references the key) and two new reports in `erpclaw-reports` (`multi-dim-trial-balance --group-by "project,department"`, `dimension-balance-report --dimension K`). `general-ledger` / `profit-and-loss` / `balance-sheet` / `cash-flow` accept repeated `--dimension-key` / `--dimension-value` filters. All dimension SQL routes through `erpclaw_lib.query.json_get()` for dialect-safe extraction (no raw `json_extract` literals). Migration `017`.
+- **Asset depth (M7).** Full fixed-asset lifecycle beyond depreciation: `impair-asset` / `reverse-impairment` (write-down to recoverable amount with balanced GL; reverse mirrors the GL and restores book value — cancel-by-reverse, impairment rows are immutable), `capitalize-asset` (initial recognition from purchase cost), and `revalue-asset` (upward/downward revaluation against a revaluation reserve, with depreciation recompute). `complete-maintenance` gains an `--is-capex` branch that capitalizes the cost into the asset (DR Asset / CR Cash) and recomputes the depreciation schedule instead of expensing it. New voucher types `asset_impairment` / `asset_capitalization` / `asset_repair_capex`; `is_capex` column on `asset_maintenance`. Migrations `018` / `019`. (erpclaw-ops/erpclaw-assets)
+- **Construction-work-in-progress (S3).** A `cwip_cost_accumulation` ledger plus five actions in erpclaw-assets: `add-cwip` (start an `under_construction` asset), `accumulate-cwip-cost` (DR the `capital_work_in_progress` account, per-project via M6's `dimensions_json`), `transfer-cwip-to-asset` (capitalize to `in_use` + start depreciation from the transfer date), `cancel-cwip` (reverse all accumulations; blocked if any cost arrived from a submitted document), and `list-cwip-projects`. `create-purchase-invoice` (erpclaw-buying) and `add-journal-entry` (erpclaw-journals) accept an optional `--cwip-asset-id` that routes the GL leg to the CWIP account and records a `cwip_cost_accumulation` row in the same transaction. The existing `gl_posting.py` guard that rejects a direct JE to a CWIP account is now reachable. New voucher type `cwip_capitalization`. Migration `021`.
 
 ### Fixed
-- `erpclaw_lib.query.json_get()` now emits dialect-correct SQL on PostgreSQL. The Postgres branch previously emitted the SQLite JSONPath form `col->>'$.key'`, which is invalid: Postgres `->>` takes a plain object key, and the JSON columns (`dimensions_json` et al.) are provisioned as `text`, so the operator needs a `::jsonb` cast first. It now emits `col::jsonb->>'key'` (verified on PostgreSQL 16). All three branches also escape the key as a proper SQL string literal (doubling embedded single quotes) instead of raw f-string interpolation, so a key containing a quote can no longer break or inject the emitted SQL. Latent until Wave 1 M6's multi-dimensional reporting, which is the first production consumer. (Wave 1 P0 / AVA-37)
+- `erpclaw_lib.query.json_get()` now emits dialect-correct SQL on PostgreSQL. The Postgres branch previously emitted the SQLite JSONPath form `col->>'$.key'`, which is invalid: Postgres `->>` takes a plain object key, and the JSON columns (`dimensions_json` et al.) are provisioned as `text`, so the operator needs a `::jsonb` cast first. It now emits `col::jsonb->>'key'` (verified on PostgreSQL 16). All three branches also escape the key as a proper SQL string literal (doubling embedded single quotes) instead of raw f-string interpolation, so a key containing a quote can no longer break or inject the emitted SQL. Latent until Wave 1 M6's multi-dimensional reporting, which is the first production consumer.
 
 ## [4.6.1] — 2026-06-08
 
 ### Fixed
-- `close-fiscal-year` now refuses to close when the chosen closing (retained-earnings) account belongs to a different company than the fiscal year being closed: it hard-errors with an actionable message and rolls back before any GL is posted. Previously, in a multi-company database, a mismatched closing account would have posted one company's net income into another company's equity (a silent cross-tenant contamination). Pure pre-write validation, no schema or API change. (FINDING-013, ADR-0016)
+- `close-fiscal-year` now refuses to close when the chosen closing (retained-earnings) account belongs to a different company than the fiscal year being closed: it hard-errors with an actionable message and rolls back before any GL is posted. Previously, in a multi-company database, a mismatched closing account would have posted one company's net income into another company's equity (a silent cross-tenant contamination). Pure pre-write validation, no schema or API change.
 
 ## [4.6.0] — 2026-06-08
 
 ### Added
-- NL company-by-name resolution: business users can address a company by name ("for Acme, invoice Bruce") instead of a UUID. The `resolve_company_id` chokepoint now accepts a `--company "<name>"` flag (exact, case-insensitive, dialect-neutral `LOWER(name)`, never `.ilike()`) alongside the unchanged `--company-id`; the sole-company auto-detect path is byte-unchanged. Wired across the GL, payments, inventory, tax, journals, and reports actions plus the educlaw-k12 router (~70 call sites). A named-but-missing company fails loudly listing the available company names and never falls through to a different company, so one entity's books can never post to another. SKILL.md instructs the agent to pass the user's exact wording and never fuzzy-substitute or autocorrect a company name. Verified end-to-end on the live gateway (mc01 right-company invoice; mc02 missing-name hard-error with zero posting). (FINDING-001, ADR-0015)
+- NL company-by-name resolution: business users can address a company by name ("for Acme, invoice Bruce") instead of a UUID. The `resolve_company_id` chokepoint now accepts a `--company "<name>"` flag (exact, case-insensitive, dialect-neutral `LOWER(name)`, never `.ilike()`) alongside the unchanged `--company-id`; the sole-company auto-detect path is byte-unchanged. Wired across the GL, payments, inventory, tax, journals, and reports actions plus the educlaw-k12 router (~70 call sites). A named-but-missing company fails loudly listing the available company names and never falls through to a different company, so one entity's books can never post to another. SKILL.md instructs the agent to pass the user's exact wording and never fuzzy-substitute or autocorrect a company name. Verified end-to-end on the live gateway (mc01 right-company invoice; mc02 missing-name hard-error with zero posting).
 
 ## [4.5.0] — 2026-06-05
 
 ### Added
-- `resolve-item` (erpclaw-inventory): cascade item resolver that maps a loose/plural user phrase ("20 Brake Pad Sets") to the stored item via a deterministic 4-tier cascade (exact → singularized → substring → token-AND, stop at first non-empty, shortest-name-first). Read-only, cross-DB (dialect-neutral `LOWER(...) LIKE`, never `.ilike()`), stdlib-only singularizer. Returns `single_match` / `multiple_matches` / `matched:false` so callers can branch deterministically. Fixes FINDING-008. (Inventory action count 42 → 43.)
+- `resolve-item` (erpclaw-inventory): cascade item resolver that maps a loose/plural user phrase ("20 Brake Pad Sets") to the stored item via a deterministic 4-tier cascade (exact → singularized → substring → token-AND, stop at first non-empty, shortest-name-first). Read-only, cross-DB (dialect-neutral `LOWER(...) LIKE`, never `.ilike()`), stdlib-only singularizer. Returns `single_match` / `multiple_matches` / `matched:false` so callers can branch deterministically. (Inventory action count 42 → 43.)
 
 ### Fixed
-- Gateway replies no longer leak accounting internals to business users: SKILL.md `## Speaking to the user` now instructs the agent to translate or omit double-entry GL narration, account names, internal status/field labels (status, posting date, outstanding, valuation rate, naming series, gl/sle counts) and raw UUIDs, surfacing the business outcome instead. Guidance-only — no response-shape or schema change. (FINDING-004)
-- Stock receipts now always post the perpetual-inventory GL leg (DR Stock-in-Hand / CR Stock Received Not Billed); a missing Stock-in-Hand or Stock Received Not Billed account now fails loudly with an actionable message instead of silently skipping the GL while still moving the subledger. The `create_perpetual_inventory_gl` lib helper raises a structured error (caught at all 7 caller sites across inventory/buying/selling/manufacturing, surfaced as a clean JSON error with full transaction rollback — no SLE-without-GL). `tutorial` (demo company) now seeds a Stock Adjustment account so demo-company reconciliations post correct GL. (FINDING-009)
-- Purchased stock is now valued from its source document end to end: receiving against a purchase order (GRN) or recording a bill with stock update carries the unit cost into the stock ledger and posts the inventory GL. A standalone, rate-less external stock receipt with no item standard cost now fails loudly with an actionable message instead of silently booking inventory at $0 (internal transfers and manufacturing legs are unaffected — they keep inheriting existing valuation). SKILL.md now guides the procure-to-pay receipt flow. (FINDING-010, ADR-0014)
+- Gateway replies no longer leak accounting internals to business users: SKILL.md `## Speaking to the user` now instructs the agent to translate or omit double-entry GL narration, account names, internal status/field labels (status, posting date, outstanding, valuation rate, naming series, gl/sle counts) and raw UUIDs, surfacing the business outcome instead. Guidance-only — no response-shape or schema change.
+- Stock receipts now always post the perpetual-inventory GL leg (DR Stock-in-Hand / CR Stock Received Not Billed); a missing Stock-in-Hand or Stock Received Not Billed account now fails loudly with an actionable message instead of silently skipping the GL while still moving the subledger. The `create_perpetual_inventory_gl` lib helper raises a structured error (caught at all 7 caller sites across inventory/buying/selling/manufacturing, surfaced as a clean JSON error with full transaction rollback — no SLE-without-GL). `tutorial` (demo company) now seeds a Stock Adjustment account so demo-company reconciliations post correct GL.
+- Purchased stock is now valued from its source document end to end: receiving against a purchase order (GRN) or recording a bill with stock update carries the unit cost into the stock ledger and posts the inventory GL. A standalone, rate-less external stock receipt with no item standard cost now fails loudly with an actionable message instead of silently booking inventory at $0 (internal transfers and manufacturing legs are unaffected — they keep inheriting existing valuation). SKILL.md now guides the procure-to-pay receipt flow.
 
 ## [4.4.0] — 2026-06-05
 
 ### Added
-- `--email` / `--phone` on `add-customer` / `update-customer` / `add-supplier` / `update-supplier`; returned by the corresponding `get-*`. (FINDING-003)
+- `--email` / `--phone` on `add-customer` / `update-customer` / `add-supplier` / `update-supplier`; returned by the corresponding `get-*`.
 
 ### Schema
-- `customer.email TEXT`, `customer.phone TEXT`, `supplier.email TEXT`, `supplier.phone TEXT` (nullable); foundation migration `016` (dialect-aware SQLite + PostgreSQL). `import-customers` / `import-suppliers` INSERTs now resolve against real columns. (FINDING-003, ADR-0012)
+- `customer.email TEXT`, `customer.phone TEXT`, `supplier.email TEXT`, `supplier.phone TEXT` (nullable); foundation migration `016` (dialect-aware SQLite + PostgreSQL). `import-customers` / `import-suppliers` INSERTs now resolve against real columns.
 
 ### Fixed
-- AR/AP payment application now clears the invoice/bill: the document's `outstanding_amount` / `status` is synced and a per-allocation payment-ledger entry with `against_voucher` is posted, so a recorded payment marks the invoice/bill paid (previously it stayed unpaid). (FINDING-005)
-- Gateway `voucher_type` labels are canonicalized system-wide (e.g. "Sales Invoice" -> `sales_invoice`) so the NL gateway and downstream GL/inventory/tax/reports/payments consumers agree on the voucher vocabulary. (FINDING-006)
+- AR/AP payment application now clears the invoice/bill: the document's `outstanding_amount` / `status` is synced and a per-allocation payment-ledger entry with `against_voucher` is posted, so a recorded payment marks the invoice/bill paid (previously it stayed unpaid).
+- Gateway `voucher_type` labels are canonicalized system-wide (e.g. "Sales Invoice" -> `sales_invoice`) so the NL gateway and downstream GL/inventory/tax/reports/payments consumers agree on the voucher vocabulary.
 
 ## [4.3.1] — 2026-05-11
 
@@ -330,10 +401,6 @@ Reconciliation verifies each file against the SHA256 declared in the published m
 ### Notes
 - Long-running processes (MCP servers, daemons) hold imported modules in memory; foundation file changes take effect on next launch.
 
-### Plan + audit
-- `apps/CLAWHUB_FIX_v415_PLAN_2026-05-04.md`
-- `apps/CLAWHUB_FIX_v415_AUDIT_2026-05-04.md` (4 BLOCK + 5 SHOULD adopted; 4 SHOULD deferred to v4.1.6/v4.2.0)
-
 ## [4.1.4] — 2026-05-04
 
 Closes the v4.1.3 OpenClaw Tool Misuse Concern by extending the runtime gate to administrative actions beyond financial postings.
@@ -345,10 +412,6 @@ Closes the v4.1.3 OpenClaw Tool Misuse Concern by extending the runtime gate to 
 
 ### Fixed
 - Stale comment in `db_query.py` referenced a removed environment-variable bypass; cleaned up.
-
-### Plan + audit
-- `apps/CLAWHUB_FIX_v414_PLAN_2026-05-04.md`
-- `apps/CLAWHUB_FIX_v414_AUDIT_2026-05-04.md`
 
 ## [4.1.3] — 2026-05-04
 
@@ -367,7 +430,7 @@ Cross-machine backup restore + Tier A regression fix-ups discovered during v4.1.
 
 ### Notes
 - No code logic changes; only documentation alignment + one test fixture update.
-- 3 pre-existing `erpclaw-os-engine` constitution failures (Article 5 cross-module write violations + addon SKILL.md drift) deferred to Tier I (vertical addon cross-tests) per `apps/V410_TEST_PLAN_2026-05-04.md`.
+- 3 pre-existing `erpclaw-os-engine` constitution failures (Article 5 cross-module write violations + addon SKILL.md drift) deferred to the vertical addon cross-test tier.
 
 ## [4.1.2] — 2026-05-04
 
@@ -379,10 +442,6 @@ Made the v4.1.0 runtime gate's enforcement visible in SKILL.md so static-analysi
 ### Notes
 - No code logic changes. The v4.1.0+ runtime gate is unchanged.
 - Phase 2 audit reviewed the proposed text; revised to drop verb-enumeration and env-var-bypass wording that would have re-summoned previous trigger phrases.
-
-### Plan + audit
-- `apps/CLAWHUB_FIX_v412_PLAN_2026-05-04.md`
-- `apps/CLAWHUB_FIX_v412_AUDIT_2026-05-04.md`
 
 ## [4.1.1] — 2026-05-04
 
@@ -401,10 +460,6 @@ Tightened v4.1.0 security posture in response to OpenClaw rescan feedback.
 
 ### Roadmap
 - v4.2.0 will add cryptographic signature verification (sigstore/cosign) on top of the file-tree integrity manifest, plus an approve-pending queue for sanctioned automation.
-
-### Plan + audit
-- `apps/CLAWHUB_FIX_v411_PLAN_2026-05-04.md`
-- `apps/CLAWHUB_FIX_v411_AUDIT_2026-05-04.md`
 
 ## [4.1.0] — 2026-05-04
 
@@ -438,17 +493,13 @@ Comprehensive security modernization. Real architectural changes: audited crypto
 - Stripe users who previously stored API keys via `--api-key`: run `erpclaw migrate-credentials` once after upgrade to move keys from DB plaintext to the encrypted credential store.
 - Cron/agent/CI users: append `--user-confirmed` to high-impact action invocations.
 
-### Plan + audit
-- `apps/CLAWHUB_FIX_v410_PLAN_2026-05-04.md`
-- `apps/CLAWHUB_FIX_v410_AUDIT_2026-05-04.md`
-
 ## [4.0.2] — 2026-05-04
 
-Eliminate F1 (Rogue Agents / cron) Concern from the ClawHub OpenClaw review by removing decorative `cron:` blocks from foundation and grouped-addons SKILL.md files.
+Eliminate the Rogue Agents (cron) concern from the ClawHub OpenClaw review by removing decorative `cron:` blocks from foundation and grouped-addons SKILL.md files.
 
 ### Why
 
-Phase 2 audit verification (B1) discovered that OpenClaw's runtime cron daemon does NOT auto-discover SKILL.md `cron:` blocks. Active scheduling requires explicit `openclaw cron add` CLI commands. The `cron:` block in foundation SKILL.md was therefore decorative metadata, not active scheduling — but the ClawHub static analyzer was reading it as scheduled financial mutation and flagging F1 as HIGH/Concern.
+Phase 2 audit verification (B1) discovered that OpenClaw's runtime cron daemon does NOT auto-discover SKILL.md `cron:` blocks. Active scheduling requires explicit `openclaw cron add` CLI commands. The `cron:` block in foundation SKILL.md was therefore decorative metadata, not active scheduling — but the ClawHub static analyzer was reading it as scheduled financial mutation and flagging it as HIGH/Concern.
 
 Removing the decorative blocks eliminates the trigger at the source without changing operational behavior (no user has ever had ERPClaw crons running automatically from `clawhub install`; users wanting daily jobs always had to run `openclaw cron add` manually).
 
@@ -465,7 +516,6 @@ Removing the decorative blocks eliminates the trigger at the source without chan
 - No code paths read SKILL.md cron blocks. Verified via grep across the source tree and internal tooling — zero hits for cron-block consumption.
 - All 4 daily action targets (`process-recurring`, `generate-recurring-invoices`, `check-reorder`, `check-overdue`) remain in foundation as on-demand callable actions. No capability removed.
 - Users who want automatic daily runs use `openclaw cron add --name <id> --cron "<expr>" --message "Using erpclaw, run the <action> action."` — the same path that was always required for actual scheduling.
-- Plan + audit + B1 verification: `apps/CLAWHUB_FIX_v402_PLAN_2026-05-04.md` + `apps/CLAWHUB_FIX_v402_AUDIT_2026-05-04.md` + this CHANGELOG entry.
 
 ### Migration arc
 
@@ -489,7 +539,7 @@ Security patch responding to ClawHub OpenClaw v4.0.0 review findings. Documentat
 - **Addon SKILL.md description** reworded to lead with developer-tooling framing and explicit sandbox-first / user-approval-before-deploy disclosure.
 
 ### Added
-- **Credential handling, Data protection, Module installation safety** paragraphs in foundation SKILL.md security section. Mirror the OpenClaw recommendations for F3-F5 Note-level findings.
+- **Credential handling, Data protection, Module installation safety** paragraphs in foundation SKILL.md security section. Mirror the OpenClaw recommendations for its Note-level findings.
 - **Background automation** section in foundation SKILL.md documenting the four cron jobs and the lib bootstrap self-heal behavior.
 - **chmod 600 on `data.sqlite`, `data.sqlite-wal`, `data.sqlite-shm`** — applied at `initialize-database`, after `restore-database`, after `backup-database`, AND on every foundation action invocation. Backup outputs are also chmod 600. New helper `chmod_db_files()` in `erpclaw-setup/db_query.py`.
 - **Lib bootstrap self-heal** (`erpclaw_lib/_bootstrap.py`). On every foundation action invocation, the router compares the bundled `erpclaw_lib.__version__` to a marker file at `~/.openclaw/erpclaw/lib/.erpclaw_lib_version`. On mismatch, it re-syncs the deployed `erpclaw_lib/` from the bundled source, writes a new marker, and appends an entry to `~/.openclaw/erpclaw/logs/bootstrap.log`. Eliminates the v3.5.1 → v4.0.0 upgrade gotcha where `clawhub update` skipped the foundation post-install hook and addon `sandbox.py` couldn't find the new `gl_invariants.py`. Honors `ERPCLAW_DISABLE_BOOTSTRAP=1` env var as an explicit opt-out.
@@ -518,4 +568,3 @@ Architectural split. ClawHub static-analysis CRITs eliminated. `clawhub install 
 
 ### Notes
 - ClawHub release id: `k974yxfap664grmdnxfsstnhy5863wfa`.
-- Plan: `apps/CLAWHUB_FIX_C_PLAN_2026-05-04.md`. Audit: `apps/CLAWHUB_FIX_C_AUDIT_2026-05-04.md`.

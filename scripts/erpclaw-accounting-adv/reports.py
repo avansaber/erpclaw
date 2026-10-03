@@ -11,6 +11,7 @@ try:
     if importlib.util.find_spec("erpclaw_lib") is None:
         sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
     from erpclaw_lib.response import ok, err, row_to_dict
+    from erpclaw_lib.query_helpers import resolve_company_id, resolve_scope_company
 except ImportError:
     pass
 
@@ -30,10 +31,10 @@ ALL_TABLES = [
 # 1. standards-compliance-dashboard
 # ===========================================================================
 def standards_compliance_dashboard(conn, args):
+    company_id = resolve_scope_company(conn, getattr(args, "company_id", None), getattr(args, "company_name", None))
     where, params = ["1=1"], []
-    if getattr(args, "company_id", None):
-        where.append("company_id = ?")
-        params.append(args.company_id)
+    where.append("company_id = ?")
+    params.append(company_id)
     where_sql = " AND ".join(where)
 
     # Revenue (ASC 606)

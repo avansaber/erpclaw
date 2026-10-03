@@ -30,7 +30,7 @@ import json
 # (the test harness does this). Either way the SDK's top-level ``mcp`` stays
 # resolvable for build_server().
 if __package__:
-    from . import skill_reader, tool_router
+    from . import confirm, skill_reader, tool_router
 else:  # pragma: no cover - direct-script (.mcp.json spawn) path
     # Run as ``python3 source/erpclaw/mcp/server.py``: load this directory as a
     # package under a synthetic, collision-free name (``erpclaw_mcp``) so the
@@ -50,6 +50,7 @@ else:  # pragma: no cover - direct-script (.mcp.json spawn) path
         _pkg = importlib.util.module_from_spec(_spec)
         sys.modules[_PKG] = _pkg
         _spec.loader.exec_module(_pkg)
+    confirm = importlib.import_module(f"{_PKG}.confirm")
     skill_reader = importlib.import_module(f"{_PKG}.skill_reader")
     tool_router = importlib.import_module(f"{_PKG}.tool_router")
 
@@ -61,12 +62,24 @@ DESCRIBE_ACTION = "erpclaw_describe_action"
 ACTION = "erpclaw_action"
 
 
+def _read_only_specs() -> bool:
+    """True when the execution tool must advertise (and enforce) read-only.
+
+    Fail closed: an invalid ``ERPCLAW_MCP_READONLY`` value advertises
+    read-only too; never raises here.
+    """
+    try:
+        return bool(confirm.session_readonly())
+    except confirm.ReadonlyModeInvalid:
+        return True
+
+
 def _tool_specs():
     """Return the static tool spec list (name, description, schema, annotations).
 
     Kept as plain dicts so the test harness can introspect them without the SDK.
     """
-    return [
+    specs = [
         {
             "name": LIST_ACTIONS,
             "description": (
@@ -138,6 +151,14 @@ def _tool_specs():
                         ),
                         "default": False,
                     },
+                    "authorization_id": {
+                        "type": "string",
+                        "description": (
+                            "Id of a single-use authorization an operator "
+                            "issued for this exact call. A model cannot "
+                            "create one."
+                        ),
+                    },
                 },
                 "required": ["action_name"],
                 "additionalProperties": False,
@@ -147,32 +168,139 @@ def _tool_specs():
             "annotations": {"readOnlyHint": False, "destructiveHint": True},
         },
     ]
+    if _read_only_specs():
+        for spec in specs:
+            if spec.get("name") == ACTION:
+                spec["annotations"] = {
+                    "readOnlyHint": True, "destructiveHint": False}
+                spec["description"] = (
+                    "This session is read-only; only read actions can run. "
+                    + spec["description"]
+                )
+    return specs
 
 
 # ── Tool implementations (SDK-independent; the harness calls these directly) ──
 
+def _outer_container_error() -> dict:
+    return {"status": "error", "error": "invalid_arguments",
+            "detail": "tool arguments must be a JSON object."}
+
+
+def _read_only_catalog_error() -> dict:
+    """Fail-closed list error when the read gate cannot be computed."""
+    return {
+        "status": "error",
+        "error": "read_only_session",
+        "detail": "this session is read-only; only read actions can run.",
+    }
+
+
+def _read_gate_sets():
+    """Live (dangerous, module_actions, onboarding_actions) sets at call time.
+
+    The dangerous set is read through the ``skill_reader`` module object and
+    the install-state sets through ``tool_router._router_maps()``. Raises on
+    any failure; callers refuse fail-closed and never pass.
+    """
+    dangerous = skill_reader.dangerous_actions()
+    module_actions, onboarding_actions, _aliases, _action_map = (
+        tool_router._router_maps())
+    return dangerous, module_actions, onboarding_actions
+
+
 def call_list_actions(arguments: dict) -> dict:
-    module = (arguments or {}).get("module", "foundation")
-    return {"status": "ok", "module": "foundation", "actions": skill_reader.list_actions(module)}
+    if arguments is None:
+        arguments = {}
+    if not isinstance(arguments, dict):
+        return _outer_container_error()
+    try:
+        readonly = confirm.session_readonly()
+    except confirm.ReadonlyModeInvalid:
+        return confirm.invalid_mode()
+    module = arguments.get("module", "foundation")
+    result = skill_reader.list_actions(module)
+    if isinstance(result, dict) and result.get("status") == "error":
+        return result
+    if readonly:
+        try:
+            dangerous, module_actions, onboarding_actions = _read_gate_sets()
+        except Exception:
+            return _read_only_catalog_error()
+        result = [
+            entry for entry in result
+            if confirm.is_session_read(
+                entry.get("name"), dangerous=dangerous,
+                module_actions=module_actions,
+                onboarding_actions=onboarding_actions)
+        ]
+    envelope = {"status": "ok", "module": "foundation", "actions": result}
+    problems = skill_reader.discovery_problems()
+    if problems:
+        warnings = []
+        for item in problems:
+            if isinstance(item, (tuple, list)) and len(item) == 2:
+                item_path, item_reason = item
+                warnings.append({"path": item_path, "detail": item_reason})
+            elif isinstance(item, dict):
+                warnings.append(item)
+            else:
+                warnings.append({"detail": str(item)})
+        envelope["warnings"] = warnings
+    return envelope
 
 
 def call_describe_action(arguments: dict) -> dict:
-    action_name = (arguments or {}).get("action_name")
+    if arguments is None:
+        arguments = {}
+    if not isinstance(arguments, dict):
+        return _outer_container_error()
+    action_name = arguments.get("action_name")
+    if action_name is None or (isinstance(action_name, str) and action_name == ""):
+        return {"status": "error", "error": "action_name is required."}
+    if not isinstance(action_name, str):
+        return {"status": "error", "error": "invalid_action",
+                "detail": "action_name must be a string."}
     if not action_name:
         return {"status": "error", "error": "action_name is required."}
+    try:
+        readonly = confirm.session_readonly()
+    except confirm.ReadonlyModeInvalid:
+        return confirm.invalid_mode()
+    if readonly:
+        try:
+            dangerous, module_actions, onboarding_actions = _read_gate_sets()
+        except Exception:
+            return confirm.refusal(action_name)
+        if not confirm.is_session_read(
+                action_name, dangerous=dangerous,
+                module_actions=module_actions,
+                onboarding_actions=onboarding_actions):
+            return confirm.refusal(action_name)
     return skill_reader.describe_action(action_name)
 
 
 def call_action(arguments: dict) -> dict:
-    arguments = arguments or {}
+    if arguments is None:
+        arguments = {}
+    if not isinstance(arguments, dict):
+        return _outer_container_error()
     action_name = arguments.get("action_name")
     if not action_name:
         return {"status": "error", "error": "action_name is required."}
+    if "args" in arguments and arguments.get("args") is None:
+        raw_args = {}
+    elif "args" in arguments:
+        raw_args = arguments.get("args")
+    else:
+        raw_args = {}
+    if "user_confirmed" in arguments:
+        raw_confirmed = arguments.get("user_confirmed")
+    else:
+        raw_confirmed = False
     return tool_router.dispatch(
-        action_name,
-        arguments.get("args") or {},
-        bool(arguments.get("user_confirmed", False)),
-    )
+        action_name, raw_args, raw_confirmed,
+        authorization_id=arguments.get("authorization_id"))
 
 
 _DISPATCH = {
@@ -185,10 +313,19 @@ _DISPATCH = {
 def handle_tool_call(name: str, arguments: dict) -> dict:
     """Route an MCP tool call to its implementation. Shared by the SDK wiring
     and the in-process test harness (MCPDriver)."""
-    impl = _DISPATCH.get(name)
-    if impl is None:
-        return {"status": "error", "error": f"Unknown tool: {name!r}"}
-    return impl(arguments or {})
+    if not isinstance(name, str) or name not in _DISPATCH:
+        return {"status": "error", "error": "unknown_tool",
+                "detail": "unknown tool."}
+    if arguments is None:
+        arguments = {}
+    if not isinstance(arguments, dict):
+        return _outer_container_error()
+    try:
+        confirm.session_readonly()
+    except confirm.ReadonlyModeInvalid:
+        return confirm.invalid_mode()
+    impl = _DISPATCH[name]
+    return impl(arguments)
 
 
 # ── stdio MCP server wiring (the spawn-on-demand entry point) ────────────────

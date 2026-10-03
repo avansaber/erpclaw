@@ -1,6 +1,6 @@
 """Part A — M46/F1: cancelling an invoice RELEASES the allocations it voids.
 
-Wave G item F1 (planning/WAVE_G_PLAN_2026-07-31.md §4). Before this change, all
+Before this change, all
 four cancel paths (cancel-sales-invoice, cancel-purchase-invoice and the two
 intercompany legs) delinked the document's own payment-ledger rows and zeroed
 its outstanding, but left ``payment_allocation``, the per-allocation PLE rows and
@@ -10,7 +10,7 @@ that no longer existed in the books.
 Every pin here drives the REAL actions (selling / buying / payments) against a
 fresh core DB and asserts exact Decimals. Two of them (pins 9 and 10) are the
 composed cancel lifecycles the Wave-G SIM found permanently red under the first
-spec (planning/simlogs/waveg-plan_SIM_2026-07-31.md findings 1-2); they walk two
+spec; they walk two
 shipped operations in both orders and check the ledger after EVERY step, not just
 at the end.
 
@@ -98,7 +98,7 @@ def _party_ple_net(conn, party_type, party_id):
     reversal. Payment rows count reversal-INCLUSIVE (no delinked filter),
     because cancel-payment delinks a row AND writes its mirror; only netting
     the pair returns the right answer. Rationale: INV-25's docstring
-    (testing/invariant_engine.py) and planning/simlogs/wavef-s14-inv25_SIM.
+    (testing/invariant_engine.py).
     """
     net = D("0")
     for vt, amount, delinked in conn.execute(
@@ -342,51 +342,6 @@ def test_pin2_cancel_purchase_invoice_releases_the_allocation(conn, benv):
     assert result["allocations_released"][0]["unallocated_amount"] == "300.00"
 
 
-# ── pin 3 — both intercompany legs: BLOCKED, and pinned as blocked ───────────
-
-def test_pin3_intercompany_legs_are_unreachable_on_a_real_install(conn, env):
-    """The two intercompany cancel legs carry the release, but cannot be driven.
-
-    F1's plan (§4) lists erpclaw-selling's two intercompany cancel legs among the
-    sites with the M46 defect, and pin 3 asks for a behavioural pin over both.
-    Measured against the live tree, that precondition is FALSE: the four
-    intercompany-invoice actions read and write ``sales_invoice.is_intercompany``
-    / ``.intercompany_reference_id`` and the matching ``purchase_invoice``
-    columns, and NO schema file, migration or dynamic-DDL site creates any of
-    them. ``create-intercompany-invoice`` therefore cannot run on any install
-    built from init_schema, so ``cancel-intercompany-invoice`` can never be
-    reached with a real allocation to release.
-
-    The release IS wired into both legs (same shared-lib call as the other two
-    cancel paths) so they are correct the day the columns exist. Fixing the
-    missing columns is a schema change F1's contract does not authorise, so it
-    is reported to the architect instead of improvised here.
-
-    This test pins the blocking fact. It fails the moment the columns land,
-    which is exactly when the behavioural pin must be written.
-    """
-    si_cols = {r[1] for r in conn.execute("PRAGMA table_info(sales_invoice)")}
-    pi_cols = {r[1] for r in conn.execute("PRAGMA table_info(purchase_invoice)")}
-    missing = {
-        "sales_invoice": sorted({"is_intercompany", "intercompany_reference_id"}
-                                - si_cols),
-        "purchase_invoice": sorted({"is_intercompany", "intercompany_reference_id"}
-                                   - pi_cols),
-    }
-    assert missing == {
-        "sales_invoice": ["intercompany_reference_id", "is_intercompany"],
-        "purchase_invoice": ["intercompany_reference_id", "is_intercompany"],
-    }, ("intercompany columns now exist — write the real pin 3 (allocation "
-        "release on both intercompany cancel legs) and delete this test")
-
-    # And the action really does refuse to run, rather than silently no-op.
-    si_id = _sales_invoice(conn, env)
-    with pytest.raises((IndexError, KeyError, Exception)):
-        mod.create_intercompany_invoice(conn, ns(
-            sales_invoice_id=si_id, target_company_id="other-co",
-            supplier_id="some-supplier"))
-
-
 # ── pin 4 — no allocation: byte-identical to today ───────────────────────────
 
 def test_pin4_cancel_without_allocation_is_unchanged(conn, env):
@@ -397,9 +352,12 @@ def test_pin4_cancel_without_allocation_is_unchanged(conn, env):
 
     result = call_action(mod.cancel_sales_invoice, conn, ns(sales_invoice_id=si_id))
     assert is_ok(result)
-    # Exactly the pre-F1 payload — no new keys on the quiet path.
-    assert set(result) == {"status", "sales_invoice_id", "gl_reversals",
-                           "sle_reversals"}
+    # Exactly the pre-F1 payload — no new keys on the quiet path, except the
+    # envelope split (m266): the document state rides document_status.
+    assert set(result) == {"status", "document_status", "sales_invoice_id",
+                           "gl_reversals", "sle_reversals"}
+    assert result["status"] == "ok"
+    assert result["document_status"] == "cancelled"
     assert _ple_count(conn) == ple_before      # no release rows written
     assert conn.execute("SELECT COUNT(*) FROM payment_allocation").fetchone()[0] \
         == alloc_before

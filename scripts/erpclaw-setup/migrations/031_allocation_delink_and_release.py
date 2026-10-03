@@ -47,8 +47,7 @@ committed heal always has one. Read it back with
 
 Without it the release is invisible after the terminal output is gone: the
 allocation ids this run voided are the one fact a reversal needs and the one
-fact nothing else records. Convention + gate:
-planning/simlogs/m102_SIM_2026-08-12.md.
+fact nothing else records.
 """
 import argparse
 import importlib.util

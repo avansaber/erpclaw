@@ -63,6 +63,7 @@ TABLE_TO_SKILL = {
     "sales_invoice": "erpclaw-selling",
     "sales_invoice_item": "erpclaw-selling",
     "sales_invoice_tax": "erpclaw-selling",
+    "intercompany_account_map": "erpclaw-selling",
     # erpclaw-buying
     "supplier": "erpclaw-buying",
     "material_request": "erpclaw-buying",
@@ -154,6 +155,17 @@ TABLE_TO_SKILL = {
     "conversation_context": "erpclaw-ai-engine",
     "pending_decision": "erpclaw-ai-engine",
     "audit_conversation": "erpclaw-ai-engine",
+    "authority_install": "erpclaw-setup",
+    "authority_principal": "erpclaw-setup",
+    "authority_membership": "erpclaw-setup",
+    "authority_right": "erpclaw-setup",
+    "authority_delegation": "erpclaw-setup",
+    "authority_delegation_right": "erpclaw-setup",
+    "authority_delegation_cap": "erpclaw-setup",
+    "operation_authorization": "erpclaw-setup",
+    "operation_authorization_envelope": "erpclaw-setup",
+    "operation_authorization_result": "erpclaw-setup",
+    "authority_delegation_usage": "erpclaw-setup",
 }
 
 

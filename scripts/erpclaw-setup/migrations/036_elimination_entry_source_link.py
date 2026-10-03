@@ -104,8 +104,6 @@ questions. No raw driver call, no connection setting, no catalog table read by h
 it runs unchanged on SQLite and PostgreSQL. Every statement is a FIXED string (migration
 031's rule): no table name, column name or value is ever formatted into SQL.
 
-SIM: planning/simlogs/m95_SIM_2026-08-12.md
-Plan home: planning/pending_items.md row M95.
 
 Usage:
     python3 036_elimination_entry_source_link.py [--db-path PATH] [--report-only]

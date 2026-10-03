@@ -72,7 +72,6 @@ reason the heal is. Read it back with
 
     get-audit-log --audit-action "migration:032_heal_party_level_ple"
 
-Convention + gate: planning/simlogs/m102_SIM_2026-08-12.md.
 """
 import argparse
 import importlib.util
@@ -90,6 +89,7 @@ if importlib.util.find_spec("erpclaw_lib") is None:  # pragma: no cover - env-de
         os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
 
 from erpclaw_lib.audit import migration_action, migration_audit_statement  # noqa: E402
+from erpclaw_lib.payment_clearing import is_customer_refund  # noqa: E402
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "data.sqlite")
 
@@ -179,6 +179,11 @@ def _plan(cur, ph):
         if not (party_type and party_id):
             skips.append({"payment_entry_id": pe_id,
                           "reason": "payment carries no party (internal transfer)"})
+            continue
+        if is_customer_refund(payment_type, party_type):
+            skips.append({
+                "payment_entry_id": pe_id,
+                "reason": "customer refund: compensation is sign-aware at runtime"})
             continue
 
         allocated = _sum(cur, ph, _SELECT_LIVE_ALLOC, (pe_id,))

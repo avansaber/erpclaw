@@ -1,8 +1,5 @@
 """Part A — migration 035: register `disposal_gain_loss` and retype what is one (M94).
 
-Plan home: `planning/pending_items.md` row M94. SIM:
-`planning/simlogs/m94_SIM_2026-08-12.md` §4, which states the matching rule and
-every failure mode this file pins.
 
 The migration's whole risk is that it changes the meaning of accounts on someone
 else's live books, so the pins are weighted toward what it must NOT do:
@@ -707,7 +704,7 @@ def test_the_retype_is_reversible_through_update_account(conn, db_path):
 # The reversal above is the reason this section exists. It needs the account id
 # and the type that account carried BEFORE the run, and until M102 the only
 # places those two facts lived were `account.updated_at` (which says when, not
-# what) and a line printed to a terminal. SIM: planning/simlogs/m102_SIM_2026-08-12.md.
+# what) and a line printed to a terminal.
 
 def _trail(conn):
     """Every audit_log row this migration wrote, oldest first."""

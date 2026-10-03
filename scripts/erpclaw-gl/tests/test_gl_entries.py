@@ -193,7 +193,7 @@ class TestPostGLEntries:
 
 class TestReverseGLEntries:
     def test_basic_reversal(self, conn, gl_setup):
-        """Reverse creates mirror entries with swapped debit/credit."""
+        """Cancelled voucher nets to zero under the house is_cancelled=0 filter; mirrors swap debit/credit."""
         entries = _entries(gl_setup,
             ("cash", "1000.00", "0"),
             ("revenue", "0", "1000.00"),
@@ -212,10 +212,35 @@ class TestReverseGLEntries:
         assert is_ok(result)
         assert result["reversed_count"] == 2
 
-        cancelled = conn.execute(
-            "SELECT COUNT(*) as cnt FROM gl_entry WHERE voucher_id='JE-REV' AND is_cancelled=1"
+        rows = conn.execute(
+            "SELECT * FROM gl_entry WHERE voucher_id='JE-REV'"
+        ).fetchall()
+        assert len(rows) == 4
+        assert all(r["is_cancelled"] == 1 for r in rows)
+        originals = [r for r in rows if not (r["remarks"] or "").startswith("Reversal of ")]
+        mirrors = [r for r in rows if (r["remarks"] or "").startswith("Reversal of ")]
+        assert len(originals) == 2
+        assert len(mirrors) == 2
+        cash_orig = [r for r in originals if r["account_id"] == gl_setup["cash"]][0]
+        assert Decimal(cash_orig["debit"]) == Decimal("1000.00")
+        assert Decimal(cash_orig["credit"]) == Decimal("0")
+        revenue_orig = [r for r in originals if r["account_id"] == gl_setup["revenue"]][0]
+        assert Decimal(revenue_orig["debit"]) == Decimal("0")
+        assert Decimal(revenue_orig["credit"]) == Decimal("1000.00")
+        for mirror in mirrors:
+            orig = [o for o in originals if o["account_id"] == mirror["account_id"]][0]
+            assert Decimal(mirror["debit"]) == Decimal(orig["credit"])
+            assert Decimal(mirror["credit"]) == Decimal(orig["debit"])
+        cash_mirror = [r for r in mirrors if r["account_id"] == gl_setup["cash"]][0]
+        assert Decimal(cash_mirror["debit"]) == Decimal("0")
+        assert Decimal(cash_mirror["credit"]) == Decimal("1000.00")
+        revenue_mirror = [r for r in mirrors if r["account_id"] == gl_setup["revenue"]][0]
+        assert Decimal(revenue_mirror["debit"]) == Decimal("1000.00")
+        assert Decimal(revenue_mirror["credit"]) == Decimal("0")
+        visible = conn.execute(
+            "SELECT COUNT(*) as cnt FROM gl_entry WHERE voucher_id='JE-REV' AND is_cancelled=0"
         ).fetchone()["cnt"]
-        assert cancelled == 2
+        assert visible == 0
 
     def test_reversal_creates_mirror(self, conn, gl_setup):
         """Reversal entries should have opposite debit/credit."""

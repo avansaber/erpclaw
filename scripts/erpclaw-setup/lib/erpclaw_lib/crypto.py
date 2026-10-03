@@ -43,7 +43,7 @@ from cryptography.hazmat.primitives import hashes
 # Pre-master-key-load environment sanity check (M36 R-b, #7071-class)
 # ---------------------------------------------------------------------------
 #
-# The S0c probe (planning/HERMES_S0_PROBE_RESULTS_2026-06-14.md) established
+# A runtime probe established
 # that skill subprocesses inherit the parent interpreter environment by
 # standard subprocess inheritance on every runtime (OpenClaw, Hermes venv —
 # no docker shim in the loop). A #7071-class attack therefore does not need

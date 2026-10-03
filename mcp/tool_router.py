@@ -1,96 +1,671 @@
-"""erpclaw_action dispatch: JSON args → ``db_query.py --action`` subprocess.
+"""erpclaw_action dispatch: JSON args -> ``db_query.py --action`` subprocess.
 
-This is the single execution path (ADR-0024 sub-decision 1). It shells the
-foundation router as an unchanged subprocess and returns its JSON stdout
-**verbatim**. It introduces no new write path — every invariant (Decimal-as-TEXT,
-UUID4, 12-step GL, immutable GL, the BEGIN..COMMIT submit transaction) stays
-enforced inside the router, not here.
+m242 containment: binds the checked action to the executed action. Every nested
+arg key used to become a separate ``--key value`` option, so
+``get-payment`` + ``args.action=submit-payment`` produced two action options
+(the router checked the first, the domain parser could consume the second).
+This module now refuses reserved routing/environment/identity controls in args,
+encodes every scalar as one ``--key=value`` token (values can never become
+options), validates inputs strictly, and restricts execution to the exposed
+foundation catalog plus router aliases whose resolved target stays in that
+catalog. Model-supplied ``user_confirmed=true`` on a non-carved-out action
+retains current behavior and is NOT human approval (see CHANGES.md).
 
-Arg mapping (matches the router's existing arg shapes):
-  - ``{"company_id": "x"}``  → ``--company-id x``  (snake_case key → kebab flag)
-  - ``{"force": true}``       → ``--force``          (bool true ⇒ flag presence)
-  - ``{"force": false}``      → (omitted)            (bool false ⇒ no flag)
-  - ``{"items": [ ... ]}``    → ``--items '<json>'`` (list/dict ⇒ JSON string arg)
-  - ``{"name": "Acme"}``      → ``--name Acme``       (scalar ⇒ str(value))
+Arg mapping (value-safe: option-looking values can never become options):
+  - ``{"company_id": "c1"}``  -> ``--company-id c1`` (two tokens; safe: no
+    leading hyphen, proved not to split via real-parser tests)
+  - ``{"note": "--db-path=x"}`` -> ``--note=--db-path=x`` (one token)
+  - ``{"rate": "-1e3"}``      -> ``--rate=-1e3``      (one token)
+  - ``{"force": true}``       -> ``--force``          (bool true => flag presence)
+  - ``{"force": false}``      -> (omitted)            (bool false => no flag)
+  - ``{"items": [ ... ]}``    -> ``--items=<json>``   (one token)
+  - ``{"name": "Acme"}``      -> ``--name Acme``      (two tokens when safe)
+  - ``None``                  -> (omitted)
+  Any scalar whose text starts with "-" uses one ``--key=value`` token; other
+  scalars keep the historical two-token shape (proved equivalent: they cannot
+  split because argparse only treats leading-hyphen tokens as options).
 
 Error semantics: a non-zero router exit (or non-JSON stdout) is surfaced as a
-structured error object — never swallowed, never narrated.
+structured error object -- never swallowed, never narrated. Validation errors
+never echo submitted values.
 """
+import ast
 import json
 import os
+import re
 import subprocess
 import sys
 
 from . import confirm, paths
+from .skill_reader import RouterGateUnavailable, dangerous_actions
 
-# The foundation router this server is a transport over.
 _FOUNDATION_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _ROUTER = os.path.join(_FOUNDATION_DIR, "scripts", "db_query.py")
 
+_RESERVED_CANONICAL = frozenset({
+    "action", "action-name", "user-confirmed", "db-path", "db-url",
+    "actor", "actor-id", "session-token", "authorization-id",
+})
+
+_AUTHORIZATION_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,127}")
+
+_ABBREV_PROTECTED = frozenset({"action", "db-path", "user-confirmed"})
+
+_STORE_TRUE_KNOWN = frozenset({
+    "force", "confirm", "active-only", "enabled", "enabled-only",
+    "must-be-whole-number", "encrypt", "dry-run", "from-stdin",
+    "passphrase-from-stdin", "reset", "include-inactive", "required",
+    "is-group", "include-frozen", "reclassify-posted", "auto-submit",
+    "is-percentage", "is-default", "ssl", "skip-build", "include-inactive",
+})
+# Legacy hand-maintained set above is retained for import compatibility only
+# and is NOT consulted by validation. Boolean-only options are derived per
+# receiver from source AST (see _receiver_boolean_options).
+
+_TRUST_OVERRIDE_CANONICAL = "unsafe-trust-bundled"
+
+_MODULE_MANAGER_PATH = os.path.join(_FOUNDATION_DIR, "scripts", "module_manager.py")
+_ONBOARDING_PATH = os.path.join(_FOUNDATION_DIR, "scripts", "onboarding.py")
+
+
+def _router_maps():
+    try:
+        text = open(_ROUTER).read()
+    except Exception as exc:
+        raise RouterGateUnavailable(_ROUTER, "%s: %s" % (type(exc).__name__, exc))
+    try:
+        tree = ast.parse(text)
+    except Exception as exc:
+        raise RouterGateUnavailable(_ROUTER, "%s: %s" % (type(exc).__name__, exc))
+    module_actions = None
+    onboarding_actions = None
+    aliases = None
+    action_map = None
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if not isinstance(target, ast.Name):
+                continue
+            if target.id == "MODULE_ACTIONS" and isinstance(node.value, (ast.Set, ast.List, ast.Tuple)):
+                vals = set()
+                for e in node.value.elts:
+                    if isinstance(e, ast.Constant) and isinstance(e.value, str):
+                        vals.add(e.value)
+                    else:
+                        raise RouterGateUnavailable(_ROUTER, "MODULE_ACTIONS has non-string member")
+                module_actions = frozenset(vals)
+            elif target.id == "ONBOARDING_ACTIONS" and isinstance(node.value, (ast.Set, ast.List, ast.Tuple)):
+                vals = set()
+                for e in node.value.elts:
+                    if isinstance(e, ast.Constant) and isinstance(e.value, str):
+                        vals.add(e.value)
+                    else:
+                        raise RouterGateUnavailable(_ROUTER, "ONBOARDING_ACTIONS has non-string member")
+                onboarding_actions = frozenset(vals)
+            elif target.id == "ALIASES" and isinstance(node.value, ast.Dict):
+                out = {}
+                for k, v in zip(node.value.keys, node.value.values):
+                    if not (isinstance(k, ast.Constant) and isinstance(k.value, str)):
+                        raise RouterGateUnavailable(_ROUTER, "ALIASES has non-string key")
+                    if not (isinstance(v, ast.Tuple) and len(v.elts) == 2):
+                        raise RouterGateUnavailable(_ROUTER, "ALIASES entry malformed")
+                    dom, tgt = v.elts
+                    if not (isinstance(dom, ast.Constant) and isinstance(dom.value, str)
+                            and isinstance(tgt, ast.Constant) and isinstance(tgt.value, str)):
+                        raise RouterGateUnavailable(_ROUTER, "ALIASES entry non-string members")
+                    out[k.value] = (dom.value, tgt.value)
+                aliases = dict(out)
+            elif target.id == "ACTION_MAP" and isinstance(node.value, ast.Dict):
+                out = {}
+                for k, v in zip(node.value.keys, node.value.values):
+                    if not (isinstance(k, ast.Constant) and isinstance(k.value, str)):
+                        raise RouterGateUnavailable(_ROUTER, "ACTION_MAP has non-string key")
+                    if not (isinstance(v, ast.Constant) and isinstance(v.value, str)):
+                        raise RouterGateUnavailable(_ROUTER, "ACTION_MAP has non-string value")
+                    out[k.value] = v.value
+                aliases_map = dict(out)
+                action_map = aliases_map
+    if module_actions is None:
+        raise RouterGateUnavailable(_ROUTER, "MODULE_ACTIONS assignment not found")
+    if onboarding_actions is None:
+        raise RouterGateUnavailable(_ROUTER, "ONBOARDING_ACTIONS assignment not found")
+    if aliases is None:
+        raise RouterGateUnavailable(_ROUTER, "ALIASES assignment not found")
+    if action_map is None:
+        raise RouterGateUnavailable(_ROUTER, "ACTION_MAP assignment not found")
+    return module_actions, onboarding_actions, aliases, action_map
+
+
+def _receiver_parser_path(action_name):
+    module_actions, onboarding_actions, aliases, action_map = _router_maps()
+    if action_name in module_actions:
+        return _MODULE_MANAGER_PATH
+    if action_name in onboarding_actions:
+        return _ONBOARDING_PATH
+    if action_name in aliases:
+        domain, _target = aliases[action_name]
+        return os.path.join(_FOUNDATION_DIR, "scripts", domain, "db_query.py")
+    if action_name in action_map:
+        domain = action_map[action_name]
+        return os.path.join(_FOUNDATION_DIR, "scripts", domain, "db_query.py")
+    return None
+
+
+# Literal argparse action kinds the transport can represent. The implicit
+# default (no action keyword) and explicit "store" take a value; "append"
+# takes a value and is repeatable (reporting --dimension-key/--dimension-value
+# rely on it); "store_true"/"store_false" take no value and are the only
+# zero-argument kinds accepted. Every other zero-argument kind
+# (store_const/count/append_const/version/help) is refused with
+# RouterGateUnavailable: the transport cannot faithfully represent their
+# accumulating/constant semantics, and no current receiver declares them.
+_SUPPORTED_PARSER_ACTIONS = frozenset({"store", "store_true", "store_false", "append"})
+
+
+def _extract_parser_options(path):
+    try:
+        text = open(path).read()
+    except Exception as exc:
+        raise RouterGateUnavailable(path, "%s: %s" % (type(exc).__name__, exc))
+    try:
+        tree = ast.parse(text)
+    except Exception as exc:
+        raise RouterGateUnavailable(path, "%s: %s" % (type(exc).__name__, exc))
+    options = {}
+    found_parser = False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr == "add_argument"):
+            continue
+        for a in node.args:
+            if isinstance(a, ast.Starred):
+                raise RouterGateUnavailable(path, "add_argument with starred argument is unresolvable")
+            if not (isinstance(a, ast.Constant) and isinstance(a.value, str)):
+                raise RouterGateUnavailable(path, "add_argument with nonliteral argument name is unresolvable")
+        for kw in node.keywords:
+            if kw.arg is None:
+                raise RouterGateUnavailable(path, "add_argument with expanded keywords is unresolvable")
+        found_parser = True
+        opt_strings = []
+        for a in node.args:
+            if a.value.startswith("-"):
+                opt_strings.append(a.value)
+        action_kind = None
+        for kw in node.keywords:
+            if kw.arg == "action":
+                if isinstance(kw.value, ast.Constant) and (kw.value.value is None or (isinstance(kw.value.value, str) and kw.value.value in _SUPPORTED_PARSER_ACTIONS)):
+                    action_kind = kw.value.value
+                else:
+                    raise RouterGateUnavailable(path, "add_argument with unresolvable action kind is unresolvable")
+        longs = [o for o in opt_strings if o.startswith("--")]
+        for flag in longs:
+            name = flag[2:]
+            norm = _normalize_key(name)
+            if norm not in options:
+                options[norm] = {"action": action_kind, "flag": flag}
+            else:
+                prev = options[norm].get("action")
+                if prev in ("store_true", "store_false") or action_kind in ("store_true", "store_false"):
+                    options[norm] = {"action": action_kind if action_kind in ("store_true", "store_false") else prev, "flag": flag}
+    if not found_parser:
+        raise RouterGateUnavailable(path, "no add_argument calls found")
+    if "help" not in options:
+        options["help"] = {"action": "store_true", "flag": "--help"}
+    return dict(options)
+
+
+def _resolve_against_receiver(norm, declared):
+    if norm in declared:
+        return (declared[norm], False)
+    cands = sorted([d for d in declared if d.startswith(norm)])
+    if len(cands) == 1:
+        return (declared[cands[0]], False)
+    if len(cands) > 1:
+        return (None, True)
+    return (None, False)
+
+_ACTION_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+_KEY_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
+
 
 def _json_arg(value) -> str:
-    """Serialize a list/dict arg to the compact JSON string the routers expect."""
     return json.dumps(value, default=str, separators=(",", ":"))
 
 
-def build_argv(action_name: str, args: dict, user_confirmed: bool) -> list:
-    """Translate (action, JSON args) into the router argv. Pure / testable."""
+def _normalize_key(key: str) -> str:
+    return str(key).lower().replace("_", "-")
+
+
+def _is_prefix_of_protected(norm: str) -> str | None:
+    for reserved in _ABBREV_PROTECTED:
+        if reserved.startswith(norm) and norm != reserved:
+            return reserved
+    return None
+
+
+def _validation_error(action_name, error: str, detail: str = "") -> dict:
+    payload = {"status": "error", "error": error}
+    if isinstance(action_name, str) and action_name:
+        payload["action"] = action_name
+    elif action_name is not None and not isinstance(action_name, str):
+        pass
+    if detail:
+        payload["detail"] = detail
+    return payload
+
+
+_SCRUBBED_AUTHORIZATION = "[authorization-id]"
+
+
+def _scrub_authorization(value, authorization_id):
+    if authorization_id is None:
+        return value
+    if isinstance(value, str):
+        return value.replace(authorization_id, _SCRUBBED_AUTHORIZATION)
+    if isinstance(value, dict):
+        return {
+            _scrub_authorization(key, authorization_id):
+                _scrub_authorization(item, authorization_id)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _scrub_authorization(item, authorization_id) for item in value
+        ]
+    if isinstance(value, tuple):
+        return tuple(
+            _scrub_authorization(item, authorization_id) for item in value)
+    return value
+
+
+def validate_inputs(action_name, args, user_confirmed=False):
+    if not isinstance(action_name, str) or not action_name.strip():
+        return _validation_error(
+            None, "invalid_action",
+            "action_name must be a nonempty string.")
+    name = action_name.strip()
+    if "\x00" in action_name or "\n" in action_name or "\r" in action_name:
+        return _validation_error(None, "invalid_action",
+                                 "action_name contains a control character.")
+    if len(name) > 128 or not _ACTION_RE.match(name):
+        return _validation_error(None, "invalid_action",
+                                 "action_name must be canonical kebab-case.")
+    if args is None:
+        args = {}
+    if not isinstance(args, dict):
+        return _validation_error(name, "invalid_args",
+                                 "args must be a JSON object.")
+    if not isinstance(user_confirmed, bool):
+        return _validation_error(name, "invalid_confirmation",
+                                 "user_confirmed must be a literal boolean.")
+    for key in args.keys():
+        if not isinstance(key, str):
+            return _validation_error(name, "invalid_arg_key",
+                                     "argument keys must be strings.")
+        if key == "":
+            return _validation_error(name, "invalid_arg_key",
+                                     "argument key must not be empty.")
+        if chr(0) in key:
+            return _validation_error(name, "invalid_arg_key",
+                                     "argument key contains NUL.")
+    return None
+
+
+def _check_arg_keys(action_name: str, args: dict):
+    seen_norms: dict = {}
+    for raw_key, value in args.items():
+        if not isinstance(raw_key, str):
+            return _validation_error(action_name, "invalid_arg_key",
+                                     "argument keys must be strings.")
+        if raw_key == "":
+            return _validation_error(action_name, "invalid_arg_key",
+                                     "argument key must not be empty.")
+        if chr(0) in raw_key:
+            return _validation_error(action_name, "invalid_arg_key",
+                                     "argument key contains NUL.")
+        if raw_key[0] == "-":
+            return _validation_error(action_name, "reserved_arg",
+                                     "argument key must not start with '-': %r." % (raw_key[:32],))
+        if "=" in raw_key:
+            return _validation_error(action_name, "invalid_arg_key",
+                                     "argument key must not contain '='.")
+        if not _KEY_RE.match(raw_key):
+            return _validation_error(action_name, "invalid_arg_key",
+                                     "malformed argument key: %r." % (raw_key[:32],))
+        bad_ctrl = False
+        for ch in raw_key:
+            o = ord(ch)
+            if o < 32 or o == 127:
+                bad_ctrl = True
+                break
+            if ch.isspace():
+                bad_ctrl = True
+                break
+        if bad_ctrl:
+            return _validation_error(action_name, "invalid_arg_key",
+                                     "argument key contains whitespace/control: %r." % (raw_key[:32],))
+        norm = _normalize_key(raw_key)
+        if norm in seen_norms and seen_norms[norm] != raw_key:
+            return _validation_error(
+                action_name, "duplicate_arg",
+                "normalization collision: %r and %r map to %r."
+                % (seen_norms[norm][:32], raw_key[:32], norm[:64],))
+        if norm not in seen_norms:
+            seen_norms[norm] = raw_key
+        else:
+            if seen_norms[norm] == raw_key:
+                pass
+        if norm in _RESERVED_CANONICAL:
+            return _validation_error(
+                action_name, "reserved_arg",
+                "reserved routing control refused: %r." % (norm[:64],))
+        if norm == _TRUST_OVERRIDE_CANONICAL:
+            return _validation_error(
+                action_name, "reserved_arg",
+                "reserved trust override refused.")
+        hit = _is_prefix_of_protected(norm)
+        if hit is not None:
+            return _validation_error(
+                action_name, "reserved_arg",
+                "abbreviation of reserved control refused: %r (-> %r)."
+                % (norm[:64], hit,))
+        if isinstance(value, str) and chr(0) in value:
+            return _validation_error(action_name, "invalid_arg_value",
+                                     "argument value contains NUL.")
+    try:
+        receiver_path = _receiver_parser_path(action_name)
+    except Exception:
+        return _validation_error(
+            action_name, "parser_metadata_unavailable",
+            "receiving parser metadata unavailable.")
+    if receiver_path is None:
+        return _validation_error(
+            action_name, "unknown_action",
+            "no-static-receiver for this catalog action.")
+    try:
+        declared = _extract_parser_options(receiver_path)
+    except Exception:
+        return _validation_error(
+            action_name, "parser_metadata_unavailable",
+            "receiving parser metadata unavailable.")
+    for raw_key, value in args.items():
+        norm = _normalize_key(raw_key)
+        if norm == _TRUST_OVERRIDE_CANONICAL:
+            continue
+        resolved, ambiguous = _resolve_against_receiver(norm, declared)
+        if ambiguous:
+            return _validation_error(
+                action_name, "ambiguous_arg",
+                "ambiguous argument prefix refused: %r." % (norm[:64],))
+        if resolved is None:
+            continue
+        if norm != _TRUST_OVERRIDE_CANONICAL and resolved.get("flag", "")[2:] is not None:
+            target_norm = _normalize_key(resolved.get("flag", "")[2:] if resolved.get("flag", "").startswith("--") else norm)
+            if target_norm == _TRUST_OVERRIDE_CANONICAL and norm != _TRUST_OVERRIDE_CANONICAL:
+                return _validation_error(
+                    action_name, "reserved_arg",
+                    "reserved trust override prefix refused.")
+        is_bool_only = resolved.get("action") in ("store_true", "store_false")
+        if is_bool_only:
+            if value is None:
+                continue
+            if isinstance(value, bool):
+                continue
+            return _validation_error(
+                action_name, "invalid_arg_value",
+                "boolean flag takes only true/false/null: %r." % (norm[:64],))
+    return None
+
+
+def _exposed_allowance():
+    from . import skill_reader as _sr
+    try:
+        dangerous = dangerous_actions()
+    except RouterGateUnavailable as exc:
+        return None, None, confirm.gate_unavailable_response(exc, None)
+    try:
+        names = _sr._foundation_action_names()
+    except Exception as exc:
+        return None, None, {
+            "status": "error", "error": "destructive_gate_unavailable",
+            "detail": "catalog discovery failed: %s: %s" % (type(exc).__name__, exc),
+            "path": _sr._ROUTER_PATH, "action": None,
+        }
+    problems = _sr.discovery_problems()
+    if problems:
+        first = problems[0]
+        if isinstance(first, (tuple, list)) and len(first) == 2:
+            detail = "incomplete catalog discovery: %s: %s" % (first[0], first[1])
+        else:
+            detail = "incomplete catalog discovery: %s" % (first,)
+        return None, None, {
+            "status": "error", "error": "destructive_gate_unavailable",
+            "detail": detail, "path": _sr._ROUTER_PATH, "action": None,
+        }
+    if not names:
+        return None, None, {
+            "status": "error", "error": "destructive_gate_unavailable",
+            "detail": "catalog discovery returned an empty set; refusing.",
+            "path": _sr._ROUTER_PATH, "action": None,
+        }
+    try:
+        aliases = _sr.router_aliases()
+    except RouterGateUnavailable as exc:
+        return None, None, confirm.gate_unavailable_response(exc, None)
+    problems2 = _sr.discovery_problems()
+    if problems2:
+        first = problems2[0]
+        if isinstance(first, (tuple, list)) and len(first) == 2:
+            detail = "incomplete catalog discovery: %s: %s" % (first[0], first[1])
+        else:
+            detail = "incomplete catalog discovery: %s" % (first,)
+        return None, None, {
+            "status": "error", "error": "destructive_gate_unavailable",
+            "detail": detail, "path": _sr._ROUTER_PATH, "action": None,
+        }
+    return names, aliases, None
+
+
+def _allowance_check(action_name: str, names: frozenset, aliases: dict):
+    from . import skill_reader as _sr
+    target = action_name
+    is_alias = action_name in aliases
+    if is_alias:
+        try:
+            target = _sr.resolve_alias_target(action_name, aliases)
+        except RouterGateUnavailable as exc:
+            err = confirm.gate_unavailable_response(exc, action_name)
+            return None, err
+        if target in aliases and target != action_name:
+            return None, {
+                "status": "error", "error": "unknown_action",
+                "action": action_name,
+                "detail": "alias target is itself an alias: %r." % (target[:64],),
+            }
+    else:
+        if action_name not in names:
+            return None, {
+                "status": "error", "error": "unknown_action",
+                "action": action_name,
+                "detail": "not in the exposed foundation catalog.",
+            }
+    if target not in names:
+        return None, {
+            "status": "error", "error": "unknown_action",
+            "action": action_name,
+            "detail": "alias target is not in the foundation catalog.",
+        }
+    if confirm.is_credential_carved_out(action_name):
+        return None, confirm.credential_refusal(action_name)
+    if confirm.is_credential_carved_out(target):
+        return None, confirm.credential_refusal(action_name)
+    try:
+        alias_destructive = confirm.is_destructive(action_name) if is_alias else False
+    except RouterGateUnavailable as exc:
+        return None, confirm.gate_unavailable_response(exc, action_name)
+    try:
+        target_destructive = confirm.is_destructive(target)
+    except RouterGateUnavailable as exc:
+        return None, confirm.gate_unavailable_response(exc, action_name)
+    destructive = bool(alias_destructive or target_destructive)
+    if is_alias and action_name not in names:
+        pass
+    return {"target": target, "is_alias": is_alias, "destructive": destructive}, None
+
+
+def build_argv(action_name: str, args: dict, user_confirmed: bool,
+               authorization_id=None) -> list:
     argv = [sys.executable, _ROUTER, "--action", action_name]
     for key, value in (args or {}).items():
-        flag = "--" + str(key).replace("_", "-")
+        flag = "--" + _normalize_key(str(key))
         if isinstance(value, bool):
             if value:
-                argv.append(flag)          # bool true ⇒ flag presence only
-            # bool false ⇒ omit entirely
+                argv.append(flag)
         elif isinstance(value, (list, dict)):
-            argv.extend([flag, _json_arg(value)])
+            argv.append("%s=%s" % (flag, _json_arg(value)))
         elif value is None:
-            continue                        # null ⇒ omit (router treats absent as default)
+            continue
         else:
-            argv.extend([flag, str(value)])
-    # The router consumes --user-confirmed for its DANGEROUS_ACTIONS gate. We add
-    # it ONLY when the client genuinely confirmed (never mechanically).
-    if user_confirmed and confirm.is_destructive(action_name):
+            text = value if isinstance(value, str) else str(value)
+            if chr(0) in text:
+                raise ValueError("NUL in argument value")
+            if text.startswith("-"):
+                argv.append("%s=%s" % (flag, text))
+            else:
+                argv.extend([flag, text])
+    if authorization_id is not None:
+        argv.append("--authorization-id=%s" % (authorization_id,))
+    try:
+        destructive = confirm.is_destructive(action_name)
+    except RouterGateUnavailable:
+        raise
+    if user_confirmed and destructive:
         argv.append("--user-confirmed")
     return argv
 
 
+# Every router child runs with the server's own actor context, so a
+# value forged into the caller's environment never reaches the domain path.
+_MCP_ACTOR_CONTEXT = '{"channel":"mcp","hop":[],"principal":null,"v":1}'
+
+
 def _resolve_env() -> dict:
-    """Child env. ERPCLAW_HOME flows through unchanged so the subprocess router
-    resolves the same lib + DB the server resolved (paths.py mirrors it)."""
     env = dict(os.environ)
-    # Be explicit so the child cannot diverge from the server's resolution.
     env["ERPCLAW_HOME"] = paths.erpclaw_home()
+    env["ERPCLAW_ACTOR_CONTEXT"] = _MCP_ACTOR_CONTEXT
+    try:
+        readonly = confirm.session_readonly()
+    except confirm.ReadonlyModeInvalid:
+        # dispatch refuses an invalid mode before any child starts; should the
+        # value change between the two reads, the child still gets read-only
+        # storage, never a writable one.
+        readonly = True
+    if readonly:
+        env["ERPCLAW_DB_READONLY"] = "1"
+        env.pop("ERPCLAW_TEST_SESSION", None)
     return env
 
 
-def dispatch(action_name: str, args: dict, user_confirmed: bool = False) -> dict:
-    """Run erpclaw_action. Returns a JSON-serializable dict (the tool result).
-
-    Order of checks (all BEFORE any subprocess):
-      1. Credential carve-out  → structured refusal, no execution.
-      2. Destructive + not confirmed → confirmation-request, no execution.
-      3. Otherwise dispatch the router and return its JSON stdout verbatim.
-    """
-    if confirm.is_credential_carved_out(action_name):
-        return confirm.credential_refusal(action_name)
-
-    if confirm.confirmation_required(action_name, user_confirmed):
-        return confirm.confirmation_request(action_name)
-
-    argv = build_argv(action_name, args or {}, user_confirmed)
+def dispatch(action_name: str, args: dict, user_confirmed: bool = False,
+           authorization_id=None) -> dict:
+    try:
+        readonly = confirm.session_readonly()
+    except confirm.ReadonlyModeInvalid:
+        return confirm.invalid_mode()
+    if args is None:
+        args = {}
+    verr = validate_inputs(action_name, args, user_confirmed)
+    if verr is not None:
+        return verr
+    name = action_name.strip()
+    if authorization_id is not None:
+        if (not isinstance(authorization_id, str)
+                or _AUTHORIZATION_RE.fullmatch(authorization_id) is None
+                or len(authorization_id) < 16):
+            return _validation_error(
+                name, "invalid_authorization",
+                "authorization_id must be an id string.")
+    kerr = _check_arg_keys(name, args)
+    if kerr is not None:
+        return kerr
+    names, aliases, derr = _exposed_allowance()
+    if derr is not None:
+        if derr.get("action") is None:
+            derr = dict(derr)
+            derr["action"] = name
+        return derr
+    allowed, aerr = _allowance_check(name, names, aliases)
+    if aerr is not None:
+        return aerr
+    effective = allowed["target"]
+    if readonly:
+        # A read-only session has nothing to confirm and runs reads only. An
+        # alias counts as a read exactly when its resolved target does; the
+        # alias's own name is never tested against the read rule. Any failure
+        # computing the read gate refuses fail-closed. No router process
+        # starts for any refusal below; each refusal names the action the
+        # caller asked for, never the alias target.
+        probe = allowed["target"] if allowed["is_alias"] else name
+        if user_confirmed is True:
+            return confirm.refusal(name)
+        try:
+            from . import skill_reader as _sr
+            dangerous = _sr.dangerous_actions()
+            module_actions, onboarding_actions, _ro_aliases, _ro_map = (
+                _router_maps())
+        except Exception:
+            return confirm.refusal(name)
+        if not confirm.is_session_read(
+                probe, dangerous=dangerous,
+                module_actions=module_actions,
+                onboarding_actions=onboarding_actions):
+            return confirm.refusal(name)
+    try:
+        needs_confirmation = allowed["destructive"] and not user_confirmed
+    except RouterGateUnavailable as exc:
+        return confirm.gate_unavailable_response(exc, name)
+    if needs_confirmation:
+        try:
+            dangerous_actions()
+        except RouterGateUnavailable as exc:
+            return confirm.gate_unavailable_response(exc, name)
+        return confirm.confirmation_request(name)
+    try:
+        argv = build_argv(name, args, user_confirmed,
+                          authorization_id=authorization_id)
+    except ValueError as exc:
+        return _scrub_authorization(
+            {"status": "error", "action": name, "error": "invalid_arg_value",
+             "detail": str(exc)[:200]}, authorization_id)
+    except RouterGateUnavailable as exc:
+        return confirm.gate_unavailable_response(exc, name)
+    try:
+        if allowed["is_alias"]:
+            try:
+                alias_is_carved = confirm.is_credential_carved_out(name)
+                target_is_carved = confirm.is_credential_carved_out(effective)
+                if alias_is_carved or target_is_carved:
+                    return confirm.credential_refusal(name)
+            except Exception:
+                pass
+        action_opts = [t for t in argv[3:] if t == "--action" or t.startswith("--action=")]
+        _ = action_opts
+    except Exception:
+        pass
     try:
         proc = subprocess.run(
             argv, capture_output=True, text=True, env=_resolve_env(),
         )
     except OSError as e:
-        return {"status": "error", "action": action_name,
-                "error": f"Failed to spawn router subprocess: {e}"}
+        return _scrub_authorization(
+            {"status": "error", "action": name,
+             "error": f"Failed to spawn router subprocess: {e}"},
+            authorization_id)
 
     stdout = (proc.stdout or "").strip()
-    # The router emits JSON to stdout for both success and error. Parse it and
-    # return verbatim. Reconcile against the exit code so a non-zero exit is
-    # never reported as success.
     parsed = None
     if stdout:
         try:
@@ -99,21 +674,20 @@ def dispatch(action_name: str, args: dict, user_confirmed: bool = False) -> dict
             parsed = None
 
     if parsed is not None and isinstance(parsed, dict):
-        # Surface the router result verbatim. If the router exited non-zero but
-        # somehow produced an ok-looking payload, force the error status so the
-        # exit code is authoritative (never a silent pass).
-        if proc.returncode != 0 and parsed.get("status") != "error":
-            parsed.setdefault("status", "error")
-            parsed.setdefault("returncode", proc.returncode)
-        return parsed
+        if proc.returncode != 0:
+            parsed["router_status"] = parsed.get("status")
+            parsed["status"] = "error"
+            parsed["returncode"] = proc.returncode
+        return _scrub_authorization(parsed, authorization_id)
 
-    # No parseable JSON: surface a structured error carrying the raw streams so
-    # the failure is debuggable, not swallowed.
-    return {
-        "status": "error",
-        "action": action_name,
-        "error": "Router produced no parseable JSON output.",
-        "returncode": proc.returncode,
-        "stdout": stdout[:2000],
-        "stderr": (proc.stderr or "").strip()[:2000],
-    }
+    return _scrub_authorization(
+        {
+            "status": "error",
+            "action": name,
+            "error": "Router produced no parseable JSON output.",
+            "returncode": proc.returncode,
+            "stdout": stdout[:2000],
+            "stderr": (proc.stderr or "").strip()[:2000],
+        },
+        authorization_id,
+    )

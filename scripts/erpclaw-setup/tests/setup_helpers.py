@@ -55,7 +55,53 @@ if ERPCLAW_LIB not in sys.path:
     if importlib.util.find_spec("erpclaw_lib") is None:
         sys.path.insert(0, ERPCLAW_LIB)
 
-from erpclaw_lib.db import setup_pragmas
+from erpclaw_lib.db import setup_pragmas, get_connection
+from erpclaw_lib.query import Q, Table, Field, P
+from erpclaw_lib import seam
+
+
+def read_all(conn, table, columns):
+    """Read every row of `table` (subset `columns`) via a PyPika-built query.
+
+    Depth-test helper: verification reads go through the same seam stack as
+    production code (erpclaw_lib.query builders), never hand-written SQL, so a
+    passing assertion proves the stored row, not the response envelope.
+    """
+    t = Table(table)
+    q = Q.from_(t).select(*[Field(c) for c in columns])
+    return [dict(r) for r in conn.execute(q.get_sql()).fetchall()]
+
+
+def read_one(conn, table, columns, row_id):
+    """Read one row by primary key via a PyPika-built query; None when absent."""
+    t = Table(table)
+    q = Q.from_(t).select(*[Field(c) for c in columns]).where(t.id == P())
+    row = conn.execute(q.get_sql(), (row_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def open_reader(db_path):
+    """An independent read handle via the seam connection factory.
+
+    Reading back through a different connection than the one the action wrote
+    with proves the effect was committed, not just visible in one handle.
+    The caller must close it.
+    """
+    return get_connection(db_path)
+
+
+def freeze_snapshot(conn, db_path, tables):
+    """Deterministic dump of `tables` (columns discovered via the seam catalog).
+
+    Returns {table: sorted list of canonical JSON row strings}. Two snapshots
+    are equal exactly when the tables hold identical rows, so refusal tests can
+    prove the database is byte-identical afterwards.
+    """
+    snap = {}
+    for name in tables:
+        rows = read_all(conn, name, seam.column_names(name, db_path))
+        snap[name] = sorted(json.dumps(r, sort_keys=True, default=str) for r in rows)
+    return snap
 
 
 # ──────────────────────────────────────────────────────────────────────────────

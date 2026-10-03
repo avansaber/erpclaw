@@ -138,6 +138,19 @@ class TestRepackCostBalanceL0:
         total_dr = sum(Decimal(r["debit"]) for r in gl)
         total_cr = sum(Decimal(r["credit"]) for r in gl)
         assert total_dr == total_cr
+        legs = conn.execute(
+            "SELECT account_id, debit, credit FROM gl_entry WHERE voucher_id=? "
+            "AND voucher_type='stock_entry' AND is_cancelled=0",
+            (se["stock_entry_id"],)).fetchall()
+        leg_tuples = sorted((r["account_id"], r["debit"], r["credit"]) for r in legs)
+        assert leg_tuples == sorted([(env["stock_acct"], "0.00", "5000.00"),
+                                     (env["stock_acct"], "5000.00", "0.00")])
+        contra = conn.execute(
+            "SELECT COUNT(*) c FROM gl_entry g JOIN account a ON a.id=g.account_id "
+            "WHERE g.voucher_id=? AND g.voucher_type='stock_entry' "
+            "AND a.account_type IN ('cost_of_goods_sold', 'stock_received_not_billed')",
+            (se["stock_entry_id"],)).fetchone()["c"]
+        assert contra == 0
 
     def test_repack_imbalance_rolls_back(self, conn, env):
         """An unbalanced repack (input $5,000 vs output $4,000, beyond the $0.01

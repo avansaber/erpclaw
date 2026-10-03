@@ -11,6 +11,8 @@ period; the verifier accepts any currently-valid key.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import PurePosixPath
+import re
 from typing import Optional
 
 from cryptography.exceptions import InvalidSignature
@@ -23,7 +25,13 @@ __all__ = [
     "fingerprint",
     "REGISTRY_VERSION_FIELD",
     "SIGNED_AT_FIELD",
+    "RegistryManifestError",
+    "validate_registry_manifests",
 ]
+
+
+class RegistryManifestError(ValueError):
+    """A signed registry has an unsafe or unverifiable file manifest."""
 
 
 @dataclass(frozen=True)
@@ -54,6 +62,107 @@ TRUSTED_KEYS: tuple[TrustedKey, ...] = (
 
 REGISTRY_VERSION_FIELD = "registry_version"
 SIGNED_AT_FIELD = "signed_at"
+
+
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+_GITHUB_RE = re.compile(r"avansaber/[A-Za-z0-9._-]+")
+
+
+def validate_registry_manifests(registry: dict) -> None:
+    """Fail unless every module has a nonempty, safe SHA-256 manifest.
+
+    A valid signature authenticates bytes; it does not make their structure
+    safe to consume as filesystem paths. Mutation and release paths call this
+    immediately after signature verification and before using any repository
+    coordinate, path, or digest from the payload.
+    """
+    if not isinstance(registry, dict):
+        raise RegistryManifestError("registry root is not an object")
+
+    modules = registry.get("modules")
+    if isinstance(modules, dict):
+        entries = list(modules.items())
+    elif isinstance(modules, list):
+        entries = []
+        seen = set()
+        for index, info in enumerate(modules):
+            if not isinstance(info, dict):
+                raise RegistryManifestError(
+                    f"modules[{index}] is not an object"
+                )
+            name = info.get("name")
+            if not isinstance(name, str) or not name:
+                raise RegistryManifestError(
+                    f"modules[{index}] has no nonempty string name"
+                )
+            if name in seen:
+                raise RegistryManifestError(f"duplicate module name: {name}")
+            seen.add(name)
+            entries.append((name, info))
+    else:
+        raise RegistryManifestError("registry.modules is not an object or list")
+
+    if not entries:
+        raise RegistryManifestError("registry.modules is empty")
+
+    for name, info in entries:
+        if not isinstance(name, str) or not name:
+            raise RegistryManifestError("module name is not a nonempty string")
+        if not isinstance(info, dict):
+            raise RegistryManifestError(f"{name}: module entry is not an object")
+
+        github = info.get("github", info.get("github_repo"))
+        if not isinstance(github, str) or _GITHUB_RE.fullmatch(github) is None:
+            raise RegistryManifestError(
+                f"{name}: unsafe or unsupported github coordinate {github!r}"
+            )
+        subdir = info.get("subdir")
+        if subdir is not None:
+            if (
+                not isinstance(subdir, str)
+                or not subdir
+                or "\\" in subdir
+                or "\x00" in subdir
+            ):
+                raise RegistryManifestError(
+                    f"{name}: unsafe subdir coordinate {subdir!r}"
+                )
+            subdir_path = PurePosixPath(subdir)
+            if (
+                subdir_path.is_absolute()
+                or subdir_path.as_posix() != subdir
+                or any(part in ("", ".", "..") for part in subdir_path.parts)
+            ):
+                raise RegistryManifestError(
+                    f"{name}: subdir is not normalized and relative: {subdir!r}"
+                )
+
+        manifest = info.get("files_sha256")
+        if not isinstance(manifest, dict) or not manifest:
+            raise RegistryManifestError(
+                f"{name}: files_sha256 must be a nonempty object"
+            )
+
+        for rel, digest in manifest.items():
+            if not isinstance(rel, str) or not rel or "\x00" in rel or "\\" in rel:
+                raise RegistryManifestError(
+                    f"{name}: unsafe manifest path {rel!r}"
+                )
+            path = PurePosixPath(rel)
+            parts = path.parts
+            if (
+                path.is_absolute()
+                or path.as_posix() != rel
+                or any(part in ("", ".", "..") for part in parts)
+                or (parts and parts[0].endswith(":"))
+            ):
+                raise RegistryManifestError(
+                    f"{name}: manifest path is not normalized and relative: {rel!r}"
+                )
+            if not isinstance(digest, str) or _SHA256_RE.fullmatch(digest) is None:
+                raise RegistryManifestError(
+                    f"{name}: invalid SHA-256 digest for {rel!r}"
+                )
 
 
 def fingerprint(public_key_hex: str) -> str:

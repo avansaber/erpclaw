@@ -16,12 +16,13 @@ import json
 import re
 import uuid
 import sqlite3
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
 from erpclaw_lib.decimal_utils import to_decimal, amounts_equal, round_currency
 from erpclaw_lib.fx_posting import convert_to_base
-from erpclaw_lib.query import rowid_col
+from erpclaw_lib.query import Q, P, Table, rowid_col, update_row
 
 
 # --- Helper: fetch account row ---
@@ -99,6 +100,16 @@ def validate_gl_entries(
         if credit < 0:
             entries[i]["debit"] = str(round_currency(abs(credit) + to_decimal(entry.get("debit", "0"))))
             entries[i]["credit"] = "0"
+        # Cost-center dimension alias: a cost_center tag fills an empty
+        # cost_center_id so every tagged leg (balance-sheet legs included)
+        # posts to the tagged cost center. A supplied cost_center_id is left
+        # alone; a mismatch is refused by _validate_dimensions (step 13).
+        dims = entries[i].get("dimensions")
+        if isinstance(dims, dict):
+            tag = dims.get("cost_center")
+            if tag is not None and str(tag).strip() != "":
+                if entries[i].get("cost_center_id") in (None, ""):
+                    entries[i]["cost_center_id"] = tag
 
     # Step 1: Double-Entry Balance
     total_debit = sum(to_decimal(e.get("debit", "0")) for e in entries)
@@ -212,14 +223,14 @@ def validate_gl_entries(
 
     # Step 9: Fiscal Year Open
     fy = conn.execute(
-        "SELECT * FROM fiscal_year WHERE start_date <= ? AND end_date >= ? AND is_closed = 0",
-        (posting_date, posting_date),
+        "SELECT * FROM fiscal_year WHERE company_id = ? AND start_date <= ? AND end_date >= ? AND is_closed = 0",
+        (company_id, posting_date, posting_date),
     ).fetchone()
     if fy is None:
         # Check if fiscal year exists but is closed
         closed_fy = conn.execute(
-            "SELECT * FROM fiscal_year WHERE start_date <= ? AND end_date >= ?",
-            (posting_date, posting_date),
+            "SELECT * FROM fiscal_year WHERE company_id = ? AND start_date <= ? AND end_date >= ?",
+            (company_id, posting_date, posting_date),
         ).fetchone()
         if closed_fy:
             raise ValueError(
@@ -286,13 +297,9 @@ def validate_gl_entries(
             SELECT budget_amount, action_if_exceeded FROM budget
             WHERE account_id = ?
               AND cost_center_id = ?
-              AND fiscal_year_id = (
-                  SELECT id FROM fiscal_year
-                  WHERE start_date <= ? AND end_date >= ?
-                  LIMIT 1
-              )
+              AND fiscal_year_id = ?
             """,
-            (account_id, cc_id, posting_date, posting_date),
+            (account_id, cc_id, fy["id"]),
         ).fetchone()
 
         if budget:
@@ -304,10 +311,10 @@ def validate_gl_entries(
                 FROM gl_entry
                 WHERE account_id = ? AND cost_center_id = ?
                   AND is_cancelled = 0
-                  AND posting_date >= (SELECT start_date FROM fiscal_year WHERE start_date <= ? AND end_date >= ?)
+                  AND posting_date >= ?
                   AND posting_date <= ?
                 """,
-                (account_id, cc_id, posting_date, posting_date, posting_date),
+                (account_id, cc_id, fy["start_date"], posting_date),
             ).fetchone()
             spent = to_decimal(str(spent_row["total"])) if spent_row else Decimal("0")
             total = spent + debit
@@ -355,6 +362,25 @@ def _validate_dimensions(conn, entries, account_cache):
     no supplied uuid_fk values), so the cost of M6 is zero for callers that pass
     no dimensions.
     """
+    # Cost-center dimension alias: a leg cannot carry two cost centers. The
+    # pre-validation copy in validate_gl_entries fills an empty cost_center_id
+    # from the tag, so reaching here with both set and different means the
+    # caller supplied conflicting values; refuse before anything is written.
+    for entry in entries:
+        entry_dims = entry.get("dimensions") or {}
+        if not isinstance(entry_dims, dict):
+            continue
+        tag = entry_dims.get("cost_center")
+        cc_id = entry.get("cost_center_id")
+        tag_s = str(tag).strip() if tag is not None else ""
+        cc_s = str(cc_id).strip() if cc_id is not None else ""
+        if tag_s and cc_s and tag_s != cc_s:
+            raise ValueError(
+                f"GL Validation Step 13 Failed: leg carries two cost centers: "
+                f"cost_center_id '{cc_id}' and dimensions cost_center '{tag}' "
+                f"-- a leg cannot carry two cost centers"
+            )
+
     reg_rows = conn.execute(
         "SELECT key, data_type, referenced_table, is_required_on_account_types_json "
         "FROM dimension_registry WHERE is_active = 1"
@@ -416,6 +442,55 @@ def _validate_dimensions(conn, entries, account_cache):
                         f"GL Validation Step 13 Failed: dimension '{key}' references "
                         f"{ref_table} id '{val}' which does not exist"
                     )
+
+
+# --- Chain-head take ---
+
+def _take_chain_head(conn: sqlite3.Connection, company_id: str) -> None:
+    """Take one company's chain head with the create-or-lock upsert.
+
+    Reads whether the company's head exists (PyPika), computes the legacy
+    seed from the predecessor query only when it does not, then runs the
+    upsert. Returns nothing; the caller re-reads the head after it.
+    """
+    _exists_table = Table("gl_chain_head")
+    _exists_query = (Q.from_(_exists_table)
+                     .select(_exists_table.company_id)
+                     .where(_exists_table.company_id == P()))
+    _exists = conn.execute(_exists_query.get_sql(), (company_id,)).fetchone()
+    if _exists is None:
+        prev_hash_row = conn.execute(
+            f"""SELECT gl_checksum FROM gl_entry ge
+           JOIN account a ON ge.account_id = a.id
+           WHERE a.company_id = ? AND ge.gl_checksum IS NOT NULL
+           ORDER BY ge.created_at DESC, {rowid_col("ge.")} DESC LIMIT 1""",
+            (company_id,),
+        ).fetchone()
+        legacy_seed = prev_hash_row["gl_checksum"] if prev_hash_row else "GENESIS"
+    else:
+        legacy_seed = "GENESIS"
+    _now_stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    conn.execute(
+        """
+        INSERT INTO gl_chain_head (company_id, last_sequence, last_checksum, updated_at)
+        VALUES (?, 0, ?, ?)
+        ON CONFLICT(company_id) DO UPDATE SET updated_at = excluded.updated_at
+        """,
+        (company_id, legacy_seed, _now_stamp),
+    )
+
+
+def take_chain_heads(conn: sqlite3.Connection, company_ids: list) -> None:
+    """Take each distinct chain head in ascending company order.
+
+    Takes each distinct head with the same upsert ``insert_gl_entries``
+    uses, in ascending ``company_id`` order whatever the order given. A
+    head created here carries the same seed a posting would have given
+    it. A transaction posting to more than one company calls this first,
+    so every head is held in one global order before any other row moves.
+    """
+    for _company_id in sorted(set(company_ids)):
+        _take_chain_head(conn, _company_id)
 
 
 # --- Insert GL Entries ---
@@ -483,7 +558,7 @@ def insert_gl_entries(
     ).fetchone():
         raise ValueError(
             f"voucher_type '{voucher_type}' is not a registered, active type for gl_entry. "
-            f"Register it (add-voucher-type) or run seed-registry-defaults."
+            f"Register it with add-voucher-type."
         )
     for _e in entries:
         _pt = _e.get("party_type")
@@ -492,7 +567,7 @@ def insert_gl_entries(
         ).fetchone():
             raise ValueError(
                 f"party_type '{_pt}' is not a registered, active type. "
-                f"Register it (add-party-type) or run seed-registry-defaults."
+                f"Register it with add-party-type."
             )
 
     # 2. Normalize entries
@@ -538,19 +613,21 @@ def insert_gl_entries(
             if "credit_base" not in entry:
                 entry["credit_base"] = str(convert_to_base(credit, rate))
 
-    # 5. Insert gl_entry rows with chain checksums
-    # Get the last checksum in this company's chain
-    prev_hash_row = conn.execute(
-        f"""SELECT gl_checksum FROM gl_entry ge
-           JOIN account a ON ge.account_id = a.id
-           WHERE a.company_id = ? AND ge.gl_checksum IS NOT NULL
-           ORDER BY ge.created_at DESC, {rowid_col("ge.")} DESC LIMIT 1""",
-        (company_id,),
-    ).fetchone()
-    prev_hash = prev_hash_row["gl_checksum"] if prev_hash_row else "GENESIS"
+    # 5. Insert gl_entry rows with chain checksums, sequenced under the head.
+    _take_chain_head(conn, company_id)
+
+    # Re-read the head after the upsert; every leg chains from here.
+    _head_table = Table("gl_chain_head")
+    _head_query = (Q.from_(_head_table)
+                   .select(_head_table.last_sequence, _head_table.last_checksum)
+                   .where(_head_table.company_id == P()))
+    _head = conn.execute(_head_query.get_sql(), (company_id,)).fetchone()
+    _base_sequence = _head["last_sequence"]
+    prev_hash = _head["last_checksum"]
 
     generated_ids = []
-    for entry in entries:
+    rows = []
+    for _offset, entry in enumerate(entries):
         entry_id = str(uuid.uuid4())
         generated_ids.append(entry_id)
 
@@ -574,16 +651,7 @@ def insert_gl_entries(
         # stored JSON canonical so the gl_checksum chain stays reproducible.
         dimensions_json = json.dumps(entry.get("dimensions") or {}, sort_keys=True)
 
-        conn.execute(
-            """
-            INSERT INTO gl_entry (
-                id, posting_date, account_id, party_type, party_id,
-                debit, credit, debit_base, credit_base,
-                currency, exchange_rate,
-                voucher_type, voucher_id, entry_set, cost_center_id, project_id,
-                remarks, fiscal_year, is_cancelled, gl_checksum, dimensions_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, CAST(CURRENT_TIMESTAMP AS TEXT))
-            """,
+        rows.append(
             (
                 entry_id,
                 posting_date,
@@ -604,11 +672,38 @@ def insert_gl_entries(
                 remarks,
                 entry.get("fiscal_year"),
                 checksum,
+                _base_sequence + _offset + 1,
                 dimensions_json,
             ),
         )
 
         prev_hash = checksum  # Chain: next entry references this one
+
+    conn.executemany(
+        """
+            INSERT INTO gl_entry (
+                id, posting_date, account_id, party_type, party_id,
+                debit, credit, debit_base, credit_base,
+                currency, exchange_rate,
+                voucher_type, voucher_id, entry_set, cost_center_id, project_id,
+                remarks, fiscal_year, is_cancelled, gl_checksum, sequence, dimensions_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, CAST(CURRENT_TIMESTAMP AS TEXT))
+            """,
+        rows,
+    )
+
+    # Write the head back in the same transaction: the next call continues
+    # exactly where this one stopped, and a rollback erases the take.
+    _head_update = update_row(
+        "gl_chain_head",
+        data={"last_sequence": P(), "last_checksum": P(), "updated_at": P()},
+        where={"company_id": P()},
+    )
+    conn.execute(
+        _head_update,
+        (_base_sequence + len(entries), prev_hash,
+         datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), company_id),
+    )
 
     return generated_ids
 
@@ -625,7 +720,15 @@ def reverse_gl_entries(
 
     Finds all gl_entry rows for the voucher where is_cancelled=0.
     Creates mirror entries (debit<->credit swapped).
-    Sets is_cancelled=1 on originals.
+    Sets is_cancelled=1 on originals AND on the reversal rows it inserts (M135).
+
+    Both legs of a cancellation carry the same marking. The reversal leg used to
+    be inserted with is_cancelled=0, so any reader applying the house filter
+    `is_cancelled = 0` dropped the original and KEPT the mirror — counting the
+    cancellation once instead of netting it to zero. Totals still balanced
+    (the filter removes a balanced pair), which is why every invariant stayed
+    green while a real book reported AR of -1,150.00 where the truth was -300.00.
+    The SLE twin in stock_posting.reverse_sle_entries already marked both.
 
     Does NOT commit — caller manages transaction.
 
@@ -647,21 +750,13 @@ def reverse_gl_entries(
 
     reversal_ids = []
 
+    mirror_rows = []
     for orig in originals:
         reversal_id = str(uuid.uuid4())
         reversal_ids.append(reversal_id)
 
         # Insert mirror entry (debit <-> credit swapped)
-        conn.execute(
-            """
-            INSERT INTO gl_entry (
-                id, posting_date, account_id, party_type, party_id,
-                debit, credit, debit_base, credit_base,
-                currency, exchange_rate,
-                voucher_type, voucher_id, entry_set, cost_center_id, project_id,
-                remarks, fiscal_year, is_cancelled, dimensions_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, CAST(CURRENT_TIMESTAMP AS TEXT))
-            """,
+        mirror_rows.append(
             (
                 reversal_id,
                 posting_date,
@@ -686,11 +781,24 @@ def reverse_gl_entries(
             ),
         )
 
-        # Mark original as cancelled
-        conn.execute(
-            "UPDATE gl_entry SET is_cancelled = 1 WHERE id = ?",
-            (orig["id"],),
-        )
+    conn.executemany(
+        """
+            INSERT INTO gl_entry (
+                id, posting_date, account_id, party_type, party_id,
+                debit, credit, debit_base, credit_base,
+                currency, exchange_rate,
+                voucher_type, voucher_id, entry_set, cost_center_id, project_id,
+                remarks, fiscal_year, is_cancelled, dimensions_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, CAST(CURRENT_TIMESTAMP AS TEXT))
+            """,
+        mirror_rows,
+    )
+
+    # Mark original as cancelled
+    conn.executemany(
+        "UPDATE gl_entry SET is_cancelled = 1 WHERE id = ?",
+        [(orig["id"],) for orig in originals],
+    )
 
     return reversal_ids
 

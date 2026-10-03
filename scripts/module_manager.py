@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import time
@@ -51,7 +52,16 @@ from erpclaw_lib.paths import (
     db_default, erpclaw_home, install_state_dir, lib_dir, modules_dir,
 )
 from erpclaw_lib.response import ok, err, rows_to_list, row_to_dict
+from erpclaw_lib.query import insert_or_ignore
 
+# Portable upsert for the action cache. erpclaw_module_action is PRIMARY KEY
+# (module_name, action_name) with no other columns, so "replace" and "ignore"
+# have identical effect here. The dialect helper is applied at each execute
+# site rather than here, so the dialect is resolved at call time.
+MODULE_ACTION_UPSERT_SQL = (
+    "INSERT OR IGNORE INTO erpclaw_module_action (module_name, action_name) "
+    "VALUES (?, ?)"
+)
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -101,7 +111,6 @@ CACHE_TTL_SECONDS = 86400  # 24 hours
 FOUNDATION_INSTALL_ROOT = os.path.dirname(SCRIPT_DIR)  # parent of scripts/
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/avansaber/erpclaw/main"
 SYNC_LOCK_PATH = os.path.join(install_state_dir(), ".sync.lock")
-LAST_SYNC_MARKER = os.path.join(install_state_dir(), ".last_sync")
 NO_AUTOSYNC_MARKER = os.path.join(install_state_dir(), ".no_autosync")
 SYNC_LOG_PATH = os.path.join(install_state_dir(), "logs", "sync.log")
 
@@ -113,9 +122,13 @@ SYNC_LOG_PATH = os.path.join(install_state_dir(), "logs", "sync.log")
 # them — otherwise `update-foundation`'s orphan-cleanup (ADR-0028: files +
 # migrations converge) would flag CLI-owned metadata as "orphaned" and delete
 # it, corrupting ClawHub's own upgrade tracking on the next `clawhub update`.
-SYNC_SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", "node_modules", "dist", "build", ".clawhub"}
-SYNC_SKIP_SUFFIXES = (".pyc", ".pyo", ".bak", ".tmp", ".DS_Store")
+SYNC_SKIP_DIRS = {
+    ".git", ".github", "__pycache__", ".pytest_cache", "node_modules",
+    "dist", "build", ".clawhub", ".venv", "tests",
+}
+SYNC_SKIP_SUFFIXES = (".pyc", ".pyo", ".bak", ".tmp")
 SYNC_SKIP_RELPATHS_FOUNDATION = {
+    ".clawhubignore",
     "scripts/module_registry.json",
     "scripts/module_registry.json.sig",
     "scripts/signing_log.txt",
@@ -123,7 +136,9 @@ SYNC_SKIP_RELPATHS_FOUNDATION = {
 # ClawHub-owned metadata filenames excluded at ANY depth (basename match),
 # mirroring erpclaw_lib.skip_filters.SKIP_FILE_EXACT's handling of the sibling
 # `.clawhubignore`. See the SYNC_SKIP_DIRS note above for the ADR-0028 rationale.
-SYNC_SKIP_BASENAMES_FOUNDATION = {"_meta.json"}
+SYNC_SKIP_BASENAMES_FOUNDATION = {
+    "_meta.json", ".DS_Store", ".gitkeep", "conftest.py", "pytest.ini",
+}
 
 
 def _now_iso():
@@ -138,6 +153,182 @@ LOCAL_VERSION_TRACKER = os.path.join(install_state_dir(), ".last_registry_versio
 
 class _RegistrySignatureError(Exception):
     """Raised when registry signature verification fails (strict mode)."""
+
+
+class _VerifiedRegistry(dict):
+    """In-memory marker for a cryptographically and structurally verified payload."""
+
+
+class _VerifiedModuleMap(dict):
+    """Module map derived from a `_VerifiedRegistry`, safe for mutation paths."""
+
+
+class _UnsafeTreeError(ValueError):
+    """A manifest-covered tree contains a symlink and cannot be trusted."""
+
+
+def _refuse_security_walk_error(error):
+    """Turn os.walk's otherwise-silent traversal errors into a hard refusal."""
+    raise _UnsafeTreeError(f"tree traversal failed: {error}") from error
+
+
+def _require_real_directory(path, label):
+    try:
+        path_stat = os.lstat(path)
+    except OSError as exc:
+        raise _UnsafeTreeError(f"cannot inspect {label}: {exc}") from exc
+    if not stat.S_ISDIR(path_stat.st_mode):
+        raise _UnsafeTreeError(f"{label} is not a real directory")
+
+
+def _require_single_link_regular_file(path, label):
+    try:
+        path_stat = os.lstat(path)
+    except OSError as exc:
+        raise _UnsafeTreeError(f"cannot inspect {label}: {exc}") from exc
+    if not stat.S_ISREG(path_stat.st_mode) or path_stat.st_nlink != 1:
+        raise _UnsafeTreeError(f"{label} is not a single-link regular file")
+    return path_stat
+
+
+def _read_stable_single_link_file(
+    path,
+    label,
+    *,
+    max_bytes=256 * 1024 * 1024,
+):
+    """Bounded read from the same descriptor whose identity was validated."""
+    before = _require_single_link_regular_file(path, label)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise _UnsafeTreeError(f"cannot safely open {label}: {exc}") from exc
+    try:
+        opened = os.fstat(fd)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+        ):
+            raise _UnsafeTreeError(f"{label} changed before read")
+        if opened.st_size > max_bytes:
+            raise _UnsafeTreeError(f"{label} exceeds {max_bytes} byte safety limit")
+        chunks = []
+        total = 0
+        while True:
+            chunk = os.read(fd, min(1024 * 1024, max_bytes + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > max_bytes:
+                raise _UnsafeTreeError(
+                    f"{label} exceeds {max_bytes} byte safety limit"
+                )
+        after = os.fstat(fd)
+        if (
+            (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+            != (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns)
+            or after.st_nlink != 1
+        ):
+            raise _UnsafeTreeError(f"{label} changed while read")
+        return b"".join(chunks), stat.S_IMODE(opened.st_mode)
+    finally:
+        os.close(fd)
+
+
+def _write_exclusive_regular_file(path, data, mode):
+    """Create a new file without following a pre-planted temporary path."""
+    flags = (
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    )
+    fd = os.open(path, flags, 0o600)
+    identity = None
+    try:
+        opened = os.fstat(fd)
+        identity = (opened.st_dev, opened.st_ino)
+        with os.fdopen(os.dup(fd), "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.fchmod(fd, mode)
+        os.fsync(fd)
+        return identity
+    except Exception:
+        if identity is not None:
+            _unlink_if_same_file(path, identity)
+        raise
+    finally:
+        os.close(fd)
+
+
+def _unlink_if_same_file(path, identity):
+    """Unlink only the exact file created by this process."""
+    try:
+        current = os.lstat(path)
+    except FileNotFoundError:
+        return
+    if (current.st_dev, current.st_ino) == identity and stat.S_ISREG(current.st_mode):
+        os.unlink(path)
+
+
+def _read_optional_stable_file(path, label, *, max_bytes):
+    """Return stable bytes for an optional trust-state file, or ``None``."""
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise _UnsafeTreeError(f"cannot inspect {label}: {exc}") from exc
+    data, _ = _read_stable_single_link_file(
+        path, label, max_bytes=max_bytes,
+    )
+    return data
+
+
+def _atomic_replace_trust_file(path, data, *, mode=0o600):
+    """Replace a trust-state file without following planted links."""
+    parent = os.path.dirname(path)
+    _require_real_directory(parent, f"parent directory for {path}")
+    try:
+        current = os.lstat(path)
+    except FileNotFoundError:
+        current = None
+    except OSError as exc:
+        raise _UnsafeTreeError(f"cannot inspect trust-state file {path}: {exc}") from exc
+    if current is not None and (
+        not stat.S_ISREG(current.st_mode) or current.st_nlink != 1
+    ):
+        raise _UnsafeTreeError(
+            f"trust-state file is not a single-link regular file: {path}"
+        )
+    pending = f"{path}.new-{uuid4().hex}"
+    pending_identity = None
+    try:
+        pending_identity = _write_exclusive_regular_file(pending, data, mode)
+        os.replace(pending, path)
+        pending_identity = None
+    finally:
+        if pending_identity is not None:
+            _unlink_if_same_file(pending, pending_identity)
+
+
+def _reject_duplicate_json_pairs(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def _load_unique_json(raw_bytes, *, label):
+    try:
+        return json.loads(raw_bytes, object_pairs_hook=_reject_duplicate_json_pairs)
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+        raise _RegistrySignatureError(f"registry not valid unique-key JSON ({label}): {exc}") from exc
 
 
 _CRYPTO_INSTALL_HINT = (
@@ -174,7 +365,11 @@ def _verify_registry_payload(raw_bytes, sig_hex, *, label):
         sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
     try:
         from erpclaw_lib.signing import (
-            verify_registry_signature, REGISTRY_VERSION_FIELD, fingerprint,
+            RegistryManifestError,
+            verify_registry_signature,
+            validate_registry_manifests,
+            REGISTRY_VERSION_FIELD,
+            fingerprint,
         )
         from cryptography.exceptions import InvalidSignature
     except ImportError as e:
@@ -192,18 +387,34 @@ def _verify_registry_payload(raw_bytes, sig_hex, *, label):
     except InvalidSignature as e:
         raise _RegistrySignatureError(f"signature verification failed ({label}): {e}")
 
+    registry = _load_unique_json(raw_bytes, label=label)
+
     try:
-        registry = json.loads(raw_bytes)
-    except json.JSONDecodeError as e:
-        raise _RegistrySignatureError(f"registry not valid JSON ({label}): {e}")
+        validate_registry_manifests(registry)
+    except RegistryManifestError as e:
+        raise _RegistrySignatureError(
+            f"registry manifest validation failed ({label}): {e}"
+        )
 
     incoming = int(registry.get(REGISTRY_VERSION_FIELD, 0) or 0)
     local_last = 0
-    if os.path.isfile(LOCAL_VERSION_TRACKER):
+    try:
+        tracker_raw = _read_optional_stable_file(
+            LOCAL_VERSION_TRACKER,
+            "registry-version tracker",
+            max_bytes=64,
+        )
+    except (OSError, _UnsafeTreeError) as exc:
+        raise _RegistrySignatureError(
+            f"cannot safely read registry-version tracker: {exc}"
+        ) from exc
+    if tracker_raw is not None:
         try:
-            local_last = int((open(LOCAL_VERSION_TRACKER).read() or "0").strip() or "0")
-        except (ValueError, OSError):
-            local_last = 0
+            local_last = int((tracker_raw.decode("ascii") or "0").strip() or "0")
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise _RegistrySignatureError(
+                f"registry-version tracker is invalid: {exc}"
+            ) from exc
     if incoming < local_last:
         raise _RegistrySignatureError(
             f"registry_version downgrade refused ({label}): "
@@ -212,13 +423,17 @@ def _verify_registry_payload(raw_bytes, sig_hex, *, label):
     if incoming > local_last:
         try:
             os.makedirs(os.path.dirname(LOCAL_VERSION_TRACKER), exist_ok=True)
-            with open(LOCAL_VERSION_TRACKER, "w") as f:
-                f.write(str(incoming))
-        except OSError:
-            pass
+            _atomic_replace_trust_file(
+                LOCAL_VERSION_TRACKER,
+                str(incoming).encode("ascii"),
+            )
+        except (OSError, _UnsafeTreeError) as exc:
+            raise _RegistrySignatureError(
+                f"cannot persist registry-version monotonic state: {exc}"
+            ) from exc
 
     registry["_signed_by"] = fingerprint(trusted.public_key_hex)
-    return registry
+    return _VerifiedRegistry(registry)
 
 
 def _fetch_with_retry(url, *, timeout=10, retries=1, retry_delay=5.0):
@@ -237,6 +452,47 @@ def _fetch_with_retry(url, *, timeout=10, retries=1, retry_delay=5.0):
     raise last_err
 
 
+def _read_local_registry_pair(registry_path, signature_path, *, label, require_signature=False):
+    """Read one local registry pair through bounded no-follow descriptors."""
+    raw = _read_optional_stable_file(
+        registry_path, f"{label} registry", max_bytes=16 * 1024 * 1024,
+    )
+    if raw is None:
+        return None
+    sig_raw = _read_optional_stable_file(
+        signature_path, f"{label} registry signature", max_bytes=4096,
+    )
+    if sig_raw is None:
+        if require_signature:
+            raise _RegistrySignatureError(f"{label} registry signature is missing")
+        sig = ""
+    else:
+        try:
+            sig = sig_raw.decode("ascii").strip()
+        except UnicodeDecodeError as exc:
+            raise _RegistrySignatureError(
+                f"{label} registry signature is not ASCII"
+            ) from exc
+    return raw, sig
+
+
+def _write_registry_cache(raw, sig, *, strict):
+    """Persist verified cache bytes without following cache-path links."""
+    try:
+        cache_dir = os.path.dirname(LOCAL_CACHE_PATH)
+        os.makedirs(cache_dir, exist_ok=True)
+        _atomic_replace_trust_file(LOCAL_CACHE_PATH, raw)
+        if sig:
+            _atomic_replace_trust_file(
+                LOCAL_SIG_CACHE_PATH, sig.encode("ascii"),
+            )
+    except (OSError, UnicodeEncodeError, _UnsafeTreeError) as exc:
+        if strict:
+            raise _RegistrySignatureError(
+                f"cannot persist verified registry cache: {exc}"
+            ) from exc
+
+
 def _bundled_foundation_version():
     """Return the foundation version recorded in the bundled (just-installed)
     registry, or None if unavailable. Used to detect a fresh foundation upgrade
@@ -245,15 +501,19 @@ def _bundled_foundation_version():
     """
     bundled = os.path.join(SCRIPT_DIR, "module_registry.json")
     try:
-        with open(bundled, "rb") as f:
-            data = json.loads(f.read())
+        pair = _read_local_registry_pair(
+            bundled, bundled + ".sig", label="bundled", require_signature=False,
+        )
+        if pair is None:
+            return None
+        data = _load_unique_json(pair[0], label="bundled-version")
         modules = data.get("modules") or {}
         if isinstance(modules, dict):
             return (modules.get("erpclaw") or {}).get("version")
         for m in modules:
             if m.get("name") == "erpclaw":
                 return m.get("version")
-    except (OSError, json.JSONDecodeError, AttributeError):
+    except (OSError, _UnsafeTreeError, _RegistrySignatureError, AttributeError):
         return None
     return None
 
@@ -261,15 +521,22 @@ def _bundled_foundation_version():
 def _cached_foundation_version():
     """Return the foundation version recorded in the cached registry, or None."""
     try:
-        with open(LOCAL_CACHE_PATH, "rb") as f:
-            data = json.loads(f.read())
+        pair = _read_local_registry_pair(
+            LOCAL_CACHE_PATH,
+            LOCAL_SIG_CACHE_PATH,
+            label="cached",
+            require_signature=False,
+        )
+        if pair is None:
+            return None
+        data = _load_unique_json(pair[0], label="cached-version")
         modules = data.get("modules") or {}
         if isinstance(modules, dict):
             return (modules.get("erpclaw") or {}).get("version")
         for m in modules:
             if m.get("name") == "erpclaw":
                 return m.get("version")
-    except (OSError, json.JSONDecodeError, AttributeError):
+    except (OSError, _UnsafeTreeError, _RegistrySignatureError, AttributeError):
         return None
     return None
 
@@ -281,7 +548,12 @@ def _cache_is_behind_bundled():
     check verifies foundation files against the OLD manifest and reports
     false-positive mismatches for any file that changed between versions.
     """
-    if not os.path.isfile(LOCAL_CACHE_PATH):
+    try:
+        if _read_optional_stable_file(
+            LOCAL_CACHE_PATH, "cached registry", max_bytes=16 * 1024 * 1024,
+        ) is None:
+            return False
+    except (OSError, _UnsafeTreeError):
         return False
     bundled = _bundled_foundation_version()
     cached = _cached_foundation_version()
@@ -301,8 +573,9 @@ def _load_registry(force_refresh=False):
     via `_signed_by`/`_signature_warning`, but the function does not refuse on
     failure. Used by read-only listings (`available-modules`, etc.).
 
-    For foundation reconciliation, callers MUST use `_load_registry_strict`
-    which refuses unsigned/tampered/downgraded registries.
+    Mutation callers that trust repository coordinates, hashes, or update
+    manifests MUST use `_load_registry_strict`, which refuses
+    unsigned/tampered/downgraded registries.
 
     Resolution order: fresh cache → remote → bundled → stale cache.
 
@@ -319,21 +592,30 @@ def _load_registry(force_refresh=False):
         force_refresh = True
 
     # 1. Check local cache
-    if not force_refresh and os.path.isfile(LOCAL_CACHE_PATH):
+    if not force_refresh:
         try:
-            age = time.time() - os.path.getmtime(LOCAL_CACHE_PATH)
-            if age < CACHE_TTL_SECONDS:
-                raw = open(LOCAL_CACHE_PATH, "rb").read()
-                sig = ""
-                if os.path.isfile(LOCAL_SIG_CACHE_PATH):
-                    sig = open(LOCAL_SIG_CACHE_PATH).read().strip()
+            pair = _read_local_registry_pair(
+                LOCAL_CACHE_PATH,
+                LOCAL_SIG_CACHE_PATH,
+                label="local-cache",
+                require_signature=False,
+            )
+            if pair is not None:
+                cache_stat = _require_single_link_regular_file(
+                    LOCAL_CACHE_PATH, "local-cache registry",
+                )
+                age = time.time() - cache_stat.st_mtime
+            else:
+                age = CACHE_TTL_SECONDS
+            if pair is not None and age < CACHE_TTL_SECONDS:
+                raw, sig = pair
                 try:
                     return _verify_registry_payload(raw, sig, label="local-cache")
                 except _RegistrySignatureError as e:
-                    data = json.loads(raw)
+                    data = _load_unique_json(raw, label="local-cache-lenient")
                     data["_signature_warning"] = str(e)
                     return data
-        except (json.JSONDecodeError, OSError):
+        except (OSError, _UnsafeTreeError, _RegistrySignatureError):
             pass
 
     # 2. Try remote fetch (registry + signature)
@@ -354,50 +636,48 @@ def _load_registry(force_refresh=False):
         except _RegistrySignatureError as e:
             data = json.loads(raw)
             data["_signature_warning"] = str(e)
-        # Update cache
-        cache_dir = os.path.dirname(LOCAL_CACHE_PATH)
-        if cache_dir:
-            os.makedirs(cache_dir, exist_ok=True)
-        with open(LOCAL_CACHE_PATH, "wb") as f:
-            f.write(raw)
-        if sig:
-            with open(LOCAL_SIG_CACHE_PATH, "w") as f:
-                f.write(sig)
+        _write_registry_cache(raw, sig, strict=False)
         return data
     except Exception:
         pass  # Offline or error — fall through
 
     # 3. Fall back to bundled copy + bundled signature
-    if os.path.isfile(bundled_path):
-        try:
-            raw = open(bundled_path, "rb").read()
-            sig = ""
-            if os.path.isfile(bundled_sig_path):
-                sig = open(bundled_sig_path).read().strip()
+    try:
+        pair = _read_local_registry_pair(
+            bundled_path,
+            bundled_sig_path,
+            label="bundled",
+            require_signature=False,
+        )
+        if pair is not None:
+            raw, sig = pair
             try:
                 return _verify_registry_payload(raw, sig, label="bundled")
             except _RegistrySignatureError as e:
-                data = json.loads(raw)
+                data = _load_unique_json(raw, label="bundled-lenient")
                 data["_signature_warning"] = str(e)
                 return data
-        except (json.JSONDecodeError, OSError):
-            pass
+    except (OSError, _UnsafeTreeError, _RegistrySignatureError):
+        pass
 
     # 4. Fall back to stale cache
-    if os.path.isfile(LOCAL_CACHE_PATH):
-        try:
-            raw = open(LOCAL_CACHE_PATH, "rb").read()
-            sig = ""
-            if os.path.isfile(LOCAL_SIG_CACHE_PATH):
-                sig = open(LOCAL_SIG_CACHE_PATH).read().strip()
+    try:
+        pair = _read_local_registry_pair(
+            LOCAL_CACHE_PATH,
+            LOCAL_SIG_CACHE_PATH,
+            label="stale-cache",
+            require_signature=False,
+        )
+        if pair is not None:
+            raw, sig = pair
             try:
                 return _verify_registry_payload(raw, sig, label="stale-cache")
             except _RegistrySignatureError as e:
-                data = json.loads(raw)
+                data = _load_unique_json(raw, label="stale-cache-lenient")
                 data["_signature_warning"] = str(e)
                 return data
-        except (json.JSONDecodeError, OSError):
-            pass
+    except (OSError, _UnsafeTreeError, _RegistrySignatureError):
+        pass
 
     return {"version": "0.0.0", "modules": {}}
 
@@ -405,9 +685,9 @@ def _load_registry(force_refresh=False):
 def _load_registry_strict(force_refresh=True):
     """Strict mode: fetch + signature-verify + monotonic-check. Refuses unsigned.
 
-    Used by `update_foundation_action` for the trust-root path. Returns a
-    verified registry dict; raises `_RegistrySignatureError` on any failure
-    (no fallback to unsigned bundled / stale cache).
+    Used by `install_module` and `update_foundation_action` for trust-bearing
+    paths. Returns a verified registry dict; raises `_RegistrySignatureError`
+    on any failure (no fallback to unsigned bundled / stale cache).
     """
     # Try remote first (force_refresh by default for strict)
     last_err = None
@@ -417,16 +697,9 @@ def _load_registry_strict(force_refresh=True):
             sig_bytes = _fetch_with_retry(REMOTE_SIGNATURE_URL, retries=1)
             sig = sig_bytes.decode("utf-8").strip()
             data = _verify_registry_payload(raw, sig, label="remote-strict")
-            # Cache the verified content
-            try:
-                cache_dir = os.path.dirname(LOCAL_CACHE_PATH)
-                os.makedirs(cache_dir, exist_ok=True)
-                with open(LOCAL_CACHE_PATH, "wb") as f:
-                    f.write(raw)
-                with open(LOCAL_SIG_CACHE_PATH, "w") as f:
-                    f.write(sig)
-            except OSError:
-                pass
+            # A strict mutation path may not accept a new monotonic version
+            # unless its replay-protection/cache state was durably persisted.
+            _write_registry_cache(raw, sig, strict=True)
             return data
         except _RegistrySignatureError as e:
             raise
@@ -439,15 +712,25 @@ def _load_registry_strict(force_refresh=True):
     # Fall back to bundled (always signature-verified in strict mode)
     bundled_path = os.path.join(SCRIPT_DIR, "module_registry.json")
     bundled_sig_path = bundled_path + ".sig"
-    if os.path.isfile(bundled_path) and os.path.isfile(bundled_sig_path):
-        raw = open(bundled_path, "rb").read()
-        sig = open(bundled_sig_path).read().strip()
+    pair = _read_local_registry_pair(
+        bundled_path,
+        bundled_sig_path,
+        label="bundled-strict",
+        require_signature=True,
+    )
+    if pair is not None:
+        raw, sig = pair
         return _verify_registry_payload(raw, sig, label="bundled-strict")
 
     # Last resort: cached (signed only)
-    if os.path.isfile(LOCAL_CACHE_PATH) and os.path.isfile(LOCAL_SIG_CACHE_PATH):
-        raw = open(LOCAL_CACHE_PATH, "rb").read()
-        sig = open(LOCAL_SIG_CACHE_PATH).read().strip()
+    pair = _read_local_registry_pair(
+        LOCAL_CACHE_PATH,
+        LOCAL_SIG_CACHE_PATH,
+        label="cached-strict",
+        require_signature=True,
+    )
+    if pair is not None:
+        raw, sig = pair
         return _verify_registry_payload(raw, sig, label="cached-strict")
 
     raise _RegistrySignatureError(
@@ -456,18 +739,41 @@ def _load_registry_strict(force_refresh=True):
     )
 
 
+def _load_bundled_registry_for_unsafe_recovery():
+    """Load exactly the on-disk bundled registry for the named unsafe bypass.
+
+    The flag waives only signature verification. It must never resolve through
+    remote or cache state, because that would turn a local recovery switch into
+    permission to trust attacker-controlled coordinates from another channel.
+    """
+    bundled_path = os.path.join(SCRIPT_DIR, "module_registry.json")
+    raw = _read_optional_stable_file(
+        bundled_path,
+        "unsafe-recovery bundled registry",
+        max_bytes=16 * 1024 * 1024,
+    )
+    if raw is None:
+        raise _RegistrySignatureError(
+            f"bundled registry is missing: {bundled_path}"
+        )
+    return _load_unique_json(raw, label="unsafe-recovery-bundled")
+
+
 def _registry_to_dict(registry):
     """Convert registry modules (dict-keyed or list) to {name: info} dict."""
     modules_raw = registry.get("modules", {})
     if isinstance(modules_raw, dict):
-        result = {}
+        result = _VerifiedModuleMap() if isinstance(registry, _VerifiedRegistry) else {}
         for name, info in modules_raw.items():
             info_copy = dict(info)
             info_copy.setdefault("name", name)
             result[name] = info_copy
         return result
     # List format (fallback)
-    return {m["name"]: m for m in modules_raw}
+    result = {m["name"]: m for m in modules_raw}
+    if isinstance(registry, _VerifiedRegistry):
+        return _VerifiedModuleMap(result)
+    return result
 
 
 def _get_installed_modules(conn):
@@ -640,7 +946,7 @@ def build_action_cache(conn, module_name, install_path):
         (module_name,)
     )
     conn.executemany(
-        "INSERT OR REPLACE INTO erpclaw_module_action (module_name, action_name) VALUES (?, ?)",
+        insert_or_ignore(MODULE_ACTION_UPSERT_SQL),
         [(module_name, a) for a in sorted(all_actions)]
     )
     conn.commit()
@@ -788,7 +1094,17 @@ def install_module(args):
     if not module_name:
         err("--module-name is required")
 
-    registry = _load_registry()
+    # Installation trusts registry-supplied repository coordinates and file
+    # hashes. Read-only listing may use the lenient loader, but this mutation
+    # path must never consume a payload whose signature merely produced a
+    # warning field.
+    try:
+        registry = _load_registry_strict(force_refresh=True)
+    except _RegistrySignatureError as e:
+        err(
+            f"Registry signature verification failed: {e}. "
+            "Refusing module installation."
+        )
     modules_by_name = _registry_to_dict(registry)
 
     if module_name not in modules_by_name:
@@ -819,7 +1135,12 @@ def install_module(args):
     requires = module_info.get("requires", [])
     if requires:
         installed = _get_installed_modules(conn)
-        missing = [r for r in requires if r not in installed]
+        missing = [
+            required
+            for required in requires
+            if required not in installed
+            or installed[required].get("install_status") != "installed"
+        ]
         if missing:
             auto_installed = []
             for dep in missing:
@@ -828,20 +1149,116 @@ def install_module(args):
                         f"Dependency '{dep}' for module '{module_name}' not found in registry",
                         suggestion="This module has an unresolvable dependency"
                     )
+                if dep in installed and installed[dep].get("install_status") != "installed":
+                    err(
+                        f"Dependency '{dep}' for module '{module_name}' has a failed or "
+                        "incomplete install; retry that dependency explicitly before "
+                        f"installing '{module_name}'."
+                    )
                 # Recursively install dependency
                 dep_args = argparse.Namespace(module_name=dep)
-                try:
-                    # Temporarily suppress ok() exit to allow chaining
-                    _install_module_inner(dep_args, conn, modules_by_name, depth=1)
-                    auto_installed.append(dep)
-                except SystemExit:
-                    # ok() calls sys.exit(0) — we need to re-open connection
-                    conn = get_connection()
-                    auto_installed.append(dep)
+                _install_module_inner(dep_args, conn, modules_by_name, depth=1)
+                auto_installed.append(dep)
 
     # Perform the actual installation
     result = _install_module_inner(args, conn, modules_by_name, depth=0)
     ok(result)
+
+
+def _compute_installed_module_drift(install_path, module_name, manifest):
+    """Return manifest drift for a fetched module; refuse every symlink."""
+    from erpclaw_lib.skip_filters import (
+        SKIP_DIRS, SKIP_SUFFIXES, SKIP_FILE_EXACT,
+        is_ambiguous_directory_name,
+    )
+    skip_relpaths = (
+        {".clawhubignore", "scripts/module_registry.json", "scripts/module_registry.json.sig",
+         "scripts/signing_log.txt"}
+        if module_name == "erpclaw" else set()
+    )
+    _require_real_directory(install_path, "module install root")
+
+    delivered = set()
+    delivered_modes = {}
+    for root, dirs, files in os.walk(
+        install_path,
+        onerror=_refuse_security_walk_error,
+    ):
+        for dirname in dirs:
+            full_dir = os.path.join(root, dirname)
+            rel = os.path.relpath(full_dir, install_path)
+            _require_real_directory(full_dir, f"module directory {rel}")
+            if module_name == "erpclaw" and is_ambiguous_directory_name(dirname):
+                raise _UnsafeTreeError(
+                    f"publisher-hidden file pattern used as directory: {rel}"
+                )
+            if (
+                module_name == "erpclaw"
+                and dirname.startswith(".")
+                and dirname not in SKIP_DIRS
+            ):
+                raise _UnsafeTreeError(
+                    f"unexpected publisher-hidden dot directory: {rel}"
+                )
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        for fname in files:
+            full_path = os.path.join(root, fname)
+            rel = os.path.relpath(full_path, install_path)
+            file_stat = _require_single_link_regular_file(
+                full_path, f"module file {rel}",
+            )
+            if (
+                module_name == "erpclaw"
+                and fname.startswith(".")
+                and fname not in SKIP_FILE_EXACT
+            ):
+                raise _UnsafeTreeError(
+                    f"unexpected publisher-hidden dot file: {rel}"
+                )
+            if fname in SKIP_FILE_EXACT:
+                continue
+            if any(fname.endswith(s) for s in SKIP_SUFFIXES):
+                continue
+            if rel not in skip_relpaths:
+                delivered.add(rel)
+                delivered_modes[rel] = stat.S_IMODE(file_stat.st_mode)
+
+    expected = set(manifest)
+    missing = expected - delivered
+    extra = delivered - expected
+    mismatched = []
+    for rel in sorted(expected & delivered):
+        raw, _mode = _read_stable_single_link_file(
+            os.path.join(install_path, rel), f"module file {rel}",
+        )
+        actual = hashlib.sha256(raw).hexdigest()
+        wrong_mode = (
+            module_name == "erpclaw"
+            and rel == "bin/erpclaw"
+            and delivered_modes[rel] != 0o755
+        )
+        if actual != manifest[rel] or wrong_mode:
+            mismatched.append(rel)
+    return {"missing": missing, "extra": extra, "mismatched": mismatched}
+
+
+def _remove_failed_install_tree(install_path):
+    """Remove an untrusted failed clone without escaping the live module root."""
+    modules_root = os.path.abspath(MODULES_DIR)
+    candidate = os.path.abspath(install_path)
+    if (
+        os.path.commonpath((modules_root, candidate)) != modules_root
+        or candidate == modules_root
+    ):
+        raise _UnsafeTreeError("failed install path escapes the modules root")
+    _require_real_directory(modules_root, "modules root")
+    try:
+        candidate_stat = os.lstat(candidate)
+    except FileNotFoundError:
+        return
+    if not stat.S_ISDIR(candidate_stat.st_mode):
+        raise _UnsafeTreeError("failed install path is not a real directory")
+    shutil.rmtree(candidate)
 
 
 def _install_module_inner(args, conn, modules_by_name, depth=0):
@@ -850,6 +1267,11 @@ def _install_module_inner(args, conn, modules_by_name, depth=0):
     The depth parameter tracks recursive dependency installs to prevent
     infinite loops.
     """
+    if not isinstance(modules_by_name, _VerifiedModuleMap):
+        err(
+            "Refusing module installation from a registry that was not "
+            "cryptographically and structurally verified."
+        )
     if depth > 10:
         err("Dependency resolution exceeded maximum depth (10) — circular dependency detected")
 
@@ -947,44 +1369,32 @@ def _install_module_inner(args, conn, modules_by_name, depth=0):
     # files_sha256 manifest must exist in the fetched tree and hash to
     # the expected value. Mismatch, missing files, OR extra files cause
     # abort + cleanup.
-    manifest = module_info.get("files_sha256")
+    manifest = module_info["files_sha256"]
+    if not manifest:
+        err(f"Registry manifest for {module_name} is empty; refusing to install.")
     if manifest:
-        # Walk the fetched tree to discover what was delivered, applying the
-        # same skip filters used at manifest generation time. Canonical
-        # source: `erpclaw_lib.skip_filters` (shared with
-        # `release/regen_module_manifests.py` so the two walks can't drift).
-        from erpclaw_lib.skip_filters import (
-            SKIP_DIRS, SKIP_SUFFIXES, SKIP_FILE_EXACT,
-        )
-        # Files excluded from manifest by design (self-referential)
-        SKIP_RELPATHS = (
-            {"scripts/module_registry.json", "scripts/module_registry.json.sig",
-             "scripts/signing_log.txt"}
-            if module_name == "erpclaw" else set()
-        )
-        delivered = set()
-        for root, dirs, files in os.walk(install_path):
-            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
-            for fname in files:
-                if fname in SKIP_FILE_EXACT:
-                    continue
-                if any(fname.endswith(s) for s in SKIP_SUFFIXES):
-                    continue
-                rel = os.path.relpath(os.path.join(root, fname), install_path)
-                if rel in SKIP_RELPATHS:
-                    continue
-                delivered.add(rel)
+        try:
+            drift = _compute_installed_module_drift(
+                install_path, module_name, manifest,
+            )
+        except (OSError, _UnsafeTreeError) as e:
+            summary = f"unsafe/unreadable fetched tree: {e}"
+            _mark_failed(conn, module_name, f"integrity-check failed: {summary}")
+            try:
+                _remove_failed_install_tree(install_path)
+            except (OSError, _UnsafeTreeError) as cleanup_error:
+                err(
+                    f"Integrity check failed for {module_name}: {summary}. "
+                    f"Refusing to install; failed-tree cleanup also failed: {cleanup_error}."
+                )
+            err(
+                f"Integrity check failed for {module_name}: {summary}. "
+                "Refusing to install; the untrusted tree was removed from the live modules root."
+            )
 
-        expected = set(manifest.keys())
-        missing = expected - delivered
-        extra = delivered - expected
-        mismatched = []
-
-        for rel in sorted(expected & delivered):
-            with open(os.path.join(install_path, rel), "rb") as f:
-                actual = hashlib.sha256(f.read()).hexdigest()
-            if actual != manifest[rel]:
-                mismatched.append(rel)
+        missing = drift["missing"]
+        extra = drift["extra"]
+        mismatched = drift["mismatched"]
 
         if missing or extra or mismatched:
             shutil.rmtree(install_path, ignore_errors=True)
@@ -1099,7 +1509,7 @@ def _install_module_inner(args, conn, modules_by_name, depth=0):
                         sub_actions = _extract_actions_via_regex(sub_script)
                     if sub_actions:
                         conn.executemany(
-                            "INSERT OR REPLACE INTO erpclaw_module_action (module_name, action_name) VALUES (?, ?)",
+                            insert_or_ignore(MODULE_ACTION_UPSERT_SQL),
                             [(module_name, a) for a in sorted(sub_actions)]
                         )
                         action_count += len(sub_actions)
@@ -1258,9 +1668,10 @@ def _run_foundation_migrations():
     file reconcile the caller already completed):
       - {"ran": False, "reason": ...}                       migrations/runner absent
       - {"ran": True, "ok": True,  "applied": [...], ...}    all pending applied
-      - {"ran": True, "ok": False, "failed": stem, ...}      a migration raised; the
-        runner recorded ledger state ('failed' + each 'applied') and left the DB at
-        the last good migration. The caller surfaces this loudly and exits non-zero.
+      - {"ran": True, "ok": False, "failed": stem, ...}      a migration raised; a
+        single-transaction migration's changes roll back, a migration that committed
+        part of its work leaves that part, and the failure is recorded in the ledger
+        as 'failed'. The caller surfaces this loudly and exits non-zero.
     """
     migrations_dir = os.path.join(SCRIPT_DIR, "erpclaw-setup", "migrations")
     runner_path = os.path.join(SCRIPT_DIR, "erpclaw-setup", "migration_runner.py")
@@ -1280,7 +1691,13 @@ def _run_foundation_migrations():
     # the current schema from init_schema). Running ALTERs against an absent or
     # schema-less DB is nonsensical, so skip cleanly when the core schema is not
     # present — dialect-agnostic via the runner's own _connect.
-    if not _foundation_db_initialized(runner, db_path):
+    try:
+        initialized = _foundation_db_initialized(runner, db_path)
+    except Exception as e:  # noqa: BLE001 — unreachable target surfaces, never masks the reconcile
+        return {"ran": True, "ok": False, "failed": "<probe>", "applied": [],
+                "error": str(e),
+                "detail": "The foundation database could not be reached, so its pending migrations were not checked or applied. Fix the database target or connection and re-run update-foundation."}
+    if not initialized:
         return {"ran": False, "reason": "foundation DB not initialized (nothing to migrate)"}
 
     try:
@@ -1296,21 +1713,36 @@ def _run_foundation_migrations():
 def _foundation_db_initialized(runner, db_path):
     """True if ``db_path`` is an initialized foundation DB (has the core schema).
 
-    Dialect-agnostic: uses the runner's own ``_connect`` so SQLite and Postgres
-    both work, and probes a core table (``company``). Any error — absent DB,
-    missing table, connect failure — means "not initialized" → skip migrations.
-    A non-existent SQLite path short-circuits so we never create a stray empty DB.
+    The missing-file short-circuit is SQLite-only: without the database file the
+    answer is False with no connection attempt, so no stray empty database is
+    ever created. On PostgreSQL there is no file to check, so the probe resolves
+    the configured target and connects: a missing target or a failed connect
+    raises (an error the caller surfaces), while a reachable database without
+    the core table reads as "not initialized".
     """
-    if "://" not in str(db_path) and not os.path.isfile(db_path):
-        return False
-    try:
-        conn, _ = runner._connect(db_path)
-    except Exception:  # noqa: BLE001
-        return False
+    if runner._dialect() != "postgresql":
+        if "://" not in str(db_path) and not os.path.isfile(db_path):
+            return False
+        try:
+            conn, _ = runner._connect(db_path)
+        except Exception:  # noqa: BLE001
+            return False
+        try:
+            conn.cursor().execute("SELECT 1 FROM company LIMIT 1")
+            return True
+        except Exception:  # noqa: BLE001 — missing table / uninitialized
+            return False
+        finally:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+    runner._resolve_target(db_path)
+    conn, _ = runner._connect(db_path)
     try:
         conn.cursor().execute("SELECT 1 FROM company LIMIT 1")
         return True
-    except Exception:  # noqa: BLE001 — missing table / uninitialized
+    except Exception:  # noqa: BLE001 — reachable database without the core table
         return False
     finally:
         try:
@@ -1411,9 +1843,10 @@ def _bump_foundation_version_row(version):
     extending ADR-0028's "a run reporting ok means files AND schema are converged"
     to include the observable version row. NEVER called on:
       - dry-run / preview (§2 previews are read-only), or
-      - a failed migration (§3 leaves the DB at the last good migration and exits
-        1 — the version row must reflect a fully-converged upgrade, never a
-        half-applied one).
+      - a failed migration (§3: a single-transaction migration's changes roll back,
+        a migration that committed part of its work leaves that part, and the failure
+        is recorded in the ledger as 'failed', then exits 1 — the version row must
+        reflect a fully-converged upgrade, never a half-applied one).
 
     Idempotent: re-setting the same version is a no-op UPDATE, so the in-sync
     early-return path also HEALS rows left stale by pre-rider upgrades (files
@@ -2075,26 +2508,54 @@ def _walk_foundation_tree():
     Mirrors the filter set used by install_module's full-tree verification, so
     drift detection and verification agree on which files are in scope.
     """
-    for root, dirs, files in os.walk(FOUNDATION_INSTALL_ROOT):
+    _require_real_directory(FOUNDATION_INSTALL_ROOT, "foundation install root")
+    for root, dirs, files in os.walk(
+        FOUNDATION_INSTALL_ROOT,
+        onerror=_refuse_security_walk_error,
+    ):
+        for dirname in dirs:
+            full_dir = os.path.join(root, dirname)
+            rel = os.path.relpath(full_dir, FOUNDATION_INSTALL_ROOT)
+            _require_real_directory(full_dir, f"foundation directory {rel}")
+            if (
+                dirname in SYNC_SKIP_BASENAMES_FOUNDATION
+                or dirname.endswith(SYNC_SKIP_SUFFIXES)
+            ):
+                raise _UnsafeTreeError(
+                    f"publisher-hidden file pattern used as directory: {rel}"
+                )
+            if dirname.startswith(".") and dirname not in SYNC_SKIP_DIRS:
+                raise _UnsafeTreeError(
+                    f"unexpected publisher-hidden dot directory: {rel}"
+                )
         dirs[:] = [d for d in dirs if d not in SYNC_SKIP_DIRS]
         for fname in files:
+            full_path = os.path.join(root, fname)
+            rel = os.path.relpath(full_path, FOUNDATION_INSTALL_ROOT)
+            _require_single_link_regular_file(
+                full_path, f"foundation file {rel}",
+            )
+            if (
+                fname.startswith(".")
+                and fname not in SYNC_SKIP_BASENAMES_FOUNDATION
+                and rel not in SYNC_SKIP_RELPATHS_FOUNDATION
+            ):
+                raise _UnsafeTreeError(
+                    f"unexpected publisher-hidden dot file: {rel}"
+                )
             if any(fname.endswith(s) for s in SYNC_SKIP_SUFFIXES):
                 continue
             if fname in SYNC_SKIP_BASENAMES_FOUNDATION:
                 continue
-            rel = os.path.relpath(os.path.join(root, fname), FOUNDATION_INSTALL_ROOT)
             if rel in SYNC_SKIP_RELPATHS_FOUNDATION:
                 continue
             yield rel
 
 
 def _hash_file(path):
-    """Return hex SHA256 of file contents, or None if unreadable."""
-    try:
-        with open(path, "rb") as f:
-            return hashlib.sha256(f.read()).hexdigest()
-    except OSError:
-        return None
+    """Return SHA256 from one stable regular, single-link descriptor."""
+    raw, _mode = _read_stable_single_link_file(path, f"foundation file {path}")
+    return hashlib.sha256(raw).hexdigest()
 
 
 def _compute_foundation_drift(manifest):
@@ -2114,8 +2575,16 @@ def _compute_foundation_drift(manifest):
 
     modified = []
     for rel in sorted(expected & delivered):
-        local_hash = _hash_file(os.path.join(FOUNDATION_INSTALL_ROOT, rel))
-        if local_hash is None or local_hash != manifest[rel]:
+        local_path = os.path.join(FOUNDATION_INSTALL_ROOT, rel)
+        local_stat = _require_single_link_regular_file(
+            local_path, f"foundation file {rel}",
+        )
+        wrong_mode = (
+            rel == "bin/erpclaw"
+            and stat.S_IMODE(local_stat.st_mode) != 0o755
+        )
+        local_hash = _hash_file(local_path)
+        if local_hash != manifest[rel] or wrong_mode:
             modified.append(rel)
 
     return {"modified": modified, "missing": missing, "orphaned": orphaned}
@@ -2141,6 +2610,24 @@ def _fetch_remote_file(rel_path, expected_hash):
     return data
 
 
+def _backup_file(target_path):
+    """Atomically preserve one rollback copy, or raise without touching target."""
+    raw, mode = _read_stable_single_link_file(
+        target_path, f"backup source {target_path}",
+    )
+    bak = target_path + ".bak"
+    pending = f"{bak}.tmp-{uuid4().hex}"
+    pending_identity = None
+    try:
+        pending_identity = _write_exclusive_regular_file(pending, raw, mode)
+        os.replace(pending, bak)
+        pending_identity = None
+    except (OSError, _UnsafeTreeError):
+        if pending_identity is not None:
+            _unlink_if_same_file(pending, pending_identity)
+        raise
+
+
 def _atomic_write(target_path, data):
     """Write data to target_path atomically.
 
@@ -2153,22 +2640,25 @@ def _atomic_write(target_path, data):
     """
     target_dir = os.path.dirname(target_path) or "."
     os.makedirs(target_dir, exist_ok=True)
-    tmp = target_path + ".new"
-    bak = target_path + ".bak"
-    with open(tmp, "wb") as f:
-        f.write(data)
-        f.flush()
-        os.fsync(f.fileno())
-    if os.path.isfile(target_path):
-        try:
-            shutil.copymode(target_path, tmp)
-        except OSError:
-            pass
-        try:
-            shutil.copy2(target_path, bak)
-        except OSError:
-            pass
-    os.replace(tmp, target_path)
+    _require_real_directory(target_dir, f"target directory {target_dir}")
+    tmp = f"{target_path}.new-{uuid4().hex}"
+    tmp_identity = None
+    try:
+        target_mode = 0o644
+        if os.path.lexists(target_path):
+            _old, target_mode = _read_stable_single_link_file(
+                target_path, f"replace target {target_path}",
+            )
+            _backup_file(target_path)
+        if os.path.normpath(target_path).endswith(os.path.join("bin", "erpclaw")):
+            target_mode = 0o755
+        tmp_identity = _write_exclusive_regular_file(tmp, data, target_mode)
+        os.replace(tmp, target_path)
+        tmp_identity = None
+    except (OSError, _UnsafeTreeError):
+        if tmp_identity is not None:
+            _unlink_if_same_file(tmp, tmp_identity)
+        raise
 
 
 def _is_dev_source_tree(path):
@@ -2266,9 +2756,13 @@ def update_foundation_action(args):
         if unsafe:
             print("WARNING: --unsafe-trust-bundled set; skipping signature verification.",
                   file=sys.stderr)
-            # Honor cache when in unsafe mode so emergency recovery and tests
-            # can use locally-staged registries.
-            registry = _load_registry(force_refresh=False)
+            try:
+                registry = _load_bundled_registry_for_unsafe_recovery()
+            except (_RegistrySignatureError, _UnsafeTreeError, OSError) as e:
+                err(
+                    f"Unsafe recovery could not read the bundled registry: {e}. "
+                    "No cache or remote registry was trusted."
+                )
         else:
             try:
                 registry = _load_registry_strict(force_refresh=True)
@@ -2278,22 +2772,34 @@ def update_foundation_action(args):
                     f"Refusing to reconcile. If this is an emergency, "
                     f"re-run with --unsafe-trust-bundled (NOT RECOMMENDED)."
                 )
+        # The emergency signature bypass never bypasses path/digest safety.
+        # In particular, an empty manifest must not turn every installed file
+        # into an orphan scheduled for deletion.
+        try:
+            from erpclaw_lib.signing import (
+                RegistryManifestError,
+                validate_registry_manifests,
+            )
+        except ImportError as e:
+            err(f"Registry manifest validation failed; refusing to reconcile: {e}")
+        try:
+            validate_registry_manifests(registry)
+        except RegistryManifestError as e:
+            err(f"Registry manifest validation failed; refusing to reconcile: {e}")
         modules_by_name = _registry_to_dict(registry)
         foundation = modules_by_name.get("erpclaw")
         if not foundation or "files_sha256" not in foundation:
             err("Registry has no erpclaw foundation manifest; refusing to sync.")
         manifest = foundation["files_sha256"]
 
-        drift = _compute_foundation_drift(manifest)
+        try:
+            drift = _compute_foundation_drift(manifest)
+        except _UnsafeTreeError as e:
+            err(f"Foundation integrity check refused an unsafe tree: {e}")
         to_replace = drift["modified"] + drift["missing"]
         to_delete = drift["orphaned"]
 
         if not to_replace and not to_delete:
-            try:
-                with open(LAST_SYNC_MARKER, "w") as f:
-                    f.write(_now_iso())
-            except OSError:
-                pass
             result = {
                 "status": "ok",
                 "version": foundation.get("version"),
@@ -2363,15 +2869,21 @@ def update_foundation_action(args):
                     f"Reason: {e}"
                 )
 
-        # Apply: atomic per-file replace
+        # Apply: atomic per-file replace. Keep attempting the independently
+        # staged operations so the post-apply measurement can report the exact
+        # residual state, but never swallow a failure into a success result.
         replaced = []
+        apply_errors = []
         for rel, data in staged.items():
             target = os.path.join(FOUNDATION_INSTALL_ROOT, rel)
             try:
                 _atomic_write(target, data)
                 replaced.append(rel)
-            except OSError as e:
+            except (OSError, _UnsafeTreeError) as e:
                 _sync_log(f"replace failed for {rel}: {e}")
+                apply_errors.append({
+                    "operation": "replace", "path": rel, "error": str(e),
+                })
 
         # Apply: delete orphans (files removed from manifest)
         deleted = []
@@ -2379,21 +2891,51 @@ def update_foundation_action(args):
             target = os.path.join(FOUNDATION_INSTALL_ROOT, rel)
             try:
                 if os.path.isfile(target):
-                    bak = target + ".bak"
-                    try:
-                        shutil.copy2(target, bak)
-                    except OSError:
-                        pass
+                    _backup_file(target)
                     os.remove(target)
                     deleted.append(rel)
-            except OSError as e:
+            except (OSError, _UnsafeTreeError) as e:
                 _sync_log(f"delete failed for {rel}: {e}")
+                apply_errors.append({
+                    "operation": "delete", "path": rel, "error": str(e),
+                })
 
+        # The operation list is not evidence of convergence. Re-read the
+        # installed tree in both directions so a failed write/delete, a
+        # post-write mutation, or a newly appeared orphan cannot be reported as
+        # in sync. Do not run migrations or advance observable version state on
+        # a partially reconciled file tree.
         try:
-            with open(LAST_SYNC_MARKER, "w") as f:
-                f.write(_now_iso())
-        except OSError:
-            pass
+            post_drift = _compute_foundation_drift(manifest)
+            post_in_sync = not any(post_drift.values())
+        except (OSError, _UnsafeTreeError) as e:
+            post_drift = {"modified": [], "missing": [], "orphaned": []}
+            post_in_sync = False
+            apply_errors.append({
+                "operation": "verify", "path": ".", "error": str(e),
+            })
+        if apply_errors or not post_in_sync:
+            _sync_log(
+                "sync incomplete after apply: "
+                f"errors={len(apply_errors)} "
+                f"modified={len(post_drift['modified'])} "
+                f"missing={len(post_drift['missing'])} "
+                f"orphaned={len(post_drift['orphaned'])}"
+            )
+            print(json.dumps({
+                "status": "error",
+                "version": foundation.get("version"),
+                "in_sync": post_in_sync,
+                "replaced": replaced,
+                "deleted": deleted,
+                "apply_errors": apply_errors,
+                "remaining_drift": post_drift,
+                "message": (
+                    "Foundation file reconciliation did not converge; "
+                    "refusing to report success or run migrations."
+                ),
+            }, indent=2))
+            sys.exit(1)
 
         _sync_log(
             f"sync complete: replaced={len(replaced)} deleted={len(deleted)} "
@@ -2412,15 +2954,16 @@ def update_foundation_action(args):
         result = {
             "status": "ok",
             "version": foundation.get("version"),
-            "in_sync": True,
+            "in_sync": post_in_sync,
             "replaced": replaced,
             "deleted": deleted,
             "migrations": migrations,
         }
         if migrations.get("ran") and migrations.get("ok") is False:
-            # Files reconciled, but a migration failed. Do NOT claim success: the
-            # runner recorded ledger state (the failed stem + each applied one)
-            # and left the DB at the last good migration. Surface loudly + exit 1
+            # Files reconciled, but a migration failed. Do NOT claim success: a
+            # single-transaction migration's changes roll back, a migration that
+            # committed part of its work leaves that part, and the failure is
+            # recorded in the ledger as 'failed'. Surface loudly + exit 1
             # so operators and CI see the half-applied upgrade and re-run.
             result["status"] = "error"
             result["message"] = (
@@ -2477,6 +3020,24 @@ def verify_trust_root_action(args):
     }, indent=2))
 
 
+def _collect_rollback_backups():
+    """Return every `.bak` path under the install root, or refuse the whole tree.
+
+    Raises `_UnsafeTreeError` when any directory in scope cannot be listed, so
+    the caller never acts on a partial view of the tree.
+    """
+    backups = []
+    for root, dirs, files in os.walk(
+        FOUNDATION_INSTALL_ROOT,
+        onerror=_refuse_security_walk_error,
+    ):
+        dirs[:] = [d for d in dirs if d not in SYNC_SKIP_DIRS]
+        for fname in files:
+            if fname.endswith(".bak"):
+                backups.append(os.path.join(root, fname))
+    return sorted(backups)
+
+
 def rollback_foundation_action(args):
     """Restore .bak copies preserved by the most recent update-foundation run.
 
@@ -2491,24 +3052,34 @@ def rollback_foundation_action(args):
         err("Another foundation sync is in progress; try again shortly.")
 
     try:
+        # Enumerate every backup BEFORE restoring any. A bare os.walk drops an
+        # unreadable subtree silently, so a rollback used to restore the
+        # readable siblings and report `status: ok, skipped: []` for a tree
+        # whose other half it never saw (F2). The same helper the drift walk
+        # uses turns that into a refusal, and because enumeration completes
+        # first, a refused tree is left exactly as it was found.
+        try:
+            backups = _collect_rollback_backups()
+        except _UnsafeTreeError as exc:
+            _sync_log(f"rollback refused before restoring anything: {exc}")
+            err(
+                "rollback-foundation refused: the install tree could not be "
+                f"traversed completely ({exc}); nothing was restored"
+            )
+
         restored = []
         skipped = []
-        for root, dirs, files in os.walk(FOUNDATION_INSTALL_ROOT):
-            dirs[:] = [d for d in dirs if d not in SYNC_SKIP_DIRS]
-            for fname in files:
-                if not fname.endswith(".bak"):
-                    continue
-                bak_path = os.path.join(root, fname)
-                target_path = bak_path[:-4]  # strip .bak
-                try:
-                    shutil.copy2(bak_path, target_path)
-                    os.remove(bak_path)
-                    restored.append(os.path.relpath(target_path, FOUNDATION_INSTALL_ROOT))
-                except OSError as e:
-                    skipped.append({
-                        "path": os.path.relpath(bak_path, FOUNDATION_INSTALL_ROOT),
-                        "reason": str(e),
-                    })
+        for bak_path in backups:
+            target_path = bak_path[:-4]  # strip .bak
+            try:
+                shutil.copy2(bak_path, target_path)
+                os.remove(bak_path)
+                restored.append(os.path.relpath(target_path, FOUNDATION_INSTALL_ROOT))
+            except OSError as e:
+                skipped.append({
+                    "path": os.path.relpath(bak_path, FOUNDATION_INSTALL_ROOT),
+                    "reason": str(e),
+                })
 
         _sync_log(f"rollback complete: restored={len(restored)} skipped={len(skipped)}")
         print(json.dumps({

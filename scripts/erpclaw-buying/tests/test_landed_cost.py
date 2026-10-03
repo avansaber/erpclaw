@@ -20,6 +20,7 @@ from decimal import Decimal
 from buying_helpers import (
     call_action, ns, is_error, is_ok, load_db_query, _uuid,
 )
+from erpclaw_lib.db import get_dialect
 
 mod = load_db_query()
 
@@ -41,6 +42,23 @@ else:
 
 def _inv24(conn):
     """Run INV-24 directly; None = GREEN, violation string = RED."""
+    if get_dialect() == "postgresql":
+        pytest.skip("INV-24 lives in the SQLite-only invariant engine; NOT RUN on PostgreSQL")
+    if inv_engine is None:
+        pytest.skip("invariant_engine harness not present (published skill tree)")
+    return inv_engine._check_inv24_stock_account_gl_matches_ledger(conn)
+
+
+def _inv24_at_stage(conn):
+    """Evaluate INV-24 without ending the test on PostgreSQL.
+
+    Multi-stage tests call this at each stage: on PostgreSQL it returns None
+    and does nothing else, while on SQLite it returns exactly what _inv24
+    returns (including the harness-not-present skip). The test still ends
+    with one _inv24 call so the PostgreSQL lane reports the INV-24 skip.
+    """
+    if get_dialect() == "postgresql":
+        return None
     if inv_engine is None:
         pytest.skip("invariant_engine harness not present (published skill tree)")
     return inv_engine._check_inv24_stock_account_gl_matches_ledger(conn)
@@ -104,14 +122,15 @@ def _freight_100(env):
 def _gl_rows(conn, lcv_id):
     return conn.execute(
         "SELECT * FROM gl_entry WHERE voucher_type = 'landed_cost_voucher' "
-        "AND voucher_id = ? ORDER BY rowid", (lcv_id,)
+        "AND voucher_id = ? ORDER BY account_id, debit, credit", (lcv_id,)
     ).fetchall()
 
 
 def _sle_rows(conn, lcv_id):
     return conn.execute(
         "SELECT * FROM stock_ledger_entry WHERE voucher_type = 'landed_cost_voucher' "
-        "AND voucher_id = ? ORDER BY rowid", (lcv_id,)
+        "AND voucher_id = ? ORDER BY item_id, warehouse_id, actual_qty, "
+        "stock_value_difference", (lcv_id,)
     ).fetchall()
 
 
@@ -433,15 +452,17 @@ class TestCancelLandedCostVoucher:
         return fifo_item, created["landed_cost_voucher_id"], cancelled
 
     def test_gl_reversed_via_constitutional_helper(self, conn, env):
+        """GL mirrors swap debit/credit; both legs of a cancellation carry `is_cancelled = 1`."""
         fifo_item, lcv_id, cancelled = self._build_and_cancel(conn, env)
         assert cancelled["gl_reversals"] == 2
 
         rows = _gl_rows(conn, lcv_id)
-        assert len(rows) == 4  # 2 originals + 2 active mirrors
-        originals = [r for r in rows if r["is_cancelled"] == 1]
-        mirrors = [r for r in rows if r["is_cancelled"] == 0]
+        assert len(rows) == 4  # 2 originals + 2 flagged mirrors
+        originals = [r for r in rows if not (r["remarks"] or "").startswith("Reversal of ")]
+        mirrors = [r for r in rows if (r["remarks"] or "").startswith("Reversal of ")]
         assert len(originals) == 2
         assert len(mirrors) == 2
+        assert all(r["is_cancelled"] == 1 for r in rows)
         # Mirror rows swap debit <-> credit: stock account gets the 100.00 credit.
         stock_mirror = [r for r in mirrors if r["account_id"] == env["stock_acct"]][0]
         assert Decimal(stock_mirror["credit"]) == Decimal("100.00")
@@ -500,6 +521,10 @@ class TestCancelLandedCostVoucher:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestInv24NegativeControl:
+    @pytest.mark.skipif(
+        os.environ.get("ERPCLAW_DB_DIALECT") == "postgresql",
+        reason="INV-24 lives in the SQLite-only invariant engine; NOT RUN on PostgreSQL",
+    )
     def test_stock_gl_without_sle_delta_reddens(self, conn, env):
         """Seed a deliberate stock-account GL post with NO SLE delta via raw SQL
         and assert INV-24 catches the divergence (the check is not vacuous)."""
@@ -524,6 +549,10 @@ class TestInv24NegativeControl:
         )
         assert "divergence" in violation
 
+    @pytest.mark.skipif(
+        os.environ.get("ERPCLAW_DB_DIALECT") == "postgresql",
+        reason="INV-24 lives in the SQLite-only invariant engine; NOT RUN on PostgreSQL",
+    )
     def test_inv24_registered_in_engine(self, conn, env):
         if inv_engine is None:
             pytest.skip("invariant_engine harness not present (published skill tree)")
@@ -542,23 +571,27 @@ class TestInv24GreenAcrossCancel:
         after PR submit, after LCV add, and after LCV cancel."""
         fifo_item = _seed_fifo_item(conn)
         pr_id = _submitted_receipt(conn, env, fifo_item)
-        assert _inv24(conn) is None, "RED after PR submit"
+        assert _inv24_at_stage(conn) is None, "RED after PR submit"
 
         created = _add_lcv(conn, env, [pr_id], _freight_100(env))
         assert is_ok(created)
-        assert _inv24(conn) is None, "RED after LCV add"
+        assert _inv24_at_stage(conn) is None, "RED after LCV add"
 
         cancelled = call_action(mod.cancel_landed_cost_voucher, conn, ns(
             landed_cost_voucher_id=created["landed_cost_voucher_id"],
         ))
         assert is_ok(cancelled)
-        assert _inv24(conn) is None, "RED after LCV cancel"
+        assert _inv24_at_stage(conn) is None, "RED after LCV cancel"
+        # Trailing _inv24 call: already GREEN above on SQLite; on PostgreSQL
+        # this reports the INV-24 skip instead of a checked pass.
+        _inv24(conn)
 
     def test_green_through_asymmetric_pr_cancel_too(self, conn, env):
-        """The BDFL's exact collision case: cancel helpers are asymmetric (GL
-        reversal rows are ACTIVE, SLE reversal rows are is_cancelled=1 audit
-        records). Only reversal-INCLUSIVE netting stays balanced when the
-        underlying purchase receipt is cancelled after the LCV cycle."""
+        """The BDFL's exact collision case: both legs of a cancellation carry `is_cancelled = 1`
+        on GL and SLE alike, so reversal-INCLUSIVE netting stays balanced when the underlying
+        purchase receipt is cancelled after the LCV cycle. The receipt cancel succeeds because
+        the LCV cancel already reversed its own valuation (negated reprice) and GL rows, leaving
+        the receipt's own active SLE/GL rows free to reverse."""
         fifo_item = _seed_fifo_item(conn)
         pr_id = _submitted_receipt(conn, env, fifo_item)
         created = _add_lcv(conn, env, [pr_id], _freight_100(env))
@@ -580,12 +613,15 @@ class TestInv24GreenAcrossCancel:
             (pr_id,)
         ).fetchall()
         assert all(r["is_cancelled"] == 1 for r in sle_flags)
-        # ...while PR GL reversal rows are active mirrors.
-        gl_active = conn.execute(
-            "SELECT COUNT(*) AS n FROM gl_entry WHERE voucher_type = 'purchase_receipt' "
-            "AND voucher_id = ? AND is_cancelled = 0",
+        # ...and PR GL reversal rows are flagged mirrors too: no active rows remain.
+        gl_rows = conn.execute(
+            "SELECT is_cancelled, remarks FROM gl_entry WHERE voucher_type = 'purchase_receipt' "
+            "AND voucher_id = ?",
             (pr_id,)
-        ).fetchone()["n"]
-        assert gl_active == 2
+        ).fetchall()
+        gl_originals = [r for r in gl_rows if not (r["remarks"] or "").startswith("Reversal of ")]
+        gl_mirrors = [r for r in gl_rows if (r["remarks"] or "").startswith("Reversal of ")]
+        assert len(gl_originals) == 2 and len(gl_mirrors) == 2
+        assert all(r["is_cancelled"] == 1 for r in gl_rows)
 
         assert _inv24(conn) is None, "RED after asymmetric PR cancel"

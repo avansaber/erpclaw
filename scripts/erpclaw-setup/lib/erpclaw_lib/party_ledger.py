@@ -27,8 +27,7 @@ Why two rules and not one flat filter — the mistake this module removes:
   payment pair is the only reading that returns the right answer, and dropping
   the delinked document row is the only reading that returns the right answer on
   the other side. Measured, not reasoned: INV-25's docstring
-  (testing/invariant_engine.py), planning/simlogs/wavef-s14-inv25_SIM_2026-07-25.md
-  item 4, ADR-0030 (INV-24), ADR-0031:35, ADR-0032 Decision 2.
+  (testing/invariant_engine.py).
 
 Everything here is a pure predicate — no writes, no transaction, no commit. The
 SQL fragments are *expressions*, never whole statements, so they compose into a

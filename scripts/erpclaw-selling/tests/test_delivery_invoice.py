@@ -6,56 +6,41 @@ Actions tested:
   - create-sales-invoice, update-sales-invoice, get-sales-invoice
   - list-sales-invoices, submit-sales-invoice, cancel-sales-invoice
   - create-credit-note, list-credit-notes
-  - update-invoice-outstanding
+  - update-invoice-outstanding is RETIRED (TestUpdateInvoiceOutstandingRetired)
 """
-import importlib.util
 import json
 import os
-import pytest
+import subprocess
+import sys
+import uuid
 from decimal import Decimal
 from selling_helpers import (
-    call_action, ns, is_error, is_ok, load_db_query,
+    call_action, ns, is_error, is_ok, load_db_query, init_all_tables,
 )
+from erpclaw_lib import payment_clearing
 
 mod = load_db_query()
 
 
-def _load_invariant_engine():
-    """Defensive monorepo-harness import (test_inv25_flows.py pattern): the
-    published skill tree has no testing/ dir, so engine-backed pins skip."""
-    cur = os.path.dirname(os.path.abspath(__file__))
-    while True:
-        if os.path.exists(os.path.join(cur, "CLAUDE.md")) or \
-                os.path.isdir(os.path.join(cur, ".git")):
-            break
-        parent = os.path.dirname(cur)
-        if parent == cur:
-            return None
-        cur = parent
-    path = os.path.join(cur, "testing", "invariant_engine.py")
-    if not os.path.exists(path):
-        return None
-    spec = importlib.util.spec_from_file_location("invariant_engine_pin_sell", path)
-    m = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(m)
-    return m
+_TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+_MODULE_DIR = os.path.dirname(_TESTS_DIR)
+_SCRIPTS_DIR = os.path.dirname(_MODULE_DIR)
+_ROUTER = os.path.join(_SCRIPTS_DIR, "db_query.py")
+_IN_TREE_LIB = os.path.join(_SCRIPTS_DIR, "erpclaw-setup", "lib")
 
+RETIRED_ACTION = "update-invoice-outstanding"
 
-_inv_engine = _load_invariant_engine()
-
-
-def _inv25(conn):
-    if _inv_engine is None:
-        pytest.skip("invariant_engine harness not present (published skill tree)")
-    _inv_engine._ensure_decimal_sum(conn)
-    return _inv_engine._check_inv25_ar_summary_detail(conn)
-
-
-def _inv22(conn):
-    if _inv_engine is None:
-        pytest.skip("invariant_engine harness not present (published skill tree)")
-    _inv_engine._ensure_decimal_sum(conn)
-    return _inv_engine._check_inv22_payment_invoice_reconciliation(conn)
+# The replacement routes. The steer must name ALL of them: the cash flow, the
+# reduction flow, and the write-off — a retirement without a route is a dead
+# end, and a partial route sends the caller somewhere that cannot finish the
+# job they actually had.
+SANCTIONED_FLOW = [
+    "add-payment",
+    "submit-payment",
+    "allocate-payment",
+    "create-credit-note",
+    "write-off-invoice",
+]
 
 
 def _items(env, *specs):
@@ -380,8 +365,30 @@ class TestListCreditNotes:
         assert is_ok(result)
 
 
-class TestUpdateInvoiceOutstanding:
-    def test_reduce_outstanding(self, conn, env):
+class TestUpdateInvoiceOutstandingRetired:
+    """`update-invoice-outstanding` is RETIRED (steer shape, M776).
+
+    The action moved a sales invoice's ``outstanding_amount`` and appended a
+    ``payment_ledger_entry`` adjustment row with NO general-ledger posting, so
+    the GL and the sub-ledger drifted apart while the summary-versus-detail
+    checks stayed green. No module calls it — payments clears documents
+    in-process through ``erpclaw_lib.payment_clearing``.
+
+    What is pinned here is the RETIREMENT CONTRACT (the M103 shape): the name
+    stays ROUTABLE and answers with one JSON error naming the replacement
+    flows, exit 1, never a traceback and never "Unknown action", and NOTHING
+    LANDS. Against the pre-retirement handler this class is red on both
+    halves — the old handler returned ``status: ok`` and wrote a ledger row.
+
+    The two old tests pinned the retired action's own contract (INV-25 and
+    INV-22 staying green after a GL-less balance move); that contract is
+    withdrawn with the action — the checks now hold because the move cannot
+    happen, and every sanctioned flow (add-payment -> submit-payment /
+    allocate-payment, create-credit-note -> submit-sales-invoice,
+    write-off-invoice) posts both sides together.
+    """
+
+    def _submitted_invoice(self, conn, env):
         items = _items(env, ("item1", "5", "100.00"))
         create = call_action(mod.create_sales_invoice, conn, ns(
             sales_order_id=None, delivery_note_id=None,
@@ -390,71 +397,101 @@ class TestUpdateInvoiceOutstanding:
             items=items, tax_template_id=None,
             payment_terms_id=None,
         ))
-        call_action(mod.submit_sales_invoice, conn, ns(
+        assert is_ok(create), f"invoice creation failed: {create}"
+        submit = call_action(mod.submit_sales_invoice, conn, ns(
             sales_invoice_id=create["sales_invoice_id"],
         ))
-        result = call_action(mod.update_invoice_outstanding, conn, ns(
-            sales_invoice_id=create["sales_invoice_id"],
+        assert is_ok(submit), f"invoice submit failed: {submit}"
+        return create["sales_invoice_id"]
+
+    def test_retired_action_returns_a_steer_not_a_result(self, conn, env):
+        """The retired action answers with one JSON error naming every
+        replacement — the half that was red before M776 (``status: ok``)."""
+        invoice_id = self._submitted_invoice(conn, env)
+        result = call_action(mod.ACTIONS[RETIRED_ACTION], conn, ns(
+            sales_invoice_id=invoice_id,
             amount="200.00",
         ))
-        assert is_ok(result)
+        assert result["status"] == "error", (
+            f"{RETIRED_ACTION} still returned a result: "
+            f"{json.dumps(result)[:300]}")
+        assert "retired" in result["message"].lower(), result
+        assert RETIRED_ACTION in result["message"], (
+            "the message must name the action the caller typed")
+        assert result["suggestion"] == payment_clearing.RETIRED_OUTSTANDING_STEER
+        for replacement in SANCTIONED_FLOW:
+            assert replacement in result["suggestion"], (
+                f"the steer does not name {replacement}; a retirement without "
+                f"a route is a dead end. Got: {result['suggestion']}")
 
+    def _snapshot(self, conn, invoice_id):
         si = conn.execute(
-            "SELECT outstanding_amount FROM sales_invoice WHERE id=?",
-            (create["sales_invoice_id"],)
-        ).fetchone()
-        assert Decimal(si["outstanding_amount"]) == Decimal("300.00")
+            "SELECT outstanding_amount, status FROM sales_invoice WHERE id=?",
+            (invoice_id,)).fetchone()
+        ple_n = conn.execute(
+            "SELECT COUNT(*) AS n FROM payment_ledger_entry").fetchone()["n"]
+        gl_n = conn.execute(
+            "SELECT COUNT(*) AS n FROM gl_entry").fetchone()["n"]
+        audit_n = conn.execute(
+            "SELECT COUNT(*) AS n FROM audit_log").fetchone()["n"]
+        return {"outstanding_amount": si["outstanding_amount"],
+                "status": si["status"],
+                "payment_ledger_entry": ple_n,
+                "gl_entry": gl_n,
+                "audit_log": audit_n}
 
-        # QA round-1 DEFECT 1 pin (INV-25 / ADR-0031): the action must post the
-        # matching payment-ledger DETAIL row in the same transaction as the
-        # SUMMARY write — one invocation without it reds INV-25 permanently.
-        assert "payment_ledger_entry_id" in result
-        adj = conn.execute(
-            "SELECT voucher_type, voucher_id, amount, delinked "
-            "FROM payment_ledger_entry WHERE id=?",
-            (result["payment_ledger_entry_id"],)
-        ).fetchone()
-        assert adj is not None
-        assert adj["voucher_type"] == "sales_invoice"
-        assert adj["voucher_id"] == create["sales_invoice_id"]
-        assert adj["delinked"] == 0
-        assert Decimal(adj["amount"]) == Decimal("-200.00")
-        assert _inv25(conn) is None
+    def test_retired_action_writes_nothing(self, conn, env):
+        """The invoice was submitted first, so both ledgers hold rows; the
+        retired action must touch neither. The half that was red before M776:
+        the old handler wrote a payment-ledger row here with no GL leg."""
+        invoice_id = self._submitted_invoice(conn, env)
+        before = self._snapshot(conn, invoice_id)
+        assert before["payment_ledger_entry"] >= 1, (
+            "the submitted invoice must own a payment-ledger row")
+        assert before["gl_entry"] >= 1, (
+            "the submitted invoice must own GL rows")
+        call_action(mod.ACTIONS[RETIRED_ACTION], conn, ns(
+            sales_invoice_id=invoice_id,
+            amount="200.00",
+        ))
+        conn.commit()
+        after = self._snapshot(conn, invoice_id)
+        assert after == before, (
+            f"{RETIRED_ACTION} wrote something: {before} -> {after}")
 
-    def test_full_pay_keeps_inv25_and_inv22_green(self, conn, env):
-        """QA round-1 DEFECT 1 pin, full-clear path: paying an invoice down to
-        zero through update-invoice-outstanding flips it to 'paid' with the
-        detail net at exactly zero — INV-25 (always-on) AND INV-22 (paid-scope)
-        both green."""
-        items = _items(env, ("item1", "5", "100.00"))
-        create = call_action(mod.create_sales_invoice, conn, ns(
-            sales_order_id=None, delivery_note_id=None,
-            customer_id=env["customer"], company_id=env["company_id"],
-            posting_date="2026-06-20", due_date="2026-07-20",
-            items=items, tax_template_id=None,
-            payment_terms_id=None,
-        ))
-        call_action(mod.submit_sales_invoice, conn, ns(
-            sales_invoice_id=create["sales_invoice_id"],
-        ))
-        r1 = call_action(mod.update_invoice_outstanding, conn, ns(
-            sales_invoice_id=create["sales_invoice_id"], amount="200.00"))
-        assert is_ok(r1)
-        r2 = call_action(mod.update_invoice_outstanding, conn, ns(
-            sales_invoice_id=create["sales_invoice_id"], amount="300.00"))
-        assert is_ok(r2)
-        si = conn.execute(
-            "SELECT status, outstanding_amount FROM sales_invoice WHERE id=?",
-            (create["sales_invoice_id"],)
-        ).fetchone()
-        assert si["status"] == "paid"
-        assert si["outstanding_amount"] == "0"
-        rows = conn.execute(
-            "SELECT amount FROM payment_ledger_entry "
-            "WHERE voucher_type='sales_invoice' AND voucher_id=? AND delinked=0",
-            (create["sales_invoice_id"],)
-        ).fetchall()
-        assert len(rows) == 3  # submit +500, adjustments -200 and -300
-        assert sum(Decimal(r["amount"]) for r in rows) == Decimal("0")
-        assert _inv25(conn) is None
-        assert _inv22(conn) is None
+    def test_full_legacy_invocation_reaches_the_steer_through_the_router(
+            self, tmp_path):
+        """Drive the FOUNDATION router exactly as a legacy caller would — the
+        old flags included — and read what comes back: the name still routes
+        (never "Unknown action"), the legacy flags still parse (an argparse
+        usage error would exit 2 before the JSON contract), and what routes
+        is the steer.
+
+        Hermetic per the M54/M97 discipline: ERPCLAW_HOME is redirected at a
+        temp dir so nothing touches the developer's real install, and
+        PYTHONPATH binds the IN-TREE erpclaw_lib so find_spec resolves the
+        tree under test rather than whatever the deployed symlink points at.
+        The temp home gets a PROVISIONED database on purpose: the router's
+        requires-setup pre-flight runs before dispatch, and the steer contract
+        is about what an INSTALLED caller gets.
+        """
+        home = tmp_path / "home"
+        (home / "lib").mkdir(parents=True)
+        init_all_tables(str(home / "data.sqlite"))
+        env = dict(os.environ, ERPCLAW_HOME=str(home), PYTHONPATH=_IN_TREE_LIB)
+        proc = subprocess.run(
+            [sys.executable, _ROUTER, "--action", RETIRED_ACTION,
+             "--sales-invoice-id", str(uuid.uuid4()),
+             "--amount", "200.00"],
+            capture_output=True, text=True, env=env, timeout=120)
+
+        assert proc.returncode == 1, (proc.returncode, proc.stdout[-400:],
+                                      proc.stderr[-400:])
+        assert "Traceback" not in proc.stderr, proc.stderr[-800:]
+        payload = json.loads(proc.stdout)
+        assert payload.get("status") == "error", payload
+        assert "retired" in payload.get("message", "").lower(), payload
+        assert RETIRED_ACTION in payload.get("message", ""), payload
+        for replacement in SANCTIONED_FLOW:
+            assert replacement in payload.get("suggestion", ""), (
+                replacement, payload)

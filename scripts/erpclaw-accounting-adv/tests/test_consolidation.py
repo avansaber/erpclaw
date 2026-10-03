@@ -212,9 +212,6 @@ class TestGenerateEliminationEntries:
 # 50,000.00 of eliminations against one 25,000.00 transaction). M63-C's steer
 # sends every user of the old flow straight here by name, so the duplicate was
 # reachable by following our own instructions.
-#
-# Plan home: planning/pending_items.md row M95.
-# SIM: planning/simlogs/m95_SIM_2026-08-12.md
 # ──────────────────────────────────────────────────────────────────────────────
 
 class TestGenerateEliminationEntriesIsIdempotent:

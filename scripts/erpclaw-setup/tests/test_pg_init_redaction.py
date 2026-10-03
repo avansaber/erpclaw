@@ -93,12 +93,27 @@ class _StubConn:
         pass
 
 
-def test_postgres_success_line_is_redacted(monkeypatch):
+def test_postgres_success_line_is_redacted(monkeypatch, tmp_path):
     """The success print (the shipped leak site) carries the masked URL only."""
     mod = _init_schema()
     import erpclaw_lib.db as db
+    import erpclaw_lib.seam as seam_mod
 
+    monkeypatch.setenv("ERPCLAW_DB_DIALECT", "postgresql")
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(db, "get_connection", lambda *a, **k: _StubConn())
+    provision_calls = []
+    provision_core_calls = []
+    provision_envelope_calls = []
+    monkeypatch.setattr(
+        seam_mod, "provision",
+        lambda metadata, db_path=None: provision_calls.append(db_path))
+    monkeypatch.setattr(
+        seam_mod, "provision_authority_core",
+        lambda db_path=None: provision_core_calls.append(db_path))
+    monkeypatch.setattr(
+        seam_mod, "provision_authority_envelope",
+        lambda db_path=None: provision_envelope_calls.append(db_path))
     buf = io.StringIO()
     with redirect_stderr(buf):
         mod._init_db_postgres(_URL)
@@ -107,6 +122,10 @@ def test_postgres_success_line_is_redacted(monkeypatch):
     assert _PASSWORD not in out
     assert "erpclaw:***@127.0.0.1:5433/erpclaw_wave_g" in out
     assert "Backend: PostgreSQL" in out
+    assert provision_calls == [_URL]
+    assert provision_core_calls == [_URL]
+    assert provision_envelope_calls == [_URL]
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_connection_failure_keeps_context_and_drops_the_password(tmp_path):

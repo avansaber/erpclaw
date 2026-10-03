@@ -68,6 +68,10 @@ class TestCloseFiscalYear:
     def test_close_empty_fy(self, conn):
         """Close a fiscal year with no GL entries (P&L = 0)."""
         cid = seed_company(conn)
+        ccid = seed_cost_center(conn, cid, "Main CC")
+        conn.execute("UPDATE company SET default_cost_center_id = ? WHERE id = ?",
+                     (ccid, cid))
+        conn.commit()
         fyid = seed_fiscal_year(conn, cid, "FY Close", "2025-01-01", "2025-12-31")
         closing_acct = seed_account(conn, cid, "Retained Earnings", "equity",
                                     "equity", "3000")
@@ -93,6 +97,9 @@ class TestCloseFiscalYear:
         retained = seed_account(conn, cid, "Retained Earnings", "equity",
                                 "equity", "3000")
         ccid = seed_cost_center(conn, cid, "Main CC")
+        conn.execute("UPDATE company SET default_cost_center_id = ? WHERE id = ?",
+                     (ccid, cid))
+        conn.commit()
 
         # Post income
         entries = json.dumps([
@@ -138,6 +145,10 @@ class TestCloseFiscalYear:
 
     def test_close_already_closed_fails(self, conn):
         cid = seed_company(conn)
+        _cc = seed_cost_center(conn, cid, "Main CC")
+        conn.execute("UPDATE company SET default_cost_center_id = ? WHERE id = ?",
+                     (_cc, cid))
+        conn.commit()
         fyid = seed_fiscal_year(conn, cid, "FY Closed2", "2025-01-01", "2025-12-31")
         closing = seed_account(conn, cid, "RE", "equity", "equity", "3001")
         call_action(mod.close_fiscal_year, conn, ns(
@@ -169,6 +180,9 @@ class TestCloseFiscalYearCompanyGuard:
         expense_a = seed_account(conn, comp_a, "Expenses A", "expense",
                                  "expense", "5000")
         cc_a = seed_cost_center(conn, comp_a, "CC A")
+        conn.execute("UPDATE company SET default_cost_center_id = ? WHERE id = ?",
+                     (cc_a, comp_a))
+        conn.commit()
 
         # Company B's retained-earnings account (the WRONG account to close A with).
         retained_b = seed_account(conn, comp_b, "Retained Earnings B", "equity",
@@ -242,6 +256,9 @@ class TestCloseFiscalYearCompanyGuard:
         retained_a = seed_account(conn, comp_a, "Retained Earnings", "equity",
                                   "equity", "3000")
         cc_a = seed_cost_center(conn, comp_a, "CC")
+        conn.execute("UPDATE company SET default_cost_center_id = ? WHERE id = ?",
+                     (cc_a, comp_a))
+        conn.commit()
 
         call_action(mod.post_gl_entries, conn, ns(
             voucher_type="journal_entry", voucher_id="JE-INC",
@@ -293,6 +310,10 @@ class TestCloseFiscalYearCompanyGuard:
 class TestReopenFiscalYear:
     def test_reopen_closed_fy(self, conn):
         cid = seed_company(conn)
+        _cc = seed_cost_center(conn, cid, "Main CC")
+        conn.execute("UPDATE company SET default_cost_center_id = ? WHERE id = ?",
+                     (_cc, cid))
+        conn.commit()
         fyid = seed_fiscal_year(conn, cid, "FY Reopen", "2025-01-01", "2025-12-31")
         closing = seed_account(conn, cid, "RE2", "equity", "equity", "3002")
         call_action(mod.close_fiscal_year, conn, ns(

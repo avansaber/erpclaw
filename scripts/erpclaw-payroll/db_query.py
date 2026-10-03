@@ -22,14 +22,15 @@ try:
     import importlib.util
     if importlib.util.find_spec("erpclaw_lib") is None:
         sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
-    from erpclaw_lib.db import get_connection, ensure_db_exists, DEFAULT_DB_PATH
+    from erpclaw_lib.db import get_connection, unexpected_error_message
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.naming import get_next_name
-    from erpclaw_lib.gl_posting import insert_gl_entries, reverse_gl_entries
+    from erpclaw_lib.gl_posting import insert_gl_entries, reverse_gl_entries, take_chain_heads
     from erpclaw_lib.validation import check_input_lengths
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.dependencies import check_required_tables
+    from erpclaw_lib.query_helpers import get_default_cost_center
     from erpclaw_lib.query import (Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL,
                                     DecimalSum, DecimalAbs, insert_row, update_row, dynamic_update, now)
     from erpclaw_lib.vendor.pypika.terms import LiteralValue, ValueWrapper
@@ -156,27 +157,9 @@ def _validate_account_exists(conn, account_id: str, label: str = "Account"):
     return acct
 
 
-def _get_fiscal_year_row(conn, target_date: str) -> dict | None:
-    """Return the full fiscal year row for a date, or None."""
-    t = Table("fiscal_year")
-    q = (Q.from_(t)
-         .select(t.id, t.name, t.start_date, t.end_date, t.company_id)
-         .where(t.start_date <= P())
-         .where(t.end_date >= P())
-         .where(t.is_closed == 0))
-    fy = conn.execute(q.get_sql(), (target_date, target_date)).fetchone()
-    return row_to_dict(fy) if fy else None
-
-
 def _get_cost_center(conn, company_id: str) -> str | None:
     """Return the first non-group cost center for a company, or None."""
-    t = Table("cost_center")
-    q = (Q.from_(t).select(t.id)
-         .where(t.company_id == P())
-         .where(t.is_group == 0)
-         .limit(1))
-    cc = conn.execute(q.get_sql(), (company_id,)).fetchone()
-    return cc["id"] if cc else None
+    return get_default_cost_center(conn, company_id)
 
 
 def _get_employee_company_id(conn, employee_id: str) -> str:
@@ -1215,6 +1198,7 @@ def update_futa_suta_config(conn, args):
 # ---------------------------------------------------------------------------
 
 VALID_GARNISHMENT_TYPES = ("child_support", "tax_levy", "student_loan", "creditor")
+VALID_GARNISHMENT_STATUSES = ("active", "paused", "completed", "cancelled")
 # Federal priority: child_support=1, tax_levy=2, student_loan=3, creditor=4
 GARNISHMENT_TYPE_PRIORITY = {
     "child_support": 1, "tax_levy": 2, "student_loan": 3, "creditor": 4,
@@ -1291,7 +1275,7 @@ def update_garnishment(conn, args):
 
     data = {}
     if args.status:
-        if args.status not in ("active", "paused", "completed", "cancelled"):
+        if args.status not in VALID_GARNISHMENT_STATUSES:
             err("Invalid status")
         data["status"] = args.status
     if args.amount_or_percentage:
@@ -1314,6 +1298,10 @@ def update_garnishment(conn, args):
 
 def list_garnishments(conn, args):
     """List garnishments for an employee or company."""
+    garnishment_status = getattr(args, "status", None)
+    if garnishment_status and garnishment_status not in VALID_GARNISHMENT_STATUSES:
+        err(f"Invalid status: {garnishment_status}. "
+            f"Must be one of: {', '.join(VALID_GARNISHMENT_STATUSES)}")
     employee_id = args.employee_id
     company_id = args.company_id
 
@@ -1882,6 +1870,109 @@ def _get_or_create_statutory_component(conn: sqlite3.Connection,
     return comp_id
 
 
+def _garnishment_component_name(conn, garn):
+    creditor = garn["creditor_name"]
+    employee_id = garn["employee_id"]
+    wg_t = Table("wage_garnishment")
+    q = Q.from_(wg_t).select(wg_t.id).where(wg_t.employee_id == P()).where(wg_t.creditor_name == P())
+    rows = conn.execute(q.get_sql(), (employee_id, creditor)).fetchall()
+    if len(rows) == 1:
+        return f"Garnishment - {creditor}"
+    return f"Garnishment - {creditor} [{garn['id'][:8]}]"
+
+
+def _give_back_garnishments(conn, slip_ids):
+    norm_ids = []
+    for item in (slip_ids or []):
+        if isinstance(item, str):
+            norm_ids.append(item)
+        elif item is None:
+            continue
+        else:
+            try:
+                norm_ids.append(item["id"])
+            except Exception:
+                norm_ids.append(str(item))
+    if not norm_ids:
+        return 0
+    per_order = {}
+    for slip_id in norm_ids:
+        ss_one = Table("salary_slip")
+        slip_q = Q.from_(ss_one).select(ss_one.star).where(ss_one.id == P())
+        slip_row = conn.execute(slip_q.get_sql(), (slip_id,)).fetchone()
+        if not slip_row:
+            continue
+        slip = row_to_dict(slip_row)
+        employee_id = slip["employee_id"]
+        slip_created = slip.get("created_at")
+        ssd_t = Table("salary_slip_detail").as_("ssd")
+        sc_t = Table("salary_component").as_("sc")
+        det_q = (Q.from_(ssd_t)
+                 .join(sc_t).on(sc_t.id == ssd_t.salary_component_id)
+                 .select(ssd_t.star, sc_t.name.as_("component_name"))
+                 .where(ssd_t.salary_slip_id == P())
+                 .where(sc_t.component_type == P())
+                 .where(sc_t.is_statutory == P())
+                 .where(sc_t.name.like(P())))
+        det_rows = conn.execute(det_q.get_sql(), (slip_id, "deduction", 1, "Garnishment - %")).fetchall()
+        for det in det_rows:
+            det_dict = row_to_dict(det)
+            comp_name = det_dict["component_name"]
+            amt = to_decimal(det_dict["amount"])
+            prefix = "Garnishment - "
+            is_bracket = False
+            creditor = None
+            id_prefix = None
+            if comp_name.startswith(prefix) and comp_name.endswith("]") and " [" in comp_name:
+                cut = comp_name.rfind(" [")
+                inner = comp_name[cut + 2:-1]
+                if len(inner) == 8:
+                    is_bracket = True
+                    creditor = comp_name[len(prefix):cut]
+                    id_prefix = inner
+            if is_bracket:
+                wg_t = Table("wage_garnishment")
+                cand_q = (Q.from_(wg_t).select(wg_t.star)
+                          .where(wg_t.employee_id == P())
+                          .where(wg_t.creditor_name == P()))
+                cands = [row_to_dict(r) for r in conn.execute(cand_q.get_sql(), (employee_id, creditor)).fetchall()]
+                cands = [c for c in cands if str(c["id"]).startswith(id_prefix)]
+            else:
+                creditor = comp_name[len(prefix):]
+                wg_t = Table("wage_garnishment")
+                cand_q = (Q.from_(wg_t).select(wg_t.star)
+                          .where(wg_t.employee_id == P())
+                          .where(wg_t.creditor_name == P()))
+                cands = [row_to_dict(r) for r in conn.execute(cand_q.get_sql(), (employee_id, creditor)).fetchall()]
+                if len(cands) > 1 and slip_created is not None:
+                    cands = [c for c in cands if (c.get("created_at") or "") <= slip_created]
+            if len(cands) != 1:
+                raise ValueError(f"Salary slip {slip_id} has garnishment deduction '{comp_name}' that matches {len(cands)} garnishment orders of employee {employee_id}; nothing was changed")
+            oid = cands[0]["id"]
+            if oid not in per_order:
+                per_order[oid] = {"order": cands[0], "amount": Decimal("0")}
+            per_order[oid]["amount"] += amt
+    changed = 0
+    for oid, info in per_order.items():
+        order = info["order"]
+        total_amt = info["amount"]
+        before = to_decimal(order.get("cumulative_paid"))
+        new_val = before - total_amt
+        if new_val < Decimal("0"):
+            new_val = Decimal("0")
+        data = {"cumulative_paid": str(round_currency(new_val))}
+        total_owed_raw = order.get("total_owed")
+        if order.get("status") == "completed" and total_owed_raw:
+            owed = to_decimal(total_owed_raw)
+            if before >= owed and new_val < owed:
+                data["status"] = "active"
+        data["updated_at"] = now()
+        upd_sql, upd_params = dynamic_update("wage_garnishment", data, where={"id": oid})
+        conn.execute(upd_sql, upd_params)
+        changed += 1
+    return changed
+
+
 def _calculate_working_and_payment_days(conn: sqlite3.Connection,
                                          employee_id: str,
                                          period_start: str,
@@ -2124,6 +2215,12 @@ def generate_salary_slips(conn: sqlite3.Connection, args) -> None:
     ss_t = Table("salary_slip")
     del_q = Q.from_(ss_t).select(ss_t.id).where(ss_t.payroll_run_id == P()).where(ss_t.status == ValueWrapper("draft"))
     existing_slips = conn.execute(del_q.get_sql(), (payroll_run_id,)).fetchall()
+
+    try:
+        _give_back_garnishments(conn, [s["id"] for s in existing_slips])
+    except ValueError as e:
+        conn.rollback()
+        err(str(e))
 
     ssd_t = Table("salary_slip_detail")
     for slip in existing_slips:
@@ -2667,7 +2764,7 @@ def generate_salary_slips(conn: sqlite3.Connection, args) -> None:
 
                 # Create salary slip detail for garnishment
                 comp_garn_id = _get_or_create_statutory_component(
-                    conn, f"Garnishment - {garn['creditor_name']}", "deduction",
+                    conn, _garnishment_component_name(conn, garn), "deduction",
                     is_statutory=1,
                 )
                 detail_id = str(uuid.uuid4())
@@ -2926,480 +3023,664 @@ def submit_payroll_run(conn: sqlite3.Connection, args) -> None:
     if run["status"] != "draft":
         err(f"Payroll run is '{run['status']}', must be 'draft' to submit")
 
-    company_id = run["company_id"]
-    period_end = run["period_end"]
-    tax_year = int(period_end[:4])
-
-    # Must have slips
-    ss_t = Table("salary_slip")
-    slips_q = Q.from_(ss_t).select(ss_t.star).where(ss_t.payroll_run_id == P()).where(ss_t.status == ValueWrapper("draft"))
-    slips = conn.execute(slips_q.get_sql(), (payroll_run_id,)).fetchall()
-    if not slips:
-        err("Payroll run has no draft salary slips. Generate slips first.")
-
-    slips = [row_to_dict(s) for s in slips]
-
-    # --- Retro-pay consistency check (Feature #22c wire-up) ---
-    # Each slip's 'Retro Pay Adjustment' earning line was computed from the
-    # employee's pending retro_pay_adjustment rows at generation time. Those
-    # same rows flip to 'applied' in this transaction, so the pending total
-    # must still equal the slip line; a mismatch means adjustments changed
-    # after generation and the run must be regenerated.
-    retro_consume = {}  # employee_id -> [retro_pay_adjustment.id, ...]
-    for slip in slips:
-        slip_emp_id = slip["employee_id"]
-        line_rows = conn.execute(
-            """SELECT d.amount
-               FROM salary_slip_detail d
-               JOIN salary_component c ON c.id = d.salary_component_id
-               WHERE d.salary_slip_id = ? AND d.component_type = 'earning'
-                 AND c.name = 'Retro Pay Adjustment'""",
-            (slip["id"],),
-        ).fetchall()
-        line_total = Decimal("0")
-        for lr in line_rows:
-            line_total += to_decimal(row_to_dict(lr)["amount"])
-
-        pending_rows = conn.execute(
-            """SELECT id, adjustment_amount FROM retro_pay_adjustment
-               WHERE employee_id = ? AND status = 'pending'""",
-            (slip_emp_id,),
-        ).fetchall()
-        pending_total = Decimal("0")
-        pending_ids = []
-        for pr_row in pending_rows:
-            prd = row_to_dict(pr_row)
-            pending_total += to_decimal(prd["adjustment_amount"])
-            pending_ids.append(prd["id"])
-
-        if round_currency(pending_total) != round_currency(line_total):
-            err(f"Retro pay adjustments changed for employee {slip_emp_id} "
-                f"after slips were generated (slip line "
-                f"{round_currency(line_total)}, pending "
-                f"{round_currency(pending_total)}). "
-                "Regenerate salary slips before submitting.")
-        if pending_ids:
-            retro_consume[slip_emp_id] = pending_ids
-
-    # --- Find GL accounts ---
     try:
-        accounts = _find_payroll_accounts(conn, company_id)
-    except ValueError as e:
-        err(str(e))
+        take_chain_heads(conn, [run["company_id"]])
+        _reread = conn.execute(run_q.get_sql(), (payroll_run_id,)).fetchone()
+        if not _reread:
+            conn.rollback()
+            err(f"Payroll run {payroll_run_id} not found")
+        run = row_to_dict(_reread)
+        if run["status"] != "draft":
+            conn.rollback()
+            err(f"Payroll run is '{run['status']}', must be 'draft' to submit")
+        company_id = run["company_id"]
+        period_end = run["period_end"]
+        tax_year = int(period_end[:4])
 
-    # If no cost_center_id provided, try to find a default one
-    if not cost_center_id:
-        cc_t = Table("cost_center")
-        cc_q = (Q.from_(cc_t).select(cc_t.id)
-                .where(cc_t.company_id == P())
-                .where(cc_t.is_group == 0)
-                .orderby(cc_t.name).limit(1))
-        cc = conn.execute(cc_q.get_sql(), (company_id,)).fetchone()
-        if cc:
-            cost_center_id = cc["id"]
-        else:
-            err("--cost-center-id is required (no default cost center found)")
+        # Must have slips
+        ss_t = Table("salary_slip")
+        slips_q = Q.from_(ss_t).select(ss_t.star).where(ss_t.payroll_run_id == P()).where(ss_t.status == ValueWrapper("draft"))
+        slips = conn.execute(slips_q.get_sql(), (payroll_run_id,)).fetchall()
+        if not slips:
+            err("Payroll run has no draft salary slips. Generate slips first.")
 
-    # --- Gather FICA config for employer-side calculations ---
-    fc_t = Table("fica_config")
-    fc_q = Q.from_(fc_t).select(fc_t.star).where(fc_t.tax_year == P())
-    fica_config = conn.execute(fc_q.get_sql(), (tax_year,)).fetchone()
-    fica = row_to_dict(fica_config) if fica_config else None
+        slips = [row_to_dict(s) for s in slips]
 
-    # --- Gather FUTA/SUTA config ---
-    # raw SQL — uses IS NULL and OR state_code = '' checks
-    futa_config = conn.execute(
-        """SELECT * FROM futa_suta_config
-           WHERE tax_year = ? AND (state_code IS NULL OR state_code = '')""",
-        (tax_year,),
-    ).fetchone()
-    futa = row_to_dict(futa_config) if futa_config else None
+        # --- Retro-pay consistency check (Feature #22c wire-up) ---
+        # Each slip's 'Retro Pay Adjustment' earning line was computed from the
+        # employee's pending retro_pay_adjustment rows at generation time. Those
+        # same rows flip to 'applied' in this transaction, so the pending total
+        # must still equal the slip line; a mismatch means adjustments changed
+        # after generation and the run must be regenerated.
+        retro_consume = {}  # employee_id -> [retro_pay_adjustment.id, ...]
+        for slip in slips:
+            slip_emp_id = slip["employee_id"]
+            line_rows = conn.execute(
+                """SELECT d.amount
+                   FROM salary_slip_detail d
+                   JOIN salary_component c ON c.id = d.salary_component_id
+                   WHERE d.salary_slip_id = ? AND d.component_type = 'earning'
+                     AND c.name = 'Retro Pay Adjustment'""",
+                (slip["id"],),
+            ).fetchall()
+            line_total = Decimal("0")
+            for lr in line_rows:
+                line_total += to_decimal(row_to_dict(lr)["amount"])
 
-    # raw SQL — uses IS NOT NULL and state_code != '' checks
-    suta_configs = conn.execute(
-        """SELECT * FROM futa_suta_config
-           WHERE tax_year = ? AND state_code IS NOT NULL AND state_code != ''""",
-        (tax_year,),
-    ).fetchall()
-    suta_map = {}
-    for sc in suta_configs:
-        sc_dict = row_to_dict(sc)
-        suta_map[sc_dict["state_code"]] = sc_dict
+            pending_rows = conn.execute(
+                """SELECT id, adjustment_amount FROM retro_pay_adjustment
+                   WHERE employee_id = ? AND status = 'pending'""",
+                (slip_emp_id,),
+            ).fetchall()
+            pending_total = Decimal("0")
+            pending_ids = []
+            for pr_row in pending_rows:
+                prd = row_to_dict(pr_row)
+                pending_total += to_decimal(prd["adjustment_amount"])
+                pending_ids.append(prd["id"])
 
-    # --- Begin building GL entries ---
-    # We'll accumulate totals across all slips, then build entries
-    total_gross = Decimal("0")
-    total_net = Decimal("0")
-    total_federal_tax = Decimal("0")
-    total_state_tax = Decimal("0")
-    total_ss_employee = Decimal("0")
-    total_medicare_employee = Decimal("0")
-    total_ss_employer = Decimal("0")
-    total_medicare_employer = Decimal("0")
-    total_futa = Decimal("0")
-    total_suta = Decimal("0")
+            if round_currency(pending_total) != round_currency(line_total):
+                err(f"Retro pay adjustments changed for employee {slip_emp_id} "
+                    f"after slips were generated (slip line "
+                    f"{round_currency(line_total)}, pending "
+                    f"{round_currency(pending_total)}). "
+                    "Regenerate salary slips before submitting.")
+            if pending_ids:
+                retro_consume[slip_emp_id] = pending_ids
 
-    # Per-employee net pay for party tracking
-    employee_net_pay = {}  # employee_id -> net_pay Decimal
+        # --- Find GL accounts ---
+        try:
+            accounts = _find_payroll_accounts(conn, company_id)
+        except ValueError as e:
+            err(str(e))
 
-    # Per-employee pre-tax deductions for party-tracked payroll payable
-    employee_pretax = {}  # employee_id -> pretax Decimal
+        # If no cost_center_id provided, try to find a default one
+        if not cost_center_id:
+            cost_center_id = _get_cost_center(conn, company_id)
+            if not cost_center_id:
+                err("--cost-center-id is required (no default cost center found)")
 
-    # Per-component GL account tracking for granular expense entries
-    component_expense_totals = {}  # gl_account_id -> Decimal
+        # --- Gather FICA config for employer-side calculations ---
+        fc_t = Table("fica_config")
+        fc_q = Q.from_(fc_t).select(fc_t.star).where(fc_t.tax_year == P())
+        fica_config = conn.execute(fc_q.get_sql(), (tax_year,)).fetchone()
+        fica = row_to_dict(fica_config) if fica_config else None
 
-    for slip in slips:
-        employee_id = slip["employee_id"]
-        slip_gross = to_decimal(slip["gross_pay"])
-        slip_net = to_decimal(slip["net_pay"])
+        # --- Gather FUTA/SUTA config ---
+        # raw SQL — uses IS NULL and OR state_code = '' checks
+        futa_config = conn.execute(
+            """SELECT * FROM futa_suta_config
+               WHERE tax_year = ? AND (state_code IS NULL OR state_code = '')""",
+            (tax_year,),
+        ).fetchone()
+        futa = row_to_dict(futa_config) if futa_config else None
 
-        total_gross += slip_gross
-        total_net += slip_net
+        # raw SQL — uses IS NOT NULL and state_code != '' checks
+        suta_configs = conn.execute(
+            """SELECT * FROM futa_suta_config
+               WHERE tax_year = ? AND state_code IS NOT NULL AND state_code != ''""",
+            (tax_year,),
+        ).fetchall()
+        suta_map = {}
+        for sc in suta_configs:
+            sc_dict = row_to_dict(sc)
+            suta_map[sc_dict["state_code"]] = sc_dict
 
-        if employee_id in employee_net_pay:
-            employee_net_pay[employee_id] += slip_net
-        else:
-            employee_net_pay[employee_id] = slip_net
+        # --- Begin building GL entries ---
+        # We'll accumulate totals across all slips, then build entries
+        total_gross = Decimal("0")
+        total_net = Decimal("0")
+        total_federal_tax = Decimal("0")
+        total_state_tax = Decimal("0")
+        total_ss_employee = Decimal("0")
+        total_medicare_employee = Decimal("0")
+        total_ss_employer = Decimal("0")
+        total_medicare_employer = Decimal("0")
+        total_futa = Decimal("0")
+        total_suta = Decimal("0")
 
-        # Get slip details for federal tax, SS, Medicare
-        ssd_t2 = Table("salary_slip_detail").as_("ssd")
-        sc_t2 = Table("salary_component").as_("sc")
-        sd_q = (Q.from_(ssd_t2)
-                .join(sc_t2).on(sc_t2.id == ssd_t2.salary_component_id)
-                .select(ssd_t2.amount, sc_t2.name.as_("component_name"))
-                .where(ssd_t2.salary_slip_id == P())
-                .where(ssd_t2.component_type == ValueWrapper("deduction")))
-        slip_details = conn.execute(sd_q.get_sql(), (slip["id"],)).fetchall()
+        # Per-employee net pay for party tracking
+        employee_net_pay = {}  # employee_id -> net_pay Decimal
 
-        for d in slip_details:
-            d_dict = row_to_dict(d)
-            amt = to_decimal(d_dict["amount"])
-            name = d_dict["component_name"]
+        # Per-employee pre-tax deductions for party-tracked payroll payable
+        employee_pretax = {}  # employee_id -> pretax Decimal
 
-            if name == "Federal Income Tax":
-                total_federal_tax += amt
-            elif name == "State Income Tax":
-                total_state_tax += amt
-            elif name == "Social Security Tax":
-                total_ss_employee += amt
-            elif name == "Medicare Tax":
-                total_medicare_employee += amt
+        # Other post-tax deductions (non-statutory, including garnishments),
+        # keyed by component id for per-component liability resolution
+        other_post_tax = {}  # component_id -> {"name", "total", "gl_account_id"}
+        statutory_tax_names = frozenset((
+            "Federal Income Tax", "State Income Tax",
+            "Social Security Tax", "Medicare Tax",
+        ))
 
-        # Accumulate per-employee pre-tax deductions for payroll payable tracking
-        ssd_pt = Table("salary_slip_detail").as_("ssd")
-        sc_pt = Table("salary_component").as_("sc")
-        pt_q = (Q.from_(ssd_pt)
-                .join(sc_pt).on(sc_pt.id == ssd_pt.salary_component_id)
-                .select(fn.Coalesce(DecimalSum(ssd_pt.amount), ValueWrapper("0")).as_("total"))
-                .where(ssd_pt.salary_slip_id == P())
-                .where(ssd_pt.component_type == ValueWrapper("deduction"))
-                .where(sc_pt.is_pre_tax == 1))
-        pretax_row = conn.execute(pt_q.get_sql(), (slip["id"],)).fetchone()
-        if pretax_row:
-            emp_pretax = to_decimal(str(pretax_row["total"]))
-            if employee_id in employee_pretax:
-                employee_pretax[employee_id] += emp_pretax
+        # Per-component GL account tracking for granular expense entries
+        component_expense_totals = {}  # gl_account_id -> Decimal
+
+        for slip in slips:
+            employee_id = slip["employee_id"]
+            slip_gross = to_decimal(slip["gross_pay"])
+            slip_net = to_decimal(slip["net_pay"])
+
+            total_gross += slip_gross
+            total_net += slip_net
+
+            if employee_id in employee_net_pay:
+                employee_net_pay[employee_id] += slip_net
             else:
-                employee_pretax[employee_id] = emp_pretax
+                employee_net_pay[employee_id] = slip_net
 
-        # Accumulate earning component amounts by GL account
-        ssd_earn = Table("salary_slip_detail").as_("ssd")
-        sc_earn = Table("salary_component").as_("sc")
-        earn_q = (Q.from_(ssd_earn)
-                  .join(sc_earn).on(sc_earn.id == ssd_earn.salary_component_id)
-                  .select(ssd_earn.amount, sc_earn.gl_account_id)
-                  .where(ssd_earn.salary_slip_id == P())
-                  .where(ssd_earn.component_type == ValueWrapper("earning")))
-        earning_details = conn.execute(earn_q.get_sql(), (slip["id"],)).fetchall()
+            # Get slip details for federal tax, SS, Medicare, and every
+            # other post-tax deduction (component id/name/flags for liability
+            # resolution below); one query per slip.
+            ssd_t2 = Table("salary_slip_detail").as_("ssd")
+            sc_t2 = Table("salary_component").as_("sc")
+            sd_q = (Q.from_(ssd_t2)
+                    .join(sc_t2).on(sc_t2.id == ssd_t2.salary_component_id)
+                    .select(ssd_t2.amount,
+                            sc_t2.id.as_("component_id"),
+                            sc_t2.name.as_("component_name"),
+                            sc_t2.is_pre_tax.as_("is_pre_tax"),
+                            sc_t2.gl_account_id.as_("component_gl_account"))
+                    .where(ssd_t2.salary_slip_id == P())
+                    .where(ssd_t2.component_type == ValueWrapper("deduction")))
+            slip_details = conn.execute(sd_q.get_sql(), (slip["id"],)).fetchall()
 
-        for ed in earning_details:
-            ed_dict = row_to_dict(ed)
-            gl_acct = ed_dict.get("gl_account_id") or accounts["salary_expense"]
-            amt = to_decimal(ed_dict["amount"])
-            if gl_acct in component_expense_totals:
-                component_expense_totals[gl_acct] += amt
-            else:
-                component_expense_totals[gl_acct] = amt
+            for d in slip_details:
+                d_dict = row_to_dict(d)
+                amt = to_decimal(d_dict["amount"])
+                name = d_dict["component_name"]
 
-        # --- Employer-side tax calculations per employee ---
-        emp_t = Table("employee")
-        emp_q = Q.from_(emp_t).select(emp_t.star).where(emp_t.id == P())
-        emp = conn.execute(emp_q.get_sql(), (employee_id,)).fetchone()
-        emp_dict = row_to_dict(emp) if emp else {}
-        is_exempt = bool(emp_dict.get("is_exempt_from_fica", 0))
+                if name == "Federal Income Tax":
+                    total_federal_tax += amt
+                elif name == "State Income Tax":
+                    total_state_tax += amt
+                elif name == "Social Security Tax":
+                    total_ss_employee += amt
+                elif name == "Medicare Tax":
+                    total_medicare_employee += amt
+                elif name not in statutory_tax_names and d_dict.get("is_pre_tax") != 1:
+                    comp_id = d_dict["component_id"]
+                    entry = other_post_tax.get(comp_id)
+                    if entry is None:
+                        other_post_tax[comp_id] = {
+                            "name": name,
+                            "total": amt,
+                            "gl_account_id": d_dict.get("component_gl_account"),
+                        }
+                    else:
+                        entry["total"] += amt
 
-        if fica and not is_exempt:
-            ss_employer_rate = to_decimal(fica["ss_employer_rate"])
-            medicare_employer_rate = to_decimal(fica["medicare_employer_rate"])
-            ss_wage_base = to_decimal(fica["ss_wage_base"])
+            # Accumulate per-employee pre-tax deductions for payroll payable tracking
+            ssd_pt = Table("salary_slip_detail").as_("ssd")
+            sc_pt = Table("salary_component").as_("sc")
+            pt_q = (Q.from_(ssd_pt)
+                    .join(sc_pt).on(sc_pt.id == ssd_pt.salary_component_id)
+                    .select(fn.Coalesce(DecimalSum(ssd_pt.amount), ValueWrapper("0")).as_("total"))
+                    .where(ssd_pt.salary_slip_id == P())
+                    .where(ssd_pt.component_type == ValueWrapper("deduction"))
+                    .where(sc_pt.is_pre_tax == 1))
+            pretax_row = conn.execute(pt_q.get_sql(), (slip["id"],)).fetchone()
+            if pretax_row:
+                emp_pretax = to_decimal(str(pretax_row["total"]))
+                if employee_id in employee_pretax:
+                    employee_pretax[employee_id] += emp_pretax
+                else:
+                    employee_pretax[employee_id] = emp_pretax
 
-            # Get YTD gross for SS cap
-            ytd = _get_ytd_values(conn, employee_id, slip["period_end"], company_id)
-            ytd_gross = ytd["ytd_gross"]
+            # Accumulate earning component amounts by GL account
+            ssd_earn = Table("salary_slip_detail").as_("ssd")
+            sc_earn = Table("salary_component").as_("sc")
+            earn_q = (Q.from_(ssd_earn)
+                      .join(sc_earn).on(sc_earn.id == ssd_earn.salary_component_id)
+                      .select(ssd_earn.amount, sc_earn.gl_account_id)
+                      .where(ssd_earn.salary_slip_id == P())
+                      .where(ssd_earn.component_type == ValueWrapper("earning")))
+            earning_details = conn.execute(earn_q.get_sql(), (slip["id"],)).fetchall()
 
-            # Employer SS (same cap as employee)
-            ss_taxable = min(slip_gross, max(Decimal("0"), ss_wage_base - ytd_gross))
-            emp_ss = round_currency(ss_taxable * ss_employer_rate / Decimal("100"))
-            total_ss_employer += emp_ss
+            for ed in earning_details:
+                ed_dict = row_to_dict(ed)
+                gl_acct = ed_dict.get("gl_account_id") or accounts["salary_expense"]
+                amt = to_decimal(ed_dict["amount"])
+                if gl_acct in component_expense_totals:
+                    component_expense_totals[gl_acct] += amt
+                else:
+                    component_expense_totals[gl_acct] = amt
 
-            # Employer Medicare (no cap)
-            emp_medicare = round_currency(slip_gross * medicare_employer_rate / Decimal("100"))
-            total_medicare_employer += emp_medicare
+            # --- Employer-side tax calculations per employee ---
+            emp_t = Table("employee")
+            emp_q = Q.from_(emp_t).select(emp_t.star).where(emp_t.id == P())
+            emp = conn.execute(emp_q.get_sql(), (employee_id,)).fetchone()
+            emp_dict = row_to_dict(emp) if emp else {}
+            is_exempt = bool(emp_dict.get("is_exempt_from_fica", 0))
 
-        # FUTA (federal unemployment) -- employer only
-        if futa and not is_exempt:
-            futa_wage_base = to_decimal(futa["wage_base"])
-            futa_rate = to_decimal(futa.get("employer_rate_override") or futa["rate"])
-            ytd = _get_ytd_values(conn, employee_id, slip["period_end"], company_id)
-            ytd_gross = ytd["ytd_gross"]
-            futa_taxable = min(slip_gross, max(Decimal("0"), futa_wage_base - ytd_gross))
-            emp_futa = round_currency(futa_taxable * futa_rate / Decimal("100"))
-            total_futa += emp_futa
+            if fica and not is_exempt:
+                ss_employer_rate = to_decimal(fica["ss_employer_rate"])
+                medicare_employer_rate = to_decimal(fica["medicare_employer_rate"])
+                ss_wage_base = to_decimal(fica["ss_wage_base"])
 
-        # SUTA (state unemployment) -- employer only
-        # For simplicity, apply the first matching SUTA config
-        # A more complete implementation would match employee work state
-        if suta_map and not is_exempt:
-            for state_code, suta_cfg in suta_map.items():
-                suta_wage_base = to_decimal(suta_cfg["wage_base"])
-                suta_rate = to_decimal(
-                    suta_cfg.get("employer_rate_override") or suta_cfg["rate"]
-                )
+                # Get YTD gross for SS cap
                 ytd = _get_ytd_values(conn, employee_id, slip["period_end"], company_id)
                 ytd_gross = ytd["ytd_gross"]
-                suta_taxable = min(slip_gross, max(Decimal("0"), suta_wage_base - ytd_gross))
-                emp_suta = round_currency(suta_taxable * suta_rate / Decimal("100"))
-                total_suta += emp_suta
-                break  # Apply first SUTA config only
 
-    # Round all totals
-    total_gross = round_currency(total_gross)
-    total_net = round_currency(total_net)
-    total_federal_tax = round_currency(total_federal_tax)
-    total_state_tax = round_currency(total_state_tax)
-    total_ss_employee = round_currency(total_ss_employee)
-    total_medicare_employee = round_currency(total_medicare_employee)
-    total_ss_employer = round_currency(total_ss_employer)
-    total_medicare_employer = round_currency(total_medicare_employer)
-    total_futa = round_currency(total_futa)
-    total_suta = round_currency(total_suta)
+                # Employer SS (same cap as employee)
+                ss_taxable = min(slip_gross, max(Decimal("0"), ss_wage_base - ytd_gross))
+                emp_ss = round_currency(ss_taxable * ss_employer_rate / Decimal("100"))
+                total_ss_employer += emp_ss
 
-    # Total employer tax expense
-    total_employer_tax = total_ss_employer + total_medicare_employer + total_futa + total_suta
+                # Employer Medicare (no cap)
+                emp_medicare = round_currency(slip_gross * medicare_employer_rate / Decimal("100"))
+                total_medicare_employer += emp_medicare
 
-    # --- Build GL entries ---
-    gl_entries = []
+            # FUTA (federal unemployment) -- employer only
+            if futa and not is_exempt:
+                futa_wage_base = to_decimal(futa["wage_base"])
+                futa_rate = to_decimal(futa.get("employer_rate_override") or futa["rate"])
+                ytd = _get_ytd_values(conn, employee_id, slip["period_end"], company_id)
+                ytd_gross = ytd["ytd_gross"]
+                futa_taxable = min(slip_gross, max(Decimal("0"), futa_wage_base - ytd_gross))
+                emp_futa = round_currency(futa_taxable * futa_rate / Decimal("100"))
+                total_futa += emp_futa
 
-    # DR: Salary Expense (by component GL account)
-    for gl_acct_id, amount in component_expense_totals.items():
-        amt = round_currency(amount)
-        if amt > 0:
+            # SUTA (state unemployment) -- employer only
+            # For simplicity, apply the first matching SUTA config
+            # A more complete implementation would match employee work state
+            if suta_map and not is_exempt:
+                for state_code, suta_cfg in suta_map.items():
+                    suta_wage_base = to_decimal(suta_cfg["wage_base"])
+                    suta_rate = to_decimal(
+                        suta_cfg.get("employer_rate_override") or suta_cfg["rate"]
+                    )
+                    ytd = _get_ytd_values(conn, employee_id, slip["period_end"], company_id)
+                    ytd_gross = ytd["ytd_gross"]
+                    suta_taxable = min(slip_gross, max(Decimal("0"), suta_wage_base - ytd_gross))
+                    emp_suta = round_currency(suta_taxable * suta_rate / Decimal("100"))
+                    total_suta += emp_suta
+                    break  # Apply first SUTA config only
+
+        # Round all totals
+        total_gross = round_currency(total_gross)
+        total_net = round_currency(total_net)
+        total_federal_tax = round_currency(total_federal_tax)
+        total_state_tax = round_currency(total_state_tax)
+        total_ss_employee = round_currency(total_ss_employee)
+        total_medicare_employee = round_currency(total_medicare_employee)
+        total_ss_employer = round_currency(total_ss_employer)
+        total_medicare_employer = round_currency(total_medicare_employer)
+        total_futa = round_currency(total_futa)
+        total_suta = round_currency(total_suta)
+        for _other in other_post_tax.values():
+            _other["total"] = round_currency(_other["total"])
+
+        # Total employer tax expense
+        total_employer_tax = total_ss_employer + total_medicare_employer + total_futa + total_suta
+
+        # --- Missing statutory account check ---
+        # A statutory total greater than zero with no matching liability account
+        # would silently drop its credit leg, so refuse before any leg is built.
+        missing_payroll_accounts = []
+        if total_federal_tax > 0 and not accounts.get("federal_tax_payable"):
+            missing_payroll_accounts.append(
+                f"no federal income tax payable account (needed for {total_federal_tax}; create a liability account with 'Federal Income Tax' in its name)"
+            )
+        if total_state_tax > 0 and not accounts.get("state_tax_payable"):
+            missing_payroll_accounts.append(
+                f"no state income tax payable account (needed for {total_state_tax}; create a liability account with 'State Income Tax' in its name)"
+            )
+        total_ss_combined = round_currency(total_ss_employee + total_ss_employer)
+        if total_ss_combined > 0 and not accounts.get("ss_payable"):
+            missing_payroll_accounts.append(
+                f"no Social Security payable account (needed for {total_ss_combined}; create a liability account with 'Social Security' in its name)"
+            )
+        total_medicare_combined = round_currency(total_medicare_employee + total_medicare_employer)
+        if total_medicare_combined > 0 and not accounts.get("medicare_payable"):
+            missing_payroll_accounts.append(
+                f"no Medicare payable account (needed for {total_medicare_combined}; create a liability account with 'Medicare' in its name)"
+            )
+        if total_futa > 0 and not accounts.get("futa_payable"):
+            missing_payroll_accounts.append(
+                f"no FUTA payable account (needed for {total_futa}; create a liability account with 'FUTA' in its name)"
+            )
+        if total_suta > 0 and not accounts.get("suta_payable"):
+            missing_payroll_accounts.append(
+                f"no SUTA payable account (needed for {total_suta}; create a liability account with 'SUTA' in its name)"
+            )
+        if missing_payroll_accounts:
+            err(f"Cannot post payroll: {', '.join(missing_payroll_accounts)}. Nothing was posted.")
+
+        # --- Resolve liability accounts for other post-tax deductions ---
+        # Every withheld amount is owed to someone, so each needs a credit
+        # leg. A component resolves to its own GL account when that account
+        # is a usable liability of this company; a Garnishment component
+        # otherwise falls back to the company's smallest (name, id) usable
+        # liability account with 'garnish' in its name. Anything else is
+        # refused below, before any leg is built.
+        _acct_t = Table("account")
+
+        def _usable_liability(_row, _company):
+            if _row is None:
+                return None
+            _acc = row_to_dict(_row)
+            if _acc.get("company_id") != _company:
+                return None
+            if _acc.get("root_type") != "liability":
+                return None
+            try:
+                if int(_acc.get("is_group") or 0) != 0:
+                    return None
+                if int(_acc.get("disabled") or 0) != 0:
+                    return None
+                if int(_acc.get("is_frozen") or 0) != 0:
+                    return None
+            except (TypeError, ValueError):
+                return None
+            _atype = _acc.get("account_type")
+            if _atype is not None and _atype in ("payable", "receivable"):
+                return None
+            return _acc
+
+        def _fetch_account(_account_id):
+            _aq = Q.from_(_acct_t).select(_acct_t.star).where(_acct_t.id == P())
+            return conn.execute(_aq.get_sql(), (_account_id,)).fetchone()
+
+        _garnish_fallback = None
+        _garnish_fallback_done = False
+
+        def _garnish_account():
+            nonlocal _garnish_fallback, _garnish_fallback_done
+            if not _garnish_fallback_done:
+                _garnish_fallback_done = True
+                _gq = (Q.from_(_acct_t).select(_acct_t.id, _acct_t.name)
+                       .where(_acct_t.company_id == P())
+                       .where(_acct_t.root_type == ValueWrapper("liability"))
+                       .where(_acct_t.is_group == 0)
+                       .where(_acct_t.disabled == 0)
+                       .where(_acct_t.is_frozen == 0)
+                       .where(_acct_t.account_type.isnull() | _acct_t.account_type.notin(["payable", "receivable"]))
+                       .where(fn.Lower(_acct_t.name).like(P())))
+                _grows = conn.execute(_gq.get_sql(), (company_id, "%garnish%",)).fetchall()
+                _cands = [(row_to_dict(_gr)["name"], row_to_dict(_gr)["id"]) for _gr in _grows]
+                if _cands:
+                    _garnish_fallback = min(_cands)[1]
+            return _garnish_fallback
+
+        other_account_totals = {}  # account_id -> Decimal
+        other_missing = []  # (component_name, item_text)
+        for _comp_id, _comp in other_post_tax.items():
+            _comp_total = _comp["total"]
+            if _comp_total <= 0:
+                continue
+            _comp_name = _comp["name"]
+            _is_garnish = _comp_name.startswith("Garnishment - ")
+            _hint = ", or create a liability account with 'Garnishment' in its name" if _is_garnish else ""
+            _need = str(round_currency(_comp_total))
+            _gl_id = _comp.get("gl_account_id")
+            _resolved = None
+            _gl_name = None
+            _gl_exists = False
+            if _gl_id:
+                _grow = _fetch_account(_gl_id)
+                if _grow is not None:
+                    _gl_exists = True
+                    _usable = _usable_liability(_grow, company_id)
+                    if _usable is not None:
+                        _resolved = _usable["id"]
+                    else:
+                        _gl_name = row_to_dict(_grow)["name"]
+            if _resolved is None and _is_garnish:
+                _fallback = _garnish_account()
+                if _fallback is not None:
+                    _resolved = _fallback
+            if _resolved is not None:
+                other_account_totals[_resolved] = other_account_totals.get(_resolved, Decimal("0")) + _comp_total
+            elif _gl_exists:
+                other_missing.append((_comp_name,
+                    f"GL account '{_gl_name}' of '{_comp_name}' is not a usable liability account of this company"
+                    f" (needed for {_need}; set the component's GL account{_hint})"))
+            else:
+                other_missing.append((_comp_name,
+                    f"no liability account for '{_comp_name}'"
+                    f" (needed for {_need}; set the component's GL account{_hint})"))
+        if other_missing:
+            other_missing.sort(key=lambda _item: _item[0])
+            err(f"Cannot post payroll: {', '.join(_text for _name, _text in other_missing)}. Nothing was posted.")
+
+        # --- Build GL entries ---
+        gl_entries = []
+
+        # DR: Salary Expense (by component GL account)
+        for gl_acct_id, amount in component_expense_totals.items():
+            amt = round_currency(amount)
+            if amt > 0:
+                gl_entries.append({
+                    "account_id": gl_acct_id,
+                    "debit": str(amt),
+                    "credit": "0",
+                    "cost_center_id": cost_center_id,
+                })
+
+        # DR: Employer Tax Expense
+        if total_employer_tax > 0 and accounts.get("employer_tax_expense"):
             gl_entries.append({
-                "account_id": gl_acct_id,
-                "debit": str(amt),
+                "account_id": accounts["employer_tax_expense"],
+                "debit": str(total_employer_tax),
                 "credit": "0",
                 "cost_center_id": cost_center_id,
             })
 
-    # DR: Employer Tax Expense
-    if total_employer_tax > 0 and accounts.get("employer_tax_expense"):
-        gl_entries.append({
-            "account_id": accounts["employer_tax_expense"],
-            "debit": str(total_employer_tax),
-            "credit": "0",
-            "cost_center_id": cost_center_id,
-        })
+        # CR: Payroll Payable (per employee for party tracking)
+        # Includes net pay + pre-tax deductions (401k, HSA) since those represent
+        # obligations the company must forward on behalf of the employee.
+        if accounts.get("payroll_payable"):
+            for emp_id, net_amt in employee_net_pay.items():
+                pretax_amt = employee_pretax.get(emp_id, Decimal("0"))
+                payable_amt = round_currency(net_amt + pretax_amt)
+                if payable_amt > 0:
+                    gl_entries.append({
+                        "account_id": accounts["payroll_payable"],
+                        "debit": "0",
+                        "credit": str(payable_amt),
+                        "party_type": "employee",
+                        "party_id": emp_id,
+                    })
 
-    # CR: Payroll Payable (per employee for party tracking)
-    # Includes net pay + pre-tax deductions (401k, HSA) since those represent
-    # obligations the company must forward on behalf of the employee.
-    if accounts.get("payroll_payable"):
-        for emp_id, net_amt in employee_net_pay.items():
-            pretax_amt = employee_pretax.get(emp_id, Decimal("0"))
-            payable_amt = round_currency(net_amt + pretax_amt)
-            if payable_amt > 0:
+        # CR: Federal IT Withheld
+        if total_federal_tax > 0 and accounts.get("federal_tax_payable"):
+            gl_entries.append({
+                "account_id": accounts["federal_tax_payable"],
+                "debit": "0",
+                "credit": str(total_federal_tax),
+            })
+
+        # CR: State IT Withheld
+        if total_state_tax > 0 and accounts.get("state_tax_payable"):
+            gl_entries.append({
+                "account_id": accounts["state_tax_payable"],
+                "debit": "0",
+                "credit": str(total_state_tax),
+            })
+
+        # CR: Social Security Payable (employee + employer)
+        total_ss = total_ss_employee + total_ss_employer
+        if total_ss > 0 and accounts.get("ss_payable"):
+            gl_entries.append({
+                "account_id": accounts["ss_payable"],
+                "debit": "0",
+                "credit": str(round_currency(total_ss)),
+            })
+
+        # CR: Medicare Payable (employee + employer)
+        total_medicare = total_medicare_employee + total_medicare_employer
+        if total_medicare > 0 and accounts.get("medicare_payable"):
+            gl_entries.append({
+                "account_id": accounts["medicare_payable"],
+                "debit": "0",
+                "credit": str(round_currency(total_medicare)),
+            })
+
+        # CR: FUTA Payable
+        if total_futa > 0 and accounts.get("futa_payable"):
+            gl_entries.append({
+                "account_id": accounts["futa_payable"],
+                "debit": "0",
+                "credit": str(total_futa),
+            })
+
+        # CR: SUTA Payable
+        if total_suta > 0 and accounts.get("suta_payable"):
+            gl_entries.append({
+                "account_id": accounts["suta_payable"],
+                "debit": "0",
+                "credit": str(total_suta),
+            })
+
+        # CR: Other post-tax deduction liabilities (including garnishments)
+        # One credit leg per resolved account for the rounded component sums;
+        # like the statutory credit legs these carry no party and no cost center.
+        for _other_acct_id in sorted(other_account_totals):
+            _other_amt = round_currency(other_account_totals[_other_acct_id])
+            if _other_amt > 0:
                 gl_entries.append({
-                    "account_id": accounts["payroll_payable"],
+                    "account_id": _other_acct_id,
                     "debit": "0",
-                    "credit": str(payable_amt),
-                    "party_type": "employee",
-                    "party_id": emp_id,
+                    "credit": str(_other_amt),
                 })
 
-    # CR: Federal IT Withheld
-    if total_federal_tax > 0 and accounts.get("federal_tax_payable"):
-        gl_entries.append({
-            "account_id": accounts["federal_tax_payable"],
-            "debit": "0",
-            "credit": str(total_federal_tax),
-        })
+        # --- Balance check: DR must equal CR ---
+        #
+        # DR = total_gross + total_employer_tax
+        # CR = payroll_payable (net_pay + pretax) + federal_tax + state_tax
+        #    + ss (employee + employer) + medicare (employee + employer)
+        #    + futa + suta + other post-tax deduction liability credits
+        #
+        # Accounting identity:
+        #   gross = net_pay + all_employee_deductions
+        #         = net_pay + pretax + federal_tax + state_tax + ss_emp + med_emp
+        #           + other_deductions + garnishments
+        #
+        #   DR Salary Expense = gross
+        #   CR Payroll Payable = net_pay + pretax (401k, HSA -- employer remits on behalf)
+        #   CR Federal IT Payable = federal_tax
+        #   CR State IT Payable = state_tax
+        #   CR SS Payable = ss_employee + ss_employer
+        #   CR Medicare Payable = medicare_employee + medicare_employer
+        #   CR FUTA Payable = futa
+        #   CR SUTA Payable = suta
+        #
+        #   DR Employer Tax Expense = ss_employer + medicare_employer + futa + suta
+        #
+        #   DR total = gross + employer_tax
+        #   CR total = (net_pay + pretax) + federal + state + (ss_emp + ss_empr)
+        #            + (med_emp + med_empr) + futa + suta + other_post_tax
+        #           = gross + employer_tax  (balanced)
+        #
+        # Pre-tax deductions (401k, HSA) are included in per-employee
+        # payroll payable CR entries above, so no separate aggregate entry needed.
+        # Other post-tax deductions (including wage garnishments) are credited
+        # to their resolved liability accounts in per-account legs above.
 
-    # CR: State IT Withheld
-    if total_state_tax > 0 and accounts.get("state_tax_payable"):
-        gl_entries.append({
-            "account_id": accounts["state_tax_payable"],
-            "debit": "0",
-            "credit": str(total_state_tax),
-        })
+        # Verify balance before posting
+        gl_total_debit = sum(to_decimal(e["debit"]) for e in gl_entries)
+        gl_total_credit = sum(to_decimal(e["credit"]) for e in gl_entries)
 
-    # CR: Social Security Payable (employee + employer)
-    total_ss = total_ss_employee + total_ss_employer
-    if total_ss > 0 and accounts.get("ss_payable"):
-        gl_entries.append({
-            "account_id": accounts["ss_payable"],
-            "debit": "0",
-            "credit": str(round_currency(total_ss)),
-        })
+        if abs(gl_total_debit - gl_total_credit) > Decimal("0.02"):
+            # Auto-correct small rounding differences
+            diff = gl_total_debit - gl_total_credit
+            if abs(diff) <= Decimal("1.00"):
+                # Adjust the largest expense entry to balance
+                if diff > 0:
+                    # Need more credit
+                    for entry in gl_entries:
+                        if entry["account_id"] == accounts.get("payroll_payable") and \
+                           to_decimal(entry["credit"]) > 0:
+                            entry["credit"] = str(
+                                round_currency(to_decimal(entry["credit"]) + diff)
+                            )
+                            break
+                else:
+                    # Need more debit
+                    for entry in gl_entries:
+                        if to_decimal(entry["debit"]) > 0:
+                            entry["debit"] = str(
+                                round_currency(to_decimal(entry["debit"]) - diff)
+                            )
+                            break
 
-    # CR: Medicare Payable (employee + employer)
-    total_medicare = total_medicare_employee + total_medicare_employer
-    if total_medicare > 0 and accounts.get("medicare_payable"):
-        gl_entries.append({
-            "account_id": accounts["medicare_payable"],
-            "debit": "0",
-            "credit": str(round_currency(total_medicare)),
-        })
+        # Filter out zero-amount entries (GL validation rejects them)
+        gl_entries = [
+            e for e in gl_entries
+            if to_decimal(e.get("debit", "0")) > 0 or to_decimal(e.get("credit", "0")) > 0
+        ]
 
-    # CR: FUTA Payable
-    if total_futa > 0 and accounts.get("futa_payable"):
-        gl_entries.append({
-            "account_id": accounts["futa_payable"],
-            "debit": "0",
-            "credit": str(total_futa),
-        })
+        if not gl_entries:
+            err("No GL entries to post (all amounts are zero)")
 
-    # CR: SUTA Payable
-    if total_suta > 0 and accounts.get("suta_payable"):
-        gl_entries.append({
-            "account_id": accounts["suta_payable"],
-            "debit": "0",
-            "credit": str(total_suta),
-        })
-
-    # --- Balance check: DR must equal CR ---
-    #
-    # DR = total_gross + total_employer_tax
-    # CR = payroll_payable (net_pay + pretax) + federal_tax + state_tax
-    #    + ss (employee + employer) + medicare (employee + employer)
-    #    + futa + suta
-    #
-    # Accounting identity:
-    #   gross = net_pay + all_employee_deductions
-    #         = net_pay + pretax + federal_tax + state_tax + ss_emp + med_emp
-    #           + other_deductions + garnishments
-    #
-    #   DR Salary Expense = gross
-    #   CR Payroll Payable = net_pay + pretax (401k, HSA -- employer remits on behalf)
-    #   CR Federal IT Payable = federal_tax
-    #   CR State IT Payable = state_tax
-    #   CR SS Payable = ss_employee + ss_employer
-    #   CR Medicare Payable = medicare_employee + medicare_employer
-    #   CR FUTA Payable = futa
-    #   CR SUTA Payable = suta
-    #
-    #   DR Employer Tax Expense = ss_employer + medicare_employer + futa + suta
-    #
-    #   DR total = gross + employer_tax
-    #   CR total = (net_pay + pretax) + federal + state + (ss_emp + ss_empr)
-    #            + (med_emp + med_empr) + futa + suta
-    #           = gross + employer_tax  (balanced)
-    #
-    # Pre-tax deductions (401k, HSA) are included in per-employee
-    # payroll payable CR entries above, so no separate aggregate entry needed.
-
-    # Verify balance before posting
-    gl_total_debit = sum(to_decimal(e["debit"]) for e in gl_entries)
-    gl_total_credit = sum(to_decimal(e["credit"]) for e in gl_entries)
-
-    if abs(gl_total_debit - gl_total_credit) > Decimal("0.02"):
-        # Auto-correct small rounding differences
-        diff = gl_total_debit - gl_total_credit
-        if abs(diff) <= Decimal("1.00"):
-            # Adjust the largest expense entry to balance
-            if diff > 0:
-                # Need more credit
-                for entry in gl_entries:
-                    if entry["account_id"] == accounts.get("payroll_payable") and \
-                       to_decimal(entry["credit"]) > 0:
-                        entry["credit"] = str(
-                            round_currency(to_decimal(entry["credit"]) + diff)
-                        )
-                        break
-            else:
-                # Need more debit
-                for entry in gl_entries:
-                    if to_decimal(entry["debit"]) > 0:
-                        entry["debit"] = str(
-                            round_currency(to_decimal(entry["debit"]) - diff)
-                        )
-                        break
-
-    # Filter out zero-amount entries (GL validation rejects them)
-    gl_entries = [
-        e for e in gl_entries
-        if to_decimal(e.get("debit", "0")) > 0 or to_decimal(e.get("credit", "0")) > 0
-    ]
-
-    if not gl_entries:
-        err("No GL entries to post (all amounts are zero)")
-
-    # --- Post GL entries (within this transaction) ---
-    try:
-        gl_ids = insert_gl_entries(
-            conn, gl_entries,
-            voucher_type="payroll_entry",
-            voucher_id=payroll_run_id,
-            posting_date=period_end,
-            company_id=company_id,
-            remarks=f"Payroll run {run.get('naming_series', payroll_run_id)} "
-                    f"for period {run['period_start']} to {period_end}",
-        )
-    except ValueError as e:
-        conn.rollback()
-        sys.stderr.write(f"[erpclaw-payroll] {e}\n")
-        err(f"GL posting failed: {e}")
-
-    # --- Mark all slips as submitted ---
-    # One timestamp is captured once and stamped on the slips, the run, AND
-    # the consumed retro rows: cancel_payroll_run uses run.updated_at as the
-    # correlator to revert exactly this run's applied retro batch.
-    # raw SQL — uses CAST(CURRENT_TIMESTAMP AS TEXT) SQLite function
-    submit_ts = conn.execute(
-        "SELECT CAST(CURRENT_TIMESTAMP AS TEXT) AS ts"
-    ).fetchone()["ts"]
-    conn.execute(
-        """UPDATE salary_slip
-           SET status = 'submitted', updated_at = ?
-           WHERE payroll_run_id = ? AND status = 'draft'""",
-        (submit_ts, payroll_run_id),
-    )
-
-    # --- Flip consumed retro-pay adjustments to 'applied' (Feature #22c) ---
-    retro_applied = 0
-    for pending_ids in retro_consume.values():
-        for rpa_id in pending_ids:
-            cur = conn.execute(
-                """UPDATE retro_pay_adjustment
-                   SET status = 'applied', updated_at = ?
-                   WHERE id = ? AND status = 'pending'""",
-                (submit_ts, rpa_id),
+        # --- Post GL entries (within this transaction) ---
+        try:
+            gl_ids = insert_gl_entries(
+                conn, gl_entries,
+                voucher_type="payroll_entry",
+                voucher_id=payroll_run_id,
+                posting_date=period_end,
+                company_id=company_id,
+                remarks=f"Payroll run {run.get('naming_series', payroll_run_id)} "
+                        f"for period {run['period_start']} to {period_end}",
             )
-            retro_applied += cur.rowcount
+        except ValueError as e:
+            conn.rollback()
+            sys.stderr.write(f"[erpclaw-payroll] {e}\n")
+            err(f"GL posting failed: {e}")
 
-    # --- Update payroll_run status ---
-    conn.execute(
-        """UPDATE payroll_run
-           SET status = 'submitted', updated_at = ?
-           WHERE id = ?""",
-        (submit_ts, payroll_run_id),
-    )
+        # --- Mark all slips as submitted ---
+        # One timestamp is captured once and stamped on the slips, the run, AND
+        # the consumed retro rows: cancel_payroll_run uses run.updated_at as the
+        # correlator to revert exactly this run's applied retro batch.
+        # raw SQL — uses CAST(CURRENT_TIMESTAMP AS TEXT) SQLite function
+        submit_ts = conn.execute(
+            "SELECT CAST(CURRENT_TIMESTAMP AS TEXT) AS ts"
+        ).fetchone()["ts"]
+        conn.execute(
+            """UPDATE salary_slip
+               SET status = 'submitted', updated_at = ?
+               WHERE payroll_run_id = ? AND status = 'draft'""",
+            (submit_ts, payroll_run_id),
+        )
 
-    audit(conn, "erpclaw-payroll", "submit-payroll-run", "payroll_run", payroll_run_id,
-           new_values={"status": "submitted", "gl_entries": len(gl_ids),
-                       "retro_adjustments_applied": retro_applied},
-           description=f"Submitted payroll run with {len(gl_ids)} GL entries")
+        # --- Flip consumed retro-pay adjustments to 'applied' (Feature #22c) ---
+        retro_applied = 0
+        for pending_ids in retro_consume.values():
+            for rpa_id in pending_ids:
+                cur = conn.execute(
+                    """UPDATE retro_pay_adjustment
+                       SET status = 'applied', updated_at = ?
+                       WHERE id = ? AND status = 'pending'""",
+                    (submit_ts, rpa_id),
+                )
+                retro_applied += cur.rowcount
 
-    conn.commit()
+        # --- Update payroll_run status ---
+        _run_upd = conn.execute(
+            """UPDATE payroll_run
+               SET status = 'submitted', updated_at = ?
+               WHERE id = ? AND status = 'draft'""",
+            (submit_ts, payroll_run_id),
+        )
+        if _run_upd.rowcount == 0:
+            conn.rollback()
+            _fresh_run = conn.execute(run_q.get_sql(), (payroll_run_id,)).fetchone()
+            if _fresh_run is None:
+                err(f"Payroll run {payroll_run_id} not found")
+            _fresh_d = row_to_dict(_fresh_run)
+            err(f"Payroll run is '{_fresh_d['status']}', must be 'draft' to submit")
+
+        audit(conn, "erpclaw-payroll", "submit-payroll-run", "payroll_run", payroll_run_id,
+               new_values={"status": "submitted", "gl_entries": len(gl_ids),
+                           "retro_adjustments_applied": retro_applied},
+               description=f"Submitted payroll run with {len(gl_ids)} GL entries")
+
+        conn.commit()
+    except SystemExit:
+        conn.rollback()
+        raise
     ok({
         "payroll_run_id": payroll_run_id,
         "naming_series": run.get("naming_series"),
@@ -3452,68 +3733,104 @@ def cancel_payroll_run(conn: sqlite3.Connection, args) -> None:
         err(f"Payroll run is '{run['status']}', must be 'submitted' to cancel",
              suggestion="Only submitted payroll runs can be cancelled.")
 
-    period_end = run["period_end"]
-
-    # --- Reverse GL entries ---
     try:
-        reversal_ids = reverse_gl_entries(
-            conn,
-            voucher_type="payroll_entry",
-            voucher_id=payroll_run_id,
-            posting_date=period_end,
+        take_chain_heads(conn, [run["company_id"]])
+        _reread = conn.execute(run_q.get_sql(), (payroll_run_id,)).fetchone()
+        if not _reread:
+            conn.rollback()
+            err(f"Payroll run {payroll_run_id} not found")
+        run = row_to_dict(_reread)
+        if run["status"] != "submitted":
+            conn.rollback()
+            err(f"Payroll run is '{run['status']}', must be 'submitted' to cancel",
+                 suggestion="Only submitted payroll runs can be cancelled.")
+        period_end = run["period_end"]
+
+        # --- Give back garnishment amounts on this run's submitted slips ---
+        ss_gb_t = Table("salary_slip")
+        sub_gb_q = (Q.from_(ss_gb_t).select(ss_gb_t.id)
+                    .where(ss_gb_t.payroll_run_id == P())
+                    .where(ss_gb_t.status == ValueWrapper("submitted")))
+        submitted_slip_rows = conn.execute(sub_gb_q.get_sql(), (payroll_run_id,)).fetchall()
+        try:
+            garnishments_reverted = _give_back_garnishments(conn, [s["id"] for s in submitted_slip_rows])
+        except ValueError as e:
+            conn.rollback()
+            err(str(e))
+
+        # --- Reverse GL entries ---
+        try:
+            reversal_ids = reverse_gl_entries(
+                conn,
+                voucher_type="payroll_entry",
+                voucher_id=payroll_run_id,
+                posting_date=period_end,
+            )
+        except ValueError as e:
+            conn.rollback()
+            sys.stderr.write(f"[erpclaw-payroll] {e}\n")
+            err(f"GL reversal failed: {e}")
+
+        # --- Revert retro-pay adjustments applied by this run (Feature #22c) ---
+        # submit_payroll_run stamped the consumed rows with the run's submit
+        # timestamp (still in run.updated_at here); cancel = reverse, so exactly
+        # that batch flips back to 'pending' for the next slip to consume.
+        # raw SQL — uses CAST(CURRENT_TIMESTAMP AS TEXT) SQLite function
+        retro_reverted = conn.execute(
+            """UPDATE retro_pay_adjustment
+               SET status = 'pending', updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
+               WHERE status = 'applied'
+                 AND updated_at = ?
+                 AND employee_id IN (
+                     SELECT employee_id FROM salary_slip
+                     WHERE payroll_run_id = ? AND status = 'submitted'
+                 )""",
+            (run["updated_at"], payroll_run_id),
+        ).rowcount
+
+        # --- Mark all slips as cancelled ---
+        # raw SQL — uses CAST(CURRENT_TIMESTAMP AS TEXT) SQLite function
+        conn.execute(
+            """UPDATE salary_slip
+               SET status = 'cancelled', updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
+               WHERE payroll_run_id = ? AND status = 'submitted'""",
+            (payroll_run_id,),
         )
-    except ValueError as e:
+
+        # --- Update payroll_run status ---
+        # raw SQL — uses CAST(CURRENT_TIMESTAMP AS TEXT) SQLite function
+        _run_upd = conn.execute(
+            """UPDATE payroll_run
+               SET status = 'cancelled', updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
+               WHERE id = ? AND status = 'submitted'""",
+            (payroll_run_id,),
+        )
+        if _run_upd.rowcount == 0:
+            conn.rollback()
+            _fresh_run = conn.execute(run_q.get_sql(), (payroll_run_id,)).fetchone()
+            if _fresh_run is None:
+                err(f"Payroll run {payroll_run_id} not found")
+            _fresh_d = row_to_dict(_fresh_run)
+            err(f"Payroll run is '{_fresh_d['status']}', must be 'submitted' to cancel",
+                 suggestion="Only submitted payroll runs can be cancelled.")
+
+        audit(conn, "erpclaw-payroll", "cancel-payroll-run", "payroll_run", payroll_run_id,
+               old_values={"status": "submitted"},
+               new_values={"status": "cancelled",
+                           "retro_adjustments_reverted": retro_reverted,
+                           "garnishments_reverted": garnishments_reverted},
+               description=f"Cancelled payroll run, reversed {len(reversal_ids)} GL entries")
+
+        conn.commit()
+    except SystemExit:
         conn.rollback()
-        sys.stderr.write(f"[erpclaw-payroll] {e}\n")
-        err(f"GL reversal failed: {e}")
-
-    # --- Revert retro-pay adjustments applied by this run (Feature #22c) ---
-    # submit_payroll_run stamped the consumed rows with the run's submit
-    # timestamp (still in run.updated_at here); cancel = reverse, so exactly
-    # that batch flips back to 'pending' for the next slip to consume.
-    # raw SQL — uses CAST(CURRENT_TIMESTAMP AS TEXT) SQLite function
-    retro_reverted = conn.execute(
-        """UPDATE retro_pay_adjustment
-           SET status = 'pending', updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
-           WHERE status = 'applied'
-             AND updated_at = ?
-             AND employee_id IN (
-                 SELECT employee_id FROM salary_slip
-                 WHERE payroll_run_id = ? AND status = 'submitted'
-             )""",
-        (run["updated_at"], payroll_run_id),
-    ).rowcount
-
-    # --- Mark all slips as cancelled ---
-    # raw SQL — uses CAST(CURRENT_TIMESTAMP AS TEXT) SQLite function
-    conn.execute(
-        """UPDATE salary_slip
-           SET status = 'cancelled', updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
-           WHERE payroll_run_id = ? AND status = 'submitted'""",
-        (payroll_run_id,),
-    )
-
-    # --- Update payroll_run status ---
-    # raw SQL — uses CAST(CURRENT_TIMESTAMP AS TEXT) SQLite function
-    conn.execute(
-        """UPDATE payroll_run
-           SET status = 'cancelled', updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
-           WHERE id = ?""",
-        (payroll_run_id,),
-    )
-
-    audit(conn, "erpclaw-payroll", "cancel-payroll-run", "payroll_run", payroll_run_id,
-           old_values={"status": "submitted"},
-           new_values={"status": "cancelled",
-                       "retro_adjustments_reverted": retro_reverted},
-           description=f"Cancelled payroll run, reversed {len(reversal_ids)} GL entries")
-
-    conn.commit()
+        raise
     ok({
         "payroll_run_id": payroll_run_id,
         "naming_series": run.get("naming_series"),
         "reversed_entries": len(reversal_ids),
         "retro_adjustments_reverted": retro_reverted,
+        "garnishments_reverted": garnishments_reverted,
     })
 
 
@@ -3529,7 +3846,10 @@ def generate_w2_data(conn: sqlite3.Connection, args) -> None:
         --company-id: The company ID.
 
     Aggregates all submitted salary slips for the year and produces
-    W-2 box data for each employee:
+    W-2 box data for each employee. A slip belongs to the tax year its
+    period ends in, the year generate-salary-slips takes its FICA wage
+    base and year-to-date figures from, so a slip spanning New Year is
+    reported once:
 
         Box 1: Wages, tips, other compensation
                (gross - pre-tax deductions like 401k and HSA)
@@ -3586,7 +3906,7 @@ def generate_w2_data(conn: sqlite3.Connection, args) -> None:
         WHERE ss.company_id = ?
           AND ss.status = 'submitted'
           AND ss.period_end >= ?
-          AND ss.period_start <= ?
+          AND ss.period_end <= ?
         ORDER BY e.full_name
         """,
         (company_id, year_start, year_end),
@@ -3606,7 +3926,7 @@ def generate_w2_data(conn: sqlite3.Connection, args) -> None:
                      .where(ss_w2.company_id == P())
                      .where(ss_w2.status == ValueWrapper("submitted"))
                      .where(ss_w2.period_end >= P())
-                     .where(ss_w2.period_start <= P()))
+                     .where(ss_w2.period_end <= P()))
         slip_rows = conn.execute(w2_slip_q.get_sql(),
                                  (employee_id, company_id, year_start, year_end)).fetchall()
 
@@ -4761,8 +5081,7 @@ def main():
     check_input_lengths(args)
 
     # --- Database connection ---
-    db_path = args.db_path or DEFAULT_DB_PATH
-    ensure_db_exists(db_path)
+    db_path = getattr(args, "db_path", None)   # None unless --db-path was given
     conn = get_connection(db_path)
 
     # Dependency check
@@ -4778,7 +5097,7 @@ def main():
     except Exception as e:
         conn.rollback()
         sys.stderr.write(f"[erpclaw-payroll] {e}\n")
-        err("An unexpected error occurred")
+        err(unexpected_error_message(e))
     finally:
         conn.close()
 

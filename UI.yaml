@@ -9785,18 +9785,6 @@ action_map:
       type: confirmation
       message: Generate all due recurring invoices? Draft invoices will be auto-submitted with GL entries.
     success_toast: '{invoices_generated} recurring invoices generated.'
-  update-invoice-outstanding:
-    component: InternalAction
-    entity: purchase_invoice
-    description: Called by erpclaw-payments to reduce outstanding amount after payment allocation
-    params:
-    - name: purchase_invoice_id
-      type: text
-      required: true
-    - name: amount
-      type: currency
-      required: true
-      precision: 2
   import-customers:
     component: null
     hidden: true

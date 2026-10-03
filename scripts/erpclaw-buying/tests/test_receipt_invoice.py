@@ -5,56 +5,45 @@ Actions tested:
   - submit-purchase-receipt, cancel-purchase-receipt
   - create-purchase-invoice, update-purchase-invoice, get-purchase-invoice
   - list-purchase-invoices, submit-purchase-invoice, cancel-purchase-invoice
-  - create-debit-note, update-invoice-outstanding
+  - create-debit-note
+  - update-invoice-outstanding is RETIRED (TestUpdateInvoiceOutstandingRetired)
 """
-import importlib.util
 import json
 import os
-import pytest
+import subprocess
+import sys
+import uuid
 from decimal import Decimal
 from buying_helpers import (
-    call_action, ns, is_error, is_ok, load_db_query,
+    call_action, ns, is_error, is_ok, load_db_query, init_all_tables,
 )
+from erpclaw_lib import payment_clearing
+from erpclaw_lib.query import P, Q, Table, fn
 
 mod = load_db_query()
 
 
-def _load_invariant_engine():
-    """Defensive monorepo-harness import (test_inv25_flows.py pattern): the
-    published skill tree has no testing/ dir, so engine-backed pins skip."""
-    cur = os.path.dirname(os.path.abspath(__file__))
-    while True:
-        if os.path.exists(os.path.join(cur, "CLAUDE.md")) or \
-                os.path.isdir(os.path.join(cur, ".git")):
-            break
-        parent = os.path.dirname(cur)
-        if parent == cur:
-            return None
-        cur = parent
-    path = os.path.join(cur, "testing", "invariant_engine.py")
-    if not os.path.exists(path):
-        return None
-    spec = importlib.util.spec_from_file_location("invariant_engine_pin_buy", path)
-    m = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(m)
-    return m
+_TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+_MODULE_DIR = os.path.dirname(_TESTS_DIR)
+_SCRIPTS_DIR = os.path.dirname(_MODULE_DIR)
+_ROUTER = os.path.join(_SCRIPTS_DIR, "db_query.py")
+_IN_TREE_LIB = os.path.join(_SCRIPTS_DIR, "erpclaw-setup", "lib")
 
+RETIRED_KEY = "update-invoice-outstanding"
+PUBLIC_ACTION = "update-purchase-outstanding"
 
-_inv_engine = _load_invariant_engine()
-
-
-def _inv25(conn):
-    if _inv_engine is None:
-        pytest.skip("invariant_engine harness not present (published skill tree)")
-    _inv_engine._ensure_decimal_sum(conn)
-    return _inv_engine._check_inv25_ar_summary_detail(conn)
-
-
-def _inv22(conn):
-    if _inv_engine is None:
-        pytest.skip("invariant_engine harness not present (published skill tree)")
-    _inv_engine._ensure_decimal_sum(conn)
-    return _inv_engine._check_inv22_payment_invoice_reconciliation(conn)
+# The replacement routes. The steer must name ALL of them: the cash flow, the
+# reduction flow (payable side: the debit note), and the write-off — a
+# retirement without a route is a dead end, and a partial route sends the
+# caller somewhere that cannot finish the job they actually had.
+SANCTIONED_FLOW = [
+    "add-payment",
+    "submit-payment",
+    "allocate-payment",
+    "create-credit-note",
+    "create-debit-note",
+    "write-off-invoice",
+]
 
 
 def _items(env, *specs):
@@ -112,12 +101,45 @@ class TestGetPurchaseReceipt:
             posting_date="2026-06-20", items=None,
             purchase_receipt_id=None,
         ))
+        pr_t = Table("purchase_receipt")
+        pri_t = Table("purchase_receipt_item")
+        before = {}
+        for name in ("purchase_receipt", "purchase_receipt_item",
+                     "audit_log"):
+            table = Table(name)
+            q = Q.from_(table).select(fn.Count("*").as_("n"))
+            before[name] = conn.execute(q.get_sql()).fetchone()["n"]
         result = call_action(mod.get_purchase_receipt, conn, ns(
             purchase_receipt_id=pr["purchase_receipt_id"],
             company_id=env["company_id"],
         ))
         assert is_ok(result)
         assert "items" in result
+
+        # Deepened (m478): get-purchase-receipt is read-only, so the response
+        # must repeat the stored receipt — the full PO quantity of 10 x 50.00
+        # — exactly, and no table may gain a row.
+        pr_id = pr["purchase_receipt_id"]
+        q = Q.from_(pr_t).select(pr_t.star).where(pr_t.id == P())
+        stored = conn.execute(q.get_sql(), (pr_id,)).fetchone()
+        assert (result["document_status"], result["total_qty"],
+                result["posting_date"]) == ("draft", "10.00", "2026-06-20")
+        assert stored["total_qty"] == "10.00"
+        q = (Q.from_(pri_t)
+             .select(pri_t.item_id, pri_t.quantity, pri_t.rate, pri_t.amount)
+             .where(pri_t.purchase_receipt_id == P()))
+        lines = conn.execute(q.get_sql(), (pr_id,)).fetchall()
+        assert [(r["item_id"], r["quantity"], r["rate"], r["amount"])
+                for r in lines] == [
+            (env["item1"], "10.00", "50.00", "500.00")]
+        assert [(i["item_id"], i["quantity"], i["rate"], i["amount"])
+                for i in result["items"]] == [
+            (env["item1"], "10.00", "50.00", "500.00")]
+        for name in ("purchase_receipt", "purchase_receipt_item",
+                     "audit_log"):
+            table = Table(name)
+            q = Q.from_(table).select(fn.Count("*").as_("n"))
+            assert conn.execute(q.get_sql()).fetchone()["n"] == before[name]
 
 
 class TestListPurchaseReceipts:
@@ -271,12 +293,51 @@ class TestGetPurchaseInvoice:
             posting_date="2026-06-20", due_date=None,
             items=items, tax_template_id=None,
         ))
+        pi_id = create["purchase_invoice_id"]
+        pi_t = Table("purchase_invoice")
+        pii_t = Table("purchase_invoice_item")
+        before = {}
+        for name in ("purchase_invoice", "purchase_invoice_item",
+                     "audit_log"):
+            table = Table(name)
+            q = Q.from_(table).select(fn.Count("*").as_("n"))
+            before[name] = conn.execute(q.get_sql()).fetchone()["n"]
         result = call_action(mod.get_purchase_invoice, conn, ns(
             purchase_invoice_id=create["purchase_invoice_id"],
             company_id=env["company_id"],
         ))
         assert is_ok(result)
         assert "items" in result
+
+        # Deepened (m478): get-purchase-invoice is read-only, so the response
+        # must repeat the stored draft bill — 3 x 100.00 with no tax — and
+        # its empty payment list exactly, and no table may gain a row.
+        q = Q.from_(pi_t).select(pi_t.star).where(pi_t.id == P())
+        stored = conn.execute(q.get_sql(), (pi_id,)).fetchone()
+        assert (result["document_status"], result["total_amount"],
+                result["tax_amount"], result["grand_total"],
+                result["outstanding_amount"]) == (
+            "draft", "300.00", "0.00", "300.00", "300.00")
+        assert (stored["total_amount"], stored["tax_amount"],
+                stored["grand_total"],
+                stored["outstanding_amount"]) == (
+            "300.00", "0.00", "300.00", "300.00")
+        q = (Q.from_(pii_t)
+             .select(pii_t.item_id, pii_t.quantity, pii_t.rate, pii_t.amount)
+             .where(pii_t.purchase_invoice_id == P()))
+        lines = conn.execute(q.get_sql(), (pi_id,)).fetchall()
+        assert [(r["item_id"], r["quantity"], r["rate"], r["amount"])
+                for r in lines] == [
+            (env["item1"], "3.00", "100.00", "300.00")]
+        assert [(i["item_id"], i["quantity"], i["rate"], i["amount"])
+                for i in result["items"]] == [
+            (env["item1"], "3.00", "100.00", "300.00")]
+        assert result["payments"] == []
+        for name in ("purchase_invoice", "purchase_invoice_item",
+                     "audit_log"):
+            table = Table(name)
+            q = Q.from_(table).select(fn.Count("*").as_("n"))
+            assert conn.execute(q.get_sql()).fetchone()["n"] == before[name]
 
 
 class TestListPurchaseInvoices:
@@ -369,9 +430,67 @@ class TestCreateDebitNote:
         assert is_ok(result)
         assert "debit_note_id" in result
 
+        # Deepened (m478): the note is a negative draft against the bill —
+        # 2 x 100.00 negated — the bill itself is untouched, and a draft
+        # posts no ledger rows.
+        dn_id = result["debit_note_id"]
+        assert result["total_amount"] == "-200.00"
+        pi_t = Table("purchase_invoice")
+        q = Q.from_(pi_t).select(pi_t.star).where(pi_t.id == P())
+        note = conn.execute(q.get_sql(), (dn_id,)).fetchone()
+        assert note["status"] == "draft"
+        assert note["is_return"] == 1
+        assert note["return_against"] == create["purchase_invoice_id"]
+        assert (note["total_amount"], note["tax_amount"],
+                note["grand_total"],
+                note["outstanding_amount"]) == (
+            "-200.00", "0", "-200.00", "-200.00")
+        pii_t = Table("purchase_invoice_item")
+        q = (Q.from_(pii_t)
+             .select(pii_t.item_id, pii_t.quantity, pii_t.rate, pii_t.amount)
+             .where(pii_t.purchase_invoice_id == P()))
+        lines = conn.execute(q.get_sql(), (dn_id,)).fetchall()
+        assert [(r["item_id"], r["quantity"], r["rate"], r["amount"])
+                for r in lines] == [
+            (env["item1"], "-2.00", "100.00", "-200.00")]
+        q = Q.from_(pi_t).select(pi_t.star).where(pi_t.id == P())
+        orig = conn.execute(q.get_sql(),
+                            (create["purchase_invoice_id"],)).fetchone()
+        assert (orig["status"], orig["grand_total"],
+                orig["outstanding_amount"]) == (
+            "submitted", "500.00", "500.00")
+        gl_t = Table("gl_entry")
+        q = (Q.from_(gl_t).select(fn.Count("*").as_("n"))
+             .where(gl_t.voucher_id == P()))
+        assert conn.execute(q.get_sql(), (dn_id,)).fetchone()["n"] == 0
 
-class TestUpdateInvoiceOutstanding:
-    def test_reduce_outstanding(self, conn, env):
+
+class TestUpdateInvoiceOutstandingRetired:
+    """`update-purchase-outstanding` is RETIRED (steer shape, M776).
+
+    The buying handler (``update_invoice_outstanding``, routed as
+    ``update-purchase-outstanding``) moved a purchase invoice's
+    ``outstanding_amount`` and appended a ``payment_ledger_entry`` adjustment
+    row with NO general-ledger posting, so the GL and the sub-ledger drifted
+    apart while the summary-versus-detail checks stayed green. No module
+    calls it — payments clears documents in-process through
+    ``erpclaw_lib.payment_clearing``.
+
+    What is pinned here is the RETIREMENT CONTRACT (the M103 shape): the name
+    stays ROUTABLE and answers with one JSON error naming the replacement
+    flows, exit 1, never a traceback and never "Unknown action", and NOTHING
+    LANDS. Against the pre-retirement handler this class is red on both
+    halves — the old handler returned ``status: ok`` and wrote a ledger row.
+
+    The two old tests pinned the retired action's own contract (INV-25 and
+    INV-22 staying green after a GL-less balance move); that contract is
+    withdrawn with the action — the checks now hold because the move cannot
+    happen, and every sanctioned flow (add-payment -> submit-payment /
+    allocate-payment, create-debit-note -> submit-purchase-invoice,
+    write-off-invoice) posts both sides together.
+    """
+
+    def _submitted_invoice(self, conn, env):
         items = _items(env, ("item1", "5", "100.00"))
         create = call_action(mod.create_purchase_invoice, conn, ns(
             purchase_order_id=None, purchase_receipt_id=None,
@@ -379,70 +498,101 @@ class TestUpdateInvoiceOutstanding:
             posting_date="2026-06-20", due_date="2026-07-20",
             items=items, tax_template_id=None,
         ))
-        call_action(mod.submit_purchase_invoice, conn, ns(
+        assert is_ok(create), f"invoice creation failed: {create}"
+        submit = call_action(mod.submit_purchase_invoice, conn, ns(
             purchase_invoice_id=create["purchase_invoice_id"],
         ))
-        result = call_action(mod.update_invoice_outstanding, conn, ns(
-            purchase_invoice_id=create["purchase_invoice_id"],
+        assert is_ok(submit), f"invoice submit failed: {submit}"
+        return create["purchase_invoice_id"]
+
+    def test_retired_action_returns_a_steer_not_a_result(self, conn, env):
+        """The retired action answers with one JSON error naming every
+        replacement — the half that was red before M776 (``status: ok``)."""
+        invoice_id = self._submitted_invoice(conn, env)
+        result = call_action(mod.ACTIONS[RETIRED_KEY], conn, ns(
+            purchase_invoice_id=invoice_id,
             amount="200.00",
         ))
-        assert is_ok(result)
+        assert result["status"] == "error", (
+            f"{PUBLIC_ACTION} still returned a result: "
+            f"{json.dumps(result)[:300]}")
+        assert "retired" in result["message"].lower(), result
+        assert PUBLIC_ACTION in result["message"], (
+            "the message must name the public action the caller typed")
+        assert result["suggestion"] == payment_clearing.RETIRED_OUTSTANDING_STEER
+        for replacement in SANCTIONED_FLOW:
+            assert replacement in result["suggestion"], (
+                f"the steer does not name {replacement}; a retirement without "
+                f"a route is a dead end. Got: {result['suggestion']}")
 
+    def _snapshot(self, conn, invoice_id):
         pi = conn.execute(
-            "SELECT outstanding_amount FROM purchase_invoice WHERE id=?",
-            (create["purchase_invoice_id"],)
-        ).fetchone()
-        assert Decimal(pi["outstanding_amount"]) == Decimal("300.00")
+            "SELECT outstanding_amount, status FROM purchase_invoice WHERE id=?",
+            (invoice_id,)).fetchone()
+        ple_n = conn.execute(
+            "SELECT COUNT(*) AS n FROM payment_ledger_entry").fetchone()["n"]
+        gl_n = conn.execute(
+            "SELECT COUNT(*) AS n FROM gl_entry").fetchone()["n"]
+        audit_n = conn.execute(
+            "SELECT COUNT(*) AS n FROM audit_log").fetchone()["n"]
+        return {"outstanding_amount": pi["outstanding_amount"],
+                "status": pi["status"],
+                "payment_ledger_entry": ple_n,
+                "gl_entry": gl_n,
+                "audit_log": audit_n}
 
-        # QA round-1 DEFECT 1 pin (INV-25 / ADR-0031): the action must post the
-        # matching payment-ledger DETAIL row in the same transaction as the
-        # SUMMARY write — one invocation without it reds INV-25 permanently.
-        assert "payment_ledger_entry_id" in result
-        adj = conn.execute(
-            "SELECT voucher_type, voucher_id, amount, delinked "
-            "FROM payment_ledger_entry WHERE id=?",
-            (result["payment_ledger_entry_id"],)
-        ).fetchone()
-        assert adj is not None
-        assert adj["voucher_type"] == "purchase_invoice"
-        assert adj["voucher_id"] == create["purchase_invoice_id"]
-        assert adj["delinked"] == 0
-        assert Decimal(adj["amount"]) == Decimal("-200.00")
-        assert _inv25(conn) is None
+    def test_retired_action_writes_nothing(self, conn, env):
+        """The invoice was submitted first, so both ledgers hold rows; the
+        retired action must touch neither. The half that was red before M776:
+        the old handler wrote a payment-ledger row here with no GL leg."""
+        invoice_id = self._submitted_invoice(conn, env)
+        before = self._snapshot(conn, invoice_id)
+        assert before["payment_ledger_entry"] >= 1, (
+            "the submitted invoice must own a payment-ledger row")
+        assert before["gl_entry"] >= 1, (
+            "the submitted invoice must own GL rows")
+        call_action(mod.ACTIONS[RETIRED_KEY], conn, ns(
+            purchase_invoice_id=invoice_id,
+            amount="200.00",
+        ))
+        conn.commit()
+        after = self._snapshot(conn, invoice_id)
+        assert after == before, (
+            f"{PUBLIC_ACTION} wrote something: {before} -> {after}")
 
-    def test_full_pay_keeps_inv25_and_inv22_green(self, conn, env):
-        """QA round-1 DEFECT 1 pin, full-clear path (AP side): paying a bill to
-        zero through update-purchase-outstanding flips it to 'paid' with the
-        detail net at exactly zero — INV-25 (always-on) AND INV-22 (paid-scope)
-        both green."""
-        items = _items(env, ("item1", "5", "100.00"))
-        create = call_action(mod.create_purchase_invoice, conn, ns(
-            purchase_order_id=None, purchase_receipt_id=None,
-            supplier_id=env["supplier"], company_id=env["company_id"],
-            posting_date="2026-06-20", due_date="2026-07-20",
-            items=items, tax_template_id=None,
-        ))
-        call_action(mod.submit_purchase_invoice, conn, ns(
-            purchase_invoice_id=create["purchase_invoice_id"],
-        ))
-        r1 = call_action(mod.update_invoice_outstanding, conn, ns(
-            purchase_invoice_id=create["purchase_invoice_id"], amount="200.00"))
-        assert is_ok(r1)
-        r2 = call_action(mod.update_invoice_outstanding, conn, ns(
-            purchase_invoice_id=create["purchase_invoice_id"], amount="300.00"))
-        assert is_ok(r2)
-        pi = conn.execute(
-            "SELECT status, outstanding_amount FROM purchase_invoice WHERE id=?",
-            (create["purchase_invoice_id"],)
-        ).fetchone()
-        assert pi["status"] == "paid"
-        assert pi["outstanding_amount"] == "0"
-        rows = conn.execute(
-            "SELECT amount FROM payment_ledger_entry "
-            "WHERE voucher_type='purchase_invoice' AND voucher_id=? AND delinked=0",
-            (create["purchase_invoice_id"],)
-        ).fetchall()
-        assert len(rows) == 3  # submit +500, adjustments -200 and -300
-        assert sum(Decimal(r["amount"]) for r in rows) == Decimal("0")
-        assert _inv25(conn) is None
-        assert _inv22(conn) is None
+    def test_full_legacy_invocation_reaches_the_steer_through_the_router(
+            self, tmp_path):
+        """Drive the FOUNDATION router exactly as a legacy caller would — the
+        old flags included — and read what comes back: the name still routes
+        (never "Unknown action"), the legacy flags still parse (an argparse
+        usage error would exit 2 before the JSON contract), and what routes
+        is the steer.
+
+        Hermetic per the M54/M97 discipline: ERPCLAW_HOME is redirected at a
+        temp dir so nothing touches the developer's real install, and
+        PYTHONPATH binds the IN-TREE erpclaw_lib so find_spec resolves the
+        tree under test rather than whatever the deployed symlink points at.
+        The temp home gets a PROVISIONED database on purpose: the router's
+        requires-setup pre-flight runs before dispatch, and the steer contract
+        is about what an INSTALLED caller gets.
+        """
+        home = tmp_path / "home"
+        (home / "lib").mkdir(parents=True)
+        init_all_tables(str(home / "data.sqlite"))
+        env = dict(os.environ, ERPCLAW_HOME=str(home), PYTHONPATH=_IN_TREE_LIB)
+        proc = subprocess.run(
+            [sys.executable, _ROUTER, "--action", PUBLIC_ACTION,
+             "--purchase-invoice-id", str(uuid.uuid4()),
+             "--amount", "200.00"],
+            capture_output=True, text=True, env=env, timeout=120)
+
+        assert proc.returncode == 1, (proc.returncode, proc.stdout[-400:],
+                                      proc.stderr[-400:])
+        assert "Traceback" not in proc.stderr, proc.stderr[-800:]
+        payload = json.loads(proc.stdout)
+        assert payload.get("status") == "error", payload
+        assert "retired" in payload.get("message", "").lower(), payload
+        assert PUBLIC_ACTION in payload.get("message", ""), payload
+        for replacement in SANCTIONED_FLOW:
+            assert replacement in payload.get("suggestion", ""), (
+                replacement, payload)

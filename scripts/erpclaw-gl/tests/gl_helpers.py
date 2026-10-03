@@ -56,15 +56,49 @@ if ERPCLAW_LIB not in sys.path:
     if importlib.util.find_spec("erpclaw_lib") is None:
         sys.path.insert(0, ERPCLAW_LIB)
 
-from erpclaw_lib.db import setup_pragmas
+from erpclaw_lib.db import setup_pragmas, get_dialect, get_connection
+from erpclaw_lib.query import insert_or_ignore
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # DB helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
-def init_all_tables(db_path: str):
-    """Create all ERPClaw core tables using init_schema.init_db()."""
+def _reset_pg_schema():
+    """Drop and recreate the shared ``public`` schema on PostgreSQL.
+
+    Per-test isolation for the PostgreSQL branch: ``DROP SCHEMA public
+    CASCADE`` clears every table, index, sequence and the ``decimal_sum``
+    aggregate left by the previous test in one statement, so no test ever
+    sees another test's rows. The fresh schema is re-provisioned by
+    ``init_schema.init_db(None)`` (which re-registers ``decimal_sum`` via
+    the ``get_connection`` it calls). Same shape as the L3 smoke suite's
+    ``_provision_pg_schema``.
+    """
+    conn = get_connection()
+    try:
+        conn.execute("DROP SCHEMA IF EXISTS public CASCADE")
+        conn.execute("CREATE SCHEMA public")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def init_all_tables(db_path=None):
+    """Create all ERPClaw core tables using init_schema.init_db().
+
+    SQLite (default): ``db_path`` is the file to build — unchanged.
+    PostgreSQL: the shared schema is reset (see ``_reset_pg_schema``) and
+    ``init_db`` receives ``None`` so the seam resolves the configured
+    target (``ERPCLAW_DB_URL``) instead of being handed a file path.
+    """
+    if get_dialect() == "postgresql":
+        _reset_pg_schema()
+        spec = importlib.util.spec_from_file_location("init_schema", INIT_SCHEMA_PATH)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.init_db(None)
+        return
     spec = importlib.util.spec_from_file_location("init_schema", INIT_SCHEMA_PATH)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -82,8 +116,17 @@ class _DecimalSum:
         return str(self.total)
 
 
-def get_conn(db_path: str) -> sqlite3.Connection:
-    """Return a sqlite3.Connection with FK enabled and Row factory."""
+def get_conn(db_path=None):
+    """Return a database connection with FK enabled and Row-style access.
+
+    SQLite (default): a ``sqlite3.Connection`` on ``db_path`` — unchanged.
+    PostgreSQL: the foundation ``get_connection()`` (a ``PgConnectionWrapper``
+    with ``?`` → ``%s`` translation and the persistent ``decimal_sum``
+    aggregate); ``db_path`` is ignored because the seam resolves the
+    configured target.
+    """
+    if get_dialect() == "postgresql":
+        return get_connection()
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     setup_pragmas(conn)
@@ -218,3 +261,17 @@ def seed_supplier(conn, company_id: str, name="Test Supplier") -> str:
     )
     conn.commit()
     return sid
+
+
+def seed_currency(conn, code: str, name: str) -> None:
+    """Insert a currency row, ignoring duplicates, on either backend.
+
+    SQLite spells it INSERT OR IGNORE; PostgreSQL has no such verb and
+    needs ON CONFLICT DO NOTHING. Routed through
+    erpclaw_lib.query.insert_or_ignore() so no fixture carries a
+    dialect-specific verb to the driver.
+    """
+    conn.execute(insert_or_ignore(
+        "INSERT OR IGNORE INTO currency (code, name) VALUES (?, ?)"),
+        (code, name))
+    conn.commit()

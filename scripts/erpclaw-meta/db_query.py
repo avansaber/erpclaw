@@ -236,7 +236,24 @@ def get_db_info(db_path):
     """Gather database information: existence, table list, company count.
 
     Returns a dict with database_exists, tables (set), table_count, company_count.
+
+    File inspection only: when the configured dialect is not sqlite there is
+    no database file to stat or open, so return an empty file answer tagged
+    with the backend instead of inventing file statistics.
     """
+    try:
+        from erpclaw_lib.db import get_dialect
+        _info_dialect = get_dialect()
+    except ImportError:
+        _info_dialect = "sqlite"
+    if _info_dialect != "sqlite":
+        return {
+            "database_exists": False,
+            "tables": set(),
+            "table_count": 0,
+            "company_count": 0,
+            "backend": _info_dialect,
+        }
     info = {
         "database_exists": False,
         "tables": set(),
@@ -300,8 +317,9 @@ def scan_installed_skills():
 
 def check_installation(args):
     """Scan installed skills, database status, and shared library health."""
-    db_path = args.db_path
-    db_info = get_db_info(db_path)
+    explicit_db_path = getattr(args, "db_path", None)
+    inspection_db_path = explicit_db_path or DEFAULT_DB_PATH
+    db_info = get_db_info(inspection_db_path)
     installed_dirs = scan_installed_skills()
     shared_lib_installed = os.path.isdir(SHARED_LIB_PATH)
 
@@ -336,7 +354,7 @@ def check_installation(args):
         "database_tables": db_info["table_count"],
         "company_count": db_info["company_count"],
         "shared_library_installed": shared_lib_installed,
-        "db_path": db_path,
+        "db_path": inspection_db_path,
         "skills_dir": SKILLS_DIR,
     }
     output_json(result)
@@ -344,8 +362,9 @@ def check_installation(args):
 
 def install_guide(args):
     """Recommend the next skills to install based on current state."""
-    db_path = args.db_path
-    db_info = get_db_info(db_path)
+    explicit_db_path = getattr(args, "db_path", None)
+    inspection_db_path = explicit_db_path or DEFAULT_DB_PATH
+    db_info = get_db_info(inspection_db_path)
     installed_dirs = scan_installed_skills()
     installed_names = set(installed_dirs.keys())
 
@@ -417,6 +436,280 @@ def install_guide(args):
     output_json(result)
 
 
+def _build_skill_cmd(script, action_name, explicit_db_path, kwargs):
+    """Build the argument list for a child skill router.
+
+    ``--db-path`` is forwarded only when the caller gave one; otherwise the
+    child receives no flag and resolves the same environment the parent did.
+    """
+    cmd = [sys.executable, script, "--action", action_name]
+    if explicit_db_path:
+        cmd.extend(["--db-path", explicit_db_path])
+    for key, val in kwargs.items():
+        if val is None:
+            continue
+        flag = "--" + key.replace("_", "-")
+        if val is True:
+            cmd.append(flag)
+        elif val is not False:
+            cmd.extend([flag, str(val)])
+    return cmd
+
+
+SEED_DEMO_FISCAL_YEARS = (
+    {"name": "FY 2025", "start_date": "2025-01-01", "end_date": "2025-12-31"},
+    {"name": "FY 2026", "start_date": "2026-01-01", "end_date": "2026-12-31"},
+)
+
+
+def _seed_fiscal_year_overlaps(want_start, want_end, got_start, got_end):
+    """True when two YYYY-MM-DD ranges overlap (inclusive on both ends)."""
+    return want_start <= got_end and got_start <= want_end
+
+
+def _seed_demo_fiscal_years(company_id, run_skill, progress, errors):
+    """Phase 1 fiscal-years step of seed-demo-data (m838).
+
+    setup-company auto-creates the fiscal year containing today, so one of
+    the seed years may already exist under another name. Before each
+    add-fiscal-year, the company's existing fiscal years are read back
+    through erpclaw-gl list-fiscal-years; a seed year whose range overlaps
+    an existing year is kept as-is (short progress note, no error) instead
+    of being added again. Each seed year is decided on its own. A failing
+    list-fiscal-years or add-fiscal-year stays an error worded as before.
+    """
+    for want in SEED_DEMO_FISCAL_YEARS:
+        try:
+            listing = run_skill("erpclaw-gl", "list-fiscal-years",
+                                company_id=company_id)
+        except Exception as e:
+            errors.append(f"Phase 1 (fiscal-years): {e}")
+            return
+        existing = listing.get("fiscal_years") or []
+        clash = None
+        for row in existing:
+            got_start = row.get("start_date")
+            got_end = row.get("end_date")
+            if got_start and got_end and _seed_fiscal_year_overlaps(
+                    want["start_date"], want["end_date"], got_start, got_end):
+                clash = row
+                break
+        if clash is not None:
+            progress(
+                f"  Fiscal year {want['start_date']} to {want['end_date']}"
+                f" already covered by '{clash.get('name')}', keeping existing."
+            )
+            continue
+        try:
+            run_skill("erpclaw-gl", "add-fiscal-year",
+                      name=want["name"], start_date=want["start_date"],
+                      end_date=want["end_date"], company_id=company_id)
+        except Exception as e:
+            errors.append(f"Phase 1 (fiscal-years): {e}")
+
+
+SEED_DEMO_ACCOUNT_MAP = {
+    "cash":                  "1111",  # Petty Cash
+    "accounts_receivable":   "1121",  # Trade Receivables
+    "inventory":             "1131",  # Raw Materials
+    "prepaid_expenses":      "1141",  # Prepaid Insurance
+    "fixed_assets":          "1214",  # Office Equipment
+    "accum_depreciation":    "1217",  # Accumulated Depreciation - FF&E
+    "accounts_payable":      "2111",  # Trade Payables
+    "sales_revenue":         "4110",  # Sales Revenue
+    "cogs":                  "5110",  # COGS - Materials
+    "operating_expenses":    "5240",  # Office Supplies
+    "payroll_expense":       "5210",  # Salaries and Wages
+    "rent_expense":          "5220",  # Rent Expense
+    "utilities_expense":     "5230",  # Utilities
+    "depreciation_expense":  "5260",  # Depreciation Expense
+    "bank":                  "1112",  # Operating Checking Account
+}
+
+
+def _seed_connection(explicit_db_path):
+    """Open the seed inspection connection through the seam.
+
+    The explicit --db-path is forwarded when one was given; otherwise None
+    lets the seam resolve the configured backend itself. The seam applies
+    the SQLite settings, so no pragma setup is needed here.
+    """
+    from erpclaw_lib.db import get_connection
+    return get_connection(explicit_db_path)
+
+
+def _seed_get_account_id(conn, account_number, company_id):
+    """Look up an account ID by account_number within a company.
+
+    Reads the row by column name so the same code runs on the SQLite seam
+    connection and the PostgreSQL seam connection.
+    """
+    if _HAS_PYPIKA:
+        t = Table("account")
+        q = (Q.from_(t).select(t.id)
+             .where(t.account_number == P())
+             .where(t.company_id == P()))
+        row = conn.execute(q.get_sql(), (account_number, company_id)).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT id FROM account WHERE account_number = ? AND company_id = ?",
+            (account_number, company_id),
+        ).fetchone()
+    return row["id"] if row else None
+
+
+def _seed_lookup_account_ids(conn, company_id):
+    """Resolve every Phase 2 demo account number to its stored id.
+
+    Returns a dict of key -> account id for the accounts that exist; the
+    caller reports the missing ones. Factored to module level so the
+    backend contract is testable without running the whole seed.
+    """
+    found = {}
+    for key, acct_num in SEED_DEMO_ACCOUNT_MAP.items():
+        aid = _seed_get_account_id(conn, acct_num, company_id)
+        if aid:
+            found[key] = aid
+    return found
+
+
+def _created_id(result, entity, legacy_key):
+    """Read the id of a record a seed action just created (m845).
+
+    Create actions return either ``{"<entity>": {"id": ...}}`` or a flat
+    ``{"<legacy_key>": ...}`` payload; anything else yields None so the
+    phase counts zero instead of crashing.
+    """
+    if not isinstance(result, dict):
+        return None
+    nested = result.get(entity)
+    if isinstance(nested, dict):
+        return nested.get("id")
+    return result.get(legacy_key)
+
+
+def _seed_find_skill_script(skill_name):
+    """Locate a skill's db_query.py — check v2 package subdirs first, then SKILLS_DIR.
+
+    Module-level twin of the seed's lookup so tests can drive the same
+    resolution the seed uses without running the whole seed.
+    """
+    # v2 consolidated: domain scripts live inside the erpclaw package
+    v2_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", skill_name, "db_query.py")
+    if os.path.isfile(v2_path):
+        return os.path.abspath(v2_path)
+    # Also check v2 sibling packages (erpclaw-ops, erpclaw-growth)
+    v2_skill_map = {
+        "erpclaw-manufacturing": "erpclaw-ops", "erpclaw-projects": "erpclaw-ops",
+        "erpclaw-assets": "erpclaw-ops", "erpclaw-quality": "erpclaw-ops",
+        "erpclaw-support": "erpclaw-ops",
+        "erpclaw-crm": "erpclaw-growth", "erpclaw-analytics": "erpclaw-growth",
+        "erpclaw-ai-engine": "erpclaw-growth",
+    }
+    if skill_name in v2_skill_map:
+        pkg = v2_skill_map[skill_name]
+        sibling = os.path.join(SKILLS_DIR, pkg, "scripts", skill_name, "db_query.py")
+        if os.path.isfile(sibling):
+            return sibling
+    # Fallback: original location
+    server_path = os.path.join(SKILLS_DIR, skill_name, "scripts", "db_query.py")
+    if os.path.isfile(server_path):
+        return server_path
+    return None
+
+
+def _seed_run_skill(skill_name, action_name, explicit_db_path, **kwargs):
+    """Run a skill action via subprocess and return parsed JSON output.
+
+    Module-level twin of the seed's runner, the same code path
+    seed_demo_data uses. Keyword arguments are converted to CLI flags:
+      key_name='val'  ->  --key-name val
+      flag=True       ->  --flag
+      skip=None       ->  (omitted)
+    """
+    script = _seed_find_skill_script(skill_name)
+    if not script:
+        raise RuntimeError(
+            f"Skill {skill_name} not found in {SKILLS_DIR}. Install it first: clawhub install {skill_name}"
+        )
+
+    cmd = _build_skill_cmd(script, action_name, explicit_db_path, kwargs)
+
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=120
+    )
+
+    stdout = result.stdout.strip()
+    if not stdout:
+        raise RuntimeError(
+            f"{skill_name}/{action_name} produced no output. "
+            f"stderr: {result.stderr.strip()}"
+        )
+
+    try:
+        data = json.loads(stdout)
+    except json.JSONDecodeError:
+        raise RuntimeError(
+            f"{skill_name}/{action_name} returned invalid JSON: {stdout[:500]}"
+        )
+
+    if result.returncode != 0:
+        err_msg = data.get("error", stdout[:300])
+        raise RuntimeError(f"{skill_name}/{action_name} failed: {err_msg}")
+
+    return data
+
+
+def _seed_demo_projects(company_id, run_skill, progress, errors, summary):
+    """Phase 13 projects step of seed-demo-data (m845).
+
+    Creates the ERP Migration Project and its four tasks. Factored to
+    module level so the task gating on the created project id is testable
+    without running the whole seed. Inputs, order, error strings and
+    summary updates are unchanged from the inline phase.
+    """
+    progress("Phase 13: Projects...")
+
+    project_id = None
+    try:
+        result = run_skill("erpclaw-projects", "add-project",
+                           name="ERP Migration Project",
+                           company_id=company_id,
+                           project_type="internal",
+                           start_date="2026-01-01",
+                           end_date="2026-06-30")
+        project_id = _created_id(result, "project", "project_id")
+        progress("  Project: ERP Migration Project")
+    except Exception as e:
+        errors.append(f"Phase 13 (project): {e}")
+
+    summary["projects"] = 1 if project_id else 0
+
+    # Create tasks
+    task_defs = [
+        # (name, start_date, end_date)
+        ("Requirements gathering",  "2026-01-01", "2026-01-31"),
+        ("Data migration",          "2026-02-01", "2026-03-31"),
+        ("User training",           "2026-04-01", "2026-04-30"),
+        ("Go-live preparation",     "2026-05-01", "2026-06-30"),
+    ]
+    task_count = 0
+    if project_id:
+        for task_name, start, end in task_defs:
+            try:
+                run_skill("erpclaw-projects", "add-task",
+                          project_id=project_id,
+                          name=task_name,
+                          start_date=start,
+                          end_date=end)
+                task_count += 1
+                progress(f"  Task: {task_name}")
+            except Exception as e:
+                errors.append(f"Phase 13 (task '{task_name}'): {e}")
+
+    summary["tasks"] = task_count
+
+
 def seed_demo_data(args):
     """Create demo data for a company.
 
@@ -436,95 +729,85 @@ def seed_demo_data(args):
     import subprocess
     import traceback
 
-    db_path = args.db_path
+    explicit_db_path = getattr(args, "db_path", None)
+    inspection_db_path = explicit_db_path or DEFAULT_DB_PATH
     use_existing_company = getattr(args, "company_id", None)
+
+    # File-backed idempotency check only: under a non-sqlite dialect there
+    # is no database file to inspect, so skip straight to seeding through
+    # the child routers (which resolve the configured backend themselves).
+    try:
+        from erpclaw_lib.db import get_dialect
+        _seed_dialect = get_dialect()
+    except ImportError:
+        _seed_dialect = "sqlite"
 
     # ------------------------------------------------------------------
     # Idempotency check — company exists AND demo data is populated
     # ------------------------------------------------------------------
-    try:
-        conn = sqlite3.connect(db_path, timeout=5)
-        conn.row_factory = sqlite3.Row
-        from erpclaw_lib.db import setup_pragmas
-        setup_pragmas(conn)
+    if _seed_dialect == "sqlite":
+        try:
+            conn = sqlite3.connect(inspection_db_path, timeout=5)
+            conn.row_factory = sqlite3.Row
+            from erpclaw_lib.db import setup_pragmas
+            setup_pragmas(conn)
 
-        target_company_id = None
-        if use_existing_company:
-            # Check existing company
-            row = conn.execute(
-                "SELECT id FROM company WHERE id = ?", (use_existing_company,)
-            ).fetchone()
-            if row:
-                target_company_id = row[0]
-        else:
-            if _HAS_PYPIKA:
-                co = Table("company")
-                q = Q.from_(co).select(co.id).where(co.name.like("Stark Manufacturing Inc%"))
-                row = conn.execute(q.get_sql()).fetchone()
-            else:
-                row = conn.execute(
-                    "SELECT id FROM company WHERE name LIKE 'Stark Manufacturing Inc%'"
-                ).fetchone()
-            if row:
-                target_company_id = row[0]
-
-        if target_company_id:
-            # Company exists — check if demo data was also loaded
-            if _HAS_PYPIKA:
-                cu = Table("customer")
-                q = Q.from_(cu).select(fn.Count("*")).where(cu.company_id == P())
-                customer_count = conn.execute(q.get_sql(), (target_company_id,)).fetchone()[0]
-            else:
-                customer_count = conn.execute(
-                    "SELECT COUNT(*) FROM customer WHERE company_id = ?", (target_company_id,)
-                ).fetchone()[0]
-            conn.close()
-            if customer_count > 0:
-                output_json({
-                    "status": "ok",
-                    "message": "Demo data already exists for this company",
-                    "company_id": target_company_id,
-                })
-                return
-            # Company exists but no demo data — fall through to seed
-        else:
-            conn.close()
+            target_company_id = None
             if use_existing_company:
-                output_json({
-                    "status": "error",
-                    "error": f"Company {use_existing_company} not found",
-                })
-                return
-    except sqlite3.Error:
-        pass  # DB may not exist yet — that is fine, setup-company will create it
+                # Check existing company
+                row = conn.execute(
+                    "SELECT id FROM company WHERE id = ?", (use_existing_company,)
+                ).fetchone()
+                if row:
+                    target_company_id = row[0]
+            else:
+                if _HAS_PYPIKA:
+                    co = Table("company")
+                    q = Q.from_(co).select(co.id).where(co.name.like("Stark Manufacturing Inc%"))
+                    row = conn.execute(q.get_sql()).fetchone()
+                else:
+                    row = conn.execute(
+                        "SELECT id FROM company WHERE name LIKE 'Stark Manufacturing Inc%'"
+                    ).fetchone()
+                if row:
+                    target_company_id = row[0]
+
+            if target_company_id:
+                # Company exists — check if demo data was also loaded
+                if _HAS_PYPIKA:
+                    cu = Table("customer")
+                    q = Q.from_(cu).select(fn.Count("*")).where(cu.company_id == P())
+                    customer_count = conn.execute(q.get_sql(), (target_company_id,)).fetchone()[0]
+                else:
+                    customer_count = conn.execute(
+                        "SELECT COUNT(*) FROM customer WHERE company_id = ?", (target_company_id,)
+                    ).fetchone()[0]
+                conn.close()
+                if customer_count > 0:
+                    output_json({
+                        "status": "ok",
+                        "message": "Demo data already exists for this company",
+                        "company_id": target_company_id,
+                    })
+                    return
+                # Company exists but no demo data — fall through to seed
+            else:
+                conn.close()
+                if use_existing_company:
+                    output_json({
+                        "status": "error",
+                        "error": f"Company {use_existing_company} not found",
+                    })
+                    return
+        except sqlite3.Error:
+            pass  # DB may not exist yet — that is fine, setup-company will create it
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
     def _find_skill_script(skill_name):
         """Locate a skill's db_query.py — check v2 package subdirs first, then SKILLS_DIR."""
-        # v2 consolidated: domain scripts live inside the erpclaw package
-        v2_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", skill_name, "db_query.py")
-        if os.path.isfile(v2_path):
-            return os.path.abspath(v2_path)
-        # Also check v2 sibling packages (erpclaw-ops, erpclaw-growth)
-        v2_skill_map = {
-            "erpclaw-manufacturing": "erpclaw-ops", "erpclaw-projects": "erpclaw-ops",
-            "erpclaw-assets": "erpclaw-ops", "erpclaw-quality": "erpclaw-ops",
-            "erpclaw-support": "erpclaw-ops",
-            "erpclaw-crm": "erpclaw-growth", "erpclaw-analytics": "erpclaw-growth",
-            "erpclaw-ai-engine": "erpclaw-growth",
-        }
-        if skill_name in v2_skill_map:
-            pkg = v2_skill_map[skill_name]
-            sibling = os.path.join(SKILLS_DIR, pkg, "scripts", skill_name, "db_query.py")
-            if os.path.isfile(sibling):
-                return sibling
-        # Fallback: original location
-        server_path = os.path.join(SKILLS_DIR, skill_name, "scripts", "db_query.py")
-        if os.path.isfile(server_path):
-            return server_path
-        return None
+        return _seed_find_skill_script(skill_name)
 
     def _run_skill(skill_name, action_name, **kwargs):
         """Run a skill action via subprocess and return parsed JSON output.
@@ -534,46 +817,7 @@ def seed_demo_data(args):
           flag=True       ->  --flag
           skip=None       ->  (omitted)
         """
-        script = _find_skill_script(skill_name)
-        if not script:
-            raise RuntimeError(
-                f"Skill {skill_name} not found in {SKILLS_DIR}. Install it first: clawhub install {skill_name}"
-            )
-
-        cmd = [sys.executable, script, "--action", action_name, "--db-path", db_path]
-
-        for key, val in kwargs.items():
-            if val is None:
-                continue
-            flag = "--" + key.replace("_", "-")
-            if val is True:
-                cmd.append(flag)
-            elif val is not False:
-                cmd.extend([flag, str(val)])
-
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=120
-        )
-
-        stdout = result.stdout.strip()
-        if not stdout:
-            raise RuntimeError(
-                f"{skill_name}/{action_name} produced no output. "
-                f"stderr: {result.stderr.strip()}"
-            )
-
-        try:
-            data = json.loads(stdout)
-        except json.JSONDecodeError:
-            raise RuntimeError(
-                f"{skill_name}/{action_name} returned invalid JSON: {stdout[:500]}"
-            )
-
-        if result.returncode != 0:
-            err_msg = data.get("error", stdout[:300])
-            raise RuntimeError(f"{skill_name}/{action_name} failed: {err_msg}")
-
-        return data
+        return _seed_run_skill(skill_name, action_name, explicit_db_path, **kwargs)
 
     def _progress(msg):
         """Print progress to stderr."""
@@ -593,7 +837,7 @@ def seed_demo_data(args):
                 "SELECT id FROM account WHERE account_number = ? AND company_id = ?",
                 (account_number, company_id),
             ).fetchone()
-        return row[0] if row else None
+        return row["id"] if row else None
 
     def _get_account_id_by_name(conn, name_pattern, company_id):
         """Look up an account ID by name LIKE pattern within a company."""
@@ -608,7 +852,7 @@ def seed_demo_data(args):
                 "SELECT id FROM account WHERE name LIKE ? AND company_id = ?",
                 (name_pattern, company_id),
             ).fetchone()
-        return row[0] if row else None
+        return row["id"] if row else None
 
     # Track what was created for the summary
     summary = {
@@ -663,8 +907,7 @@ def seed_demo_data(args):
             errors.append(f"Phase 1 (setup-company): {e}")
             # Fall back: look for any existing company to use
             try:
-                conn = sqlite3.connect(db_path, timeout=5)
-                conn.row_factory = sqlite3.Row
+                conn = _seed_connection(explicit_db_path)
                 if _HAS_PYPIKA:
                     co = Table("company")
                     q = (Q.from_(co).select(co.id, co.name)
@@ -677,10 +920,10 @@ def seed_demo_data(args):
                     ).fetchone()
                 conn.close()
                 if row:
-                    company_id = row[0]
-                    _progress(f"  Using existing company: {row[1]} ({company_id})")
+                    company_id = row["id"]
+                    _progress(f"  Using existing company: {row['name']} ({company_id})")
                     errors.pop()  # Remove the setup-company error since we recovered
-            except sqlite3.Error:
+            except Exception:
                 pass
         if not company_id:
             output_json({
@@ -703,16 +946,8 @@ def seed_demo_data(args):
     except Exception as e:
         errors.append(f"Phase 1 (chart-of-accounts): {e}")
 
-    try:
-        _progress("  Adding fiscal years 2025 and 2026...")
-        _run_skill("erpclaw-gl", "add-fiscal-year",
-                    name="FY 2025", start_date="2025-01-01",
-                    end_date="2025-12-31", company_id=company_id)
-        _run_skill("erpclaw-gl", "add-fiscal-year",
-                    name="FY 2026", start_date="2026-01-01",
-                    end_date="2026-12-31", company_id=company_id)
-    except Exception as e:
-        errors.append(f"Phase 1 (fiscal-years): {e}")
+    _progress("  Adding fiscal years 2025 and 2026...")
+    _seed_demo_fiscal_years(company_id, _run_skill, _progress, errors)
 
     try:
         _progress("  Seeding naming series...")
@@ -726,37 +961,15 @@ def seed_demo_data(args):
     _progress("Phase 2: Looking up account IDs...")
     accounts = {}
     try:
-        conn = sqlite3.connect(db_path, timeout=5)
-        conn.row_factory = sqlite3.Row
-        from erpclaw_lib.db import setup_pragmas
-        setup_pragmas(conn)
+        conn = _seed_connection(explicit_db_path)
 
-        account_map = {
-            "cash":                  "1111",  # Petty Cash
-            "accounts_receivable":   "1121",  # Trade Receivables
-            "inventory":             "1131",  # Raw Materials
-            "prepaid_expenses":      "1141",  # Prepaid Insurance
-            "fixed_assets":          "1214",  # Office Equipment
-            "accum_depreciation":    "1217",  # Accumulated Depreciation - FF&E
-            "accounts_payable":      "2111",  # Trade Payables
-            "sales_revenue":         "4110",  # Sales Revenue
-            "cogs":                  "5110",  # COGS - Materials
-            "operating_expenses":    "5240",  # Office Supplies
-            "payroll_expense":       "5210",  # Salaries and Wages
-            "rent_expense":          "5220",  # Rent Expense
-            "utilities_expense":     "5230",  # Utilities
-            "depreciation_expense":  "5260",  # Depreciation Expense
-            "bank":                  "1112",  # Operating Checking Account
-        }
-        for key, acct_num in account_map.items():
-            aid = _get_account_id(conn, acct_num, company_id)
-            if aid:
-                accounts[key] = aid
-            else:
+        accounts = _seed_lookup_account_ids(conn, company_id)
+        for key, acct_num in SEED_DEMO_ACCOUNT_MAP.items():
+            if key not in accounts:
                 _progress(f"  WARNING: Account {acct_num} ({key}) not found")
 
         conn.close()
-        _progress(f"  Found {len(accounts)} of {len(account_map)} accounts")
+        _progress(f"  Found {len(accounts)} of {len(SEED_DEMO_ACCOUNT_MAP)} accounts")
     except Exception as e:
         errors.append(f"Phase 2 (account lookup): {e}")
 
@@ -777,7 +990,7 @@ def seed_demo_data(args):
                     _progress(f"  Cost center '{cc_name}' already exists, skipping")
                     # Look up existing
                     try:
-                        conn_tmp = sqlite3.connect(db_path, timeout=5)
+                        conn_tmp = _seed_connection(explicit_db_path)
                         if _HAS_PYPIKA:
                             cc = Table("cost_center")
                             q = (Q.from_(cc).select(cc.id)
@@ -789,7 +1002,7 @@ def seed_demo_data(args):
                                 "SELECT id FROM cost_center WHERE name = ? AND company_id = ?",
                                 (cc_name, company_id)).fetchone()
                         if row:
-                            cost_center_ids[cc_name] = row[0]
+                            cost_center_ids[cc_name] = row["id"]
                         conn_tmp.close()
                     except Exception:
                         pass
@@ -837,8 +1050,7 @@ def seed_demo_data(args):
                 _progress(f"  Item group '{group_name}' already exists")
                 # Try to retrieve existing
                 try:
-                    conn = sqlite3.connect(db_path, timeout=5)
-                    conn.row_factory = sqlite3.Row
+                    conn = _seed_connection(explicit_db_path)
                     if _HAS_PYPIKA:
                         ig = Table("item_group")
                         q = Q.from_(ig).select(ig.id).where(ig.name == P())
@@ -848,7 +1060,7 @@ def seed_demo_data(args):
                             "SELECT id FROM item_group WHERE name = ?", (group_name,)
                         ).fetchone()
                     if row:
-                        item_group_ids[group_name] = row[0]
+                        item_group_ids[group_name] = row["id"]
                     conn.close()
                 except Exception:
                     pass
@@ -1317,10 +1529,7 @@ def seed_demo_data(args):
 
     # Build item_code -> item_id map from DB (items were created in Phase 5)
     try:
-        conn = sqlite3.connect(db_path, timeout=5)
-        conn.row_factory = sqlite3.Row
-        from erpclaw_lib.db import setup_pragmas
-        setup_pragmas(conn)
+        conn = _seed_connection(explicit_db_path)
         if _HAS_PYPIKA:
             it = Table("item")
             q = Q.from_(it).select(it.id, it.item_code)
@@ -1375,8 +1584,7 @@ def seed_demo_data(args):
             # We need the rate for BOM items; fetch from the item table
             rate = "0"
             try:
-                conn_tmp = sqlite3.connect(db_path, timeout=5)
-                conn_tmp.row_factory = sqlite3.Row
+                conn_tmp = _seed_connection(explicit_db_path)
                 if _HAS_PYPIKA:
                     it = Table("item")
                     q = Q.from_(it).select(it.standard_rate).where(it.id == P())
@@ -1560,7 +1768,7 @@ def seed_demo_data(args):
                             campaign_type="event",
                             start_date="2026-01-01",
                             end_date="2026-03-31")
-        campaign_id = result.get("campaign_id")
+        campaign_id = _created_id(result, "campaign", "campaign_id")
         _progress("  Campaign: Q1 2026 Product Launch")
     except Exception as e:
         errors.append(f"Phase 10 (campaign): {e}")
@@ -1582,7 +1790,7 @@ def seed_demo_data(args):
                                 lead_name=lead_name,
                                 source=source,
                                 company_id=company_id)
-            lid = result.get("lead", {}).get("id") if isinstance(result.get("lead"), dict) else result.get("lead_id")
+            lid = _created_id(result, "lead", "lead_id")
             lead_ids[lead_name] = lid
             lead_count += 1
             _progress(f"  Lead: {lead_name}")
@@ -1629,11 +1837,7 @@ def seed_demo_data(args):
             if lid:
                 kwargs["lead_id"] = lid
             result = _run_skill("erpclaw-crm", "add-opportunity", **kwargs)
-            opp_id = None
-            if isinstance(result.get("opportunity"), dict):
-                opp_id = result["opportunity"].get("id")
-            else:
-                opp_id = result.get("opportunity_id")
+            opp_id = _created_id(result, "opportunity", "opportunity_id")
 
             # Update stage after creation (opportunities start as 'new')
             if opp_id:
@@ -1721,7 +1925,7 @@ def seed_demo_data(args):
                             name="Standard SLA",
                             priorities=priorities_json,
                             is_default="1")
-        sla_id = result.get("sla_id")
+        sla_id = _created_id(result, "sla", "sla_id")
         _progress("  SLA: Standard SLA")
     except Exception as e:
         errors.append(f"Phase 12 (SLA): {e}")
@@ -1751,11 +1955,7 @@ def seed_demo_data(args):
             if sla_id:
                 kwargs["sla_id"] = sla_id
             result = _run_skill("erpclaw-support", "add-issue", **kwargs)
-            issue_id_val = None
-            if isinstance(result.get("issue"), dict):
-                issue_id_val = result["issue"].get("id")
-            else:
-                issue_id_val = result.get("issue_id")
+            issue_id_val = _created_id(result, "issue", "issue_id")
 
             # Update status for specific issues
             if issue_id_val:
@@ -1784,46 +1984,7 @@ def seed_demo_data(args):
     # ==================================================================
     # PHASE 13: Projects
     # ==================================================================
-    _progress("Phase 13: Projects...")
-
-    project_id = None
-    try:
-        result = _run_skill("erpclaw-projects", "add-project",
-                            name="ERP Migration Project",
-                            company_id=company_id,
-                            project_type="internal",
-                            start_date="2026-01-01",
-                            end_date="2026-06-30")
-        project_id = result.get("project_id")
-        _progress("  Project: ERP Migration Project")
-    except Exception as e:
-        errors.append(f"Phase 13 (project): {e}")
-
-    summary["projects"] = 1 if project_id else 0
-
-    # Create tasks
-    task_defs = [
-        # (name, start_date, end_date)
-        ("Requirements gathering",  "2026-01-01", "2026-01-31"),
-        ("Data migration",          "2026-02-01", "2026-03-31"),
-        ("User training",           "2026-04-01", "2026-04-30"),
-        ("Go-live preparation",     "2026-05-01", "2026-06-30"),
-    ]
-    task_count = 0
-    if project_id:
-        for task_name, start, end in task_defs:
-            try:
-                _run_skill("erpclaw-projects", "add-task",
-                           project_id=project_id,
-                           name=task_name,
-                           start_date=start,
-                           end_date=end)
-                task_count += 1
-                _progress(f"  Task: {task_name}")
-            except Exception as e:
-                errors.append(f"Phase 13 (task '{task_name}'): {e}")
-
-    summary["tasks"] = task_count
+    _seed_demo_projects(company_id, _run_skill, _progress, errors, summary)
 
     # ==================================================================
     # Final output
@@ -1894,11 +2055,7 @@ def main():
         choices=sorted(ACTIONS.keys()),
         help="Action to perform",
     )
-    parser.add_argument(
-        "--db-path",
-        default=DEFAULT_DB_PATH,
-        help=f"Path to the ERPClaw database (default: {DEFAULT_DB_PATH})",
-    )
+    parser.add_argument("--db-path", default=None)
     parser.add_argument(
         "--company-id",
         help="Use an existing company instead of creating Stark Manufacturing (seed-demo-data)",

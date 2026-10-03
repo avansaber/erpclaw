@@ -1,8 +1,5 @@
 """Part A — migration 036: elimination entries record their source transaction (M95).
 
-Plan home: `planning/pending_items.md` row M95. SIM:
-`planning/simlogs/m95_SIM_2026-08-12.md` §4.3, which states the matching rule and every
-failure mode this file pins.
 
 The migration runs over an operator's existing consolidation numbers, and the install
 that most needs it is the one that already ran the defect — so the pins are weighted

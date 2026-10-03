@@ -5,7 +5,9 @@ validate-registry-completeness.
 """
 import argparse
 import pytest
-from setup_helpers import call_action, seed_company, is_ok, is_error, load_db_query
+from setup_helpers import call_action, seed_company, is_ok, is_error, load_db_query, read_one, open_reader, freeze_snapshot
+from erpclaw_lib.query import Q, Table, P  # noqa: E402 (plant rows via builders, not literals)
+from erpclaw_lib import seam  # noqa: E402 (catalog questions go through the seam)
 
 mod = load_db_query()
 
@@ -70,18 +72,64 @@ class TestVoucherTypeRegistry:
         assert is_error(_call("deactivate_voucher_type", conn, voucher_type="journal_entry", target_table="gl_entry"))
 
 
-class TestValidateRegistryCompleteness:
-    def test_complete_on_fresh_db(self, conn):
-        r = _call("validate_registry_completeness", conn)
-        assert is_ok(r) and r["complete"] is True
-        assert r["unregistered_in_use"] == {}
+_VALIDATE_CANDIDATES = ("account", "gl_entry", "payment_entry",
+                         "payment_ledger_entry", "asset", "account_type_registry",
+                         "party_type_registry", "voucher_type_registry",
+                         "asset_status_registry", "audit_log")
 
-    def test_flags_unregistered_value_in_use(self, conn):
+
+def _validate_tables(db_path):
+    """Tables the diagnostic can observe, restricted to ones that exist.
+
+    Asked through the seam catalog so the list stays truthful on backends or
+    installs where an optional table is absent.
+    """
+    return [t for t in _VALIDATE_CANDIDATES if seam.table_exists(t, db_path)]
+
+
+class TestValidateRegistryCompleteness:
+    def test_complete_on_fresh_db(self, conn, db_path):
+        """Behavioural depth: the diagnostic reports a fresh database complete
+        AND writes nothing — the observed tables are byte-identical after.
+
+        Ledger: validate-registry-completeness is read-only; it posts no legs,
+        so no balance assertion can hold here.
+        """
+        reader = open_reader(db_path)
+        try:
+            assert seam.table_exists("account_type_registry", db_path)
+            tables = _validate_tables(db_path)
+            before = freeze_snapshot(reader, db_path, tables)
+            r = _call("validate_registry_completeness", conn)
+            assert is_ok(r) and r["complete"] is True
+            assert r["unregistered_in_use"] == {}
+            assert freeze_snapshot(reader, db_path, tables) == before
+        finally:
+            reader.close()
+
+    def test_flags_unregistered_value_in_use(self, conn, db_path):
+        """Behavioural depth: the flag names an exact stored value, the flagged
+        row is read back from the database (not just the response), every other
+        bucket is exactly empty, and the diagnostic itself wrote nothing.
+        """
         cid = seed_company(conn)
-        # an account_type that is NOT registered (CHECK is gone, so raw insert succeeds)
-        conn.execute("INSERT INTO account (id, name, root_type, account_type, company_id) "
-                     "VALUES ('a-unreg', 'Weird', 'asset', 'totally_unregistered', ?)", (cid,))
+        # an account_type that is NOT registered (CHECK is gone, so the plant succeeds)
+        t = Table("account")
+        q = Q.into(t).columns("id", "name", "root_type", "account_type", "company_id").insert(P(), P(), P(), P(), P())
+        conn.execute(q.get_sql(), ("a-unreg", "Weird", "asset", "totally_unregistered", cid))
         conn.commit()
-        r = _call("validate_registry_completeness", conn)
-        assert r["complete"] is False
-        assert "totally_unregistered" in r["unregistered_in_use"].get("account_type", [])
+        reader = open_reader(db_path)
+        try:
+            tables = _validate_tables(db_path)
+            before = freeze_snapshot(reader, db_path, tables)
+            r = _call("validate_registry_completeness", conn)
+            assert r["complete"] is False
+            assert r["unregistered_in_use"] == {"account_type": ["totally_unregistered"]}
+            stored = read_one(reader, "account",
+                              ["id", "name", "root_type", "account_type", "company_id"],
+                              "a-unreg")
+            assert stored["account_type"] == "totally_unregistered"
+            assert stored["company_id"] == cid
+            assert freeze_snapshot(reader, db_path, tables) == before
+        finally:
+            reader.close()

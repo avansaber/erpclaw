@@ -44,7 +44,7 @@ if ERPCLAW_LIB not in sys.path:
     if importlib.util.find_spec("erpclaw_lib") is None:
         sys.path.insert(0, ERPCLAW_LIB)
 
-from erpclaw_lib.db import setup_pragmas
+from erpclaw_lib.db import setup_pragmas, get_dialect, get_connection, _resolve_pg_url
 
 
 def load_db_query():
@@ -60,8 +60,80 @@ def load_db_query():
 # DB helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
-def init_all_tables(db_path: str):
-    """Create all ERPClaw core tables using init_schema.init_db()."""
+def _reset_pg_schema():
+    """Drop and recreate the shared ``public`` schema on PostgreSQL.
+
+    Per-test isolation for the PostgreSQL branch: ``DROP SCHEMA public
+    CASCADE`` clears every table, index, sequence and the ``decimal_sum``
+    aggregate left by the previous test in one statement, so no test ever
+    sees another test's rows. The fresh schema is re-provisioned by
+    ``init_schema.init_db(None)`` (which re-registers ``decimal_sum`` via
+    the ``get_connection`` it calls). Same shape as the L3 smoke suite's
+    ``_provision_pg_schema`` and the GL suite's ``gl_helpers._reset_pg_schema``.
+
+    The reset opens the general connection (``get_connection()`` with no
+    argument, which resolves ``ERPCLAW_DB_URL`` then ``ERPCLAW_DB_PATH``)
+    and refuses unless the database that connection reports matches the
+    database named in ``ERPCLAW_PG_TEST_URL`` and the host and port parsed
+    from ``ERPCLAW_PG_TEST_URL`` and from the URL the general connection
+    actually resolves match (both absent counts as equal, for socket URLs).
+    The ``DROP`` is issued on that same general connection, so the database
+    the suite uses is the database that is checked. An unset
+    ``ERPCLAW_PG_TEST_URL``, a URL naming no database, or any mismatch
+    raises instead of dropping a schema on a database the caller did not
+    mean.
+    """
+    from urllib.parse import urlparse
+    test_url = os.environ.get("ERPCLAW_PG_TEST_URL")
+    if not test_url:
+        raise RuntimeError(
+            "refusing to reset the shared schema: ERPCLAW_PG_TEST_URL is "
+            "not set, so the reset target is unknown")
+    expected_db = urlparse(test_url).path.strip("/")
+    if not expected_db:
+        raise RuntimeError(
+            "refusing to reset the shared schema: ERPCLAW_PG_TEST_URL "
+            "names no database")
+    db_url = _resolve_pg_url(None)
+    conn = get_connection()
+    try:
+        resolved_db = conn.execute("SELECT current_database()").fetchone()[0]
+        if resolved_db != expected_db:
+            raise RuntimeError(
+                "refusing to reset the shared schema: ERPCLAW_PG_TEST_URL "
+                "names database %r but the connection resolved to %r"
+                % (expected_db, resolved_db))
+        test_parts = urlparse(test_url)
+        db_parts = urlparse(db_url)
+        if (test_parts.hostname != db_parts.hostname
+                or test_parts.port != db_parts.port):
+            raise RuntimeError(
+                "refusing to reset the shared schema: host/port mismatch "
+                "between ERPCLAW_PG_TEST_URL (%r, %r) and ERPCLAW_DB_URL "
+                "(%r, %r)" % (test_parts.hostname, test_parts.port,
+                               db_parts.hostname, db_parts.port))
+        conn.execute("DROP SCHEMA IF EXISTS public CASCADE")
+        conn.execute("CREATE SCHEMA public")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def init_all_tables(db_path=None):
+    """Create all ERPClaw core tables using init_schema.init_db().
+
+    SQLite (default): ``db_path`` is the file to build — unchanged.
+    PostgreSQL: the shared schema is reset (see ``_reset_pg_schema``) and
+    ``init_db`` receives ``None`` so the seam resolves the configured
+    target (``ERPCLAW_DB_URL``) instead of being handed a file path.
+    """
+    if get_dialect() == "postgresql":
+        _reset_pg_schema()
+        spec = importlib.util.spec_from_file_location("init_schema", INIT_SCHEMA_PATH)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.init_db(None)
+        return
     spec = importlib.util.spec_from_file_location("init_schema", INIT_SCHEMA_PATH)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -81,8 +153,17 @@ class _DecimalSum:
         return str(self.total)
 
 
-def get_conn(db_path: str) -> sqlite3.Connection:
-    """Return a sqlite3.Connection with FK enabled and Row factory."""
+def get_conn(db_path=None):
+    """Return a database connection with FK enabled and Row-style access.
+
+    SQLite (default): a ``sqlite3.Connection`` on ``db_path`` — unchanged.
+    PostgreSQL: the foundation ``get_connection()`` (a ``PgConnectionWrapper``
+    with ``?`` → ``%s`` translation and the persistent ``decimal_sum``
+    aggregate); ``db_path`` is ignored because the seam resolves the
+    configured target.
+    """
+    if get_dialect() == "postgresql":
+        return get_connection()
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     setup_pragmas(conn)

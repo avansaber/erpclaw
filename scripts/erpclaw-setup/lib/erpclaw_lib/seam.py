@@ -48,7 +48,8 @@ import threading
 
 from erpclaw_lib.db import (
     get_dialect, DEFAULT_DB_PATH, _resolve_pg_url, ensure_db_exists,
-    setup_pragmas, _DecimalSum, db_error_types,
+    setup_pragmas, _DecimalSum, db_error_types, readonly_requested,
+    _reject_url_shaped_path, readonly_sqlite_uri,
 )
 
 _VENDOR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor")
@@ -105,13 +106,27 @@ def sqlalchemy_url(db_path=None) -> str:
         if url.startswith("postgresql://"):
             url = "postgresql+psycopg2://" + url[len("postgresql://"):]
         return url
-    path = os.path.abspath(os.path.expanduser(
-        db_path or os.environ.get("ERPCLAW_DB_PATH", DEFAULT_DB_PATH)))
+    raw = db_path or os.environ.get("ERPCLAW_DB_PATH", DEFAULT_DB_PATH)
+    _reject_url_shaped_path(raw)
+    path = os.path.abspath(os.path.expanduser(raw))
+    if readonly_requested():
+        # Read-only storage creates nothing: no parent directory, no file.
+        # The engine opens the existing file through a mode=ro URI, the same
+        # driver-level refusal get_connection uses.
+        if not os.path.isfile(path):
+            raise FileNotFoundError(
+                "database file does not exist and ERPCLAW_DB_READONLY=1 "
+                "refuses to create it: %s" % path
+            )
+        return "sqlite:///" + readonly_sqlite_uri(path) + "&uri=true"
     # Same courtesy get_connection extends: create the parent directory. Phase 2
     # provisions databases through this path, and SQLite reports a missing parent
     # as the thoroughly unhelpful "unable to open database file".
     ensure_db_exists(path)
-    return "sqlite:///" + path
+    # Percent-encoded file: URI, as in read-only mode, so a "?", "#" or "%"
+    # in the path cannot become URL syntax.
+    from urllib.parse import quote as _quote
+    return "sqlite:///file:" + _quote(path, safe="/") + "?uri=true"
 
 
 def get_engine(db_path=None):
@@ -175,7 +190,8 @@ def _match_dml_connection_settings(sa, engine):
 _DECLARATION_NAMES = {
     # structure
     "MetaData", "Table", "Column", "Index", "CheckConstraint",
-    "ForeignKey", "UniqueConstraint", "PrimaryKeyConstraint", "text",
+    "ForeignKey", "ForeignKeyConstraint", "UniqueConstraint",
+    "PrimaryKeyConstraint", "text",
     # the only column types ERPClaw declares. Money and IDs are TEXT on every
     # backend (ADR-0034 dec. 1); Integer is for counts and boolean-ish flags.
     "Text", "Integer",
@@ -289,6 +305,8 @@ def provision(metadata, db_path=None):
     it skipped, and a count that quietly includes pre-existing tables is the
     exact dishonesty F11 was about.
     """
+    if readonly_requested():
+        raise RuntimeError("provisioning refused: ERPCLAW_DB_READONLY=1")
     engine = get_engine(db_path)
     # Reference-only declarations exist so foreign keys resolve; creating them
     # would mean this module provisioning another module's table.
@@ -510,6 +528,49 @@ def column_names(table, db_path=None):
     Replaces ``PRAGMA table_info(x)``, which is not a statement PostgreSQL has.
     """
     return [c["name"] for c in _inspector(db_path).get_columns(table)]
+
+
+def observer_catalog(conn):
+    """Describe every object in the main schema through the caller handle.
+
+    Reads the backend catalog with exactly the supplied connection: no
+    environment lookup is performed and no second engine or connection is
+    opened. One record is returned per object, in a deterministic order,
+    each record carrying type, name, tbl_name and sql members. Sequence and
+    automatic-index objects are included with no name-prefix filtering.
+    Attached databases are not enumerated, and views are reported as views
+    rather than re-read as tables.
+
+    An unusable handle, an unreadable catalog, or an unknown backend raises
+    instead of returning an empty list or any other success-shaped partial
+    value.
+    """
+    if get_dialect() != "sqlite":
+        raise RuntimeError(
+            "observer_catalog supports the SQLite backend only."
+        )
+    if conn is None or not hasattr(conn, "execute"):
+        raise TypeError(
+            "observer_catalog requires a caller-supplied connection."
+        )
+    # Owner catalog read: every object in the main schema, ordered, through
+    # the supplied read-only handle. The backend catalog statement lives here
+    # in the seam, which owns dialect knowledge, like the other readers above.
+    cursor = conn.execute(
+        "SELECT type, name, tbl_name, sql FROM sqlite_master "
+        "ORDER BY type, name, tbl_name"
+    )
+    rows = cursor.fetchall()
+    records = [
+        {"type": row[0], "name": row[1], "tbl_name": row[2], "sql": row[3]}
+        for row in rows
+    ]
+    records.sort(key=lambda item: (
+        "" if item["type"] is None else str(item["type"]),
+        "" if item["name"] is None else str(item["name"]),
+        "" if item["tbl_name"] is None else str(item["tbl_name"]),
+    ))
+    return records
 
 
 def index_names(table, db_path=None):
@@ -811,3 +872,1260 @@ def describe_table(table, db_path=None):
         "primary_key": sorted(pk.get("constrained_columns") or []),
         "indexes": index_names(table, db_path),
     }
+
+
+def declared_type(column, db_path=None) -> str:
+    """Declared column type as spelled by the active backend dialect."""
+    return column.type.compile(dialect=get_engine(db_path).dialect).upper()
+
+
+# ── Authority-core schema evidence (m242, internal transport) ────────────────
+#
+# A minimal read-only capture of the stored schema text for the fixed
+# eight-table authority-core profile. This helper is INTERNAL and unwired: no
+# production caller uses it. It is not a validator and returns no admission
+# or validity flag — only the raw stored rows for the profile tables in the
+# main and temp namespaces of the SUPPLIED connection.
+#
+# Callers keep their own transaction open across the call; cursors opened
+# here are the only objects this helper touches or closes.
+#
+# One oversized native cell can allocate before Python measures it: the byte
+# budget below bounds what is KEPT, not what the driver transiently holds,
+# so it is not a hard native allocation cap.
+
+_AUTHORITY_CORE_TABLES = (
+    "authority_install",
+    "authority_principal",
+    "authority_membership",
+    "authority_right",
+    "authority_delegation",
+    "authority_delegation_right",
+    "authority_delegation_cap",
+    "operation_authorization",
+)
+
+
+def authority_core_metadata():
+    """The shipped declaration of the frozen authority-core profile; the L0 fixture pins its shape."""
+    sa = _sqlalchemy()
+    meta = sa.MetaData()
+    sa.Table(
+        "authority_install", meta,
+        sa.Column("singleton", sa.Integer,
+                  nullable=False, primary_key=True),
+        sa.Column("install_id", sa.Text, nullable=False, unique=True),
+        sa.Column("schema_version", sa.Integer, nullable=False),
+        sa.Column("phase", sa.Text, nullable=False),
+        sa.Column("revision", sa.Integer, nullable=False),
+        sa.CheckConstraint("singleton = 1"),
+        sa.CheckConstraint("schema_version = 1"),
+        sa.CheckConstraint("phase IN ('STAGED', 'ACTIVE')"),
+        sa.CheckConstraint("revision >= 0"),
+    )
+    sa.Table(
+        "authority_principal", meta,
+        sa.Column("install_id", sa.Text, nullable=False),
+        sa.Column("id", sa.Text, nullable=False),
+        sa.Column("kind", sa.Text, nullable=False),
+        sa.Column("disabled_at", sa.BigInteger().with_variant(sa.Integer(), "sqlite"), nullable=True),
+        sa.PrimaryKeyConstraint("install_id", "id"),
+        sa.ForeignKeyConstraint(
+            ["install_id"], ["authority_install.install_id"],
+            onupdate="RESTRICT", ondelete="RESTRICT"),
+        sa.CheckConstraint("kind IN ('human', 'service')"),
+        sa.CheckConstraint("(disabled_at IS NULL OR disabled_at >= 0)"),
+    )
+    sa.Table(
+        "authority_membership", meta,
+        sa.Column("install_id", sa.Text, nullable=False),
+        sa.Column("principal_id", sa.Text, nullable=False),
+        sa.Column("company_id", sa.Text, nullable=False),
+        sa.Column("effect", sa.Text, nullable=False),
+        sa.PrimaryKeyConstraint(
+            "install_id", "principal_id", "company_id", "effect"),
+        sa.ForeignKeyConstraint(
+            ["install_id", "principal_id"],
+            ["authority_principal.install_id", "authority_principal.id"],
+            onupdate="RESTRICT", ondelete="RESTRICT"),
+        sa.CheckConstraint("effect IN ('allow', 'deny')"),
+    )
+    sa.Table(
+        "authority_right", meta,
+        sa.Column("install_id", sa.Text, nullable=False),
+        sa.Column("principal_id", sa.Text, nullable=False),
+        sa.Column("company_id", sa.Text, nullable=False),
+        sa.Column("resource_kind", sa.Text, nullable=False),
+        sa.Column("resource_id", sa.Text, nullable=False),
+        sa.Column("action", sa.Text, nullable=False),
+        sa.Column("effect", sa.Text, nullable=False),
+        sa.PrimaryKeyConstraint(
+            "install_id", "principal_id", "company_id", "resource_kind",
+            "resource_id", "action", "effect"),
+        sa.ForeignKeyConstraint(
+            ["install_id", "principal_id"],
+            ["authority_principal.install_id", "authority_principal.id"],
+            onupdate="RESTRICT", ondelete="RESTRICT"),
+        sa.CheckConstraint("effect IN ('allow', 'deny')"),
+    )
+    sa.Table(
+        "authority_delegation", meta,
+        sa.Column("install_id", sa.Text, nullable=False),
+        sa.Column("id", sa.Text, nullable=False),
+        sa.Column("issuer_id", sa.Text, nullable=False),
+        sa.Column("grantee_id", sa.Text, nullable=False),
+        sa.Column("issued_at", sa.BigInteger().with_variant(sa.Integer(), "sqlite"), nullable=False),
+        sa.Column("expires_at", sa.BigInteger().with_variant(sa.Integer(), "sqlite"), nullable=False),
+        sa.Column("revoked_at", sa.BigInteger().with_variant(sa.Integer(), "sqlite"), nullable=True),
+        sa.PrimaryKeyConstraint("install_id", "id"),
+        sa.ForeignKeyConstraint(
+            ["install_id", "issuer_id"],
+            ["authority_principal.install_id", "authority_principal.id"],
+            onupdate="RESTRICT", ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(
+            ["install_id", "grantee_id"],
+            ["authority_principal.install_id", "authority_principal.id"],
+            onupdate="RESTRICT", ondelete="RESTRICT"),
+        sa.CheckConstraint("(issued_at >= 0 AND issued_at < expires_at)"),
+        sa.CheckConstraint("(revoked_at IS NULL OR revoked_at >= 0)"),
+        sa.CheckConstraint("issuer_id <> grantee_id"),
+    )
+    sa.Table(
+        "authority_delegation_right", meta,
+        sa.Column("install_id", sa.Text, nullable=False),
+        sa.Column("delegation_id", sa.Text, nullable=False),
+        sa.Column("company_id", sa.Text, nullable=False),
+        sa.Column("resource_kind", sa.Text, nullable=False),
+        sa.Column("resource_id", sa.Text, nullable=False),
+        sa.Column("action", sa.Text, nullable=False),
+        sa.PrimaryKeyConstraint(
+            "install_id", "delegation_id", "company_id", "resource_kind",
+            "resource_id", "action"),
+        sa.ForeignKeyConstraint(
+            ["install_id", "delegation_id"],
+            ["authority_delegation.install_id", "authority_delegation.id"],
+            onupdate="RESTRICT", ondelete="RESTRICT"),
+    )
+    sa.Table(
+        "authority_delegation_cap", meta,
+        sa.Column("install_id", sa.Text, nullable=False),
+        sa.Column("delegation_id", sa.Text, nullable=False),
+        sa.Column("action", sa.Text, nullable=False),
+        sa.Column("currency", sa.Text, nullable=False),
+        sa.Column("scale", sa.Integer, nullable=False),
+        sa.Column("per_operation", sa.Text, nullable=False),
+        sa.Column("aggregate_limit", sa.Text, nullable=False),
+        sa.Column("window_start", sa.BigInteger().with_variant(sa.Integer(), "sqlite"), nullable=False),
+        sa.Column("window_end", sa.BigInteger().with_variant(sa.Integer(), "sqlite"), nullable=False),
+        sa.PrimaryKeyConstraint(
+            "install_id", "delegation_id", "action", "currency",
+            "window_start", "window_end"),
+        sa.ForeignKeyConstraint(
+            ["install_id", "delegation_id"],
+            ["authority_delegation.install_id", "authority_delegation.id"],
+            onupdate="RESTRICT", ondelete="RESTRICT"),
+        sa.CheckConstraint("(scale >= 0 AND scale <= 18)"),
+        sa.CheckConstraint(
+            "(window_start >= 0 AND window_start < window_end)"),
+    )
+    sa.Table(
+        "operation_authorization", meta,
+        sa.Column("id", sa.Text, primary_key=True),
+        sa.Column("install_id", sa.Text, nullable=False),
+        sa.Column("principal_id", sa.Text, nullable=False),
+        sa.Column("action", sa.Text, nullable=False),
+        sa.Column("binding_digest", sa.Text, nullable=False),
+        sa.Column("delegation_id", sa.Text, nullable=True),
+        sa.Column("issued_at", sa.BigInteger().with_variant(sa.Integer(), "sqlite"), nullable=False),
+        sa.Column("expires_at", sa.BigInteger().with_variant(sa.Integer(), "sqlite"), nullable=False),
+        sa.Column("revoked_at", sa.BigInteger().with_variant(sa.Integer(), "sqlite"), nullable=True),
+        sa.Column("consumed_at", sa.BigInteger().with_variant(sa.Integer(), "sqlite"), nullable=True),
+        sa.Column("consumed_txn", sa.Text, nullable=True),
+        sa.CheckConstraint("expires_at >= issued_at AND issued_at >= 0"),
+        sa.CheckConstraint(
+            "((consumed_at IS NULL AND consumed_txn IS NULL) OR "
+            "(consumed_at IS NOT NULL AND consumed_txn IS NOT NULL))"),
+        sa.ForeignKeyConstraint(
+            ["install_id", "principal_id"],
+            ["authority_principal.install_id", "authority_principal.id"],
+            onupdate="RESTRICT", ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(
+            ["install_id", "delegation_id"],
+            ["authority_delegation.install_id", "authority_delegation.id"],
+            onupdate="RESTRICT", ondelete="RESTRICT"),
+    )
+    return meta
+
+
+def provision_authority_core(db_path=None, seed=True) -> dict:
+    """Ensure the eight authority-core tables exist with one install record.
+
+    Tables are added only when absent and the install record is written only
+    when authority_install is empty; a record already present is never changed.
+    """
+    authority_core_metadata().create_all(get_engine(db_path), checkfirst=True)
+    # The checkfirst emit costs about 0.09 s here against about 0.65 s for
+    # the full snapshot route on a full foundation database, so the snapshot
+    # route is not used.
+    if not seed:
+        return {"install_seeded": False}
+    import uuid as _uuid
+    from erpclaw_lib import db as _db
+    from erpclaw_lib.query import P as _P
+    from erpclaw_lib.query import Q as _Q
+    from erpclaw_lib.query import Table as _T
+    _install = _T("authority_install")
+    _conn = _db.get_connection(db_path)
+    try:
+        _row = _conn.execute(
+            _Q.from_(_install).select(_install.singleton).get_sql()
+        ).fetchone()
+        if _row is not None:
+            return {"install_seeded": False}
+        _new_id = str(_uuid.uuid4())
+        _insert = _Q.into(_install).columns(
+            "singleton", "install_id", "schema_version", "phase",
+            "revision").insert(_P(), _P(), _P(), _P(), _P())
+        try:
+            _conn.execute(_insert.get_sql(), (1, _new_id, 1, "STAGED", 0))
+            _conn.commit()
+        except _db.integrity_error_types():
+            _conn.rollback()
+            _again = _conn.execute(
+                _Q.from_(_install).select(_install.singleton).get_sql()
+            ).fetchone()
+            if _again is None:
+                raise
+            return {"install_seeded": False}
+        return {"install_seeded": True}
+    finally:
+        _conn.close()
+
+
+_AUTHORITY_ENVELOPE_TABLES = (
+    "operation_authorization_envelope",
+    "operation_authorization_result",
+    "authority_delegation_usage",
+)
+
+
+def authority_envelope_metadata():
+    """The shipped declaration of the three authorization-envelope tables."""
+    sa = _sqlalchemy()
+    meta = authority_core_metadata()
+    sa.Table(
+        "operation_authorization_envelope", meta,
+        sa.Column("authorization_id", sa.Text, primary_key=True),
+        sa.Column("install_id", sa.Text, nullable=False),
+        sa.Column("principal_id", sa.Text, nullable=False),
+        sa.Column("envelope_version", sa.Integer, nullable=False),
+        sa.Column("args_digest", sa.Text, nullable=False),
+        sa.Column("issuer_id", sa.Text, nullable=False),
+        sa.Column("issued_route", sa.Text, nullable=False),
+        sa.Column("reason_code", sa.Text, nullable=False),
+        sa.Column("reason_text", sa.Text, nullable=False),
+        sa.Column("idempotency_key", sa.Text, nullable=False),
+        sa.Column("call_id", sa.Text, nullable=True),
+        sa.Column("envelope_digest", sa.Text, nullable=False),
+        sa.ForeignKeyConstraint(
+            ["authorization_id"], ["operation_authorization.id"],
+            onupdate="RESTRICT", ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(
+            ["install_id", "principal_id"],
+            ["authority_principal.install_id", "authority_principal.id"],
+            onupdate="RESTRICT", ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(
+            ["install_id", "issuer_id"],
+            ["authority_principal.install_id", "authority_principal.id"],
+            onupdate="RESTRICT", ondelete="RESTRICT"),
+        sa.UniqueConstraint(
+            "install_id", "principal_id", "idempotency_key"),
+        sa.CheckConstraint("envelope_version = 2"),
+        sa.CheckConstraint(
+            "issued_route IN "
+            "('delegation', 'exact_approval', 'staged_unattested')"),
+        sa.CheckConstraint("length(args_digest) = 64"),
+        sa.CheckConstraint("length(envelope_digest) = 64"),
+        sa.CheckConstraint("length(reason_text) <= 280"),
+    )
+    sa.Table(
+        "operation_authorization_result", meta,
+        sa.Column("authorization_id", sa.Text, primary_key=True),
+        sa.Column("consumed_txn", sa.Text, nullable=False),
+        sa.Column("result_kind", sa.Text, nullable=False),
+        sa.Column("result_status", sa.Text, nullable=False),
+        sa.Column("result_id", sa.Text, nullable=True),
+        sa.Column("recorded_at", sa.BigInteger().with_variant(sa.Integer(), "sqlite"), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["authorization_id"], ["operation_authorization.id"],
+            onupdate="RESTRICT", ondelete="RESTRICT"),
+        sa.CheckConstraint("recorded_at >= 0"),
+    )
+    sa.Table(
+        "authority_delegation_usage", meta,
+        sa.Column("install_id", sa.Text, nullable=False),
+        sa.Column("delegation_id", sa.Text, nullable=False),
+        sa.Column("action", sa.Text, nullable=False),
+        sa.Column("currency", sa.Text, nullable=False),
+        sa.Column("window_start", sa.BigInteger().with_variant(sa.Integer(), "sqlite"), nullable=False),
+        sa.Column("window_end", sa.BigInteger().with_variant(sa.Integer(), "sqlite"), nullable=False),
+        sa.Column("used", sa.Text, nullable=False),
+        sa.PrimaryKeyConstraint(
+            "install_id", "delegation_id", "action", "currency",
+            "window_start", "window_end"),
+        sa.ForeignKeyConstraint(
+            ["install_id", "delegation_id", "action", "currency",
+             "window_start", "window_end"],
+            ["authority_delegation_cap.install_id",
+             "authority_delegation_cap.delegation_id",
+             "authority_delegation_cap.action",
+             "authority_delegation_cap.currency",
+             "authority_delegation_cap.window_start",
+             "authority_delegation_cap.window_end"],
+            onupdate="RESTRICT", ondelete="RESTRICT"),
+    )
+    return meta
+
+
+def provision_authority_envelope(db_path=None) -> dict:
+    """Ensure the three authorization-envelope tables exist, empty.
+
+    Tables are added only when absent; rows already stored are never
+    changed. The authority core must already be present.
+    """
+    have = set(table_names(db_path))
+    if any(name not in have for name in _AUTHORITY_CORE_TABLES):
+        raise RuntimeError(
+            "authorization envelope needs the authority core: CORE_ABSENT")
+    absent = [name for name in _AUTHORITY_ENVELOPE_TABLES if name not in have]
+    meta = authority_envelope_metadata()
+    meta.create_all(
+        get_engine(db_path),
+        tables=[meta.tables[name] for name in _AUTHORITY_ENVELOPE_TABLES],
+        checkfirst=True)
+    return {"created": absent}
+
+
+_AUTHORITY_CORE_CATALOG_SQL = (
+    "SELECT type, name, tbl_name, sql FROM \"%s\".sqlite_master "
+    "WHERE lower(name) IN (?, ?, ?, ?, ?, ?, ?, ?) "
+    "OR lower(tbl_name) IN (?, ?, ?, ?, ?, ?, ?, ?)"
+)
+
+_AUTHORITY_CORE_ROW_LIMIT = 128
+_AUTHORITY_CORE_BYTE_LIMIT = 1048576
+
+
+def authority_core_schema_evidence(conn):
+    """Read-only capture of stored core-profile schema text.
+
+    Returns an immutable tuple of immutable
+    ``(namespace, type, name, tbl_name, sql)`` tuples for the eight fixed
+    profile tables, read from the SUPPLIED connection in the ``main`` and
+    ``temp`` namespaces and deterministically sorted (a ``None`` sql sorts
+    as an empty string). This is raw evidence, not a validity finding: it
+    reports what this connection stores and says nothing about admission,
+    validity or readiness.
+
+    Only an exact ``db.ConnectionWrapper`` holding an exact native
+    connection is accepted, with the caller-owned write transaction already
+    active and the native text decoder left at ``str``. Anything else fails
+    with a fixed token and no detail. At most 128 matching rows per
+    namespace and at most 1 MiB of kept text across both captures; beyond
+    either the call fails rather than returning a prefix. Only cursors
+    opened here are touched, and only to neutralise their row shape; the
+    connection itself is never configured, advanced, closed, or handed to
+    another opener.
+    """
+    import sqlite3 as _sqlite3
+
+    from erpclaw_lib.db import ConnectionWrapper as _ConnectionWrapper
+
+    if type(conn) is not _ConnectionWrapper:
+        raise ValueError("AUTHORITY_CORE_UNSUPPORTED") from None
+    try:
+        raw = object.__getattribute__(conn, "_conn")
+    except Exception:
+        raise ValueError("AUTHORITY_CORE_UNSUPPORTED") from None
+    if type(raw) is not _sqlite3.Connection:
+        raise ValueError("AUTHORITY_CORE_UNSUPPORTED") from None
+    try:
+        text_factory = raw.text_factory
+        in_transaction = raw.in_transaction
+        isolation_level = raw.isolation_level
+    except Exception:
+        raise RuntimeError("AUTHORITY_CORE_STORAGE_ERROR") from None
+    if text_factory is not str:
+        raise ValueError("AUTHORITY_CORE_UNSUPPORTED") from None
+    if in_transaction is not True or isolation_level is None:
+        raise ValueError("AUTHORITY_CORE_TRANSACTION_REQUIRED") from None
+    params = list(_AUTHORITY_CORE_TABLES) + list(_AUTHORITY_CORE_TABLES)
+    rows = []
+    kept = 0
+    opened = []
+    failed_close = False
+    try:
+        for namespace in ("main", "temp"):
+            try:
+                cursor = raw.cursor()
+            except Exception:
+                raise RuntimeError("AUTHORITY_CORE_STORAGE_ERROR") from None
+            opened.append(cursor)
+            try:
+                cursor.row_factory = None
+                cursor.execute(_AUTHORITY_CORE_CATALOG_SQL % namespace, params)
+            except Exception:
+                raise RuntimeError("AUTHORITY_CORE_STORAGE_ERROR") from None
+            seen = 0
+            while True:
+                try:
+                    record = cursor.fetchone()
+                except Exception:
+                    raise RuntimeError("AUTHORITY_CORE_STORAGE_ERROR") from None
+                if record is None:
+                    break
+                seen += 1
+                if seen > _AUTHORITY_CORE_ROW_LIMIT:
+                    raise RuntimeError("AUTHORITY_CORE_INCOMPLETE") from None
+                if type(record) is not tuple or len(record) != 4:
+                    raise RuntimeError(
+                        "AUTHORITY_CORE_STORAGE_INVALID") from None
+                kind, name, tbl_name, sql = record
+                if type(kind) is not str or type(name) is not str \
+                        or type(tbl_name) is not str:
+                    raise RuntimeError(
+                        "AUTHORITY_CORE_STORAGE_INVALID") from None
+                if sql is not None and type(sql) is not str:
+                    raise RuntimeError(
+                        "AUTHORITY_CORE_STORAGE_INVALID") from None
+                kept += len(namespace.encode("utf-8")) \
+                    + len(kind.encode("utf-8")) \
+                    + len(name.encode("utf-8")) \
+                    + len(tbl_name.encode("utf-8")) \
+                    + (0 if sql is None else len(sql.encode("utf-8")))
+                if kept > _AUTHORITY_CORE_BYTE_LIMIT:
+                    raise RuntimeError("AUTHORITY_CORE_INCOMPLETE") from None
+                rows.append((namespace, kind, name, tbl_name, sql))
+    finally:
+        for cursor in opened:
+            try:
+                cursor.close()
+            except Exception:
+                failed_close = True
+    if failed_close:
+        raise RuntimeError("AUTHORITY_CORE_STORAGE_ERROR") from None
+    rows.sort(key=lambda item: (
+        item[0], item[1], item[2], item[3],
+        item[4] if item[4] is not None else ""))
+    return tuple(rows)
+# ── Authority-core same-connection observation (m242) ────────────────────────
+#
+# A single internal observer for the frozen eight-table core profile. It reads
+# only the connection it is handed, inside the caller-owned open transaction,
+# and returns a read-only four-key mapping. A MATCH is an observation taken at
+# one instant: it grants nothing, authenticates nothing, chooses no cap and
+# binds no later write. There is no wiring to any caller.
+#
+# Fixed read-only statement templates below, one per inspection operation.
+# Table, column and index spellings come only from the closed tuples beside
+# them; no identifier is caller-supplied and no statement is built from row
+# data. The six native-catalog templates are the only new pattern sites in
+# this module; the retained evidence template above is untouched and is
+# composed with, never duplicated.
+#
+# Frozen expectation data (automatic-index names, stored-schema rows, column /
+# index / dependency observations) was derived once during authoring from the
+# qualified frozen artifact plus the exact native metadata of that fixture,
+# pinned to native SQLite 3.45.1 and the vendored SQLAlchemy 2.0.51
+# representation. Any toolchain or representation change refuses as a
+# structure mismatch until separately reviewed.
+#
+# Stored main-namespace rows are bound by one digest derived from the frozen
+# artifact and verified by the test module.
+
+_AUTHORITY_CORE_PROFILE = "authority-core-v1-sqlite"
+_AUTHORITY_CORE_SQLITE_VERSION = "3.45.1"
+_AUTHORITY_CORE_SQLALCHEMY_VERSION = "2.0.51"
+_AUTHORITY_CORE_INT_MAX = 9223372036854775807
+_AUTHORITY_CORE_INSPECT_ROW_LIMIT = 10000
+_AUTHORITY_CORE_INSPECT_TEXT_LIMIT = 1048576
+_AUTHORITY_CORE_FETCH_BATCH = 500
+
+_AUTHORITY_CORE_FK_STATE_SQL = "PRAGMA foreign_keys"
+_AUTHORITY_CORE_DB_LIST_SQL = "PRAGMA database_list"
+_AUTHORITY_CORE_TABLE_SHAPE_SQL = "PRAGMA table_xinfo(\"%s\")"
+_AUTHORITY_CORE_INDEX_LIST_SQL = "PRAGMA index_list(\"%s\")"
+_AUTHORITY_CORE_INDEX_DETAIL_SQL = "PRAGMA index_xinfo(\"%s\")"
+_AUTHORITY_CORE_FOREIGN_KEY_SQL = "PRAGMA foreign_key_list(\"%s\")"
+
+_AUTHORITY_CORE_AUTO_INDEXES = (
+    'sqlite_autoindex_authority_delegation_1',
+    'sqlite_autoindex_authority_delegation_cap_1',
+    'sqlite_autoindex_authority_delegation_right_1',
+    'sqlite_autoindex_authority_install_1',
+    'sqlite_autoindex_authority_membership_1',
+    'sqlite_autoindex_authority_principal_1',
+    'sqlite_autoindex_authority_right_1',
+    'sqlite_autoindex_operation_authorization_1',
+)
+
+_AUTHORITY_CORE_RAW_MAIN_DIGEST = "9b8e0b50fabe01de6412e704ad0305f6b024be9d099cdaee061cc92a1869b3c2"
+_AUTHORITY_CORE_COLUMNS = (
+    (  # authority_install
+        (0, 'singleton', 'INTEGER', 1, None, 1, 0),
+        (1, 'install_id', 'TEXT', 1, None, 0, 0),
+        (2, 'schema_version', 'INTEGER', 1, None, 0, 0),
+        (3, 'phase', 'TEXT', 1, None, 0, 0),
+        (4, 'revision', 'INTEGER', 1, None, 0, 0),
+    ),
+    (  # authority_principal
+        (0, 'install_id', 'TEXT', 1, None, 1, 0),
+        (1, 'id', 'TEXT', 1, None, 2, 0),
+        (2, 'kind', 'TEXT', 1, None, 0, 0),
+        (3, 'disabled_at', 'INTEGER', 0, None, 0, 0),
+    ),
+    (  # authority_membership
+        (0, 'install_id', 'TEXT', 1, None, 1, 0),
+        (1, 'principal_id', 'TEXT', 1, None, 2, 0),
+        (2, 'company_id', 'TEXT', 1, None, 3, 0),
+        (3, 'effect', 'TEXT', 1, None, 4, 0),
+    ),
+    (  # authority_right
+        (0, 'install_id', 'TEXT', 1, None, 1, 0),
+        (1, 'principal_id', 'TEXT', 1, None, 2, 0),
+        (2, 'company_id', 'TEXT', 1, None, 3, 0),
+        (3, 'resource_kind', 'TEXT', 1, None, 4, 0),
+        (4, 'resource_id', 'TEXT', 1, None, 5, 0),
+        (5, 'action', 'TEXT', 1, None, 6, 0),
+        (6, 'effect', 'TEXT', 1, None, 7, 0),
+    ),
+    (  # authority_delegation
+        (0, 'install_id', 'TEXT', 1, None, 1, 0),
+        (1, 'id', 'TEXT', 1, None, 2, 0),
+        (2, 'issuer_id', 'TEXT', 1, None, 0, 0),
+        (3, 'grantee_id', 'TEXT', 1, None, 0, 0),
+        (4, 'issued_at', 'INTEGER', 1, None, 0, 0),
+        (5, 'expires_at', 'INTEGER', 1, None, 0, 0),
+        (6, 'revoked_at', 'INTEGER', 0, None, 0, 0),
+    ),
+    (  # authority_delegation_right
+        (0, 'install_id', 'TEXT', 1, None, 1, 0),
+        (1, 'delegation_id', 'TEXT', 1, None, 2, 0),
+        (2, 'company_id', 'TEXT', 1, None, 3, 0),
+        (3, 'resource_kind', 'TEXT', 1, None, 4, 0),
+        (4, 'resource_id', 'TEXT', 1, None, 5, 0),
+        (5, 'action', 'TEXT', 1, None, 6, 0),
+    ),
+    (  # authority_delegation_cap
+        (0, 'install_id', 'TEXT', 1, None, 1, 0),
+        (1, 'delegation_id', 'TEXT', 1, None, 2, 0),
+        (2, 'action', 'TEXT', 1, None, 3, 0),
+        (3, 'currency', 'TEXT', 1, None, 4, 0),
+        (4, 'scale', 'INTEGER', 1, None, 0, 0),
+        (5, 'per_operation', 'TEXT', 1, None, 0, 0),
+        (6, 'aggregate_limit', 'TEXT', 1, None, 0, 0),
+        (7, 'window_start', 'INTEGER', 1, None, 5, 0),
+        (8, 'window_end', 'INTEGER', 1, None, 6, 0),
+    ),
+    (  # operation_authorization
+        (0, 'id', 'TEXT', 1, None, 1, 0),
+        (1, 'install_id', 'TEXT', 1, None, 0, 0),
+        (2, 'principal_id', 'TEXT', 1, None, 0, 0),
+        (3, 'action', 'TEXT', 1, None, 0, 0),
+        (4, 'binding_digest', 'TEXT', 1, None, 0, 0),
+        (5, 'delegation_id', 'TEXT', 0, None, 0, 0),
+        (6, 'issued_at', 'INTEGER', 1, None, 0, 0),
+        (7, 'expires_at', 'INTEGER', 1, None, 0, 0),
+        (8, 'revoked_at', 'INTEGER', 0, None, 0, 0),
+        (9, 'consumed_at', 'INTEGER', 0, None, 0, 0),
+        (10, 'consumed_txn', 'TEXT', 0, None, 0, 0),
+    ),
+)
+
+_AUTHORITY_CORE_INDEXES = (
+    (  # authority_install
+        (0, 'sqlite_autoindex_authority_install_1', 1, 'u', 0),
+    ),
+    (  # authority_principal
+        (0, 'sqlite_autoindex_authority_principal_1', 1, 'pk', 0),
+    ),
+    (  # authority_membership
+        (0, 'sqlite_autoindex_authority_membership_1', 1, 'pk', 0),
+    ),
+    (  # authority_right
+        (0, 'sqlite_autoindex_authority_right_1', 1, 'pk', 0),
+    ),
+    (  # authority_delegation
+        (0, 'sqlite_autoindex_authority_delegation_1', 1, 'pk', 0),
+    ),
+    (  # authority_delegation_right
+        (0, 'sqlite_autoindex_authority_delegation_right_1', 1, 'pk', 0),
+    ),
+    (  # authority_delegation_cap
+        (0, 'sqlite_autoindex_authority_delegation_cap_1', 1, 'pk', 0),
+    ),
+    (  # operation_authorization
+        (0, 'sqlite_autoindex_operation_authorization_1', 1, 'pk', 0),
+    ),
+)
+
+_AUTHORITY_CORE_FOREIGN_KEYS = (
+    (  # authority_install
+    ),
+    (  # authority_principal
+        (0, 0, 'authority_install', 'install_id', 'install_id', 'RESTRICT', 'RESTRICT', 'NONE'),
+    ),
+    (  # authority_membership
+        (0, 0, 'authority_principal', 'install_id', 'install_id', 'RESTRICT', 'RESTRICT', 'NONE'),
+        (0, 1, 'authority_principal', 'principal_id', 'id', 'RESTRICT', 'RESTRICT', 'NONE'),
+    ),
+    (  # authority_right
+        (0, 0, 'authority_principal', 'install_id', 'install_id', 'RESTRICT', 'RESTRICT', 'NONE'),
+        (0, 1, 'authority_principal', 'principal_id', 'id', 'RESTRICT', 'RESTRICT', 'NONE'),
+    ),
+    (  # authority_delegation
+        (0, 0, 'authority_principal', 'install_id', 'install_id', 'RESTRICT', 'RESTRICT', 'NONE'),
+        (0, 1, 'authority_principal', 'grantee_id', 'id', 'RESTRICT', 'RESTRICT', 'NONE'),
+        (1, 0, 'authority_principal', 'install_id', 'install_id', 'RESTRICT', 'RESTRICT', 'NONE'),
+        (1, 1, 'authority_principal', 'issuer_id', 'id', 'RESTRICT', 'RESTRICT', 'NONE'),
+    ),
+    (  # authority_delegation_right
+        (0, 0, 'authority_delegation', 'install_id', 'install_id', 'RESTRICT', 'RESTRICT', 'NONE'),
+        (0, 1, 'authority_delegation', 'delegation_id', 'id', 'RESTRICT', 'RESTRICT', 'NONE'),
+    ),
+    (  # authority_delegation_cap
+        (0, 0, 'authority_delegation', 'install_id', 'install_id', 'RESTRICT', 'RESTRICT', 'NONE'),
+        (0, 1, 'authority_delegation', 'delegation_id', 'id', 'RESTRICT', 'RESTRICT', 'NONE'),
+    ),
+    (  # operation_authorization
+        (0, 0, 'authority_delegation', 'install_id', 'install_id', 'RESTRICT', 'RESTRICT', 'NONE'),
+        (0, 1, 'authority_delegation', 'delegation_id', 'id', 'RESTRICT', 'RESTRICT', 'NONE'),
+        (1, 0, 'authority_principal', 'install_id', 'install_id', 'RESTRICT', 'RESTRICT', 'NONE'),
+        (1, 1, 'authority_principal', 'principal_id', 'id', 'RESTRICT', 'RESTRICT', 'NONE'),
+    ),
+)
+
+_AUTHORITY_CORE_INDEX_COLUMNS = (
+    (  # sqlite_autoindex_authority_delegation_1
+        (0, 0, 'install_id', 0, 'BINARY', 1),
+        (1, 1, 'id', 0, 'BINARY', 1),
+        (2, -1, None, 0, 'BINARY', 0),
+    ),
+    (  # sqlite_autoindex_authority_delegation_cap_1
+        (0, 0, 'install_id', 0, 'BINARY', 1),
+        (1, 1, 'delegation_id', 0, 'BINARY', 1),
+        (2, 2, 'action', 0, 'BINARY', 1),
+        (3, 3, 'currency', 0, 'BINARY', 1),
+        (4, 7, 'window_start', 0, 'BINARY', 1),
+        (5, 8, 'window_end', 0, 'BINARY', 1),
+        (6, -1, None, 0, 'BINARY', 0),
+    ),
+    (  # sqlite_autoindex_authority_delegation_right_1
+        (0, 0, 'install_id', 0, 'BINARY', 1),
+        (1, 1, 'delegation_id', 0, 'BINARY', 1),
+        (2, 2, 'company_id', 0, 'BINARY', 1),
+        (3, 3, 'resource_kind', 0, 'BINARY', 1),
+        (4, 4, 'resource_id', 0, 'BINARY', 1),
+        (5, 5, 'action', 0, 'BINARY', 1),
+        (6, -1, None, 0, 'BINARY', 0),
+    ),
+    (  # sqlite_autoindex_authority_install_1
+        (0, 1, 'install_id', 0, 'BINARY', 1),
+        (1, -1, None, 0, 'BINARY', 0),
+    ),
+    (  # sqlite_autoindex_authority_membership_1
+        (0, 0, 'install_id', 0, 'BINARY', 1),
+        (1, 1, 'principal_id', 0, 'BINARY', 1),
+        (2, 2, 'company_id', 0, 'BINARY', 1),
+        (3, 3, 'effect', 0, 'BINARY', 1),
+        (4, -1, None, 0, 'BINARY', 0),
+    ),
+    (  # sqlite_autoindex_authority_principal_1
+        (0, 0, 'install_id', 0, 'BINARY', 1),
+        (1, 1, 'id', 0, 'BINARY', 1),
+        (2, -1, None, 0, 'BINARY', 0),
+    ),
+    (  # sqlite_autoindex_authority_right_1
+        (0, 0, 'install_id', 0, 'BINARY', 1),
+        (1, 1, 'principal_id', 0, 'BINARY', 1),
+        (2, 2, 'company_id', 0, 'BINARY', 1),
+        (3, 3, 'resource_kind', 0, 'BINARY', 1),
+        (4, 4, 'resource_id', 0, 'BINARY', 1),
+        (5, 5, 'action', 0, 'BINARY', 1),
+        (6, 6, 'effect', 0, 'BINARY', 1),
+        (7, -1, None, 0, 'BINARY', 0),
+    ),
+    (  # sqlite_autoindex_operation_authorization_1
+        (0, 0, 'id', 0, 'BINARY', 1),
+        (1, -1, None, 0, 'BINARY', 0),
+    ),
+)
+
+_AUTHORITY_CORE_STRUCTURE_DIGEST = (
+    "e100762e110f7efea6c4d6fb3d860078fae62f6409afe4c61b97077941bb2b3d"
+)
+
+_AUTHORITY_CORE_ROW_COLUMNS = (
+    ("singleton", "install_id", "schema_version", "phase", "revision"),
+    ("install_id", "id", "kind", "disabled_at"),
+    ("install_id", "principal_id", "company_id", "effect"),
+    ("install_id", "principal_id", "company_id", "resource_kind",
+     "resource_id", "action", "effect"),
+    ("install_id", "id", "issuer_id", "grantee_id", "issued_at",
+     "expires_at", "revoked_at"),
+    ("install_id", "delegation_id", "company_id", "resource_kind",
+     "resource_id", "action"),
+    ("install_id", "delegation_id", "action", "currency", "scale",
+     "per_operation", "aggregate_limit", "window_start", "window_end"),
+    ("id", "install_id", "principal_id", "action", "binding_digest",
+     "delegation_id", "issued_at", "expires_at", "revoked_at",
+     "consumed_at", "consumed_txn"),
+)
+
+_AUTHORITY_CORE_ROW_ORDER = (
+    ("singleton",),
+    ("install_id", "id"),
+    ("install_id", "principal_id", "company_id", "effect"),
+    ("install_id", "principal_id", "company_id", "resource_kind",
+     "resource_id", "action", "effect"),
+    ("install_id", "id"),
+    ("install_id", "delegation_id", "company_id", "resource_kind",
+     "resource_id", "action"),
+    ("install_id", "delegation_id", "action", "currency", "window_start",
+     "window_end"),
+    ("id",),
+)
+
+def inspect_authority_core(conn, *, expected_install_id):
+    """Same-connection observation of the frozen authority-core profile.
+
+    Checks the expected install identifier first, then accepts only an exact
+    wrapper holding an exact native connection whose caller transaction is
+    open and whose text decoder is the default. Reads the fixed catalog and
+    the complete bounded row sets through the supplied handle only, compares
+    every observation to the frozen profile, and returns a read-only mapping
+    with exactly profile, status, phase and reason. MATCH carries the stored
+    phase; every other outcome carries phase None. A MATCH is an observation
+    at one instant: it grants nothing, authenticates nothing, chooses no cap
+    and binds no later write.
+    """
+    import hashlib as _hashlib
+    import json as _json
+    import sqlite3 as _sqlite3
+    import types as _types
+
+    from erpclaw_lib.db import ConnectionWrapper as _ConnectionWrapper
+
+    if type(expected_install_id) is not str:
+        raise ValueError("AUTHORITY_CORE_INPUT_INVALID") from None
+    if len(expected_install_id) < 1 or len(expected_install_id) > 128:
+        raise ValueError("AUTHORITY_CORE_INPUT_INVALID") from None
+    for _letter in expected_install_id:
+        if "a" <= _letter <= "z" or "A" <= _letter <= "Z" \
+                or "0" <= _letter <= "9" or _letter == "_" \
+                or _letter == "-":
+            continue
+        raise ValueError("AUTHORITY_CORE_INPUT_INVALID") from None
+    if type(conn) is not _ConnectionWrapper:
+        raise ValueError("AUTHORITY_CORE_UNSUPPORTED") from None
+    try:
+        raw = object.__getattribute__(conn, "_conn")
+    except Exception:
+        raise ValueError("AUTHORITY_CORE_UNSUPPORTED") from None
+    if type(raw) is not _sqlite3.Connection:
+        raise ValueError("AUTHORITY_CORE_UNSUPPORTED") from None
+    try:
+        _decoder = raw.text_factory
+        _in_txn = raw.in_transaction
+        _isolation = raw.isolation_level
+    except Exception:
+        raise RuntimeError("AUTHORITY_CORE_STORAGE_ERROR") from None
+    if _decoder is not str:
+        raise ValueError("AUTHORITY_CORE_UNSUPPORTED") from None
+    if _in_txn is not True or _isolation is None:
+        raise ValueError("AUTHORITY_CORE_TRANSACTION_REQUIRED") from None
+
+    _opened = []
+    _close_failed = []
+
+    def _result(_status, _phase, _reason):
+        return _types.MappingProxyType({
+            "profile": _AUTHORITY_CORE_PROFILE,
+            "status": _status,
+            "phase": _phase,
+            "reason": _reason,
+        })
+
+    def _read_all(_statement):
+        try:
+            _cursor = raw.cursor()
+        except Exception:
+            raise RuntimeError("AUTHORITY_CORE_STORAGE_ERROR") from None
+        _opened.append(_cursor)
+        try:
+            _cursor.row_factory = None
+            _cursor.execute(_statement)
+        except Exception:
+            raise RuntimeError("AUTHORITY_CORE_STORAGE_ERROR") from None
+        try:
+            _rows = _cursor.fetchall()
+        except Exception:
+            raise RuntimeError("AUTHORITY_CORE_STORAGE_ERROR") from None
+        return _rows
+
+    def _shaped(_rows, _arity):
+        if type(_rows) is not list:
+            raise RuntimeError("AUTHORITY_CORE_STORAGE_ERROR") from None
+        for _record in _rows:
+            if type(_record) is not tuple or len(_record) != _arity:
+                raise RuntimeError("AUTHORITY_CORE_STORAGE_ERROR") from None
+        return tuple(_rows)
+
+    def _cells(_rows, _kinds):
+        for _record in _rows:
+            for _value, _kind in zip(_record, _kinds):
+                if _kind == "int":
+                    if type(_value) is not int:
+                        raise RuntimeError(
+                            "AUTHORITY_CORE_STORAGE_ERROR") from None
+                elif _kind == "str":
+                    if type(_value) is not str:
+                        raise RuntimeError(
+                            "AUTHORITY_CORE_STORAGE_ERROR") from None
+                elif _value is not None and type(_value) is not str:
+                    raise RuntimeError(
+                        "AUTHORITY_CORE_STORAGE_ERROR") from None
+
+    def _is_id(_value):
+        if type(_value) is not str:
+            return False
+        if len(_value) < 1 or len(_value) > 128:
+            return False
+        for _letter in _value:
+            if "a" <= _letter <= "z" or "A" <= _letter <= "Z" \
+                    or "0" <= _letter <= "9" or _letter == "_" \
+                    or _letter == "-":
+                continue
+            return False
+        return True
+
+    def _is_action(_value):
+        if type(_value) is not str:
+            return False
+        if len(_value) < 1 or len(_value) > 128:
+            return False
+        if not ("a" <= _value[0] <= "z"):
+            return False
+        for _letter in _value[1:]:
+            if "a" <= _letter <= "z" or "0" <= _letter <= "9" \
+                    or _letter == "-":
+                continue
+            return False
+        return True
+
+    def _is_epoch(_value):
+        return type(_value) is int and 0 <= _value <= _AUTHORITY_CORE_INT_MAX
+
+    def _is_currency(_value):
+        if type(_value) is not str or len(_value) != 3:
+            return False
+        for _letter in _value:
+            if not ("A" <= _letter <= "Z"):
+                return False
+        return True
+
+    def _is_int_part(_text):
+        if _text == "0":
+            return True
+        if type(_text) is not str or len(_text) < 1:
+            return False
+        if not ("1" <= _text[0] <= "9"):
+            return False
+        for _letter in _text[1:]:
+            if not ("0" <= _letter <= "9"):
+                return False
+        return True
+
+    def _is_amount(_value, _scale):
+        if type(_value) is not str or type(_scale) is not int:
+            return False
+        if len(_value) < 1 or len(_value) > 128:
+            return False
+        if _scale < 0 or _scale > 18:
+            return False
+        if _scale == 0:
+            return _is_int_part(_value)
+        _parts = _value.split(".")
+        if len(_parts) != 2:
+            return False
+        _head, _tail = _parts
+        if len(_tail) != _scale or not _is_int_part(_head):
+            return False
+        for _letter in _tail:
+            if not ("0" <= _letter <= "9"):
+                return False
+        return True
+
+    def _is_digest(_value):
+        if type(_value) is not str or len(_value) != 64:
+            return False
+        for _letter in _value:
+            if "0" <= _letter <= "9" or "a" <= _letter <= "f":
+                continue
+            return False
+        return True
+
+    def _tag(_value):
+        if _value is None:
+            return ["none", 0]
+        if type(_value) is str:
+            return ["str", _value]
+        if type(_value) is int:
+            return ["int", _value]
+        if type(_value) is tuple or type(_value) is list:
+            return ["tuple", [_tag(_item) for _item in _value]]
+        if type(_value) is dict:
+            return ["map", [[_key, _tag(_value[_key])]
+                            for _key in sorted(_value.keys())]]
+        raise ValueError("untagged observation")
+
+    def _run():
+        try:
+            _evidence = authority_core_schema_evidence(conn)
+        except RuntimeError as _exc:
+            if _exc.args == ("AUTHORITY_CORE_INCOMPLETE",):
+                return _result("INCOMPLETE", None, "LIMIT")  # catalog budget
+            if _exc.args in (("AUTHORITY_CORE_STORAGE_ERROR",),
+                             ("AUTHORITY_CORE_STORAGE_INVALID",)):
+                raise RuntimeError("AUTHORITY_CORE_STORAGE_ERROR") from None
+            raise
+        _fk_rows = _shaped(_read_all(_AUTHORITY_CORE_FK_STATE_SQL), 1)
+        _fk_on = (
+            len(_fk_rows) == 1 and _fk_rows[0] == (1,)
+            and type(_fk_rows[0][0]) is int
+        )
+        _db_rows = _shaped(_read_all(_AUTHORITY_CORE_DB_LIST_SQL), 3)
+        _db_names = []
+        for _entry in _db_rows:
+            _seq, _name, _file = _entry
+            if type(_seq) is not int or type(_name) is not str \
+                    or type(_file) is not str:
+                raise RuntimeError("AUTHORITY_CORE_STORAGE_ERROR") from None
+            _db_names.append(_name)
+        _fixed_lower = frozenset(
+            _label.lower() for _label in _AUTHORITY_CORE_TABLES)
+        _temp_collision = False
+        for _item in _evidence:
+            if _item[0] != "temp":
+                continue
+            if _item[2].lower() in _fixed_lower \
+                    or _item[3].lower() in _fixed_lower:
+                _temp_collision = True
+                break
+        if not _fk_on:
+            return _result("MISMATCH", None, "NAMESPACE")
+        _namespace_ok = (
+            "main" in _db_names
+            and all(_name == "main" or _name == "temp"
+                    for _name in _db_names)
+            and not _temp_collision
+        )
+        if not _namespace_ok:
+            return _result("MISMATCH", None, "NAMESPACE")
+        _main_rows = tuple(
+            _item for _item in _evidence if _item[0] == "main")
+        try:
+            _main_canon = _json.dumps(
+                _tag(_main_rows), sort_keys=True, separators=(",", ":"),
+                ensure_ascii=True, allow_nan=False)
+            _main_digest = _hashlib.sha256(
+                _main_canon.encode("utf-8")).hexdigest()
+        except Exception:
+            return _result("MISMATCH", None, "STRUCTURE")
+        if _main_digest != _AUTHORITY_CORE_RAW_MAIN_DIGEST:
+            return _result("MISMATCH", None, "STRUCTURE")
+        if _sqlite3.sqlite_version != _AUTHORITY_CORE_SQLITE_VERSION:
+            return _result("MISMATCH", None, "STRUCTURE")
+        _live_columns = []
+        _live_indexes = []
+        _live_fkeys = []
+        for _shape_pos in range(len(_AUTHORITY_CORE_TABLES)):
+            _shape_table = _AUTHORITY_CORE_TABLES[_shape_pos]
+            _shape = _shaped(
+                _read_all(_AUTHORITY_CORE_TABLE_SHAPE_SQL % _shape_table), 7)
+            _listing = _shaped(
+                _read_all(_AUTHORITY_CORE_INDEX_LIST_SQL % _shape_table), 5)
+            _links = _shaped(
+                _read_all(_AUTHORITY_CORE_FOREIGN_KEY_SQL % _shape_table), 8)
+            _cells(_shape, ("int", "str", "str", "int", "opt", "int", "int"))
+            _cells(_listing, ("int", "str", "int", "str", "int"))
+            _cells(_links, ("int", "int", "str", "str", "str", "str",
+                            "str", "str"))
+            _live_columns.append(_shape)
+            _live_indexes.append(_listing)
+            _live_fkeys.append(_links)
+        _seen_names = frozenset(
+            _record[1] for _rows in _live_indexes for _record in _rows)
+        if _seen_names != frozenset(_AUTHORITY_CORE_AUTO_INDEXES):
+            return _result("MISMATCH", None, "STRUCTURE")
+        _live_details = []
+        for _index_name in _AUTHORITY_CORE_AUTO_INDEXES:
+            _detail = _shaped(
+                _read_all(_AUTHORITY_CORE_INDEX_DETAIL_SQL % _index_name), 6)
+            _cells(_detail, ("int", "int", "opt", "int", "str", "int"))
+            _live_details.append(_detail)
+        _live_bundle = {
+            "columns": dict(zip(_AUTHORITY_CORE_TABLES, _live_columns)),
+            "foreign_keys": dict(zip(_AUTHORITY_CORE_TABLES, _live_fkeys)),
+            "index_columns": dict(
+                zip(_AUTHORITY_CORE_AUTO_INDEXES, _live_details)),
+            "indexes": dict(zip(_AUTHORITY_CORE_TABLES, _live_indexes)),
+            "profile": _AUTHORITY_CORE_PROFILE,
+            "provenance": {"sqlite": _sqlite3.sqlite_version},
+        }
+        try:
+            _canon = _json.dumps(
+                _tag(_live_bundle), sort_keys=True, separators=(",", ":"),
+                ensure_ascii=True, allow_nan=False)
+            _live_digest = _hashlib.sha256(
+                _canon.encode("utf-8")).hexdigest()
+        except Exception:
+            return _result("MISMATCH", None, "STRUCTURE")
+        if _live_digest != _AUTHORITY_CORE_STRUCTURE_DIGEST:
+            return _result("MISMATCH", None, "STRUCTURE")
+        _fetched = []
+        _row_total = 0
+        _text_total = 0
+        _exhausted = False
+        for _fetch_pos in range(len(_AUTHORITY_CORE_TABLES)):
+            _fetch_table = _AUTHORITY_CORE_TABLES[_fetch_pos]
+            _fetch_cols = _AUTHORITY_CORE_ROW_COLUMNS[_fetch_pos]
+            _fetch_order = _AUTHORITY_CORE_ROW_ORDER[_fetch_pos]
+            _select = "SELECT " + ", ".join(
+                "\"%s\"" % _column for _column in _fetch_cols) \
+                + " FROM \"%s\"" % _fetch_table + " ORDER BY " + ", ".join(
+                    "\"%s\"" % _column for _column in _fetch_order)
+            try:
+                _read_cursor = raw.cursor()
+            except Exception:
+                raise RuntimeError("AUTHORITY_CORE_STORAGE_ERROR") from None
+            _opened.append(_read_cursor)
+            try:
+                _read_cursor.row_factory = None
+                _read_cursor.execute(_select)
+            except Exception:
+                raise RuntimeError("AUTHORITY_CORE_STORAGE_ERROR") from None
+            _table_rows = []
+            while True:
+                try:
+                    _batch = _read_cursor.fetchmany(
+                        _AUTHORITY_CORE_FETCH_BATCH)
+                except Exception:
+                    raise RuntimeError(
+                        "AUTHORITY_CORE_STORAGE_ERROR") from None
+                if not _batch:
+                    break
+                for _record in _batch:
+                    if type(_record) is not tuple \
+                            or len(_record) != len(_fetch_cols):
+                        raise RuntimeError(
+                            "AUTHORITY_CORE_STORAGE_ERROR") from None
+                    _row_total += 1
+                    if _row_total > _AUTHORITY_CORE_INSPECT_ROW_LIMIT:
+                        _exhausted = True
+                        break
+                    try:
+                        for _field in _record:
+                            if _field is None:
+                                continue
+                            if type(_field) is str:
+                                _text_total += len(
+                                    _field.encode("utf-8"))
+                            elif type(_field) is bytes:
+                                _text_total += len(_field)
+                            else:
+                                _text_total += len(
+                                    str(_field).encode("utf-8"))
+                            if _text_total > \
+                                    _AUTHORITY_CORE_INSPECT_TEXT_LIMIT:
+                                _exhausted = True
+                                break
+                    except Exception:
+                        raise RuntimeError(
+                            "AUTHORITY_CORE_STORAGE_ERROR") from None
+                    if _exhausted:
+                        break
+                    _table_rows.append(_record)
+                if _exhausted:
+                    break
+            _fetched.append(tuple(_table_rows))
+            if _exhausted:
+                break
+        if _exhausted:
+            return _result("INCOMPLETE", None, "LIMIT")  # row budget spent
+        _install_rows = _fetched[0]
+        if len(_install_rows) != 1:
+            return _result("MISMATCH", None, "INSTALL")
+        _singleton, _row_install, _schema_version, _phase, _revision = \
+            _install_rows[0]
+        if type(_singleton) is not int or _singleton != 1:
+            return _result("MISMATCH", None, "INSTALL")
+        if type(_schema_version) is not int or _schema_version != 1:
+            return _result("MISMATCH", None, "INSTALL")
+        if type(_row_install) is not str \
+                or _row_install != expected_install_id:
+            return _result("MISMATCH", None, "INSTALL")
+        if _phase != "STAGED" and _phase != "ACTIVE":
+            return _result("MISMATCH", None, "INSTALL")
+        if type(_revision) is not int or _revision < 0 \
+                or _revision > _AUTHORITY_CORE_INT_MAX:
+            return _result("MISMATCH", None, "INSTALL")
+        _principals = set()
+        for _record in _fetched[1]:
+            _r_install, _r_id, _r_kind, _r_disabled = _record
+            if type(_r_install) is not str \
+                    or _r_install != expected_install_id:
+                return _result("MISMATCH", None, "ROWS")
+            if not _is_id(_r_id):
+                return _result("MISMATCH", None, "ROWS")
+            if _r_kind != "human" and _r_kind != "service":
+                return _result("MISMATCH", None, "ROWS")
+            if _r_disabled is not None and not _is_epoch(_r_disabled):
+                return _result("MISMATCH", None, "ROWS")
+            _principals.add((_r_install, _r_id))
+        for _record in _fetched[2]:
+            _r_install, _r_principal, _r_company, _r_effect = _record
+            if type(_r_install) is not str \
+                    or _r_install != expected_install_id:
+                return _result("MISMATCH", None, "ROWS")
+            if not _is_id(_r_principal) or not _is_id(_r_company):
+                return _result("MISMATCH", None, "ROWS")
+            if _r_effect != "allow" and _r_effect != "deny":
+                return _result("MISMATCH", None, "ROWS")
+            if (_r_install, _r_principal) not in _principals:
+                return _result("MISMATCH", None, "ROWS")
+        for _record in _fetched[3]:
+            (_r_install, _r_principal, _r_company, _r_kind, _r_resource,
+             _r_action, _r_effect) = _record
+            if type(_r_install) is not str \
+                    or _r_install != expected_install_id:
+                return _result("MISMATCH", None, "ROWS")
+            if not _is_id(_r_principal) or not _is_id(_r_company):
+                return _result("MISMATCH", None, "ROWS")
+            if not _is_action(_r_kind) or not _is_id(_r_resource):
+                return _result("MISMATCH", None, "ROWS")
+            if not _is_action(_r_action):
+                return _result("MISMATCH", None, "ROWS")
+            if _r_effect != "allow" and _r_effect != "deny":
+                return _result("MISMATCH", None, "ROWS")
+            if (_r_install, _r_principal) not in _principals:
+                return _result("MISMATCH", None, "ROWS")
+        _delegations = set()
+        for _record in _fetched[4]:
+            (_r_install, _r_id, _r_issuer, _r_grantee, _r_issued,
+             _r_expires, _r_revoked) = _record
+            if type(_r_install) is not str \
+                    or _r_install != expected_install_id:
+                return _result("MISMATCH", None, "ROWS")
+            if not _is_id(_r_id) or not _is_id(_r_issuer):
+                return _result("MISMATCH", None, "ROWS")
+            if not _is_id(_r_grantee):
+                return _result("MISMATCH", None, "ROWS")
+            if _r_issuer == _r_grantee:
+                return _result("MISMATCH", None, "ROWS")
+            if not _is_epoch(_r_issued) or not _is_epoch(_r_expires):
+                return _result("MISMATCH", None, "ROWS")
+            if not _r_issued < _r_expires:
+                return _result("MISMATCH", None, "ROWS")
+            if _r_revoked is not None and not _is_epoch(_r_revoked):
+                return _result("MISMATCH", None, "ROWS")
+            if (_r_install, _r_issuer) not in _principals:
+                return _result("MISMATCH", None, "ROWS")
+            if (_r_install, _r_grantee) not in _principals:
+                return _result("MISMATCH", None, "ROWS")
+            _delegations.add((_r_install, _r_id))
+        for _record in _fetched[5]:
+            (_r_install, _r_delegation, _r_company, _r_kind, _r_resource,
+             _r_action) = _record
+            if type(_r_install) is not str \
+                    or _r_install != expected_install_id:
+                return _result("MISMATCH", None, "ROWS")
+            if not _is_id(_r_delegation) or not _is_id(_r_company):
+                return _result("MISMATCH", None, "ROWS")
+            if not _is_action(_r_kind) or not _is_id(_r_resource):
+                return _result("MISMATCH", None, "ROWS")
+            if not _is_action(_r_action):
+                return _result("MISMATCH", None, "ROWS")
+            if (_r_install, _r_delegation) not in _delegations:
+                return _result("MISMATCH", None, "ROWS")
+        for _record in _fetched[6]:
+            (_r_install, _r_delegation, _r_action, _r_currency, _r_scale,
+             _r_per_operation, _r_aggregate, _r_start, _r_end) = _record
+            if type(_r_install) is not str \
+                    or _r_install != expected_install_id:
+                return _result("MISMATCH", None, "ROWS")
+            if not _is_id(_r_delegation):
+                return _result("MISMATCH", None, "ROWS")
+            if not _is_action(_r_action):
+                return _result("MISMATCH", None, "ROWS")
+            if not _is_currency(_r_currency):
+                return _result("MISMATCH", None, "ROWS")
+            if type(_r_scale) is not int or _r_scale < 0 or _r_scale > 18:
+                return _result("MISMATCH", None, "ROWS")
+            if not _is_amount(_r_per_operation, _r_scale):
+                return _result("MISMATCH", None, "ROWS")
+            if not _is_amount(_r_aggregate, _r_scale):
+                return _result("MISMATCH", None, "ROWS")
+            if not _is_epoch(_r_start) or not _is_epoch(_r_end):
+                return _result("MISMATCH", None, "ROWS")
+            if not _r_start < _r_end:
+                return _result("MISMATCH", None, "ROWS")
+            if (_r_install, _r_delegation) not in _delegations:
+                return _result("MISMATCH", None, "ROWS")
+        for _record in _fetched[7]:
+            (_r_id, _r_install, _r_principal, _r_action, _r_digest,
+             _r_delegation, _r_issued, _r_expires, _r_revoked,
+             _r_consumed_at, _r_consumed_txn) = _record
+            if not _is_id(_r_id):
+                return _result("MISMATCH", None, "ROWS")
+            if type(_r_install) is not str \
+                    or _r_install != expected_install_id:
+                return _result("MISMATCH", None, "ROWS")
+            if not _is_id(_r_principal):
+                return _result("MISMATCH", None, "ROWS")
+            if not _is_action(_r_action):
+                return _result("MISMATCH", None, "ROWS")
+            if not _is_digest(_r_digest):
+                return _result("MISMATCH", None, "ROWS")
+            if _r_delegation is not None:
+                if not _is_id(_r_delegation):
+                    return _result("MISMATCH", None, "ROWS")
+                if (_r_install, _r_delegation) not in _delegations:
+                    return _result("MISMATCH", None, "ROWS")
+            if not _is_epoch(_r_issued) or not _is_epoch(_r_expires):
+                return _result("MISMATCH", None, "ROWS")
+            if not _r_expires >= _r_issued:
+                return _result("MISMATCH", None, "ROWS")
+            if _r_revoked is not None and not _is_epoch(_r_revoked):
+                return _result("MISMATCH", None, "ROWS")
+            if _r_consumed_at is None and _r_consumed_txn is None:
+                pass
+            elif _is_epoch(_r_consumed_at) and _is_id(_r_consumed_txn):
+                pass
+            else:
+                return _result("MISMATCH", None, "ROWS")
+            if (_r_install, _r_principal) not in _principals:
+                return _result("MISMATCH", None, "ROWS")
+        return _result("MATCH", _phase, "MATCH")
+
+    try:
+        _outcome = _run()
+    finally:
+        for _cursor in _opened:
+            try:
+                _cursor.close()
+            except Exception:
+                _close_failed.append(_cursor)
+    if _close_failed:
+        raise RuntimeError("AUTHORITY_CORE_STORAGE_ERROR") from None
+    return _outcome

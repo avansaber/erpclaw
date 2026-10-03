@@ -7,7 +7,9 @@ Actions tested:
   - set-password
 """
 import pytest
-from setup_helpers import call_action, ns, seed_company, is_error, is_ok, load_db_query
+from setup_helpers import call_action, ns, seed_company, is_error, is_ok, load_db_query, read_all, read_one, open_reader, freeze_snapshot
+from erpclaw_lib import seam  # noqa: E402 (catalog questions go through the seam)
+from erpclaw_lib.passwords import verify_password  # noqa: E402 (after the lib binding in setup_helpers)
 
 mod = load_db_query()
 
@@ -261,9 +263,71 @@ class TestSetPassword:
         ))
         assert is_ok(result)
 
+    def test_set_password_stores_verifiable_hash_and_nothing_else(self, conn, db_path):
+        """Behavioural depth for set-password: the stored row carries a hash
+        that verifies against the plaintext, every other column is untouched,
+        and exactly one audit row records the change.
+
+        Ledger: set-password writes only erp_user (plus its audit row); it
+        posts no ledger legs, so no balance assertion can hold here.
+        """
+        created = call_action(mod.add_user, conn, ns(
+            name="pw_hash_user", email="ph@t.com",
+            full_name="Hash User", company_id=None,
+        ))
+        uid = created["user_id"]
+        cols = seam.column_names("erp_user", db_path)
+        reader = open_reader(db_path)
+        try:
+            before = read_one(reader, "erp_user", cols, uid)
+            assert before["password_hash"] is None
+            result = call_action(mod.set_password, conn, ns(
+                user_id=uid,
+                password="SecureP@ss123",
+            ))
+            assert is_ok(result)
+            assert result["username"] == "pw_hash_user"
+            after = read_one(reader, "erp_user", cols, uid)
+            assert after["password_hash"] not in (None, "", "SecureP@ss123")
+            assert after["password_hash"].startswith("pbkdf2:600000$")
+            assert verify_password("SecureP@ss123", after["password_hash"]) is True
+            assert verify_password("SecureP@ss124", after["password_hash"]) is False
+            for col in cols:
+                if col in ("password_hash", "updated_at"):
+                    continue
+                assert after[col] == before[col], col
+            audit_cols = seam.column_names("audit_log", db_path)
+            writes = [r for r in read_all(reader, "audit_log", audit_cols)
+                      if r["action"] == "set-password" and r["entity_id"] == uid]
+            assert len(writes) == 1
+            assert writes[0]["skill"] == "erpclaw-setup"
+            assert writes[0]["entity_type"] == "erp_user"
+        finally:
+            reader.close()
+
     def test_set_password_missing_user_fails(self, conn):
         result = call_action(mod.set_password, conn, ns(
             user_id=None,
             password="test",
         ))
         assert is_error(result)
+
+    def test_set_password_short_password_refuses_and_writes_nothing(self, conn, db_path):
+        """Refusal: a short password is rejected with a truthful message and
+        the database is byte-identical afterwards (no half-written hash)."""
+        created = call_action(mod.add_user, conn, ns(
+            name="pw_short", email="ps@t.com",
+            full_name=None, company_id=None,
+        ))
+        reader = open_reader(db_path)
+        try:
+            before = freeze_snapshot(reader, db_path, ["erp_user", "audit_log"])
+            result = call_action(mod.set_password, conn, ns(
+                user_id=created["user_id"],
+                password="short",
+            ))
+            assert is_error(result)
+            assert result["message"] == "Password must be at least 8 characters"
+            assert freeze_snapshot(reader, db_path, ["erp_user", "audit_log"]) == before
+        finally:
+            reader.close()

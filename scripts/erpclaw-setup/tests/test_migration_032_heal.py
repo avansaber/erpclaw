@@ -410,7 +410,7 @@ def test_postgres_lane():
 # This migration APPENDS ledger rows computed from the install's own allocations
 # and deductions. Nothing else records that those rows came from a migration
 # rather than from a payment, which is precisely what a later reader needs to
-# know. SIM: planning/simlogs/m102_SIM_2026-08-12.md.
+# know.
 
 def _trail(conn):
     cur = conn.execute(
@@ -616,3 +616,37 @@ def test_a_failed_heal_takes_its_trail_row_with_it(conn, db_path, monkeypatch):
         "no trail row was written before the failure, so this proves nothing")
     assert _trail(conn) == [], "a rolled-back heal left its audit row behind"
     assert _dump(db_path) == before, "the failed run changed the database"
+
+
+def _seed_customer_refund(conn, env):
+    pe_id, alloc_id = _uid(), _uid()
+    conn.execute(
+        "INSERT INTO payment_entry (id, naming_series, payment_type, posting_date, "
+        " party_type, party_id, paid_from_account, paid_to_account, paid_amount, "
+        " received_amount, status, unallocated_amount, company_id) "
+        "VALUES (?, 'PAY-REFUND', 'pay', '2026-06-05', 'customer', ?, ?, ?, "
+        " '9.25', '9.25', 'submitted', '0.00', ?)",
+        (pe_id, env["customer"], env["bank"], env["ar"], env["company"]))
+    conn.execute(
+        "INSERT INTO payment_allocation (id, payment_entry_id, voucher_type, "
+        " voucher_id, allocated_amount) VALUES (?, ?, 'credit_note', ?, '9.25')",
+        (alloc_id, pe_id, _uid()))
+    _ple(conn, env, voucher_type="payment_entry", voucher_id=pe_id,
+         amount="-9.25", against_voucher_type="payment_entry",
+         against_voucher_id=pe_id)
+    conn.commit()
+    return {"payment": pe_id, "allocation": alloc_id}
+
+
+def test_customer_refund_is_skipped_and_reported(conn, db_path):
+    env = _seed_party_and_accounts(conn)
+    ids = _seed_customer_refund(conn, env)
+    before = _dump(db_path)
+
+    out = _run(mig032, db_path)
+
+    assert len(_comp_rows(conn, ids["payment"])) == 1
+    assert D(_comp_rows(conn, ids["payment"])[0][0]) == D("-9.25")
+    assert _dump(db_path) == before, "a skipped refund was touched"
+    assert ids["payment"] in out
+    assert "customer refund: compensation is sign-aware at runtime" in out

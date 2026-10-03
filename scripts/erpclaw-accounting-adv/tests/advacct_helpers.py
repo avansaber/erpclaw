@@ -30,6 +30,7 @@ if ERPCLAW_LIB not in sys.path:
         sys.path.insert(0, ERPCLAW_LIB)
 
 from erpclaw_lib.db import setup_pragmas
+from erpclaw_lib.query import P, Q, Table
 
 
 def load_db_query():
@@ -161,4 +162,63 @@ def build_advacct_env(conn) -> dict:
     return {
         "company_id": cid1,
         "company2_id": cid2,
+    }
+
+
+def seed_recognition_ledger(conn, company_id) -> dict:
+    """Seed the ledger rows a revenue recognition posting needs.
+
+    Inserts use parameterized PyPika builders so the helper also runs on
+    PostgreSQL. Creates an open FY2026 fiscal year, a non-group cost center,
+    a liability "Deferred Revenue" account and an income "Subscription
+    Revenue" account, each name-suffixed with the company id's first 6
+    characters. Commits, and returns the three ids a recognition call takes.
+    """
+    suffix = company_id[:6]
+    now = "2026-01-01T00:00:00Z"
+
+    fy_id = _uuid()
+    fy_t = Table("fiscal_year")
+    conn.execute(
+        Q.into(fy_t).columns(
+            "id", "name", "start_date", "end_date",
+            "is_closed", "company_id", "created_at", "updated_at")
+        .insert(P(), P(), P(), P(), P(), P(), P(), P()).get_sql(),
+        (fy_id, f"FY2026-{suffix}", "2026-01-01", "2026-12-31",
+         0, company_id, now, now))
+
+    cc_id = _uuid()
+    cc_t = Table("cost_center")
+    conn.execute(
+        Q.into(cc_t).columns(
+            "id", "name", "company_id", "is_group", "created_at", "updated_at")
+        .insert(P(), P(), P(), P(), P(), P()).get_sql(),
+        (cc_id, f"Main {suffix}", company_id, 0, now, now))
+
+    acct_t = Table("account")
+    deferred_id = _uuid()
+    conn.execute(
+        Q.into(acct_t).columns(
+            "id", "name", "root_type", "account_type", "currency",
+            "is_group", "balance_direction", "company_id",
+            "created_at", "updated_at")
+        .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(), P()).get_sql(),
+        (deferred_id, f"Deferred Revenue {suffix}", "liability", "temporary",
+         "USD", 0, "credit_normal", company_id, now, now))
+
+    revenue_id = _uuid()
+    conn.execute(
+        Q.into(acct_t).columns(
+            "id", "name", "root_type", "account_type", "currency",
+            "is_group", "balance_direction", "company_id",
+            "created_at", "updated_at")
+        .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(), P()).get_sql(),
+        (revenue_id, f"Subscription Revenue {suffix}", "income", "revenue",
+         "USD", 0, "credit_normal", company_id, now, now))
+
+    conn.commit()
+    return {
+        "cost_center_id": cc_id,
+        "deferred_revenue_account_id": deferred_id,
+        "revenue_account_id": revenue_id,
     }

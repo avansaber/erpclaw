@@ -44,7 +44,7 @@ if not _lib_found:
     }))
     sys.exit(1)
 
-from erpclaw_lib.db import get_connection, ensure_db_exists, DEFAULT_DB_PATH
+from erpclaw_lib.db import get_connection, DEFAULT_DB_PATH, get_dialect, integrity_error_types
 from erpclaw_lib.decimal_utils import to_decimal
 from erpclaw_lib.validation import check_input_lengths
 from erpclaw_lib.response import ok, err, row_to_dict
@@ -52,6 +52,7 @@ from erpclaw_lib.audit import audit
 from erpclaw_lib.query import Q, P, Table, Field, fn, now, dynamic_update, insert_or_ignore
 from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
 from erpclaw_lib import custom_fields as cf
+from erpclaw_lib import actor, company_scope
 from erpclaw_lib.vendor.pypika import Order
 from erpclaw_lib.vendor.pypika.terms import LiteralValue
 
@@ -194,11 +195,22 @@ def setup_company(conn, args):
                 # Import onboarding module and call onboard programmatically
                 sys.path.insert(0, os.path.join(SKILL_DIR, ".."))
                 from onboarding import PROFILES, COUNTRY_REGION_MAP
-                from module_manager import _load_registry, _install_module_inner, _registry_to_dict, build_action_cache
+                from module_manager import (
+                    _RegistrySignatureError,
+                    _install_module_inner,
+                    _load_registry_strict,
+                    _registry_to_dict,
+                )
 
                 profile = PROFILES.get(onboard_profile)
                 if profile:
-                    registry = _load_registry()
+                    try:
+                        registry = _load_registry_strict(force_refresh=True)
+                    except _RegistrySignatureError as e:
+                        err(
+                            "Registry verification failed; refusing automatic "
+                            f"module installation: {e}"
+                        )
                     modules_by_name = _registry_to_dict(registry)
                     installed_rows = conn.execute(
                         "SELECT name FROM erpclaw_module WHERE install_status = 'installed'"
@@ -215,15 +227,11 @@ def setup_company(conn, args):
                             _install_module_inner(install_args, conn, modules_by_name, depth=0)
                             modules_installed.append(module_name)
                             already_installed.add(module_name)
-                        except SystemExit:
-                            conn = get_connection()
-                            check = conn.execute(
-                                "SELECT install_status FROM erpclaw_module WHERE name = ?",
-                                (module_name,)
-                            ).fetchone()
-                            if check and check["install_status"] == "installed":
-                                modules_installed.append(module_name)
-                                already_installed.add(module_name)
+                        except SystemExit as e:
+                            modules_failed.append({
+                                "module": module_name,
+                                "error": f"installation refused (exit {e.code})",
+                            })
                         except Exception as e:
                             # Best-effort onboarding: one module failing must not
                             # abort the rest, but the failure must be visible —
@@ -241,14 +249,11 @@ def setup_company(conn, args):
                                 install_args = argparse.Namespace(module_name=region_module)
                                 _install_module_inner(install_args, conn, modules_by_name, depth=0)
                                 modules_installed.append(region_module)
-                            except SystemExit:
-                                conn = get_connection()
-                                check = conn.execute(
-                                    "SELECT install_status FROM erpclaw_module WHERE name = ?",
-                                    (region_module,)
-                                ).fetchone()
-                                if check and check["install_status"] == "installed":
-                                    modules_installed.append(region_module)
+                            except SystemExit as e:
+                                modules_failed.append({
+                                    "module": region_module,
+                                    "error": f"installation refused (exit {e.code})",
+                                })
                             except Exception as e:
                                 modules_failed.append({"module": region_module, "error": str(e)})
                                 print(f"WARN: onboarding auto-install of region module "
@@ -365,11 +370,28 @@ def list_companies(conn, args):
     """List all companies."""
     limit = int(args.limit or 20)
     offset = int(args.offset or 0)
+    try:
+        scope = company_scope.resolution_scope(conn, actor.current())
+    except company_scope.ScopeRefused as exc:
+        err(exc.code)
+    if scope is None:
+        t = Table("company")
+        qc = Q.from_(t).select(fn.Count("*").as_("cnt"))
+        total_count = conn.execute(qc.get_sql()).fetchone()["cnt"]
+        q = Q.from_(t).select(t.star).orderby(t.name).limit(limit).offset(offset)
+        rows = conn.execute(q.get_sql()).fetchall()
+        ok({"companies": [row_to_dict(r) for r in rows],
+             "total_count": total_count, "limit": limit, "offset": offset,
+             "has_more": offset + limit < total_count})
+    ids = sorted(scope)
     t = Table("company")
-    qc = Q.from_(t).select(fn.Count("*").as_("cnt"))
-    total_count = conn.execute(qc.get_sql()).fetchone()["cnt"]
-    q = Q.from_(t).select(t.star).orderby(t.name).limit(limit).offset(offset)
-    rows = conn.execute(q.get_sql()).fetchall()
+    qc = (Q.from_(t).select(fn.Count("*").as_("cnt"))
+          .where(t.id.isin([P() for _ in ids])))
+    total_count = conn.execute(qc.get_sql(), ids).fetchone()["cnt"]
+    q = (Q.from_(t).select(t.star)
+         .where(t.id.isin([P() for _ in ids]))
+         .orderby(t.name).limit(limit).offset(offset))
+    rows = conn.execute(q.get_sql(), ids).fetchall()
     ok({"companies": [row_to_dict(r) for r in rows],
          "total_count": total_count, "limit": limit, "offset": offset,
          "has_more": offset + limit < total_count})
@@ -779,12 +801,22 @@ def update_regional_settings(conn, args):
     ok({"updated": list(settings.keys())})
 
 
+def _require_sqlite_backend(action, what):
+    """Refuse an action that can only operate on a SQLite database file."""
+    dialect = get_dialect()
+    if dialect != "sqlite":
+        err(f"{action} operates on the SQLite database file and this install is "
+            f"configured for {dialect}",
+            suggestion=f"use your {dialect} tooling to {what}")
+
+
 def backup_database(conn, args):
     """Create a backup of the database.
 
     Supports optional encryption with --encrypt --passphrase flags.
     Encrypted backups use AES-256 + HMAC-SHA256 authentication.
     """
+    _require_sqlite_backend("backup-database", "back up the database")
     db_path = args.db_path or DEFAULT_DB_PATH
     backup_path = args.backup_path
     encrypt = getattr(args, "encrypt", False)
@@ -985,6 +1017,7 @@ def restore_database(conn, args):
     5. Verify integrity
     If any step fails, rollback to safety backup.
     """
+    _require_sqlite_backend("restore-database", "restore the database")
     backup_path = args.backup_path
     passphrase = getattr(args, "passphrase", None)
     if not backup_path:
@@ -1089,6 +1122,66 @@ def restore_database(conn, args):
         err(f"Restore failed (rolled back to previous state): {e}")
 
 
+def _authority_core_observation(conn):
+    """An observation of the authority-core profile, not a readiness signal.
+
+    The expected install id is read from the same database, so this checks
+    the shape and the single install record, not which install this is.
+    Nothing is granted and nothing is written here.
+    """
+    from erpclaw_lib import seam as _core_seam
+    from erpclaw_lib.db import ConnectionWrapper as _CoreWrapper
+    from erpclaw_lib.db import db_error_types as _core_errors
+    _profile = "authority-core-v1-sqlite"
+    if type(conn) is not _CoreWrapper:
+        return {"profile": _profile, "status": "UNSUPPORTED",
+                "phase": None, "reason": "BACKEND"}
+    if conn.in_transaction:
+        return {"profile": _profile, "status": "UNAVAILABLE",
+                "phase": None, "reason": "BUSY"}
+    if sqlite3.sqlite_version != _core_seam._AUTHORITY_CORE_SQLITE_VERSION:
+        return {"profile": _profile, "status": "UNSUPPORTED",
+                "phase": None, "reason": "SQLITE_VERSION"}
+    conn.execute("BEGIN")
+    try:
+        _install = Table("authority_install")
+        _missing = _core_errors()[0]
+        try:
+            _rows = conn.execute(
+                Q.from_(_install).select(_install.install_id).get_sql()
+            ).fetchall()
+        except _missing:
+            _rows = []
+        _expected = "unset"
+        if len(_rows) == 1:
+            _candidate = _rows[0]["install_id"]
+            if isinstance(_candidate, str) and 1 <= len(_candidate) <= 128:
+                _valid = True
+                for _letter in _candidate:
+                    if ("a" <= _letter <= "z" or "A" <= _letter <= "Z"
+                            or "0" <= _letter <= "9"
+                            or _letter == "_" or _letter == "-"):
+                        continue
+                    _valid = False
+                    break
+                if _valid:
+                    _expected = _candidate
+        try:
+            return dict(_core_seam.inspect_authority_core(
+                conn, expected_install_id=_expected))
+        except (ValueError, RuntimeError) as _exc:
+            if len(_exc.args) == 1 and isinstance(_exc.args[0], str):
+                return {"profile": _profile, "status": "ERROR",
+                        "phase": None, "reason": _exc.args[0]}
+            return {"profile": _profile, "status": "ERROR",
+                    "phase": None, "reason": type(_exc).__name__}
+    except Exception as _exc:
+        return {"profile": _profile, "status": "ERROR",
+                "phase": None, "reason": type(_exc).__name__}
+    finally:
+        conn.rollback()
+
+
 def status(conn, args):
     """Overall system status."""
     tc = Table("company")
@@ -1120,6 +1213,7 @@ def status(conn, args):
         "uoms": uoms,
         "payment_terms": payment_terms,
         "schema_versions": versions,
+        "authority_core": _authority_core_observation(conn),
     })
 
 
@@ -1186,17 +1280,36 @@ def initialize_database(conn, args):
     database — uses CREATE TABLE IF NOT EXISTS throughout. If --force is
     passed, drops and recreates the database from scratch.
     """
+    if get_dialect() == "postgresql":
+        from erpclaw_lib.db import require_pg_url
+        _router_explicit = getattr(args, "db_path", None)
+        _router_env_url = os.environ.get("ERPCLAW_DB_URL")
+        _router_env_path = os.environ.get("ERPCLAW_DB_PATH")
+        _router_target = _router_explicit or _router_env_url or _router_env_path
+        if _router_target:
+            if _router_explicit:
+                _router_source = "--db-path"
+            elif _router_env_url:
+                _router_source = "ERPCLAW_DB_URL"
+            else:
+                _router_source = "ERPCLAW_DB_PATH"
+            require_pg_url(_router_target, source=_router_source)
     _link_shared_library()
-    db_path = args.db_path or DEFAULT_DB_PATH
 
     # Import the schema module (co-located in the same scripts/ directory)
     scripts_dir = os.path.dirname(os.path.abspath(__file__))
     sys.path.insert(0, scripts_dir)
     from init_schema import init_db, ALL_DDL_BLOCKS, redact_db_url
 
+    explicit = getattr(args, "db_path", None)
+    if get_dialect() == "sqlite":
+        db_path = explicit or os.environ.get("ERPCLAW_DB_PATH") or DEFAULT_DB_PATH
+    else:
+        db_path = explicit          # None unless --db-path was given
+
     force = getattr(args, "force", False) or getattr(args, "force_reinit", False)
 
-    if force and os.path.exists(db_path):
+    if force and get_dialect() == "sqlite" and db_path and os.path.exists(db_path):
         # Close existing connection before deleting
         if conn:
             conn.close()
@@ -1205,23 +1318,39 @@ def initialize_database(conn, args):
     # Run full schema initialization
     init_db(db_path)
 
-    # Lock down DB file perms (covers data.sqlite, -wal, -shm)
-    chmod_db_files(db_path)
+    if get_dialect() == "sqlite":
+        # Lock down DB file perms (covers data.sqlite, -wal, -shm)
+        chmod_db_files(db_path)
 
-    # Verify by reconnecting and counting
-    verify_conn = sqlite3.connect(db_path)
-    try:
-        table_count = verify_conn.execute(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
-        ).fetchone()[0]
-        index_count = verify_conn.execute(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='index'"
-        ).fetchone()[0]
-        skill_count = verify_conn.execute(
-            "SELECT COUNT(*) FROM schema_version"
-        ).fetchone()[0]
-    finally:
-        verify_conn.close()
+        # Verify by reconnecting and counting
+        verify_conn = sqlite3.connect(db_path)
+        try:
+            table_count = verify_conn.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+            ).fetchone()[0]
+            index_count = verify_conn.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index'"
+            ).fetchone()[0]
+            skill_count = verify_conn.execute(
+                "SELECT COUNT(*) FROM schema_version"
+            ).fetchone()[0]
+        finally:
+            verify_conn.close()
+        journal_mode = "WAL"
+        foreign_keys = "ON"
+        dialect = "sqlite"
+    else:
+        from erpclaw_lib.seam import table_names
+        pg_conn = get_connection(db_path)
+        try:
+            table_count = len(table_names(db_path))
+        finally:
+            pg_conn.close()
+        index_count = None
+        skill_count = None
+        journal_mode = None
+        foreign_keys = None
+        dialect = get_dialect()
 
     # M39 (Wave G F6): catalog the foundation in its own erpclaw_module table.
     # ClawHub's post hook runs this action and nothing else, so this INSERT is
@@ -1255,14 +1384,17 @@ def initialize_database(conn, args):
         # F11: on PostgreSQL this value IS the connection URL, so the response
         # echoed the database password to stdout. Same redactor as the stderr
         # prints; a SQLite filesystem path passes through unchanged.
-        "db_path": redact_db_url(db_path),
+        "db_path": redact_db_url(db_path or os.environ.get("ERPCLAW_DB_URL") or "the configured target"),
         "tables": table_count,
+        "table_count": table_count,
         "indexes": index_count,
+        "index_count": index_count,
         "skills_registered": skill_count,
-        "journal_mode": "WAL",
-        "foreign_keys": "ON",
+        "journal_mode": journal_mode,
+        "foreign_keys": foreign_keys,
         "reinitialized": force,
         "foundation_module_row": module_row,
+        "dialect": dialect,
     })
 
 
@@ -1679,7 +1811,13 @@ def get_user(conn, args):
         err("--user-id is required")
 
     tu = Table("erp_user")
-    q_user = Q.from_(tu).select(tu.star).where(tu.id == P())
+    # An explicit column list: a secret column added later never reaches
+    # the answer (password_hash is the one there today).
+    q_user = (Q.from_(tu)
+              .select(tu.id, tu.username, tu.email, tu.full_name, tu.status,
+                      tu.company_ids, tu.last_login, tu.created_at,
+                      tu.updated_at)
+              .where(tu.id == P()))
     user = conn.execute(q_user.get_sql(), (user_id,)).fetchone()
     if not user:
         err("User not found")
@@ -1813,6 +1951,404 @@ def revoke_role(conn, args):
            old_values={"role_name": role_name, "company_id": company_id})
     conn.commit()
     ok({"revoked": role_name, "user_id": user_id})
+
+
+def _authority_phase(conn):
+    """Resolve the install phase for membership handlers."""
+    if not company_scope.core_present(conn):
+        return (None, None)
+    table = Table("authority_install")
+    rows = conn.execute(
+        Q.from_(table).select(table.phase, table.install_id).get_sql()
+    ).fetchall()
+    if len(rows) != 1:
+        return (None, None)
+    row = rows[0]
+    return (row["phase"], row["install_id"])
+
+
+def grant_company_membership(conn, args):
+    """Grant one company to one principal while the install is staged."""
+    phase, install = _authority_phase(conn)
+    if phase is None:
+        conn.rollback()
+        err("AUTHORITY_CORE_UNAVAILABLE")
+    if phase != "STAGED":
+        conn.rollback()
+        err("COMPANY_MEMBERSHIP_ISSUER_UNAVAILABLE")
+    principal_id = getattr(args, "principal_id", None)
+    company_id = getattr(args, "company_id", None)
+    effect_arg = getattr(args, "effect", None)
+    if type(principal_id) is not str or not principal_id:
+        conn.rollback()
+        err("COMPANY_MEMBERSHIP_INPUT_INVALID")
+    if type(company_id) is not str or not company_id:
+        conn.rollback()
+        err("COMPANY_MEMBERSHIP_INPUT_INVALID")
+    if effect_arg is not None:
+        conn.rollback()
+        err("COMPANY_MEMBERSHIP_INPUT_INVALID")
+    effect = "allow"
+    principal_table = Table("authority_principal")
+    found_principal = conn.execute(
+        Q.from_(principal_table).select(principal_table.id).where(
+            principal_table.install_id == P()).where(
+            principal_table.id == P()).get_sql(),
+        (install, principal_id),
+    ).fetchone()
+    if found_principal is None:
+        conn.rollback()
+        err("PRINCIPAL_NOT_FOUND")
+    company_table = Table("company")
+    found_company = conn.execute(
+        Q.from_(company_table).select(company_table.id).where(
+            company_table.id == P()).get_sql(),
+        (company_id,),
+    ).fetchone()
+    if found_company is None:
+        conn.rollback()
+        err("COMPANY_NOT_FOUND")
+    try:
+        membership_table = Table("authority_membership")
+        existing = conn.execute(
+            Q.from_(membership_table).select(membership_table.install_id).where(
+                membership_table.install_id == P()).where(
+                membership_table.principal_id == P()).where(
+                membership_table.company_id == P()).where(
+                membership_table.effect == P()).get_sql(),
+            (install, principal_id, company_id, effect),
+        ).fetchone()
+        if existing is not None:
+            conn.rollback()
+            err("COMPANY_MEMBERSHIP_EXISTS")
+        try:
+            conn.execute(
+                Q.into(membership_table).columns(
+                    "install_id", "principal_id", "company_id", "effect"
+                ).insert(P(), P(), P(), P()).get_sql(),
+                (install, principal_id, company_id, effect),
+            )
+        except integrity_error_types():
+            conn.rollback()
+            err("COMPANY_MEMBERSHIP_EXISTS")
+        audit(conn, "erpclaw-setup", "grant-company-membership",
+              "authority_membership", principal_id,
+              new_values={"install_id": install, "principal_id": principal_id,
+                          "company_id": company_id, "effect": effect})
+        phase_now, _install_now = _authority_phase(conn)
+        if phase_now != "STAGED":
+            conn.rollback()
+            err("COMPANY_MEMBERSHIP_ISSUER_UNAVAILABLE")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    ok({"install_id": install, "principal_id": principal_id,
+        "company_id": company_id, "effect": effect})
+
+
+def deny_company_membership(conn, args):
+    """Deny one company to one principal while the install is staged."""
+    phase, install = _authority_phase(conn)
+    if phase is None:
+        conn.rollback()
+        err("AUTHORITY_CORE_UNAVAILABLE")
+    if phase != "STAGED":
+        conn.rollback()
+        err("COMPANY_MEMBERSHIP_ISSUER_UNAVAILABLE")
+    principal_id = getattr(args, "principal_id", None)
+    company_id = getattr(args, "company_id", None)
+    effect_arg = getattr(args, "effect", None)
+    if type(principal_id) is not str or not principal_id:
+        conn.rollback()
+        err("COMPANY_MEMBERSHIP_INPUT_INVALID")
+    if type(company_id) is not str or not company_id:
+        conn.rollback()
+        err("COMPANY_MEMBERSHIP_INPUT_INVALID")
+    if effect_arg is not None:
+        conn.rollback()
+        err("COMPANY_MEMBERSHIP_INPUT_INVALID")
+    effect = "deny"
+    principal_table = Table("authority_principal")
+    found_principal = conn.execute(
+        Q.from_(principal_table).select(principal_table.id).where(
+            principal_table.install_id == P()).where(
+            principal_table.id == P()).get_sql(),
+        (install, principal_id),
+    ).fetchone()
+    if found_principal is None:
+        conn.rollback()
+        err("PRINCIPAL_NOT_FOUND")
+    company_table = Table("company")
+    found_company = conn.execute(
+        Q.from_(company_table).select(company_table.id).where(
+            company_table.id == P()).get_sql(),
+        (company_id,),
+    ).fetchone()
+    if found_company is None:
+        conn.rollback()
+        err("COMPANY_NOT_FOUND")
+    try:
+        membership_table = Table("authority_membership")
+        existing = conn.execute(
+            Q.from_(membership_table).select(membership_table.install_id).where(
+                membership_table.install_id == P()).where(
+                membership_table.principal_id == P()).where(
+                membership_table.company_id == P()).where(
+                membership_table.effect == P()).get_sql(),
+            (install, principal_id, company_id, effect),
+        ).fetchone()
+        if existing is not None:
+            conn.rollback()
+            err("COMPANY_MEMBERSHIP_EXISTS")
+        try:
+            conn.execute(
+                Q.into(membership_table).columns(
+                    "install_id", "principal_id", "company_id", "effect"
+                ).insert(P(), P(), P(), P()).get_sql(),
+                (install, principal_id, company_id, effect),
+            )
+        except integrity_error_types():
+            conn.rollback()
+            err("COMPANY_MEMBERSHIP_EXISTS")
+        audit(conn, "erpclaw-setup", "deny-company-membership",
+              "authority_membership", principal_id,
+              new_values={"install_id": install, "principal_id": principal_id,
+                          "company_id": company_id, "effect": effect})
+        phase_now, _install_now = _authority_phase(conn)
+        if phase_now != "STAGED":
+            conn.rollback()
+            err("COMPANY_MEMBERSHIP_ISSUER_UNAVAILABLE")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    ok({"install_id": install, "principal_id": principal_id,
+        "company_id": company_id, "effect": effect})
+
+
+def revoke_company_membership(conn, args):
+    """Revoke exactly one membership row while the install is staged."""
+    phase, install = _authority_phase(conn)
+    if phase is None:
+        conn.rollback()
+        err("AUTHORITY_CORE_UNAVAILABLE")
+    if phase != "STAGED":
+        conn.rollback()
+        err("COMPANY_MEMBERSHIP_ISSUER_UNAVAILABLE")
+    principal_id = getattr(args, "principal_id", None)
+    company_id = getattr(args, "company_id", None)
+    effect = getattr(args, "effect", None)
+    if type(principal_id) is not str or not principal_id:
+        conn.rollback()
+        err("COMPANY_MEMBERSHIP_INPUT_INVALID")
+    if type(company_id) is not str or not company_id:
+        conn.rollback()
+        err("COMPANY_MEMBERSHIP_INPUT_INVALID")
+    if effect not in ("allow", "deny"):
+        conn.rollback()
+        err("COMPANY_MEMBERSHIP_INPUT_INVALID")
+    principal_table = Table("authority_principal")
+    found_principal = conn.execute(
+        Q.from_(principal_table).select(principal_table.id).where(
+            principal_table.install_id == P()).where(
+            principal_table.id == P()).get_sql(),
+        (install, principal_id),
+    ).fetchone()
+    if found_principal is None:
+        conn.rollback()
+        err("PRINCIPAL_NOT_FOUND")
+    try:
+        membership_table = Table("authority_membership")
+        removed = conn.execute(
+            Q.from_(membership_table).delete().where(
+                membership_table.install_id == P()).where(
+                membership_table.principal_id == P()).where(
+                membership_table.company_id == P()).where(
+                membership_table.effect == P()).get_sql(),
+            (install, principal_id, company_id, effect),
+        )
+        if removed.rowcount == 0:
+            conn.rollback()
+            err("COMPANY_MEMBERSHIP_NOT_FOUND")
+        audit(conn, "erpclaw-setup", "revoke-company-membership",
+              "authority_membership", principal_id,
+              old_values={"install_id": install, "principal_id": principal_id,
+                          "company_id": company_id, "effect": effect})
+        phase_now, _install_now = _authority_phase(conn)
+        if phase_now != "STAGED":
+            conn.rollback()
+            err("COMPANY_MEMBERSHIP_ISSUER_UNAVAILABLE")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    ok({"install_id": install, "principal_id": principal_id,
+        "company_id": company_id, "effect": effect, "revoked": True})
+
+
+def list_company_memberships(conn, args):
+    """List membership rows for the install with optional filters."""
+    phase, install = _authority_phase(conn)
+    if install is None:
+        ok({"core_present": False, "memberships": [], "total_count": 0})
+    membership_table = Table("authority_membership")
+    wanted_principal = getattr(args, "principal_id", None)
+    wanted_company = getattr(args, "company_id", None)
+    query = Q.from_(membership_table).select(
+        membership_table.principal_id,
+        membership_table.company_id,
+        membership_table.effect,
+    ).where(membership_table.install_id == P())
+    params = [install]
+    if wanted_principal is not None:
+        query = query.where(membership_table.principal_id == P())
+        params.append(wanted_principal)
+    if wanted_company is not None:
+        query = query.where(membership_table.company_id == P())
+        params.append(wanted_company)
+    rows = conn.execute(query.get_sql(), tuple(params)).fetchall()
+    memberships = sorted(
+        ({"principal_id": row["principal_id"],
+          "company_id": row["company_id"],
+          "effect": row["effect"]} for row in rows),
+        key=lambda item: (item["principal_id"], item["company_id"], item["effect"]),
+    )
+    payload = {"core_present": True, "memberships": memberships,
+               "total_count": len(memberships)}
+    if wanted_principal is not None:
+        payload["effective_scope"] = sorted(
+            company_scope.principal_scope(conn, install, wanted_principal))
+    ok(payload)
+
+
+def reconcile_legacy_company_scope(conn, args):
+    """Show where legacy user company lists differ from membership."""
+    phase, install = _authority_phase(conn)
+    present = install is not None
+    user_table = Table("erp_user")
+    user_rows = conn.execute(
+        Q.from_(user_table).select(
+            user_table.id, user_table.username, user_table.status,
+            user_table.company_ids,
+        ).orderby(user_table.id).get_sql()
+    ).fetchall()
+    company_table = Table("company")
+    company_rows = conn.execute(
+        Q.from_(company_table).select(company_table.id).get_sql()
+    ).fetchall()
+    every_company = sorted(row["id"] for row in company_rows)
+    role_table = Table("user_role")
+    principal_table = Table("authority_principal")
+    users = []
+    disagreements = 0
+    for user_row in user_rows:
+        user_id = user_row["id"]
+        raw = user_row["company_ids"]
+        if raw is None or raw == "":
+            base = []
+            unrestricted = True
+            malformed = False
+        else:
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                base = []
+                unrestricted = True
+                malformed = True
+            else:
+                if not isinstance(parsed, list):
+                    base = []
+                    unrestricted = True
+                    malformed = True
+                elif len(parsed) == 0:
+                    base = []
+                    unrestricted = True
+                    malformed = False
+                else:
+                    malformed = any(
+                        type(entry) is not str or not entry for entry in parsed)
+                    unrestricted = False
+                    base = [entry for entry in parsed if type(entry) is str]
+        role_rows = conn.execute(
+            Q.from_(role_table).select(role_table.company_id).where(
+                role_table.user_id == P()).get_sql(),
+            (user_id,),
+        ).fetchall()
+        scoped = [row["company_id"] for row in role_rows
+                  if row["company_id"] is not None]
+        has_global = any(row["company_id"] is None for row in role_rows)
+        if unrestricted:
+            legacy_set = set(every_company) | set(scoped)
+        else:
+            legacy_set = set(base) | set(scoped)
+        legacy_ids = sorted(legacy_set)
+        if present:
+            found = conn.execute(
+                Q.from_(principal_table).select(
+                    principal_table.disabled_at).where(
+                    principal_table.install_id == P()).where(
+                    principal_table.id == P()).get_sql(),
+                (install, user_id),
+            ).fetchone()
+        else:
+            found = None
+        is_found = found is not None
+        is_disabled = bool(is_found and found["disabled_at"] is not None)
+        if is_found and present:
+            membership_ids = sorted(
+                company_scope.principal_scope(conn, install, user_id))
+        else:
+            membership_ids = []
+        legacy_only = sorted(set(legacy_ids) - set(membership_ids))
+        membership_only = sorted(set(membership_ids) - set(legacy_ids))
+        agrees = bool(is_found and not legacy_only and not membership_only)
+        if not agrees:
+            disagreements += 1
+        users.append({
+            "user_id": user_id,
+            "username": user_row["username"],
+            "user_status": user_row["status"],
+            "legacy_company_ids": legacy_ids,
+            "legacy_unrestricted": bool(unrestricted),
+            "legacy_company_ids_malformed": bool(malformed),
+            "legacy_global_role": bool(has_global),
+            "principal_found": bool(is_found),
+            "principal_disabled": bool(is_disabled),
+            "membership_company_ids": membership_ids,
+            "legacy_only": legacy_only,
+            "membership_only": membership_only,
+            "agrees": bool(agrees),
+        })
+    if present:
+        user_ids = set(row["id"] for row in user_rows)
+        membership_table = Table("authority_membership")
+        member_rows = conn.execute(
+            Q.from_(membership_table).select(
+                membership_table.principal_id).where(
+                membership_table.install_id == P()).get_sql(),
+            (install,),
+        ).fetchall()
+        orphan_ids = sorted(set(
+            row["principal_id"] for row in member_rows) - user_ids)
+        orphans = []
+        for orphan_id in orphan_ids:
+            orphans.append({
+                "principal_id": orphan_id,
+                "membership_company_ids": sorted(
+                    company_scope.principal_scope(conn, install, orphan_id)),
+            })
+    else:
+        orphans = []
+    payload = {
+        "core_present": bool(present),
+        "users": users,
+        "principals_without_legacy_user": orphans,
+        "disagreement_count": disagreements + len(orphans),
+        "note": "principal_found is False for every user until principals "
+                "are provisioned; equal id is the only link between the stores.",
+    }
+    ok(payload)
 
 
 def set_password(conn, args):
@@ -2602,20 +3138,34 @@ def validate_registry_completeness(conn, args):
                   "new writes using them would be rejected. Register via add-*-type."})
 
 
-def migrate_action(conn, args):
-    """Run pending foundation migrations (migrations/NNN_*.py), recording each in
-    the erpclaw_schema_migration ledger. Idempotent + dialect-aware. --dry-run
-    lists pending without applying. (Manages its own DB connections via db_path.)"""
+def _load_migration_runner():
+    """Load the foundation migration runner module."""
     import importlib.util
     runner_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "migration_runner.py")
     spec = importlib.util.spec_from_file_location("migration_runner", runner_path)
     runner = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(runner)
-    db_path = getattr(args, "db_path", None) or DEFAULT_DB_PATH
+    return runner
+
+
+def migrate_action(conn, args):
+    """Run pending foundation migrations (migrations/NNN_*.py), recording each in
+    the erpclaw_schema_migration ledger. Idempotent + dialect-aware. --dry-run
+    lists pending without applying. (Manages its own DB connections via db_path.)"""
+    runner = _load_migration_runner()
+    db_path = getattr(args, "db_path", None)
     res = runner.run_pending(db_path, dry_run=bool(getattr(args, "dry_run", False)))
     if res.get("ok") is False:
-        err(f"Migration '{res['failed']}' failed: {res['error']}",
-            suggestion=res.get("detail"))
+        if res.get("stage") == "record":
+            err(f"Migration '{res['failed']}' ran but could not be recorded in the ledger: "
+                f"{res['ledger_error']}. Applied before it: {res['applied']}.",
+                suggestion=res.get("detail"))
+        message = (f"Migration '{res['failed']}' failed: {res['error']}. "
+                   f"Applied before failure: {res['applied']}.")
+        if res.get("ledger_error"):
+            message += (f" The failure could not be recorded in the ledger: "
+                        f"{res['ledger_error']}.")
+        err(message, suggestion=res.get("detail"))
     ok(res)
 
 
@@ -2772,6 +3322,103 @@ def set_advance_account(conn, args):
         "column": column, "account_id": acct_id})
 
 
+def _authorization_phase(conn):
+    """Open a read transaction, read the install phase, then roll back in
+    every case. A read takes no write lock, so it also runs on read-only
+    storage."""
+    from erpclaw_lib import authority_gate as _gate
+    _gate.open_read_transaction(conn)
+    try:
+        phase, _install_id = _gate.install_phase(conn)
+    finally:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    return phase
+
+
+def _authorized_argv(args):
+    """Parse --authorized-args as a JSON array of strings."""
+    import json as _json
+    raw = getattr(args, "authorized_args", None)
+    if not isinstance(raw, str):
+        err("AUTHORIZATION_INPUT_INVALID")
+    try:
+        parsed = _json.loads(raw)
+    except Exception:
+        err("AUTHORIZATION_INPUT_INVALID")
+    if type(parsed) is not list:
+        err("AUTHORIZATION_INPUT_INVALID")
+    for item in parsed:
+        if type(item) is not str:
+            err("AUTHORIZATION_INPUT_INVALID")
+    return parsed
+
+
+def issue_authorization(conn, args):
+    """Issue one single-use authorization while the install is staged."""
+    from erpclaw_lib import authority_gate as _gate
+    from erpclaw_lib import authorization_issuance as _issuance
+    if _authorization_phase(conn) == "ACTIVE":
+        err("AUTHORIZATION_ISSUER_UNAVAILABLE")
+    try:
+        result = _issuance.issue_envelope(
+            conn,
+            principal_id=getattr(args, "principal_id", None),
+            delegation_id=getattr(args, "delegation_id", None),
+            action=getattr(args, "authorized_action", None),
+            argv=_authorized_argv(args),
+            reason_code=getattr(args, "reason_code", None),
+            reason_text=getattr(args, "reason_text", None),
+            idempotency_key=getattr(args, "authorization_key",
+                                    None),
+            call_id=getattr(args, "call_id", None),
+            lifetime_ms=getattr(args, "lifetime_ms", None))
+    except _gate.AuthorityRefusal as refused:
+        err(refused.args[0] if refused.args else "AUTHORIZATION_REFUSED")
+    except ValueError as invalid:
+        err(invalid.args[0] if invalid.args
+            else "AUTHORIZATION_INPUT_INVALID")
+    ok(result)
+
+
+def revoke_authorization(conn, args):
+    """Revoke one single-use authorization while the install is staged."""
+    from erpclaw_lib import authority_gate as _gate
+    from erpclaw_lib import authorization_issuance as _issuance
+    if _authorization_phase(conn) == "ACTIVE":
+        err("AUTHORIZATION_ISSUER_UNAVAILABLE")
+    try:
+        result = _issuance.revoke_envelope(
+            conn,
+            authorization_id=getattr(args, "envelope_id", None))
+    except _gate.AuthorityRefusal as refused:
+        err(refused.args[0] if refused.args else "AUTHORIZATION_REFUSED")
+    except ValueError as invalid:
+        err(invalid.args[0] if invalid.args
+            else "AUTHORIZATION_INPUT_INVALID")
+    ok(result)
+
+
+def get_authorization(conn, args):
+    """Read one single-use authorization while the install is staged."""
+    from erpclaw_lib import authority_gate as _gate
+    from erpclaw_lib import authorization_issuance as _issuance
+    if _authorization_phase(conn) == "ACTIVE":
+        err("AUTHORIZATION_ISSUER_UNAVAILABLE")
+    try:
+        result = _issuance.get_envelope(
+            conn,
+            authorization_id=getattr(args, "envelope_id", None))
+    except _gate.AuthorityRefusal as refused:
+        err(refused.args[0] if refused.args else "AUTHORIZATION_REFUSED")
+    except ValueError as invalid:
+        err(invalid.args[0] if invalid.args
+            else "AUTHORIZATION_INPUT_INVALID")
+    ok(result)
+
+
 ACTIONS = {
     "initialize-database": initialize_database,
     "migrate": migrate_action,
@@ -2828,12 +3475,20 @@ ACTIONS = {
     "list-roles": list_roles,
     "assign-role": assign_role,
     "revoke-role": revoke_role,
+    "grant-company-membership": grant_company_membership,
+    "deny-company-membership": deny_company_membership,
+    "revoke-company-membership": revoke_company_membership,
+    "list-company-memberships": list_company_memberships,
+    "reconcile-legacy-company-scope": reconcile_legacy_company_scope,
     "set-password": set_password,
     "seed-permissions": seed_permissions,
     "link-telegram-user": link_telegram_user,
     "unlink-telegram-user": unlink_telegram_user,
     "check-telegram-permission": check_telegram_permission,
     "onboarding-step": onboarding_step,
+    "issue-authorization": issue_authorization,
+    "revoke-authorization": revoke_authorization,
+    "get-authorization": get_authorization,
 }
 
 
@@ -2930,6 +3585,8 @@ def main():
 
     # RBAC flags
     parser.add_argument("--user-id", default=None)
+    parser.add_argument("--principal-id", default=None)
+    parser.add_argument("--effect", default=None)
     parser.add_argument("--email", default=None)
     parser.add_argument("--full-name", default=None)
     parser.add_argument("--user-status", default=None)
@@ -2991,6 +3648,17 @@ def main():
     parser.add_argument("--confirm", action="store_true", default=False,
                         help="Custom field: confirm destructive removal of a field with stored values")
 
+    # Single-use authorization flags (issue/revoke/get-authorization); --principal-id is the RBAC flag above
+    parser.add_argument("--delegation-id", default=None)
+    parser.add_argument("--authorized-action", default=None)
+    parser.add_argument("--authorized-args", default=None)
+    parser.add_argument("--reason-code", default=None)
+    parser.add_argument("--reason-text", default=None)
+    parser.add_argument("--authorization-key", default=None)
+    parser.add_argument("--call-id", default=None)
+    parser.add_argument("--lifetime-ms", type=int, default=None)
+    parser.add_argument("--envelope-id", default=None)
+
     args, unknown = parser.parse_known_args()
     check_unknown_args(parser, unknown)
     check_input_lengths(args)
@@ -3013,8 +3681,7 @@ def main():
         return
 
     # Connect to database
-    db_path = args.db_path or DEFAULT_DB_PATH
-    ensure_db_exists(db_path)
+    db_path = getattr(args, "db_path", None)   # None unless --db-path was given
     conn = get_connection(db_path)
 
     try:

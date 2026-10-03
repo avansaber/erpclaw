@@ -13,12 +13,14 @@ connection settings applied for the active dialect:
     placeholders to psycopg2's ``%s`` so existing call sites work unchanged.
 
 Dialect is selected by ``ERPCLAW_DB_DIALECT`` (``sqlite`` | ``postgresql``).
-The Postgres connection URL is resolved from the ``db_path`` argument,
-``ERPCLAW_DB_URL``, or ``ERPCLAW_DB_PATH`` (mirrors the migration runner).
+The Postgres connection URL is resolved from the ``db_path`` argument, then ``ERPCLAW_DB_URL``, then ``ERPCLAW_DB_PATH``. The migration runner resolves its own target in a different order (``ERPCLAW_DB_URL`` first) and passes that target explicitly.
+
+When ``ERPCLAW_DB_READONLY`` is set to ``1``, every connection opened here refuses writes and creates nothing on disk or on the server. On SQLite, "creates nothing" holds for a rollback-journal (DELETE mode) file or a file on a read-only mount: a ``mode=ro`` open of a WAL-mode file in a writable directory may still create its ``-shm`` side file. PostgreSQL's read-only session setting can be reversed by SQL on the same connection, so a PostgreSQL source for a read-only session needs a role without write grants as well. Unset or empty keeps today's behaviour, and any other value is a configuration error that refuses the connection without echoing the value.
 """
 import os
 import sqlite3
 import stat
+import sys
 import time
 from decimal import Decimal
 
@@ -32,9 +34,59 @@ from erpclaw_lib.paths import db_default
 DEFAULT_DB_PATH = db_default()
 
 
+def integrity_error_types():
+    """Return integrity-error classes for the active dialect.
+
+    Returns a tuple holding SQLite's integrity-error class always, plus
+    the PostgreSQL driver's integrity-error class only when the active
+    dialect is PostgreSQL (imported inside the function, so importing
+    this module never pulls in the driver on other backends). Product
+    code catches the returned tuple to refuse unique violations with one
+    portable handler that stays narrower than the base error class.
+    """
+    if get_dialect() == "postgresql":
+        import psycopg2
+        return (sqlite3.IntegrityError, psycopg2.IntegrityError)
+    return (sqlite3.IntegrityError,)
+
+
 def get_dialect():
     """Return the configured database dialect."""
     return os.environ.get("ERPCLAW_DB_DIALECT", "sqlite")
+
+
+def readonly_requested() -> bool:
+    """Whether the process asked for read-only storage."""
+    value = os.environ.get("ERPCLAW_DB_READONLY")
+    if value is None or value == "":
+        return False
+    if value == "1":
+        return True
+    raise RuntimeError("ERPCLAW_DB_READONLY must be unset or 1")
+
+
+def readonly_sqlite_uri(path) -> str:
+    """The ``file:...?mode=ro`` URI for a SQLite path, percent-encoded.
+
+    Encoding the absolute filesystem path keeps spaces, ``?``, ``#`` and
+    ``%`` in a name from reshaping the URI or adding parameters.
+    """
+    from urllib.parse import quote as _quote
+    absolute = os.path.abspath(os.fspath(path))
+    return "file:" + _quote(absolute, safe="/") + "?mode=ro"
+
+
+def _apply_readonly(conn) -> None:
+    """Apply the read-only setting to an open connection."""
+    if get_dialect() == "postgresql":
+        cur = conn.cursor() if hasattr(conn, "cursor") else conn
+        try:
+            cur.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
+        finally:
+            if cur is not conn:
+                cur.close()
+    else:
+        conn.execute("PRAGMA query_only=ON")
 
 
 def db_error_types():
@@ -65,6 +117,119 @@ def db_error_types():
     return (sqlite3.OperationalError,), sqlite3.Error
 
 
+def db_integrity_error(conn=None):
+    """Return the integrity-error class for the connection in use.
+
+    Prefers the DB-API connection attribute (``conn.IntegrityError``), which
+    both connection wrappers pass through to the underlying driver, so the
+    caller catches exactly what its own connection raises. Falls back to the
+    active dialect's driver class, chosen the way :func:`db_error_types`
+    chooses (PostgreSQL driver imported lazily), when no connection is given
+    or it exposes no such attribute.
+    """
+    if conn is not None:
+        try:
+            return conn.IntegrityError
+        except AttributeError:
+            pass
+    if get_dialect() == "postgresql":
+        from psycopg2 import IntegrityError as _PgIntegrityError
+        return _PgIntegrityError
+    return sqlite3.IntegrityError
+
+
+def is_lock_conflict(exc):
+    """Whether an exception is a lock conflict with nothing written.
+
+    True for a PostgreSQL deadlock or lock-not-available error and for
+    SQLite's locked-database error, false otherwise. PostgreSQL errors
+    are recognised through the driver's error classes, imported lazily
+    the way the other helpers here import the driver, so importing this
+    module never pulls in the driver on other backends.
+    """
+    try:
+        from psycopg2 import errors as _pg_errors
+        if isinstance(exc, (_pg_errors.DeadlockDetected,
+                            _pg_errors.LockNotAvailable)):
+            return True
+    except ImportError:
+        pass
+    if isinstance(exc, sqlite3.OperationalError):
+        return "database is locked" in str(exc).lower()
+    return False
+
+
+_READONLY_REFUSED = ("This session is read-only; the action needed to write, "
+                     "so nothing was written.")
+_READONLY_FILE = ("The database refused the write because it is read-only; "
+                  "nothing was written.")
+_UNEXPECTED = "An unexpected error occurred"
+# PostgreSQL's SQLSTATE for "cannot execute ... in a read-only transaction".
+_PG_READ_ONLY_SQL_TRANSACTION = "25006"
+
+
+def is_readonly_refusal(exc):
+    """Whether an exception is the database refusing a write in read-only mode.
+
+    True for SQLite's read-only refusal (result code SQLITE_READONLY or any
+    of its extended codes; "attempt to write a readonly database") and for
+    PostgreSQL's read-only transaction error (by class or by SQLSTATE 25006),
+    false otherwise. A PostgreSQL error can only exist once its driver is
+    loaded, so the driver is looked up among loaded modules and never
+    imported here.
+    """
+    if "psycopg2" in sys.modules:
+        _pg_errors = sys.modules.get("psycopg2.errors")
+        if _pg_errors is not None and isinstance(
+                exc, _pg_errors.ReadOnlySqlTransaction):
+            return True
+        if getattr(exc, "pgcode", None) == _PG_READ_ONLY_SQL_TRANSACTION:
+            return True
+    if isinstance(exc, sqlite3.OperationalError):
+        # By result code where the driver gives one (Python 3.11+: the
+        # primary code is the low byte of the extended one), by SQLite's
+        # message otherwise, so a rewording cannot hide the refusal.
+        code = getattr(exc, "sqlite_errorcode", None)
+        if code is not None and code & 0xFF == sqlite3.SQLITE_READONLY:
+            return True
+        return "readonly database" in str(exc).lower()
+    return False
+
+
+def unexpected_error_message(exc):
+    """The message a domain script's last-resort handler prints for ``exc``.
+
+    A read-only refusal is named as such: as the session's when the process
+    asked for read-only storage, otherwise as the database's own (a
+    read-only file or server). Anything else keeps the generic message, so
+    no internal detail reaches the answer.
+    """
+    if is_readonly_refusal(exc):
+        try:
+            session = readonly_requested()
+        except RuntimeError:
+            session = False
+        return _READONLY_REFUSED if session else _READONLY_FILE
+    return _UNEXPECTED
+
+
+def _enable_wal(conn) -> None:
+    """Switch a writable SQLite connection to WAL, unless the file is read-only.
+
+    A database file this process cannot write (a 0444 file, or one owned by
+    another user) is opened read-only by the driver for the life of the
+    handle, and SQLite refuses the journal-mode change on it. Such a file keeps
+    its own journal mode: reads answer as they would from a WAL file, and
+    every write is refused by the database, which the domain scripts'
+    last-resort handlers name as a read-only file. Any other error is raised.
+    """
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.OperationalError as exc:
+        if not is_readonly_refusal(exc):
+            raise
+
+
 def setup_pragmas(conn):
     """Apply vendor-specific connection settings.
 
@@ -78,13 +243,23 @@ def setup_pragmas(conn):
       ``ERPCLAW_PG_STATEMENT_TIMEOUT``.
     Supported backends are SQLite and PostgreSQL only (MySQL ruled out
     2026-08-11 — see erpclaw_lib/query.py's SUPPORTED_DIALECTS note).
+
+    When read-only mode is requested, the SQLite branch keeps foreign-key and
+    busy-timeout settings but skips the journal-mode change, then applies the
+    connection-local read-only setting. The PostgreSQL branch applies its
+    timeouts first and then applies the session read-only setting.
     """
     dialect = get_dialect()
     if dialect == "sqlite":
-        conn.execute("PRAGMA journal_mode=WAL")
+        read_only = readonly_requested()
+        if not read_only:
+            _enable_wal(conn)
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA busy_timeout=5000")
+        if read_only:
+            _apply_readonly(conn)
     elif dialect == "postgresql":
+        read_only = readonly_requested()
         lock_timeout = os.environ.get("ERPCLAW_PG_LOCK_TIMEOUT", "5s")
         statement_timeout = os.environ.get("ERPCLAW_PG_STATEMENT_TIMEOUT", "0")
         cur = conn.cursor() if hasattr(conn, 'cursor') else conn
@@ -94,6 +269,8 @@ def setup_pragmas(conn):
         finally:
             if cur is not conn:
                 cur.close()
+        if read_only:
+            _apply_readonly(conn)
 
 
 class _DecimalSum:
@@ -115,6 +292,25 @@ class _DecimalSum:
 
     def finalize(self):
         return str(self.total)
+
+
+LEDGER_SINK_NAMES = frozenset({
+    "gl_entry",
+    "gl_chain_head",
+    "stock_ledger_entry",
+    "stock_fifo_layer",
+    "payment_ledger_entry",
+})
+
+
+def _check_ledger_write(wrapper, sql):
+    text = sql if isinstance(sql, str) else str(sql)
+    low = text.lower()
+    if "u&\"" not in low and not any(
+            name in low for name in LEDGER_SINK_NAMES):
+        return
+    import erpclaw_lib.authority_sink as _authority_sink
+    _authority_sink.check_statement(wrapper, sql)
 
 
 class ConnectionWrapper:
@@ -143,10 +339,41 @@ class ConnectionWrapper:
         return self
 
     def __exit__(self, *args):
-        return self._conn.__exit__(*args)
+        import erpclaw_lib.authority_sink as _authority_sink
+        return _authority_sink.exit_wrapper(self, args)
 
     def __call__(self, *args, **kwargs):
         return self._conn(*args, **kwargs)
+
+    def execute(self, sql, *args):
+        import erpclaw_lib.authority_sink as _authority_sink
+        _authority_sink.guard_statement(self, sql)
+        _check_ledger_write(self, sql)
+        return self._conn.execute(sql, *args)
+
+    def executemany(self, sql, *args):
+        import erpclaw_lib.authority_sink as _authority_sink
+        _authority_sink.guard_statement(self, sql)
+        _check_ledger_write(self, sql)
+        return self._conn.executemany(sql, *args)
+
+    def executescript(self, script):
+        import erpclaw_lib.authority_sink as _authority_sink
+        _authority_sink.guard_statement(self, script)
+        _authority_sink.check_executescript(self, script)
+        return self._conn.executescript(script)
+
+    def commit(self):
+        import erpclaw_lib.authority_sink as _authority_sink
+        return _authority_sink.commit_wrapper(self)
+
+    def rollback(self):
+        import erpclaw_lib.authority_sink as _authority_sink
+        return _authority_sink.rollback_wrapper(self)
+
+    def close(self):
+        import erpclaw_lib.authority_sink as _authority_sink
+        return _authority_sink.close_wrapper(self)
 
 
 def _qmark_to_pyformat(sql: str) -> str:
@@ -224,6 +451,9 @@ class PgConnectionWrapper:
         object.__setattr__(self, "_conn", conn)
 
     def execute(self, sql, params=None):
+        import erpclaw_lib.authority_sink as _authority_sink
+        _authority_sink.guard_statement(self, sql)
+        _check_ledger_write(self, sql)
         cur = self._conn.cursor()
         if params is None:
             cur.execute(sql)
@@ -232,6 +462,9 @@ class PgConnectionWrapper:
         return cur
 
     def executemany(self, sql, seq_of_params):
+        import erpclaw_lib.authority_sink as _authority_sink
+        _authority_sink.guard_statement(self, sql)
+        _check_ledger_write(self, sql)
         cur = self._conn.cursor()
         cur.executemany(_qmark_to_pyformat(sql), seq_of_params)
         return cur
@@ -250,7 +483,31 @@ class PgConnectionWrapper:
         return self
 
     def __exit__(self, *args):
-        return self._conn.__exit__(*args)
+        import erpclaw_lib.authority_sink as _authority_sink
+        return _authority_sink.exit_wrapper(self, args)
+
+    def commit(self):
+        import erpclaw_lib.authority_sink as _authority_sink
+        return _authority_sink.commit_wrapper(self)
+
+    def rollback(self):
+        import erpclaw_lib.authority_sink as _authority_sink
+        return _authority_sink.rollback_wrapper(self)
+
+    def close(self):
+        import erpclaw_lib.authority_sink as _authority_sink
+        return _authority_sink.close_wrapper(self)
+
+
+# Transaction-scoped advisory lock serialising first-time creation of the
+# ``decimal_sum`` aggregate and its ``erpclaw_decimal_sum_sfunc`` /
+# ``erpclaw_decimal_sum_ffunc`` support functions: concurrent first connects to
+# a fresh schema must never fail with ``tuple concurrently updated``
+# (concurrent ``CREATE OR REPLACE`` of the same function) or a duplicate-object
+# error (both passing the existence check, both creating the aggregate). Taken
+# with ``pg_advisory_xact_lock`` inside a single transaction, so the commit
+# releases it.
+_PG_DECIMAL_SUM_SETUP_LOCK = 4820471820369641307
 
 
 def _ensure_pg_decimal_sum(conn) -> None:
@@ -265,44 +522,79 @@ def _ensure_pg_decimal_sum(conn) -> None:
     The aggregate sums each value as ``numeric`` (exact, no float drift) and
     returns the total as TEXT, matching the SQLite ``_DecimalSum.finalize``
     contract so call sites can keep doing ``to_decimal(str(row["total"]))``.
-    Idempotent and race-tolerant: the support functions use
-    ``CREATE OR REPLACE`` and the aggregate is guarded by an existence check.
+    Fast path: one search-path-scoped existence read
+    (``to_regprocedure('decimal_sum(text)')``); when the aggregate is already
+    registered no DDL runs at all. Slow path: under a transaction-scoped
+    advisory lock the existence read is repeated and only the winner creates
+    the two support functions (``CREATE OR REPLACE``, same bodies) and the
+    aggregate (same definition); the commit releases the lock. The DDL runs
+    inside a savepoint so a loser whose re-check raced a winner's commit
+    (``to_regprocedure`` can keep reporting a just-superseded answer inside
+    the loser's transaction) turns its duplicate-object error into success
+    instead of failing the connect; any other error still propagates.
     """
+    import psycopg2
     cur = conn.cursor()
     try:
         cur.execute(
-            """
-            CREATE OR REPLACE FUNCTION erpclaw_decimal_sum_sfunc(numeric, text)
-            RETURNS numeric LANGUAGE sql IMMUTABLE AS
-            $$ SELECT $1 + COALESCE($2::numeric, 0) $$;
-            """
+            "SELECT to_regprocedure('decimal_sum(text)') IS NOT NULL"
+        )
+        row = cur.fetchone()
+        if row is not None and row[0]:
+            conn.commit()
+            return
+        # End the fast-path read here (commit, never rollback: the
+        # transaction also carries setup_pragmas' SETs, which a rollback
+        # would undo). The slow path below must start a fresh transaction:
+        # to_regprocedure() keeps reporting whatever was committed before
+        # its transaction's first catalog read, so re-checking in this same
+        # transaction would repeat the fast path's answer and miss a winner
+        # that committed while waiting on the lock.
+        conn.commit()
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(%d)" % _PG_DECIMAL_SUM_SETUP_LOCK
         )
         cur.execute(
-            """
-            CREATE OR REPLACE FUNCTION erpclaw_decimal_sum_ffunc(numeric)
-            RETURNS text LANGUAGE sql IMMUTABLE AS
-            $$ SELECT $1::text $$;
-            """
+            "SELECT to_regprocedure('decimal_sum(text)') IS NOT NULL"
         )
-        cur.execute(
-            """
-            DO $do$
-            BEGIN
-              IF NOT EXISTS (
-                SELECT 1 FROM pg_proc
-                WHERE proname = 'decimal_sum' AND prokind = 'a'
-              ) THEN
+        row = cur.fetchone()
+        if row is not None and row[0]:
+            conn.commit()
+            return
+        cur.execute("SAVEPOINT erpclaw_decimal_sum_setup")
+        try:
+            cur.execute(
+                """
+                CREATE OR REPLACE FUNCTION erpclaw_decimal_sum_sfunc(numeric, text)
+                RETURNS numeric LANGUAGE sql IMMUTABLE AS
+                $$ SELECT $1 + COALESCE($2::numeric, 0) $$;
+                """
+            )
+            cur.execute(
+                """
+                CREATE OR REPLACE FUNCTION erpclaw_decimal_sum_ffunc(numeric)
+                RETURNS text LANGUAGE sql IMMUTABLE AS
+                $$ SELECT $1::text $$;
+                """
+            )
+            cur.execute(
+                """
                 CREATE AGGREGATE decimal_sum(text) (
                   sfunc = erpclaw_decimal_sum_sfunc,
                   stype = numeric,
                   finalfunc = erpclaw_decimal_sum_ffunc,
                   initcond = '0'
                 );
-              END IF;
-            END
-            $do$;
-            """
-        )
+                """
+            )
+        except (psycopg2.errors.DuplicateObject,
+                psycopg2.errors.DuplicateFunction):
+            # A concurrent first connect created and committed the aggregate
+            # after our re-check ran: the duplicate itself proves the desired
+            # end state exists, so discard our redundant rewrites and report
+            # success. Anything else (notably a concurrent catalog rewrite
+            # surfacing as tuple-concurrently-updated) still propagates.
+            cur.execute("ROLLBACK TO SAVEPOINT erpclaw_decimal_sum_setup")
         conn.commit()
     finally:
         cur.close()
@@ -311,9 +603,7 @@ def _ensure_pg_decimal_sum(conn) -> None:
 def _resolve_pg_url(db_path=None) -> str:
     """Resolve the PostgreSQL connection URL for the active config.
 
-    Precedence mirrors the migration runner (``db_path or ERPCLAW_DB_URL``),
-    with ``ERPCLAW_DB_PATH`` accepted as a final fallback so a single
-    ``ERPCLAW_DB_PATH=postgresql://...`` works end-to-end. Raises if none is set.
+    Precedence: the ``db_path`` argument, then ``ERPCLAW_DB_URL``, then ``ERPCLAW_DB_PATH``, so a single ``ERPCLAW_DB_PATH=postgresql://...`` works end-to-end. The migration runner puts ``ERPCLAW_DB_URL`` first and passes its resolved target explicitly. Raises if none is set.
     """
     url = db_path or os.environ.get("ERPCLAW_DB_URL") or os.environ.get("ERPCLAW_DB_PATH")
     if not url:
@@ -322,6 +612,18 @@ def _resolve_pg_url(db_path=None) -> str:
             "(set ERPCLAW_DB_URL or pass db_path)."
         )
     return url
+
+
+def require_pg_url(target, *, source):
+    """Refuse a PostgreSQL target that is not a URL, before any connection."""
+    if isinstance(target, str) and (target.startswith("postgresql://")
+                                     or target.startswith("postgres://")):
+        return target
+    raise RuntimeError(
+        "PostgreSQL target from %s is not a postgresql:// URL; use the URL form,"
+        " for example postgresql:///<database>?host=<socket directory>."
+        " A libpq keyword string (dbname=... host=...) is not accepted here." % (source,)
+    )
 
 
 def _pg_connect_with_retry(psycopg2, url, *, cursor_factory, attempts=4):
@@ -392,35 +694,152 @@ def get_connection(db_path=None):
 
     Returns:
         ConnectionWrapper (SQLite) or PgConnectionWrapper (PostgreSQL).
+
+    When read-only mode is requested, SQLite refuses with FileNotFoundError
+    unless the file already exists and never creates directories or changes
+    permissions. PostgreSQL connections skip the server-side aggregate
+    registration and are handed back idle in read-only mode.
     """
     if get_dialect() == "postgresql":
         import psycopg2
         from psycopg2.extras import DictCursor
         url = _resolve_pg_url(db_path)
+        read_only = readonly_requested()
         conn = _pg_connect_with_retry(psycopg2, url, cursor_factory=DictCursor)
         setup_pragmas(conn)
         # Mirror the SQLite create_aggregate registration: ensure the
         # decimal_sum() SQL aggregate exists for exact financial sums.
-        _ensure_pg_decimal_sum(conn)
+        if not read_only:
+            _ensure_pg_decimal_sum(conn)
         # SET lock_timeout/statement_timeout opened an implicit transaction;
         # commit so the connection is handed back idle, not in-transaction.
         conn.commit()
         return PgConnectionWrapper(conn)
 
     path = db_path or os.environ.get("ERPCLAW_DB_PATH", DEFAULT_DB_PATH)
-    ensure_db_exists(path)
-    is_new = not os.path.exists(path)
-    conn = sqlite3.connect(path)
+    read_only = readonly_requested()
+    if read_only:
+        _reject_url_shaped_path(path)
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                "database file does not exist and ERPCLAW_DB_READONLY=1 "
+                "refuses to create it: %s" % path
+            )
+        is_new = False
+        # Read-only storage opens through a mode=ro URI, so the driver itself
+        # refuses every write on this handle; query_only below stays as the
+        # second, connection-local guard.
+        target, as_uri = readonly_sqlite_uri(path), True
+    else:
+        ensure_db_exists(path)
+        is_new = not os.path.exists(path)
+        target, as_uri = path, False
+    conn = sqlite3.connect(target, uri=as_uri)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    if not read_only:
+        _enable_wal(conn)
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.create_aggregate("decimal_sum", 1, _DecimalSum)
+    if read_only:
+        _apply_readonly(conn)
     if is_new:
         try:
             os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)  # 0o600
         except OSError:
             pass  # non-fatal on some platforms
+    return ConnectionWrapper(conn)
+
+
+def get_readonly_connection(db_path):
+    """Open an existing SQLite file read-only for observation.
+
+    The path argument is required and must name an existing regular file.
+    Nothing is created: no directory is made, no permission bit is touched,
+    and no environment variable or compiled-in default location is consulted.
+    Empty values, in-memory database names, directory paths, and URL- or
+    URI-shaped values are refused before any driver call, without echoing
+    the supplied value when it could carry credentials. A PostgreSQL dialect
+    selection is refused before its driver is imported; this entry point is
+    SQLite-only by contract.
+
+    The file is opened through a read-only URI with the filesystem path
+    percent-encoded, so spaces, non-ASCII names, and reserved characters
+    cannot alter the URI structure or inject extra URI parameters. The
+    handle carries a connection-local query-only guard and a row factory
+    matching the observation checks. No directory setup, permission change,
+    journal-mode switch, checkpoint, commit, aggregate registration, engine
+    use, or provisioning helper runs here; the regular write-path entry
+    point is unchanged.
+
+    This is a trusted-observer handle for first-party inspection helpers.
+    It is not a sandbox for untrusted statements or untrusted code; do not
+    hand it to an untrusted agent.
+
+    SQLite may still need the database sidecar files to be present alongside
+    the main file, or may place coordination sidecars on an ordinary writable
+    directory while reading. Zero filesystem change is qualified only for a
+    separately sealed, consistent fixture with usable existing sidecars.
+    """
+    # Dialect gate first: refuse before any driver import or open attempt.
+    if get_dialect() == "postgresql":
+        raise RuntimeError(
+            "get_readonly_connection is SQLite-only: refusing a PostgreSQL "
+            "dialect selection before any driver import or open attempt."
+        )
+    if get_dialect() != "sqlite":
+        raise RuntimeError(
+            "get_readonly_connection does not support this dialect."
+        )
+    if db_path is None:
+        raise ValueError("get_readonly_connection requires a database path.")
+    raw = db_path
+    if isinstance(db_path, os.PathLike):
+        raw = os.fspath(db_path)
+    if isinstance(raw, bytes):
+        raw = os.fsdecode(raw)
+    if not isinstance(raw, str):
+        raise TypeError("get_readonly_connection requires a path string.")
+    if raw == "" or raw.strip() == "":
+        raise ValueError("get_readonly_connection requires a database path.")
+    path_value = raw
+    if path_value.strip() == ":memory:":
+        raise ValueError(
+            "get_readonly_connection refuses an in-memory database name."
+        )
+    # URI-shaped values are refused without echoing the value itself, which
+    # may carry credentials. The shared helper covers scheme URLs; the file
+    # scheme needs its own check because it is not in the helper set.
+    if ":" in path_value and path_value.split(":", 1)[0].lower() == "file":
+        raise ValueError(
+            "get_readonly_connection requires a filesystem path, not a URI."
+        )
+    _reject_url_shaped_path(path_value)
+    if os.path.isdir(path_value):
+        raise IsADirectoryError(
+            "get_readonly_connection requires a regular file: %r is a "
+            "directory." % (path_value,)
+        )
+    if not os.path.isfile(path_value):
+        raise FileNotFoundError(
+            "read-only database file does not exist: %s" % (path_value,)
+        )
+    from urllib.parse import quote as _quote
+    absolute = os.path.abspath(path_value)
+    # Owner read path: percent-encode the filesystem location so reserved
+    # characters cannot reshape the URI, then open strictly read-only.
+    uri = "file:" + _quote(absolute, safe="/") + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    try:
+        conn.row_factory = sqlite3.Row
+        # Owner read guard: connection-local query-only defense.
+        conn.execute("PRAGMA query_only=ON")
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        raise
     return ConnectionWrapper(conn)
 
 

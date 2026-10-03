@@ -20,18 +20,18 @@ try:
     import importlib.util
     if importlib.util.find_spec("erpclaw_lib") is None:
         sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
-    from erpclaw_lib.db import get_connection, ensure_db_exists, DEFAULT_DB_PATH
+    from erpclaw_lib.db import get_connection
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.validation import check_input_lengths
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.dependencies import check_required_tables
-    from erpclaw_lib.query_helpers import resolve_company_id
+    from erpclaw_lib.query_helpers import resolve_company_id, resolve_scope_company
     from erpclaw_lib.voucher_types import canonical_voucher_type
     # Aliased: this module already has a `party_ledger` ACTION function (the
     # `party-ledger` report at :1049), and a bare import would be shadowed by it.
     from erpclaw_lib import party_ledger as party_ledger_rules
-    from erpclaw_lib.query import Q, P, Table, Field, fn, DecimalSum, DecimalAbs, json_get
+    from erpclaw_lib.query import Q, P, Table, Field, Case, fn, DecimalSum, DecimalAbs, json_get
     from erpclaw_lib.vendor.pypika import Order
     from erpclaw_lib.vendor.pypika.terms import LiteralValue
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
@@ -42,6 +42,10 @@ except ImportError:
 
 
 REQUIRED_TABLES = ["company", "account", "gl_entry"]
+
+# Closing vouchers zero income/expense into retained earnings. They are a
+# bookkeeping transfer, not activity, so the P&L-shaped reports exclude them.
+_CLOSING_VOUCHER_TYPE = "period_closing"
 
 
 # ---------------------------------------------------------------------------
@@ -263,16 +267,17 @@ def _grouped_pl(conn, company_id, key, from_date, to_date, dim_clause, dim_param
         "FROM account a "
         "LEFT JOIN gl_entry g ON g.account_id = a.id "
         "  AND g.posting_date >= ? AND g.posting_date <= ? "
-        "  AND g.is_cancelled = 0" + dim_clause + " "
+        "  AND g.is_cancelled = 0" + dim_clause + " AND g.voucher_type <> ? "
         "WHERE a.company_id = ? AND a.root_type IN ('income', 'expense') "
         "  AND a.is_group = 0 "
         "GROUP BY " + bucket_expr + ", a.root_type "
         "ORDER BY dim_value"
     )
     # Param order mirrors the textual ?-order: SELECT bucket default, JOIN dates +
-    # dim filter, WHERE company, GROUP BY bucket default.
+    # dim filter + closing-type exclusion, WHERE company, GROUP BY bucket default.
     params = ([_UNTAGGED_BUCKET, from_date, to_date]
-              + list(dim_params) + [company_id, _UNTAGGED_BUCKET])
+              + list(dim_params) + [_CLOSING_VOUCHER_TYPE, company_id,
+                                    _UNTAGGED_BUCKET])
     rows = conn.execute(sql, params).fetchall()
 
     # Fold the (value, root_type) rows into per-value {revenue, expenses}.
@@ -357,56 +362,59 @@ def profit_and_loss(conn, args):
     proj_params = proj_params + tuple(_dim_params)
 
     # Raw SQL: too complex for PyPika, readability preserved
-    # (COALESCE(decimal_sum(...)) arithmetic in SELECT, LEFT JOIN with date range in ON clause,
-    #  HAVING on computed alias — PyPika doesn't support HAVING on aliased expressions cleanly)
-    # CAST(... AS NUMERIC): PostgreSQL has no implicit text arithmetic and
-    # decimal_sum returns TEXT on both backends. The amount expression is
-    # repeated in HAVING because PG (unlike SQLite) disallows a SELECT-list
-    # alias in HAVING.
-    income_amount_expr = (
-        "CAST(COALESCE(decimal_sum(g.credit), '0') AS NUMERIC) "
-        "- CAST(COALESCE(decimal_sum(g.debit), '0') AS NUMERIC)"
-    )
+    # (LEFT JOIN with date range in ON clause). Each leg is fetched as text
+    # with the exact-decimal sum helper and subtracted in Python with
+    # Decimal: decimal_sum returns TEXT on both backends, and subtracting
+    # (or casting) the text sums inside the SQL goes through a binary float
+    # on SQLite and is rejected on PostgreSQL. Exact-zero nets are dropped
+    # in Python, so there is no HAVING for PG to reject.
     income_rows = conn.execute(
         f"""SELECT a.id, a.name, a.account_number,
-                  {income_amount_expr} as amount
+                  COALESCE(decimal_sum(g.credit), '0') as total_credit,
+                  COALESCE(decimal_sum(g.debit), '0') as total_debit
            FROM account a
            LEFT JOIN gl_entry g ON g.account_id = a.id
                AND g.posting_date >= ? AND g.posting_date <= ?
-               AND g.is_cancelled = 0{proj_join_clause}
+               AND g.is_cancelled = 0 AND g.voucher_type <> ?{proj_join_clause}
            WHERE a.company_id = ? AND a.root_type = 'income' AND a.is_group = 0
            GROUP BY a.id
-           HAVING {income_amount_expr} != 0
            ORDER BY a.account_number, a.name""",
-        (args.from_date, args.to_date) + proj_params + (company_id,),
+        (args.from_date, args.to_date, _CLOSING_VOUCHER_TYPE) + proj_params + (company_id,),
     ).fetchall()
 
     # Raw SQL: too complex for PyPika, readability preserved
-    expense_amount_expr = (
-        "CAST(COALESCE(decimal_sum(g.debit), '0') AS NUMERIC) "
-        "- CAST(COALESCE(decimal_sum(g.credit), '0') AS NUMERIC)"
-    )
     expense_rows = conn.execute(
         f"""SELECT a.id, a.name, a.account_number,
-                  {expense_amount_expr} as amount
+                  COALESCE(decimal_sum(g.debit), '0') as total_debit,
+                  COALESCE(decimal_sum(g.credit), '0') as total_credit
            FROM account a
            LEFT JOIN gl_entry g ON g.account_id = a.id
                AND g.posting_date >= ? AND g.posting_date <= ?
-               AND g.is_cancelled = 0{proj_join_clause}
+               AND g.is_cancelled = 0 AND g.voucher_type <> ?{proj_join_clause}
            WHERE a.company_id = ? AND a.root_type = 'expense' AND a.is_group = 0
            GROUP BY a.id
-           HAVING {expense_amount_expr} != 0
            ORDER BY a.account_number, a.name""",
-        (args.from_date, args.to_date) + proj_params + (company_id,),
+        (args.from_date, args.to_date, _CLOSING_VOUCHER_TYPE) + proj_params + (company_id,),
     ).fetchall()
 
-    income = [{"account": r["name"], "account_id": r["id"], "amount": _s(_d(r["amount"]))}
-              for r in income_rows]
-    expenses = [{"account": r["name"], "account_id": r["id"], "amount": _s(_d(r["amount"]))}
-                for r in expense_rows]
-
-    income_total = sum(_d(r["amount"]) for r in income_rows)
-    expense_total = sum(_d(r["amount"]) for r in expense_rows)
+    income = []
+    income_total = Decimal("0")
+    for r in income_rows:
+        amt = _d(r["total_credit"]) - _d(r["total_debit"])
+        if amt == 0:
+            continue
+        income.append({"account": r["name"], "account_id": r["id"],
+                       "amount": _s(amt)})
+        income_total += amt
+    expenses = []
+    expense_total = Decimal("0")
+    for r in expense_rows:
+        amt = _d(r["total_debit"]) - _d(r["total_credit"])
+        if amt == 0:
+            continue
+        expenses.append({"account": r["name"], "account_id": r["id"],
+                         "amount": _s(amt)})
+        expense_total += amt
     net_income = income_total - expense_total
 
     ok({
@@ -451,11 +459,11 @@ def balance_sheet(conn, args):
 
     def _section(root_type, debit_positive=True):
         # Raw SQL: too complex for PyPika, readability preserved
-        # (LEFT JOIN with date filter in ON clause, HAVING on computed aliases)
+        # (LEFT JOIN with date filter in ON clause; no HAVING clause)
         # SELECT stays TEXT (decimal_sum's native return) so Python keeps doing
-        # the exact-Decimal subtraction in _section. HAVING repeats the sums
-        # wrapped in CAST(... AS NUMERIC): PG disallows a SELECT-list alias in
-        # HAVING and rejects the text<->int comparison the alias form relied on.
+        # the exact-Decimal subtraction in _section. The Python loop below
+        # already drops every account whose amount is zero, so no
+        # database-side zero-row filter is needed.
         rows = conn.execute(
             """SELECT a.id, a.name, a.account_number,
                       COALESCE(decimal_sum(g.debit), '0') as total_debit,
@@ -465,8 +473,6 @@ def balance_sheet(conn, args):
                    AND g.posting_date <= ? AND g.is_cancelled = 0""" + proj_join_clause + """
                WHERE a.company_id = ? AND a.root_type = ? AND a.is_group = 0
                GROUP BY a.id
-               HAVING CAST(COALESCE(decimal_sum(g.debit), '0') AS NUMERIC) != 0
-                   OR CAST(COALESCE(decimal_sum(g.credit), '0') AS NUMERIC) != 0
                ORDER BY a.account_number, a.name""",
             (args.as_of_date,) + proj_join_params + (company_id, root_type),
         ).fetchall()
@@ -506,28 +512,50 @@ def balance_sheet(conn, args):
     net_income_ytd = Decimal("0")
     if fy:
         fy_start = fy["start_date"]
-        # Raw SQL: too complex for PyPika, readability preserved
-        # (JOIN with subquery-style arithmetic, decimal_sum aggregates on cross-join result)
-        # CAST(... AS NUMERIC): decimal_sum returns TEXT; PG rejects text - text.
+        # Exact-decimal year-to-date totals: each leg is fetched as text with
+        # the exact-decimal sum helper (text '0' when there are no rows) and
+        # the legs are subtracted in Python with Decimal, so no binary float
+        # ever touches money. The optional project/dimension filters travel
+        # as bound parameters, exactly as before.
+        g_t = Table("gl_entry").as_("g")
+        a_t = Table("account").as_("a")
+        inc_q = (
+            Q.from_(g_t)
+            .join(a_t).on(a_t.id == g_t.account_id)
+            .select(
+                fn.Coalesce(DecimalSum(g_t.credit), "0").as_("total_credit"),
+                fn.Coalesce(DecimalSum(g_t.debit), "0").as_("total_debit"),
+            )
+            .where(a_t.company_id == P())
+            .where(a_t.root_type == "income")
+            .where(g_t.posting_date >= P())
+            .where(g_t.posting_date <= P())
+            .where(g_t.is_cancelled == 0)
+        )
         inc = conn.execute(
-            """SELECT CAST(COALESCE(decimal_sum(credit), '0') AS NUMERIC)
-                      - CAST(COALESCE(decimal_sum(debit), '0') AS NUMERIC) as amt
-               FROM gl_entry g JOIN account a ON a.id = g.account_id
-               WHERE a.company_id = ? AND a.root_type = 'income'
-               AND g.posting_date >= ? AND g.posting_date <= ?
-               AND g.is_cancelled = 0""" + proj_where_clause,
+            inc_q.get_sql() + proj_where_clause,
             (company_id, fy_start, args.as_of_date) + proj_where_params,
         ).fetchone()
+        exp_q = (
+            Q.from_(g_t)
+            .join(a_t).on(a_t.id == g_t.account_id)
+            .select(
+                fn.Coalesce(DecimalSum(g_t.debit), "0").as_("total_debit"),
+                fn.Coalesce(DecimalSum(g_t.credit), "0").as_("total_credit"),
+            )
+            .where(a_t.company_id == P())
+            .where(a_t.root_type == "expense")
+            .where(g_t.posting_date >= P())
+            .where(g_t.posting_date <= P())
+            .where(g_t.is_cancelled == 0)
+        )
         exp = conn.execute(
-            """SELECT CAST(COALESCE(decimal_sum(debit), '0') AS NUMERIC)
-                      - CAST(COALESCE(decimal_sum(credit), '0') AS NUMERIC) as amt
-               FROM gl_entry g JOIN account a ON a.id = g.account_id
-               WHERE a.company_id = ? AND a.root_type = 'expense'
-               AND g.posting_date >= ? AND g.posting_date <= ?
-               AND g.is_cancelled = 0""" + proj_where_clause,
+            exp_q.get_sql() + proj_where_clause,
             (company_id, fy_start, args.as_of_date) + proj_where_params,
         ).fetchone()
-        net_income_ytd = _d(inc["amt"]) - _d(exp["amt"])
+        income_total = _d(inc["total_credit"]) - _d(inc["total_debit"])
+        expense_total = _d(exp["total_debit"]) - _d(exp["total_credit"])
+        net_income_ytd = income_total - expense_total
 
     total_equity = total_equity_base + net_income_ytd
 
@@ -563,23 +591,25 @@ def cash_flow(conn, args):
     # Raw SQL: too complex for PyPika, readability preserved
     # (JOIN + decimal_sum arithmetic in SELECT with IN clause on account_type)
     opening = conn.execute(
-        """SELECT COALESCE(decimal_sum(g.debit), '0') - COALESCE(decimal_sum(g.credit), '0') as bal
+        """SELECT COALESCE(decimal_sum(g.debit), '0') as total_debit,
+                  COALESCE(decimal_sum(g.credit), '0') as total_credit
            FROM gl_entry g JOIN account a ON a.id = g.account_id
            WHERE a.company_id = ? AND a.account_type IN ('bank','cash')
            AND g.posting_date < ? AND g.is_cancelled = 0""" + _dim_clause,
         (company_id, args.from_date) + _dim_params,
     ).fetchone()
-    opening_balance = _d(opening["bal"])
+    opening_balance = _d(opening["total_debit"]) - _d(opening["total_credit"])
 
     # Raw SQL: too complex for PyPika, readability preserved
     closing = conn.execute(
-        """SELECT COALESCE(decimal_sum(g.debit), '0') - COALESCE(decimal_sum(g.credit), '0') as bal
+        """SELECT COALESCE(decimal_sum(g.debit), '0') as total_debit,
+                  COALESCE(decimal_sum(g.credit), '0') as total_credit
            FROM gl_entry g JOIN account a ON a.id = g.account_id
            WHERE a.company_id = ? AND a.account_type IN ('bank','cash')
            AND g.posting_date <= ? AND g.is_cancelled = 0""" + _dim_clause,
         (company_id, args.to_date) + _dim_params,
     ).fetchone()
-    closing_balance = _d(closing["bal"])
+    closing_balance = _d(closing["total_debit"]) - _d(closing["total_credit"])
 
     net_change = closing_balance - opening_balance
 
@@ -590,7 +620,9 @@ def cash_flow(conn, args):
     details = []
 
     # Raw SQL: too complex for PyPika, readability preserved
-    # (JOIN + decimal_sum + NOT IN clause + HAVING on computed aliases)
+    # (JOIN + decimal_sum + NOT IN clause). The legs stay TEXT aliases read
+    # in Python; HAVING repeats the aggregates wrapped in
+    # CAST(... AS NUMERIC) because PG disallows a SELECT-list alias there.
     movements = conn.execute(
         """SELECT a.id, a.name, a.root_type, a.account_type,
                   COALESCE(decimal_sum(g.debit), '0') as d,
@@ -599,9 +631,10 @@ def cash_flow(conn, args):
            WHERE a.company_id = ?
            AND g.posting_date >= ? AND g.posting_date <= ?
            AND g.is_cancelled = 0
-           AND a.account_type NOT IN ('bank','cash')""" + _dim_clause + """
+           AND (a.account_type IS NULL OR a.account_type NOT IN ('bank','cash'))""" + _dim_clause + """
            GROUP BY a.id
-           HAVING d != 0 OR c != 0
+           HAVING CAST(COALESCE(decimal_sum(g.debit), '0') AS NUMERIC) != 0
+               OR CAST(COALESCE(decimal_sum(g.credit), '0') AS NUMERIC) != 0
            ORDER BY a.root_type, a.name""",
         (company_id, args.from_date, args.to_date) + _dim_params,
     ).fetchall()
@@ -696,7 +729,8 @@ def general_ledger(conn, args):
         Q.from_(gl_t)
         .join(acct_t).on(acct_t.id == gl_t.account_id)
         .select(
-            (fn.Coalesce(DecimalSum(gl_t.debit), "0") - fn.Coalesce(DecimalSum(gl_t.credit), "0")).as_("bal")
+            fn.Coalesce(DecimalSum(gl_t.debit), "0").as_("total_debit"),
+            fn.Coalesce(DecimalSum(gl_t.credit), "0").as_("total_credit"),
         )
         .where(gl_t.posting_date < P())
         .where(gl_t.is_cancelled == 0)
@@ -712,7 +746,7 @@ def general_ledger(conn, args):
         opening_params.extend(_dim_params)
 
     opening = conn.execute(opening_q.get_sql(), opening_params).fetchone()
-    opening_balance = _d(opening["bal"])
+    opening_balance = _d(opening["total_debit"]) - _d(opening["total_credit"])
 
     # Build period entries query dynamically
     entries_q = (
@@ -809,15 +843,20 @@ def _aging_report(conn, args, party_type_label, party_table, party_name_col="nam
 
     The values this report returns changed with Wave G F2 (M38): the party-level
     double-count is compensated in the ledger itself, so a 1,000.00 invoice paid
-    300.00 now ages 700.00 rather than 400.00. Same output SHAPE, corrected
-    values. A released allocation (an invoice cancelled while cash was applied)
-    legitimately shows as a negative/credit bucket for the payment.
+    300.00 now ages 700.00 rather than 400.00. M139 adopts the ATTRIBUTION half
+    of the canon too (previously only get-outstanding did): each bucket's
+    residual is aged at its own document's date, so that same invoice paid in
+    May reads 700.00 in the invoice's bucket in June, not 1,000.00 there and
+    -300.00 in current. Buckets attributed to a payment (unapplied cash,
+    residual compensation) are reported as `unapplied`, never aged. A released
+    allocation (an invoice cancelled while cash was applied) legitimately shows
+    as a negative `unapplied` amount.
     """
     if party_table not in _PARTY_TABLE_ALLOWLIST:
         err(f"Invalid party table: {party_table}")
-    company_id = resolve_company_id(conn,
-                                    getattr(args, 'company_id', None),
-                                    getattr(args, 'company_name', None))
+    company_id = resolve_scope_company(conn,
+                                       getattr(args, 'company_id', None),
+                                       getattr(args, 'company_name', None))
     if not args.as_of_date:
         err("--as-of-date is required")
 
@@ -829,6 +868,12 @@ def _aging_report(conn, args, party_type_label, party_table, party_name_col="nam
 
     # Get outstanding by party from payment_ledger_entry
     ple_t = Table("payment_ledger_entry")
+    acct_t = Table("account")
+    acct_scope_sub = (
+        Q.from_(acct_t)
+        .select(acct_t.id)
+        .where(acct_t.company_id == P())
+    )
     outstanding_sql = (
         Q.from_(ple_t)
         .select(
@@ -839,6 +884,7 @@ def _aging_report(conn, args, party_type_label, party_table, party_name_col="nam
         .where(ple_t.party_type == P())
         .where(party_ledger_rules.live_rows_criterion())
         .where(ple_t.posting_date <= P())
+        .where(ple_t.account_id.isin(acct_scope_sub))
         .groupby(ple_t.party_id)
         .having(
             # Repeat the aggregate rather than the "total" SELECT alias: PostgreSQL
@@ -851,27 +897,49 @@ def _aging_report(conn, args, party_type_label, party_table, party_name_col="nam
         )
         .get_sql()
     )
-    outstanding = conn.execute(outstanding_sql, (party_type_label, args.as_of_date)).fetchall()
+    outstanding = conn.execute(outstanding_sql, (party_type_label, args.as_of_date, company_id)).fetchall()
 
-    # Get individual entries for aging
-    entries_sql = (
+    # Residuals per attributed bucket — the get_outstanding attribution canon
+    # (ADR-0032 Decision 2, correction C6): live rows grouped by
+    # (party, bucket voucher) and summed, so a payment's allocation rows reduce
+    # the invoice they point at. The age date of a bucket is the posting date
+    # of the bucket's own document row
+    # (MIN(CASE WHEN own voucher = bucket THEN posting_date END)), falling back
+    # to the bucket's earliest row when no such row exists (a payment applied
+    # to an invoice that posted later). Buckets whose residual is zero are
+    # dropped by the HAVING, as get_outstanding does.
+    bucket_type = party_ledger_rules.bucket_voucher_type_term()
+    bucket_id = party_ledger_rules.bucket_voucher_id_term()
+    doc_date_case = Case().when(
+        (ple_t.voucher_type == bucket_type) & (ple_t.voucher_id == bucket_id),
+        ple_t.posting_date,
+    )
+    buckets_sql = (
         Q.from_(ple_t)
-        .select(ple_t.party_id, ple_t.posting_date, ple_t.amount)
+        .select(
+            ple_t.party_id,
+            bucket_type.as_("bucket_type"),
+            bucket_id.as_("bucket_id"),
+            DecimalSum(ple_t.amount).as_("residual"),
+            fn.Min(doc_date_case).as_("doc_date"),
+            fn.Min(ple_t.posting_date).as_("min_date"),
+        )
         .where(ple_t.party_type == P())
         .where(party_ledger_rules.live_rows_criterion())
         .where(ple_t.posting_date <= P())
-        .orderby(ple_t.party_id)
-        .orderby(ple_t.posting_date)
+        .where(ple_t.account_id.isin(acct_scope_sub))
+        .groupby(ple_t.party_id, bucket_type, bucket_id)
+        .having(LiteralValue('CAST(decimal_sum("amount") AS NUMERIC) != 0'))
         .get_sql()
     )
-    ple_rows = conn.execute(entries_sql, (party_type_label, args.as_of_date)).fetchall()
+    bucket_rows = conn.execute(buckets_sql, (party_type_label, args.as_of_date, company_id)).fetchall()
 
-    entries_by_party = {}
-    for row in ple_rows:
+    buckets_by_party = {}
+    for row in bucket_rows:
         pid = row["party_id"]
-        if pid not in entries_by_party:
-            entries_by_party[pid] = []
-        entries_by_party[pid].append(row)
+        if pid not in buckets_by_party:
+            buckets_by_party[pid] = []
+        buckets_by_party[pid].append(row)
 
     result = []
     total_outstanding = Decimal("0")
@@ -898,30 +966,43 @@ def _aging_report(conn, args, party_type_label, party_table, party_name_col="nam
             party = conn.execute(party_sql, (pid,)).fetchone()
         pname = party["pname"] if party else pid
 
-        # Calculate aging for this party
+        # Age each attributed bucket's RESIDUAL at its own document's age.
+        # A bucket attributed to a payment (unapplied cash, residual
+        # compensation) is not an invoice: it is reported as `unapplied` and
+        # never aged into the day buckets.
+        as_of = datetime.strptime(args.as_of_date, "%Y-%m-%d")
         bucket_amounts = [Decimal("0")] * (len(buckets) + 1)  # +1 for beyond last bucket
+        unapplied = Decimal("0")
 
-        for ple in entries_by_party.get(pid, []):
-            from datetime import datetime
-            pd = datetime.strptime(ple["posting_date"], "%Y-%m-%d")
-            ad = datetime.strptime(args.as_of_date, "%Y-%m-%d")
-            days = (ad - pd).days
+        for brow in buckets_by_party.get(pid, []):
+            residual = _d(brow["residual"])
+            if round_currency(residual) == Decimal("0"):
+                continue
+            if brow["bucket_type"] == "payment_entry":
+                unapplied += residual
+                continue
+            age_date = brow["doc_date"] or brow["min_date"]
+            days = (as_of - datetime.strptime(age_date, "%Y-%m-%d")).days
 
             placed = False
             for i, b in enumerate(buckets):
                 if i == 0 and days <= b:
-                    bucket_amounts[0] += _d(ple["amount"])
+                    bucket_amounts[0] += residual
                     placed = True
                     break
                 elif i > 0 and days > buckets[i-1] and days <= b:
-                    bucket_amounts[i] += _d(ple["amount"])
+                    bucket_amounts[i] += residual
                     placed = True
                     break
             if not placed:
-                bucket_amounts[-1] += _d(ple["amount"])
+                bucket_amounts[-1] += residual
 
         party_total = _d(o["total"])
         total_outstanding += party_total
+
+        if abs(party_total - (sum(bucket_amounts) + unapplied)) > Decimal("0.005"):
+            err(f"Aging buckets plus unapplied do not sum to party total "
+                f"for {pid}: {party_total} != {sum(bucket_amounts)} + {unapplied}")
 
         entry = {
             f"{party_type_label}_id": pid,
@@ -938,6 +1019,7 @@ def _aging_report(conn, args, party_type_label, party_table, party_name_col="nam
             for i in range(1, len(buckets)):
                 entry[f"days_{buckets[i]}"] = _s(bucket_amounts[i])
         entry[f"days_{buckets[-1]}_plus"] = _s(bucket_amounts[-1])
+        entry["unapplied"] = _s(unapplied)
         entry["total"] = _s(party_total)
         result.append(entry)
 
@@ -1012,7 +1094,8 @@ def budget_vs_actual(conn, args):
         actual_q = (
             Q.from_(gl_t)
             .select(
-                (fn.Coalesce(DecimalSum(gl_t.debit), "0") - fn.Coalesce(DecimalSum(gl_t.credit), "0")).as_("amt")
+                fn.Coalesce(DecimalSum(gl_t.debit), "0").as_("total_debit"),
+                fn.Coalesce(DecimalSum(gl_t.credit), "0").as_("total_credit"),
             )
             .where(gl_t.is_cancelled == 0)
             .where(gl_t.posting_date >= P())
@@ -1028,7 +1111,7 @@ def budget_vs_actual(conn, args):
             actual_params.append(b["cost_center_id"])
 
         actual = conn.execute(actual_q.get_sql(), actual_params).fetchone()
-        actual_amt = _d(actual["amt"])
+        actual_amt = _d(actual["total_debit"]) - _d(actual["total_credit"])
 
         variance = budget_amt - actual_amt
         variance_pct = (variance / budget_amt * 100) if budget_amt else Decimal("0")
@@ -1050,8 +1133,8 @@ def budget_vs_actual(conn, args):
 # ---------------------------------------------------------------------------
 
 def party_ledger(conn, args):
-    if not args.party_type or args.party_type not in ("customer", "supplier"):
-        err("--party-type must be 'customer' or 'supplier'")
+    if not args.party_type or args.party_type not in ("customer", "supplier", "employee"):
+        err("--party-type must be 'customer', 'supplier' or 'employee'")
     if not args.party_id:
         err("--party-id is required")
 
@@ -1059,7 +1142,7 @@ def party_ledger(conn, args):
         cust_t = Table("customer")
         party_sql = (
             Q.from_(cust_t)
-            .select(cust_t.name)
+            .select(cust_t.name, cust_t.company_id)
             .where(cust_t.id == P())
             .get_sql()
         )
@@ -1068,36 +1151,76 @@ def party_ledger(conn, args):
         supp_t = Table("supplier")
         party_sql = (
             Q.from_(supp_t)
-            .select(supp_t.name)
+            .select(supp_t.name, supp_t.company_id)
             .where(supp_t.id == P())
             .get_sql()
         )
         party = conn.execute(party_sql, (args.party_id,)).fetchone()
+    elif args.party_type == "employee":
+        emp_t = Table("employee")
+        party_sql = (
+            Q.from_(emp_t)
+            .select(emp_t.full_name, emp_t.company_id)
+            .where(emp_t.id == P())
+            .get_sql()
+        )
+        party = conn.execute(party_sql, (args.party_id,)).fetchone()
     else:
-        err("--party-type must be 'customer' or 'supplier'")
-    party_name = party["name"] if party else args.party_id
+        err("--party-type must be 'customer', 'supplier' or 'employee'")
+    if not party:
+        if args.party_type == "customer":
+            err(f"Customer {args.party_id} not found")
+        if args.party_type == "supplier":
+            err(f"Supplier {args.party_id} not found")
+        err(f"Employee {args.party_id} not found")
+    party_name = party["full_name"] if args.party_type == "employee" else party["name"]
+    # The party anchors the scope: with no company the read covers the
+    # party's own company's rows; a given company must exist and a party
+    # of another company is refused.
+    if getattr(args, "company_id", None) or getattr(args, "company_name", None):
+        scope_company_id = resolve_scope_company(
+            conn, getattr(args, "company_id", None),
+            getattr(args, "company_name", None))
+        if party["company_id"] != scope_company_id:
+            if args.party_type == "customer":
+                err(f"Customer {args.party_id} belongs to another company")
+            if args.party_type == "supplier":
+                err(f"Supplier {args.party_id} belongs to another company")
+            err(f"Employee {args.party_id} belongs to another company")
+    else:
+        scope_company_id = party["company_id"]
 
     gl_t = Table("gl_entry").as_("g")
+    acct_t = Table("account")
+    acct_scope_sub = (
+        Q.from_(acct_t)
+        .select(acct_t.id)
+        .where(acct_t.company_id == P())
+    )
 
     # Opening balance (before from_date)
     if args.from_date:
         opening_q = (
             Q.from_(gl_t)
             .select(
-                (fn.Coalesce(DecimalSum(gl_t.debit), "0") - fn.Coalesce(DecimalSum(gl_t.credit), "0")).as_("bal")
+                fn.Coalesce(DecimalSum(gl_t.debit), "0").as_("total_debit"),
+                fn.Coalesce(DecimalSum(gl_t.credit), "0").as_("total_credit"),
             )
             .where(gl_t.party_type == P())
             .where(gl_t.party_id == P())
             .where(gl_t.is_cancelled == 0)
             .where(gl_t.posting_date < P())
+            .where(gl_t.account_id.isin(acct_scope_sub))
         )
-        opening_params = [args.party_type, args.party_id, args.from_date]
+        opening_params = [args.party_type, args.party_id, args.from_date,
+                          scope_company_id]
     else:
         # No from_date → no opening balance (1=0 condition)
         opening_q = (
             Q.from_(gl_t)
             .select(
-                (fn.Coalesce(DecimalSum(gl_t.debit), "0") - fn.Coalesce(DecimalSum(gl_t.credit), "0")).as_("bal")
+                fn.Coalesce(DecimalSum(gl_t.debit), "0").as_("total_debit"),
+                fn.Coalesce(DecimalSum(gl_t.credit), "0").as_("total_credit"),
             )
             .where(gl_t.party_type == P())
             .where(gl_t.party_id == P())
@@ -1107,7 +1230,7 @@ def party_ledger(conn, args):
         opening_params = [args.party_type, args.party_id]
 
     opening = conn.execute(opening_q.get_sql(), opening_params).fetchone()
-    opening_balance = _d(opening["bal"])
+    opening_balance = _d(opening["total_debit"]) - _d(opening["total_credit"])
 
     # Period entries
     entries_q = (
@@ -1116,8 +1239,9 @@ def party_ledger(conn, args):
         .where(gl_t.party_type == P())
         .where(gl_t.party_id == P())
         .where(gl_t.is_cancelled == 0)
+        .where(gl_t.account_id.isin(acct_scope_sub))
     )
-    entries_params = [args.party_type, args.party_id]
+    entries_params = [args.party_type, args.party_id, scope_company_id]
 
     if args.from_date:
         entries_q = entries_q.where(gl_t.posting_date >= P())
@@ -1364,23 +1488,25 @@ def comparative_pl(conn, args):
         for acct in accounts:
             if acct["root_type"] == "income":
                 row = conn.execute(
-                    """SELECT COALESCE(decimal_sum(credit), '0') - COALESCE(decimal_sum(debit), '0') as amt
+                    """SELECT COALESCE(decimal_sum(credit), '0') as total_credit,
+                              COALESCE(decimal_sum(debit), '0') as total_debit
                        FROM gl_entry WHERE account_id = ?
                        AND posting_date >= ? AND posting_date <= ?
-                       AND is_cancelled = 0""",
-                    (acct["id"], fd, td),
+                       AND is_cancelled = 0 AND voucher_type <> ?""",
+                    (acct["id"], fd, td, _CLOSING_VOUCHER_TYPE),
                 ).fetchone()
-                amt = _d(row["amt"])
+                amt = _d(row["total_credit"]) - _d(row["total_debit"])
                 p_income += amt
             else:
                 row = conn.execute(
-                    """SELECT COALESCE(decimal_sum(debit), '0') - COALESCE(decimal_sum(credit), '0') as amt
+                    """SELECT COALESCE(decimal_sum(debit), '0') as total_debit,
+                              COALESCE(decimal_sum(credit), '0') as total_credit
                        FROM gl_entry WHERE account_id = ?
                        AND posting_date >= ? AND posting_date <= ?
-                       AND is_cancelled = 0""",
-                    (acct["id"], fd, td),
+                       AND is_cancelled = 0 AND voucher_type <> ?""",
+                    (acct["id"], fd, td, _CLOSING_VOUCHER_TYPE),
                 ).fetchone()
-                amt = _d(row["amt"])
+                amt = _d(row["total_debit"]) - _d(row["total_credit"])
                 p_expense += amt
 
             # Find or create account entry in result
@@ -1503,7 +1629,6 @@ def check_overdue(conn, args):
         )
         .where(si_t.company_id == P())
         .where(si_t.status.isin(["submitted", "partially_paid", "overdue"]))
-        .where(LiteralValue("si.\"outstanding_amount\" + 0 > 0"))
         .where(si_t.due_date < P())
         .orderby(si_t.due_date)
         .get_sql()
@@ -1525,6 +1650,8 @@ def check_overdue(conn, args):
 
     for row in rows:
         outstanding = _d(row["outstanding_amount"])
+        if outstanding <= 0:
+            continue
         due_date = row["due_date"]
         due_dt = datetime.strptime(due_date, "%Y-%m-%d")
         days_overdue = (today_dt - due_dt).days
@@ -1605,7 +1732,6 @@ def check_overdue(conn, args):
 # submitted ledger rows are immutable, and reversing an operator's books from a
 # migration is not ours to do.
 #
-# SIM: planning/simlogs/m63c_SIM_2026-08-12.md
 # ---------------------------------------------------------------------------
 
 # Every step of this is required, and the two approval steps are the reason the
@@ -1885,8 +2011,7 @@ def main():
     check_unknown_args(parser, unknown)
     check_input_lengths(args)
 
-    db_path = args.db_path or DEFAULT_DB_PATH
-    ensure_db_exists(db_path)
+    db_path = getattr(args, "db_path", None)   # None unless --db-path was given
     conn = get_connection(db_path)
 
     # Dependency check
