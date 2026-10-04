@@ -35,10 +35,10 @@ ACTOR_COLS = ["actor_os_account", "actor_channel", "actor_principal_claim",
               "actor_status", "actor_hop"]
 AUTH_COLS = ["authorization_id", "authorization_status"]
 SCOPE_COLS = ["scope_company_ids", "scope_status"]
-FRESH_COLUMNS = FIRST_COLS + ACTOR_COLS + AUTH_COLS + SCOPE_COLS
+FRESH_COLUMNS = FIRST_COLS + ACTOR_COLS + AUTH_COLS + SCOPE_COLS + ["actor_session_digest"]
 # Re-upgraded order differs: the rewind drops only the authorization columns,
 # so migration 045 re-adds them after the scope columns.
-REUPGRADED_COLUMNS = FIRST_COLS + ACTOR_COLS + SCOPE_COLS + AUTH_COLS
+REUPGRADED_COLUMNS = FIRST_COLS + ACTOR_COLS + SCOPE_COLS + ["actor_session_digest"] + AUTH_COLS
 
 _DROP_TABLES = (
     "DROP TABLE IF EXISTS operation_authorization_envelope",

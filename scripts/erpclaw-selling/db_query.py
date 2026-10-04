@@ -49,6 +49,7 @@ try:
     from erpclaw_lib import authority_gate
     from erpclaw_lib.authorization_consumption import INPUT_INVALID
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
+    from erpclaw_lib import payment_clearing
     from erpclaw_lib.vendor.pypika.terms import LiteralValue, ValueWrapper
 except ImportError:
     import json as _json
@@ -2737,6 +2738,28 @@ def submit_sales_invoice(conn, args):
     if not si_items:
         err("Sales invoice has no items")
 
+    if bool(si_dict.get("is_return", 0)) and si_dict.get("return_against"):
+        _orig_id = si_dict["return_against"]
+        _oq = (Q.from_(_t_sales_invoice)
+               .select(_t_sales_invoice.id, _t_sales_invoice.is_return,
+                       _t_sales_invoice.status, _t_sales_invoice.customer_id,
+                       _t_sales_invoice.company_id, _t_sales_invoice.currency)
+               .where(_t_sales_invoice.id == P()))
+        _orig = conn.execute(_oq.get_sql(), (_orig_id,)).fetchone()
+        if not _orig:
+            err(f"Cannot submit credit note: original invoice {_orig_id} not found")
+        _orig_d = row_to_dict(_orig)
+        if int(_orig_d.get("is_return") or 0) == 1:
+            err(f"Cannot submit credit note: {_orig_id} is itself a credit note")
+        if _orig_d.get("status") not in ("submitted", "overdue", "partially_paid", "paid"):
+            err(f"Cannot submit credit note: original invoice is '{_orig_d.get('status')}'")
+        if _orig_d.get("customer_id") != customer_id or _orig_d.get("company_id") != company_id:
+            err(f"Cannot submit credit note: original invoice {_orig_id} belongs to another customer or company")
+        _r_cur = si_dict.get("currency") or "USD"
+        _o_cur = _orig_d.get("currency") or "USD"
+        if _r_cur != _o_cur:
+            err(f"Cannot submit credit note: its currency {_r_cur} differs from the original invoice's {_o_cur}")
+
     fiscal_year = get_fiscal_year(conn, posting_date, company_id=si_dict["company_id"])
     cost_center_id = doc_dimensions.get("cost_center") or _get_cost_center(conn, company_id)
 
@@ -2969,33 +2992,78 @@ def submit_sales_invoice(conn, args):
     # For credit notes: PLE amount is negative (reduces receivable)
     ple_amount = str(round_currency(abs_grand_total if not is_return else -abs_grand_total))
     ple_id = str(uuid.uuid4())
-    # For credit notes, against_voucher points to the original invoice
     against_vtype = voucher_type
     against_vid = args.sales_invoice_id
-    if is_return and si_dict.get("return_against"):
-        against_vtype = "sales_invoice"
-        against_vid = si_dict["return_against"]
-    # raw SQL — INSERT with embedded literal strings ('customer', 'USD')
+    ple_currency = (si_dict.get("currency") or "USD") if is_return else "USD"
+    # raw SQL — INSERT with embedded literal strings ('customer')
     conn.execute(
         """INSERT INTO payment_ledger_entry
            (id, posting_date, account_id, party_type, party_id,
             voucher_type, voucher_id, against_voucher_type, against_voucher_id,
             amount, amount_in_account_currency, currency, remarks)
            VALUES (?, ?, ?, 'customer', ?, ?, ?, ?, ?,
-                   ?, ?, 'USD', ?)""",
+                   ?, ?, ?, ?)""",
         (ple_id, posting_date, receivable_account_id, customer_id,
          voucher_type, args.sales_invoice_id, against_vtype, against_vid,
-         ple_amount, ple_amount,
+         ple_amount, ple_amount, ple_currency,
          f"{'Credit Note' if is_return else 'Sales Invoice'} {args.sales_invoice_id}"),
     )
 
+    _applied_amount = Decimal("0.00")
+    if is_return and si_dict.get("return_against"):
+        _alloc_orig_id = si_dict["return_against"]
+        _rq = (Q.from_(_t_sales_invoice)
+               .select(_t_sales_invoice.outstanding_amount, _t_sales_invoice.status)
+               .where(_t_sales_invoice.id == P()))
+        _rrow = conn.execute(_rq.get_sql(), (_alloc_orig_id,)).fetchone()
+        if not _rrow:
+            conn.rollback()
+            err(f"Cannot submit credit note: original invoice {_alloc_orig_id} not found")
+        _rdict = row_to_dict(_rrow)
+        _rstatus = _rdict["status"]
+        if _rstatus not in ("submitted", "overdue", "partially_paid", "paid"):
+            conn.rollback()
+            err(f"Cannot submit credit note: original invoice is '{_rstatus}'")
+        if _rstatus in ("submitted", "overdue", "partially_paid"):
+            _o = to_decimal(_rdict["outstanding_amount"])
+        else:
+            _o = Decimal("0")
+        _g = abs_grand_total
+        _applied_amount = round_currency(min(_g, max(_o, Decimal("0"))))
+        if _applied_amount > 0:
+            try:
+                payment_clearing.allocate_return_to_document(
+                    conn, "credit_note", args.sales_invoice_id,
+                    "sales_invoice", _alloc_orig_id, _applied_amount,
+                    posting_date=posting_date,
+                    account_id=receivable_account_id,
+                    party_type="customer", party_id=customer_id,
+                    currency=(si_dict.get("currency") or "USD"))
+            except ValueError as e:
+                conn.rollback()
+                err(str(e))
+
     # Update invoice status (naming already generated above before GL posting)
-    uq = (Q.update(_t_sales_invoice)
-          .set("status", ValueWrapper("submitted"))
-          .set("naming_series", P())
-          .set("updated_at", now())
-          .where(_t_sales_invoice.id == P()))
-    conn.execute(uq.get_sql(), (naming, args.sales_invoice_id))
+    if is_return and si_dict.get("return_against"):
+        _open_rem = round_currency(abs_grand_total - _applied_amount)
+        if _open_rem == 0:
+            _cn_outstanding = "0"
+        else:
+            _cn_outstanding = str(round_currency(-(abs_grand_total - _applied_amount)))
+        uq = (Q.update(_t_sales_invoice)
+              .set("status", ValueWrapper("submitted"))
+              .set("outstanding_amount", P())
+              .set("naming_series", P())
+              .set("updated_at", now())
+              .where(_t_sales_invoice.id == P()))
+        conn.execute(uq.get_sql(), (_cn_outstanding, naming, args.sales_invoice_id))
+    else:
+        uq = (Q.update(_t_sales_invoice)
+              .set("status", ValueWrapper("submitted"))
+              .set("naming_series", P())
+              .set("updated_at", now())
+              .where(_t_sales_invoice.id == P()))
+        conn.execute(uq.get_sql(), (naming, args.sales_invoice_id))
 
     # Update SO invoiced_qty if linked
     if si_dict.get("sales_order_id"):
@@ -3015,15 +3083,27 @@ def submit_sales_invoice(conn, args):
         _audit_so_status_change(conn, "submit-sales-invoice", si_dict["sales_order_id"],
                                 _old_so_status, _new_so_status)
 
+    _audit_values = {"naming_series": naming, "gl_count": len(gl_ids),
+                   "sle_count": len(sle_ids), "update_stock": update_stock}
+    if is_return and si_dict.get("return_against"):
+        _audit_values["applied_to"] = si_dict["return_against"]
+        _audit_values["applied_amount"] = str(_applied_amount)
     audit(conn, "erpclaw-selling", "submit-sales-invoice", "sales_invoice", args.sales_invoice_id,
-           new_values={"naming_series": naming, "gl_count": len(gl_ids),
-                       "sle_count": len(sle_ids), "update_stock": update_stock})
+           new_values=_audit_values)
     conn.commit()
-    ok({"sales_invoice_id": args.sales_invoice_id, "naming_series": naming,
+    _payload = {"sales_invoice_id": args.sales_invoice_id, "naming_series": naming,
          "status": "submitted",
          "gl_entries_created": len(gl_ids) + len(cogs_gl_ids),
          "sle_entries_created": len(sle_ids),
-         "update_stock": bool(update_stock)})
+         "update_stock": bool(update_stock)}
+    if is_return and si_dict.get("return_against"):
+        _payload["applied_to"] = {"voucher_id": si_dict["return_against"],
+                                  "amount": str(_applied_amount)}
+        _payload["open_credit"] = str(round_currency(abs_grand_total - _applied_amount))
+    elif is_return:
+        _payload["applied_to"] = None
+        _payload["open_credit"] = str(round_currency(abs_grand_total))
+    ok(_payload)
 
 
 # ---------------------------------------------------------------------------
@@ -3034,10 +3114,11 @@ def _customer_outstanding_ar(conn, customer_id: str) -> Decimal:
     """Exact-decimal sum of outstanding_amount for a customer's exposure.
 
     Counts rows with is_return 0 and status in ("submitted", "overdue",
-    "partially_paid"), plus submitted credit notes (is_return 1) whose
-    negative outstanding_amount nets against the invoices. The sum is not
-    floored at zero, so unapplied credit notes can raise available credit
-    above the limit.
+    "partially_paid"), plus credit notes (is_return 1) with status in
+    ("submitted", "partially_paid") whose negative outstanding_amount nets
+    against the invoices. A note's outstanding carries only its unabsorbed
+    excess, so nothing is counted twice. The sum is not floored at zero, so
+    unapplied credit notes can raise available credit above the limit.
     """
     _clearable = (
         (_t_sales_invoice.is_return == ValueWrapper(0))
@@ -3047,7 +3128,8 @@ def _customer_outstanding_ar(conn, customer_id: str) -> Decimal:
     )
     _credit = (
         (_t_sales_invoice.is_return == ValueWrapper(1))
-        & (_t_sales_invoice.status == ValueWrapper("submitted"))
+        & (_t_sales_invoice.status.isin([
+            ValueWrapper("submitted"), ValueWrapper("partially_paid")]))
     )
     q_owed = (
         Q.from_(_t_sales_invoice)
@@ -3468,6 +3550,20 @@ def list_dunning_runs(conn, args):
     ok({"runs": [row_to_dict(r) for r in rows]})
 
 
+def _first_live_credit_note(conn, invoice_id):
+    cnq = (Q.from_(_t_sales_invoice)
+           .select(_t_sales_invoice.id, _t_sales_invoice.naming_series,
+                   _t_sales_invoice.status)
+           .where(_t_sales_invoice.return_against == P())
+           .where(_t_sales_invoice.is_return == ValueWrapper(1))
+           .where(_t_sales_invoice.status.notin([
+               ValueWrapper("draft"), ValueWrapper("cancelled")]))
+           .orderby(_t_sales_invoice.posting_date)
+           .orderby(_t_sales_invoice.id))
+    cn_rows = conn.execute(cnq.get_sql(), (invoice_id,)).fetchall()
+    return cn_rows[0] if cn_rows else None
+
+
 # ---------------------------------------------------------------------------
 # 27. cancel-sales-invoice
 # ---------------------------------------------------------------------------
@@ -3501,6 +3597,16 @@ def cancel_sales_invoice(conn, args):
     is_return = bool(si_dict.get("is_return", 0))
     cancel_voucher_type = "credit_note" if is_return else "sales_invoice"
 
+    if not is_return:
+        cn_row = _first_live_credit_note(conn, args.sales_invoice_id)
+        if cn_row is not None:
+            cn_dict = row_to_dict(cn_row)
+            cn_ref = cn_dict.get("naming_series") or cn_dict["id"]
+            conn.rollback()
+            err(f"Cannot cancel: sales invoice {args.sales_invoice_id} "
+                f"has credit note {cn_ref} ('{cn_dict['status']}'); "
+                f"cancel credit note {cn_ref} first")
+
     # Reverse GL entries
     try:
         reversal_gl_ids = reverse_gl_entries(
@@ -3520,6 +3626,15 @@ def cancel_sales_invoice(conn, args):
     reversal_sle_ids = []
     if update_stock:
         reversal_sle_ids = _reverse_stock_or_refuse(conn, cancel_voucher_type, args.sales_invoice_id, posting_date, "SLE reversal")
+
+    _return_rel = {"restored": {}}
+    if is_return:
+        try:
+            _return_rel = payment_clearing.release_return_allocations(
+                conn, "credit_note", args.sales_invoice_id)
+        except ValueError as e:
+            conn.rollback()
+            err(str(e))
 
     # Release the payment allocations this cancel voids (M46/F1). Cash applied
     # to a document that no longer exists in the books is not applied cash: the
@@ -3596,6 +3711,8 @@ def cancel_sales_invoice(conn, args):
     # Reported only when something was actually released or skipped, so the
     # no-allocation cancel keeps its exact shipped payload (F1 pin 4).
     _merge_release_result(payload, release)
+    if is_return and _return_rel.get("restored"):
+        payload["restored"] = _return_rel["restored"]
     ok(payload)
 
 
@@ -3803,15 +3920,18 @@ def create_credit_note(conn, args):
                         "total_amount", "tax_amount", "grand_total",
                         "outstanding_amount", "tax_template_id", "status",
                         "sales_order_id", "is_return", "return_against",
-                        "update_stock", "company_id", "dimensions_json")
+                        "update_stock", "company_id", "currency",
+                        "exchange_rate", "dimensions_json")
               .insert(P(), P(), P(), P(), P(), P(), P(), P(), P(),
-                      ValueWrapper("draft"), P(), 1, P(), P(), P(), P()))
+                      ValueWrapper("draft"), P(), 1, P(), P(), P(), P(),
+                      P(), P()))
     conn.execute(cn_ins.get_sql(),
         (si_id, customer_id, posting_date, posting_date,
          str(total_amount), str(tax_amount), str(grand_total), str(grand_total),
          orig_dict.get("tax_template_id"), orig_dict.get("sales_order_id"),
          args.against_invoice_id, orig_dict.get("update_stock", 0),
-         company_id, orig_dimensions_text),
+         company_id, orig_dict.get("currency") or "USD",
+         orig_dict.get("exchange_rate") or "1", orig_dimensions_text),
     )
 
     # Insert child items
@@ -5348,6 +5468,16 @@ def cancel_intercompany_invoice(conn, args):
     elif si_status not in ("submitted", "overdue", "partially_paid"):
         err(f"Cannot cancel sales invoice in status: {si_status}")
 
+    if (si_status in ("submitted", "overdue", "partially_paid")
+            and not si["is_return"]):
+        _live_cn = _first_live_credit_note(conn, si_id)
+        if _live_cn is not None:
+            _live_dict = row_to_dict(_live_cn)
+            _live_ref = _live_dict.get("naming_series") or _live_dict["id"]
+            err(f"Cannot cancel: sales invoice {si_id} "
+                f"has credit note {_live_ref} ('{_live_dict['status']}'); "
+                f"cancel credit note {_live_ref} first")
+
     # The mirror bill's company (a plain read; none when pi_id is empty or
     # the bill is missing), then both heads before the first write of
     # either leg, in ascending company order.
@@ -5397,6 +5527,17 @@ def cancel_intercompany_invoice(conn, args):
     elif si_status not in ("submitted", "overdue", "partially_paid"):
         conn.rollback()
         err(f"Cannot cancel sales invoice in status: {si_status}")
+
+    if (si_status in ("submitted", "overdue", "partially_paid")
+            and not si["is_return"]):
+        _live_cn = _first_live_credit_note(conn, si_id)
+        if _live_cn is not None:
+            _live_dict = row_to_dict(_live_cn)
+            _live_ref = _live_dict.get("naming_series") or _live_dict["id"]
+            conn.rollback()
+            err(f"Cannot cancel: sales invoice {si_id} "
+                f"has credit note {_live_ref} ('{_live_dict['status']}'); "
+                f"cancel credit note {_live_ref} first")
 
     # Decided from the re-read rows from here on.
     pi_id = si["intercompany_reference_id"]

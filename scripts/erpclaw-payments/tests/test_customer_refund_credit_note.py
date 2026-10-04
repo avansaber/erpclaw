@@ -118,10 +118,10 @@ def _seed_credit_note(conn, env, return_against, amount="-9.25",
         "(id, posting_date, account_id, party_type, party_id, voucher_type, "
         " voucher_id, against_voucher_type, against_voucher_id, amount, "
         " amount_in_account_currency, currency, delinked) "
-        "VALUES (?, ?, ?, 'customer', ?, 'credit_note', ?, 'sales_invoice', ?, "
+        "VALUES (?, ?, ?, 'customer', ?, 'credit_note', ?, 'credit_note', ?, "
         " ?, ?, 'USD', 0)",
         (str(uuid.uuid4()), posting_date, env["ar"], env["customer"],
-         cn_id, return_against, amount, amount))
+         cn_id, cn_id, amount, amount))
     conn.commit()
     _post_invoice_gl(conn, env, "credit_note", cn_id, "9.25",
                      control=env["ar"], other=env["income"],
@@ -479,8 +479,8 @@ def test_refund_refusals(conn):
         " voucher_id, against_voucher_type, against_voucher_id, amount, "
         " amount_in_account_currency, currency, delinked) "
         "VALUES (?, '2026-06-03', ?, 'customer', ?, 'credit_note', ?, "
-        " 'sales_invoice', ?, '-9.25', '-9.25', 'USD', 0)",
-        (str(uuid.uuid4()), env["ar"], cust2, cn_other, inv_a))
+        " 'credit_note', ?, '-9.25', '-9.25', 'USD', 0)",
+        (str(uuid.uuid4()), env["ar"], cust2, cn_other, cn_other))
     conn.commit()
     r_other = _add_refund(conn, env, "9.25", cn_other)
     assert is_ok(r_other), r_other

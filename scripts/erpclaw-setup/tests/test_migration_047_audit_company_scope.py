@@ -31,7 +31,10 @@ ACTOR_COLS = ["actor_os_account", "actor_channel", "actor_principal_claim",
               "actor_status", "actor_hop"]
 AUTH_COLS = ["authorization_id", "authorization_status"]
 SCOPE_COLS = ["scope_company_ids", "scope_status"]
-FRESH_COLUMNS = FIRST_COLS + ACTOR_COLS + AUTH_COLS + SCOPE_COLS
+FRESH_COLUMNS = FIRST_COLS + ACTOR_COLS + AUTH_COLS + SCOPE_COLS + ["actor_session_digest"]
+# Re-upgraded order differs: the fixture drops only the scope columns,
+# so migration 047 re-adds them after the session digest column.
+REUPGRADED_COLUMNS = FIRST_COLS + ACTOR_COLS + AUTH_COLS + ["actor_session_digest"] + SCOPE_COLS
 
 _DROP_STATEMENTS = (
     "ALTER TABLE audit_log DROP COLUMN scope_company_ids",
@@ -147,7 +150,7 @@ def test_upgrade_adds_the_columns_and_changes_no_row(conn, db_path, pre047):
     mig = _load_migration()
     result = mig.run_migration(db_path)
     assert result == {"added": list(mig.SCOPE_COLUMNS), "report_only": False}
-    assert seam.column_names("audit_log", db_path) == FRESH_COLUMNS
+    assert seam.column_names("audit_log", db_path) == REUPGRADED_COLUMNS
     assert _counts(conn, db_path) == before_counts
     after = [row for row in read_all(conn, "audit_log", FRESH_COLUMNS)
              if row["entity_id"] in ("S1", "S2")]

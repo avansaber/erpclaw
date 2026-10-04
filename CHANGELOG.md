@@ -2,6 +2,25 @@
 
 All notable changes to the ERPClaw foundation skill.
 
+## [4.15.2] — 2026-10-03 — credit notes, Stripe reports and safer concurrent updates
+
+### Fixed — money
+- **A credit note now reduces the invoice it was issued against.** Submitting a credit note allocates it to its original sales invoice; any excess stays as open customer credit. The original invoice cannot be cancelled while a live credit note is applied to it, and a credit note copies its invoice's currency fields. Foundation migration 052 brings existing books into line: it allocates already-submitted credit notes to their originals and records every change in the audit log.
+- **Stripe MRR is exact.** MRR counts active subscriptions only; trialing ones are shown as a count, never as revenue. Annual plans divide exactly by 12, while day and week plans keep their existing approximation. Rounding happens once, after grouping. Each currency gets its own total; with more than one currency there is no single combined total. An unknown interval, a blank currency or a negative or non-finite amount is refused rather than guessed.
+- **The Stripe fee report keeps unitemised fees.** An account with a mix of itemised and unitemised fees now reports its full fee total, and each entry names its source.
+- **India Form 16 and Form 24Q read the real salary slips:** submitted and paid slips over the April to March fiscal year, TDS per quarter, gross salary and taxable income after the standard deduction.
+
+### Fixed — concurrent updates
+- Loan approve, reject, update, disbursement, repayment schedule, restructure and close; stock revaluation; and work-order cancellation now take the company ledger lock first, then re-read the record and re-check its status before they write. A request that read a record which another request then changed rolls back and asks you to re-read it, instead of writing from stale data. Work-order cancellation never leaves a partial reversal.
+
+### Changed
+- `add-carrier-invoice` (logistics) now requires `--total-amount`, a positive amount with at most two decimals, and refuses a carrier invoice from another company. It no longer stores a silent zero.
+
+### Database
+- Migration 052: credit-note allocation for existing books (changes data; audited).
+- Migration 053: adds the authority session and credential tables. They are groundwork for operator sign-in and are not active yet; existing approvals work as before.
+- Migration 054: repairs PostgreSQL installs on which foundation migrations 001 and 002 had been recorded as applied without creating their objects.
+
 ## [4.15.1] — 2026-10-03 — company boundaries and ledger discipline
 
 ### Added — company boundaries

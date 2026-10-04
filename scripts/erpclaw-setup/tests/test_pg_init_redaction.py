@@ -105,6 +105,7 @@ def test_postgres_success_line_is_redacted(monkeypatch, tmp_path):
     provision_calls = []
     provision_core_calls = []
     provision_envelope_calls = []
+    provision_sessions_calls = []
     monkeypatch.setattr(
         seam_mod, "provision",
         lambda metadata, db_path=None: provision_calls.append(db_path))
@@ -114,6 +115,9 @@ def test_postgres_success_line_is_redacted(monkeypatch, tmp_path):
     monkeypatch.setattr(
         seam_mod, "provision_authority_envelope",
         lambda db_path=None: provision_envelope_calls.append(db_path))
+    monkeypatch.setattr(
+        seam_mod, "provision_authority_sessions",
+        lambda db_path=None: provision_sessions_calls.append(db_path))
     buf = io.StringIO()
     with redirect_stderr(buf):
         mod._init_db_postgres(_URL)
@@ -125,6 +129,7 @@ def test_postgres_success_line_is_redacted(monkeypatch, tmp_path):
     assert provision_calls == [_URL]
     assert provision_core_calls == [_URL]
     assert provision_envelope_calls == [_URL]
+    assert provision_sessions_calls == [_URL]
     assert list(tmp_path.iterdir()) == []
 
 

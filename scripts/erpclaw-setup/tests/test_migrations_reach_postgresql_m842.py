@@ -10,6 +10,7 @@ import ast
 import importlib.util
 import io
 import os
+import sqlite3
 import sys
 import types
 from contextlib import redirect_stdout
@@ -53,10 +54,18 @@ def _raise(name):
     return _fn
 
 
-def _install_probes(monkeypatch):
+def _refuse_sqlite_open(*args, **kwargs):
+    raise AssertionError("sqlite3.connect on a PostgreSQL target")
+
+
+def _install_probes(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("ERPCLAW_HOME", str(home / ".openclaw" / "erpclaw"))
     monkeypatch.setenv("ERPCLAW_DB_DIALECT", "postgresql")
     monkeypatch.setenv("ERPCLAW_DB_URL", _PROBE_URL)
     monkeypatch.delenv("ERPCLAW_DB_PATH", raising=False)
+    monkeypatch.setattr(sqlite3, "connect", _refuse_sqlite_open)
     monkeypatch.setattr(_db, "get_connection", _raise("db.get_connection"))
     for attr in ("get_engine", "table_exists", "table_names", "column_names",
                  "index_names", "describe_table", "provision",
@@ -93,8 +102,8 @@ def _has_reached(exc):
 
 
 @pytest.mark.parametrize("stem,path", _DISCOVERED, ids=_IDS)
-def test_migration_reaches_postgresql(monkeypatch, stem, path):
-    _install_probes(monkeypatch)
+def test_migration_reaches_postgresql(monkeypatch, tmp_path, stem, path):
+    _install_probes(monkeypatch, tmp_path)
     spec = importlib.util.spec_from_file_location("m842_probe_" + stem, path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

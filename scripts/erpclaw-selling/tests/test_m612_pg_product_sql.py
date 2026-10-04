@@ -258,14 +258,14 @@ class TestCreditExposureExact:
         ))
         assert is_ok(cn_sub), cn_sub
         assert _invoice_status_outstanding(conn, inv) == (
-            "submitted", "300.00")
+            "paid", "0")
         assert _invoice_status_outstanding(conn, cn["credit_note_id"]) == (
-            "submitted", "-300.00")
+            "submitted", "0")
         result = call_action(mod.check_credit_limit, conn, ns(
             customer_id=env["customer"],
         ))
         assert is_ok(result), result
-        assert result["outstanding_ar"] == "0.00"
+        assert result["outstanding_ar"] == "0"
 
 
 # ──────────────────────────────────────────────────────────────────────────────

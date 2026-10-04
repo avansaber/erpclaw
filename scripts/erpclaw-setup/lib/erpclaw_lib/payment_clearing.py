@@ -12,6 +12,8 @@ and answer with ``RETIRED_OUTSTANDING_STEER``.
 Key functions:
 - apply_payment_to_document():   reduce outstanding, flip to paid/partially_paid
 - reverse_payment_on_document(): add outstanding back, restore submitted/partially_paid
+- allocate_return_to_document(): apply a credit/debit note to a document (A1/A2 pair)
+- release_return_allocations():  restore what a return's live allocations took
 - release_allocations_on_document(): void the allocations a document cancel kills
 - recalc_unallocated():          canonical payment residual (paid − live alloc − ded)
 - post_party_residual_compensation(): the Fork-A party-level residual row (M38)
@@ -27,7 +29,9 @@ The owning modules (selling/buying/hr) also delegate here; payments invokes
 the same shared write path rather than hand-rolling an UPDATE.
 The same rule covers the payments-owned tables written by
 release_allocations_on_document(): the cancel paths delegate here instead of
-reaching into payment_allocation / payment_ledger_entry themselves.
+reaching into payment_allocation / payment_ledger_entry themselves. It also
+covers allocate_return_to_document(), which writes the payment_ledger_entry
+allocation pair on behalf of selling and buying.
 """
 
 RETIRED_OUTSTANDING_STEER = (
@@ -353,6 +357,187 @@ def reverse_payment_on_expense_claim(conn, claim_id, payment_entry_id):
             "status": "approved", "applied": True}
 
 
+def allocate_return_to_document(conn, return_type, return_id, target_type,
+                                target_id, amount, *, posting_date,
+                                account_id, party_type, party_id, currency):
+    """Apply a return (credit/debit note) to a document, writing the A1/A2 pair.
+
+    A return issued against an invoice reduces that invoice by
+    ``a = min(credit, the invoice's outstanding)``; whatever the invoice cannot
+    absorb stays on the return as open customer/supplier credit. GL does not
+    change. The party ledger records the application explicitly, in the same
+    shape a payment uses: A1 ``+a`` against the return itself and A2 ``-a``
+    against the target, both under the return's own voucher.
+
+    Runs inside the caller's open transaction — does NOT commit. It does not
+    touch the return's own ``outstanding_amount`` or status; the caller does.
+
+    Args:
+        conn: open DB connection (caller owns the transaction).
+        return_type: 'credit_note' | 'debit_note'.
+        return_id: the return's id.
+        target_type: 'sales_invoice' | 'purchase_invoice'.
+        target_id: the document id being reduced (must differ from return_id).
+        amount: amount applied (str/int/Decimal; never float).
+        posting_date, account_id, party_type, party_id, currency: the two
+            ledger rows' shared stamps.
+
+    Returns:
+        dict {"return_type", "return_id", "target_type", "target_id",
+        "amount", "ple_ids", "target_outstanding", "target_status"}.
+
+    Raises:
+        ValueError: bad return/target type, target_id == return_id,
+            non-positive amount, or the target's own refusal (missing, not
+            clearable, above outstanding) — raised before any ledger row exists (the target's row lock may already be held; the caller rolls back).
+    """
+    if return_type not in ("credit_note", "debit_note"):
+        raise ValueError(
+            f"return_type must be 'credit_note' or 'debit_note', "
+            f"got '{return_type}'")
+    if target_type not in _CLEARABLE_DOCS:
+        raise ValueError(
+            f"target_type must be one of {sorted(_CLEARABLE_DOCS)}, "
+            f"got '{target_type}'")
+    if ((return_type == "credit_note" and target_type == "purchase_invoice")
+            or (return_type == "debit_note"
+                and target_type == "sales_invoice")):
+        raise ValueError(
+            f"A {return_type} cannot be applied to a {target_type}")
+    if target_id == return_id:
+        raise ValueError(
+            "target_id must differ from return_id "
+            f"(both are '{return_id}')")
+    a = round_currency(to_decimal(amount))
+    if a <= 0:
+        raise ValueError("allocation amount must be > 0")
+
+    cleared = apply_payment_to_document(conn, target_type, target_id, a)
+
+    ins_sql, _ = insert_row("payment_ledger_entry", {
+        "id": P(), "posting_date": P(), "account_id": P(),
+        "party_type": P(), "party_id": P(),
+        "voucher_type": P(), "voucher_id": P(),
+        "against_voucher_type": P(), "against_voucher_id": P(),
+        "amount": P(), "amount_in_account_currency": P(),
+        "currency": P(), "delinked": P(), "remarks": P(),
+    })
+    base_remarks = f"Return {return_id} applied to {target_type} {target_id}"
+    a1_id = str(uuid.uuid4())
+    conn.execute(ins_sql, (
+        a1_id, posting_date, account_id, party_type, party_id,
+        return_type, return_id, return_type, return_id,
+        str(a), str(a), currency, 0,
+        base_remarks + " (allocation, self)"))
+    a2_id = str(uuid.uuid4())
+    conn.execute(ins_sql, (
+        a2_id, posting_date, account_id, party_type, party_id,
+        return_type, return_id, target_type, target_id,
+        str(-a), str(-a), currency, 0, base_remarks))
+
+    return {"return_type": return_type, "return_id": return_id,
+            "target_type": target_type, "target_id": target_id,
+            "amount": str(a), "ple_ids": [a1_id, a2_id],
+            "target_outstanding": cleared["outstanding_amount"],
+            "target_status": cleared["status"]}
+
+
+def release_return_allocations(conn, return_type, return_id):
+    """Restore what a return's live allocations took from their targets.
+
+    Reads the return's live own rows (``voucher_type`` = return_type,
+    ``voucher_id`` = return_id, ``delinked`` = 0) ordered by creation and
+    groups the rows pointed at another document by
+    (canonical_voucher_type(against_voucher_type), against_voucher_id),
+    summing each group as exact Decimal — a migrated return can carry several
+    rows per target, and only their sum is the amount applied.
+
+    A return written before the allocation pair existed carries no live own row
+    pointed at itself (legacy shape): restore nothing. A group summing to zero
+    likewise restores nothing; a group summing below zero is added back with
+    ``reverse_payment_on_document``; a group summing above zero means the ledger
+    was edited by hand, and refusing is safer than restoring a wrong figure.
+
+    It refuses before it writes: every group is validated first (invoice-only
+    target type, non-positive net, an existing target, a live status) and only
+    when no group refuses is any target restored, so a refusal leaves every
+    target and every ledger row unchanged.
+
+    Runs inside the caller's open transaction — does NOT commit. Never delinks
+    (the caller's existing cancel delink does that) and writes no ledger row.
+
+    Returns:
+        dict {"legacy_shape", "restored"} where ``restored`` maps
+        "<type>:<id>" to the amount restored.
+
+    Raises:
+        ValueError: a group points at a non-invoice target, nets above zero,
+            points at a missing document, or at a cancelled/draft document.
+    """
+    ple_t = Table("payment_ledger_entry")
+    q = (Q.from_(ple_t)
+         .select(ple_t.against_voucher_type, ple_t.against_voucher_id,
+                 ple_t.amount)
+         .where(ple_t.voucher_type == P())
+         .where(ple_t.voucher_id == P())
+         .where(ple_t.delinked == P())
+         .orderby(ple_t.created_at).orderby(ple_t.id))
+    rows = conn.execute(
+        q.get_sql(), (return_type, return_id, 0)).fetchall()
+
+    if not any(r["against_voucher_id"] == return_id for r in rows):
+        return {"legacy_shape": True, "restored": {}}
+
+    groups = {}
+    for r in rows:
+        raw_atype, aid = r["against_voucher_type"], r["against_voucher_id"]
+        if aid is None or aid == "" or aid == return_id:
+            continue
+        atype = canonical_voucher_type(raw_atype)
+        groups.setdefault((atype, aid), []).append(to_decimal(r["amount"]))
+
+    totals = {key: sum(amounts, Decimal("0"))
+              for key, amounts in groups.items()}
+    order = sorted(groups, key=lambda k: (k[0] or "", k[1]))
+
+    checked = {}
+    for (atype, aid) in order:
+        total = totals[(atype, aid)]
+        if atype not in _CLEARABLE_DOCS:
+            raise ValueError(
+                f"Return {return_type} {return_id} allocation for "
+                f"{atype!r} {aid} nets to {total:.2f}; refusing: "
+                "not a sales_invoice or purchase_invoice")
+        if total == 0:
+            continue
+        if total > 0:
+            raise ValueError(
+                f"Return {return_type} {return_id} allocation for "
+                f"{atype} {aid} nets to {total:.2f}; refusing to restore "
+                f"(the ledger was edited by hand)")
+        target = _read_doc(conn, atype, aid, ("grand_total", "status"))
+        if target is None:
+            raise ValueError(f"{atype} {aid} not found")
+        status = target["status"]
+        if status not in ("submitted", "overdue", "partially_paid", "paid"):
+            raise ValueError(
+                f"Cannot restore a return allocation: {atype} {aid} "
+                f"is '{status}'")
+        checked[(atype, aid)] = target["grand_total"]
+
+    restored = {}
+    for (atype, aid) in order:
+        total = totals[(atype, aid)]
+        if total == 0:
+            continue
+        back = round_currency(-total)
+        result = reverse_payment_on_document(conn, atype, aid, back,
+                                             checked[(atype, aid)])
+        if result.get("applied"):
+            restored[f"{atype}:{aid}"] = str(back)
+    return {"legacy_shape": False, "restored": restored}
+
+
 def is_customer_refund(payment_type, party_type):
     """True only for a customer refund: pay against a customer."""
     return payment_type == "pay" and party_type == "customer"
@@ -403,6 +588,11 @@ def apply_refund_to_credit_note(conn, credit_note_id, amount):
 def reverse_refund_on_credit_note(conn, credit_note_id, amount, grand_total):
     """Add ``amount`` back to a credit note's open credit (cancel path).
 
+    The ``submitted`` baseline is the note's pre-refund outstanding, which is
+    ``grand_total + absorbed`` once the note has reduced an invoice: ``absorbed``
+    is 0 for a legacy-shaped note (no live own row points at the note itself),
+    else the negation of the live own rows pointed at another document.
+
     Runs inside the caller's open transaction — does NOT commit.
     """
     row = _read_doc(conn, "sales_invoice", credit_note_id,
@@ -420,8 +610,24 @@ def reverse_refund_on_credit_note(conn, credit_note_id, amount, grand_total):
         raise ValueError("refund amount must be > 0")
     current = to_decimal(row["outstanding_amount"])
     restored = round_currency(current - amt)
+    ple_t = Table("payment_ledger_entry")
+    q = (Q.from_(ple_t).select(ple_t.against_voucher_id, ple_t.amount)
+         .where(ple_t.voucher_type == P())
+         .where(ple_t.voucher_id == P())
+         .where(ple_t.delinked == P()))
+    live_own = conn.execute(
+        q.get_sql(), ("credit_note", credit_note_id, 0)).fetchall()
+    if not any(r["against_voucher_id"] == credit_note_id for r in live_own):
+        absorbed = Decimal("0")
+    else:
+        absorbed = -(sum(
+            (to_decimal(r["amount"]) for r in live_own
+             if r["against_voucher_id"] is not None
+             and r["against_voucher_id"] != credit_note_id),
+            Decimal("0")))
+    baseline = round_currency(to_decimal(grand_total) + absorbed)
     new_status = ("submitted"
-                  if restored == round_currency(to_decimal(grand_total))
+                  if restored == baseline
                   else "partially_paid")
     _write_doc(conn, "sales_invoice", credit_note_id,
                str(restored), new_status)

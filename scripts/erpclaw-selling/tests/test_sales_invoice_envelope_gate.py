@@ -832,6 +832,142 @@ def test_cross_company_cancel_at_active(tmp_path, monkeypatch):
     assert last["scope_company_ids"] == comp_a
 
 
+def _delegation_usage(path):
+    import test_payment_envelope_gate as pgate
+    from decimal import Decimal as _D
+    rows = pgate._read_all(path, "authority_delegation_usage", ["used"])
+    return sum((_D(str(row["used"])) for row in rows), _D("0.00"))
+
+
+def test_credit_note_submit_through_the_gate_staged(db_env):
+    """A credit-note submit consumes at STAGED and applies to its invoice."""
+    import test_credit_note_original_cancel as cnc
+    import test_payment_envelope_gate as pgate
+    import test_sales_invoice_projection as sproj
+    from decimal import Decimal
+    path, env = db_env
+    handle = _open(path)
+    try:
+        inv = cnc._invoice(handle, env, "10")
+        cnc._receive(handle, env, inv, "400.00")
+        note = cnc._credit_note(handle, env, inv, "1")
+        handle.commit()
+    finally:
+        handle.close()
+    handle = _open(path)
+    try:
+        assert cnc._doc(handle, inv) == ("600.00", "partially_paid")
+    finally:
+        handle.close()
+    before = _delegation_usage(path)
+    assert before == Decimal("0.00")
+    sproj._grant(path, env["company_id"], note, "submit-sales-invoice")
+    auth_id = pgate._issue(path, "submit-sales-invoice",
+                           sproj._std("submit-sales-invoice", path, note))
+    code, payload = _direct(
+        sproj._std("submit-sales-invoice", path, note,
+                   ["--authorization-id", auth_id]))
+    assert code == 0, payload
+    result = pgate._result_row(path, auth_id)
+    assert (result["result_kind"], result["result_id"],
+            result["result_status"]) == ("sales-invoice", note, "submitted")
+    handle = _open(path)
+    try:
+        assert cnc._doc(handle, inv) == ("500.00", "partially_paid")
+        assert cnc._doc(handle, note) == ("0", "submitted")
+    finally:
+        handle.close()
+    assert _delegation_usage(path) - before == Decimal("100.00")
+
+
+def test_credit_note_submit_through_the_gate_active(db_env, monkeypatch):
+    """A credit-note submit consumes at ACTIVE through delegation."""
+    import authority_fixtures as fx
+    import test_credit_note_original_cancel as cnc
+    import test_payment_envelope_gate as pgate
+    import test_sales_invoice_projection as sproj
+    from decimal import Decimal
+    path, env = db_env
+    handle = _open(path)
+    try:
+        inv = cnc._invoice(handle, env, "10")
+        cnc._receive(handle, env, inv, "400.00")
+        note = cnc._credit_note(handle, env, inv, "1")
+        handle.commit()
+    finally:
+        handle.close()
+    fx.make_active(path)
+    _patch_ready(monkeypatch)
+    _patch_actor(monkeypatch)
+    before = _delegation_usage(path)
+    assert before == Decimal("0.00")
+    sproj._grant(path, env["company_id"], note, "submit-sales-invoice")
+    issued = pgate._issue_full(path, "submit-sales-invoice",
+                               sproj._std("submit-sales-invoice", path, note))
+    assert issued["issued_route"] == "delegation"
+    auth_id = issued["authorization_id"]
+    code, payload = _direct(
+        sproj._std("submit-sales-invoice", path, note,
+                   ["--authorization-id", auth_id]))
+    assert code == 0, payload
+    result = pgate._result_row(path, auth_id)
+    assert (result["result_kind"], result["result_id"],
+            result["result_status"]) == ("sales-invoice", note, "submitted")
+    handle = _open(path)
+    try:
+        assert cnc._doc(handle, inv) == ("500.00", "partially_paid")
+        assert cnc._doc(handle, note) == ("0", "submitted")
+    finally:
+        handle.close()
+    assert _delegation_usage(path) - before == Decimal("100.00")
+
+
+def test_credit_note_submit_through_the_gate_staged_original_moves(db_env):
+    """The envelope binds the note only, so a moved original still consumes."""
+    import test_credit_note_original_cancel as cnc
+    import test_payment_envelope_gate as pgate
+    import test_sales_invoice_projection as sproj
+    from decimal import Decimal
+    path, env = db_env
+    handle = _open(path)
+    try:
+        inv = cnc._invoice(handle, env, "10")
+        cnc._receive(handle, env, inv, "400.00")
+        note = cnc._credit_note(handle, env, inv, "1")
+        handle.commit()
+    finally:
+        handle.close()
+    before = _delegation_usage(path)
+    assert before == Decimal("0.00")
+    sproj._grant(path, env["company_id"], note, "submit-sales-invoice")
+    auth_id = pgate._issue(path, "submit-sales-invoice",
+                           sproj._std("submit-sales-invoice", path, note))
+    handle = _open(path)
+    try:
+        cnc._receive(handle, env, inv, "550.00")
+        handle.commit()
+    finally:
+        handle.close()
+    handle = _open(path)
+    try:
+        assert cnc._doc(handle, inv) == ("50.00", "partially_paid")
+    finally:
+        handle.close()
+    code, payload = _direct(
+        sproj._std("submit-sales-invoice", path, note,
+                   ["--authorization-id", auth_id]))
+    assert code == 0, payload
+    assert payload.get("applied_to") == {"voucher_id": inv, "amount": "50.00"}
+    assert payload.get("open_credit") == "50.00"
+    handle = _open(path)
+    try:
+        assert cnc._doc(handle, inv) == ("0", "paid")
+        assert cnc._doc(handle, note) == ("-50.00", "submitted")
+    finally:
+        handle.close()
+    assert _delegation_usage(path) - before == Decimal("100.00")
+
+
 @pytest.mark.skipif(not _PG_URL, reason="live Postgres required")
 def test_pg_leg(tmp_path, monkeypatch):
     """Postgres leg mirrors the envelope flow; not qualification."""

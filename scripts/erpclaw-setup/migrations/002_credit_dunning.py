@@ -99,6 +99,8 @@ def _run_postgres(db_path):
         if add_credit_status:
             conn.execute(_ADD_CREDIT_STATUS_PG)
             print("  PostgreSQL: customer.credit_status: added.")
+        elif not _customer_exists:
+            print("  PostgreSQL: customer absent; customer.credit_status not added")
         else:
             print("  PostgreSQL: customer.credit_status: already present")
         if create_level:
@@ -185,12 +187,24 @@ def run_migration(db_path=None):
         conn.close()
 
 
+def _build_parser():
+    """Build the command-line parser, resolving the default at call time.
+
+    On a PostgreSQL dialect the configured URL is the target, so `--db-path`
+    defaults to None; on SQLite it defaults to the install database file.
+    """
+    if os.environ.get("ERPCLAW_DB_DIALECT", "sqlite") == "postgresql":
+        _default = None
+    else:
+        _default = os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "data.sqlite")
+    _parser = argparse.ArgumentParser(description=__doc__)
+    _parser.add_argument("--db-path", default=_default,
+                         help="Database path (defaults to the install database file on SQLite)")
+    return _parser
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db-path", default=DEFAULT_DB_PATH,
-                        help=f"Database path (default: {DEFAULT_DB_PATH})")
-    args = parser.parse_args()
-    run_migration(args.db_path)
+    run_migration(_build_parser().parse_args().db_path)
 
 
 if __name__ == "__main__":

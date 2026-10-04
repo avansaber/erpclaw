@@ -38,12 +38,13 @@ ACTOR_COLS = ["actor_os_account", "actor_channel", "actor_principal_claim",
 FIRST_COLS = ["id", "timestamp", "user_id", "skill", "action", "entity_type",
               "entity_id", "old_values", "new_values", "description"]
 FRESH_COLUMNS = FIRST_COLS + ACTOR_COLS + ["authorization_id",
-               "authorization_status", "scope_company_ids", "scope_status"]
+               "authorization_status", "scope_company_ids", "scope_status",
+               "actor_session_digest"]
 # Re-upgraded order differs: the fixture drops only the actor columns,
 # so migration 041 re-adds them after the authorization and scope columns.
 REUPGRADED_COLUMNS = FIRST_COLS + ["authorization_id",
                     "authorization_status", "scope_company_ids",
-                    "scope_status"] + ACTOR_COLS
+                    "scope_status", "actor_session_digest"] + ACTOR_COLS
 
 _DROP_STATEMENTS = (
     "ALTER TABLE audit_log DROP COLUMN actor_os_account",

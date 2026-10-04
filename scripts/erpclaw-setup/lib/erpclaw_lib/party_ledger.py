@@ -51,9 +51,10 @@ from erpclaw_lib.vendor.pypika.terms import LiteralValue
 #     reversal, so a delinked document row must drop out.
 LIVE_ROW_SQL = """("voucher_type" = 'payment_entry' OR "delinked" = 0)"""
 
-# ATTRIBUTION (ADR-0032 Decision 2, correction C6). A row's bucket is its
-# against-voucher when it is a payment row AND the against-voucher is PRESENT
-# and is not the row's own voucher; otherwise the row's own voucher.
+# ATTRIBUTION (ADR-0032 Decision 2, correction C6; ADR-0046). A row's bucket is
+# its against-voucher when it is a payment or credit-note row AND the
+# against-voucher is PRESENT and is not the row's own voucher; otherwise the
+# row's own voucher.
 #
 # The word PRESENT is load-bearing and was measured: submit_payment's
 # party-level row omits against_voucher_* entirely, and NULL "is not the payment
@@ -61,16 +62,18 @@ LIVE_ROW_SQL = """("voucher_type" = 'payment_entry' OR "delinked" = 0)"""
 # phantom (None, None) voucher — party totals stay right while the per-voucher
 # output of ar-aging and get-outstanding goes wrong.
 #
-# The self-reference test is what keeps the F2 residual-compensation row
-# (voucher = against = the payment) in the payment's own bucket, and it is also
-# what makes a document's own row always count to itself — a credit note's row
-# stays on the credit note, which is INV-25's stated design.
+# ADR-0046 partially supersedes ADR-0032 Decision 2's "a document's own row
+# always counts to itself" for a return's rows that name another document: a
+# credit note's allocation row against its original counts toward the original.
+# Self-reference is decided by id alone (ids are UUIDs unique across tables, so
+# for payments this equals the old type-and-id test): that keeps a payment's
+# compensation row, a credit note's own posting row P and its self allocation
+# row A1 in their own buckets. Debit notes join in the payable-side change.
 _ATTRIBUTED_TO_AGAINST_SQL = (
-    """"voucher_type" = 'payment_entry'"""
+    """"voucher_type" IN ('payment_entry', 'credit_note')"""
     """ AND "against_voucher_type" IS NOT NULL"""
     """ AND "against_voucher_id" IS NOT NULL"""
-    """ AND NOT ("against_voucher_type" = "voucher_type\""""
-    """ AND "against_voucher_id" = "voucher_id")"""
+    """ AND "against_voucher_id" <> "voucher_id\""""
 )
 BUCKET_VOUCHER_TYPE_SQL = (
     f"""CASE WHEN {_ATTRIBUTED_TO_AGAINST_SQL}"""
@@ -113,11 +116,10 @@ def bucket_of(voucher_type, voucher_id, against_voucher_type,
     Never returns (None, None): a row always falls back to its own voucher,
     both of whose columns are NOT NULL.
     """
-    if (voucher_type == "payment_entry"
+    if (voucher_type in ("payment_entry", "credit_note")
             and against_voucher_type is not None
             and against_voucher_id is not None
-            and not (against_voucher_type == voucher_type
-                     and against_voucher_id == voucher_id)):
+            and against_voucher_id != voucher_id):
         return (against_voucher_type, against_voucher_id)
     return (voucher_type, voucher_id)
 # ── END CANONICAL PARTY-LEDGER PREDICATE ─────────────────────────────────────

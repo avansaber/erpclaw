@@ -2740,139 +2740,173 @@ def revalue_stock(conn, args):
     if new_rate_d == old_rate_d:
         err(f"New rate ({new_rate_d}) is the same as current rate ({old_rate_d}). No revaluation needed.")
 
-    # Compute adjustment
-    new_value = round_currency(current_qty * new_rate_d)
-    adjustment = round_currency(new_value - old_value)
+    try:
+        take_chain_heads(conn, [company_id])
 
-    fiscal_year = get_fiscal_year(conn, posting_date, company_id=wh_row["company_id"])
-    cost_center_id = (dims_obj or {}).get("cost_center") or _get_cost_center(conn, company_id)
+        # Re-read under the head: the same selects, decided afresh.
+        item_row = conn.execute(item_q.get_sql(), (item_id,)).fetchone()
+        if not item_row:
+            conn.rollback()
+            err(f"Item {item_id} not found")
+        if not item_row["is_stock_item"]:
+            conn.rollback()
+            err(f"Item {item_row['item_name']} is not a stock item")
 
-    # Generate IDs
-    reval_id = str(uuid.uuid4())
+        wh_row = conn.execute(wh_q.get_sql(), (warehouse_id,)).fetchone()
+        if not wh_row:
+            conn.rollback()
+            err(f"Warehouse {warehouse_id} not found")
+        company_id = wh_row["company_id"]
 
-    # Naming series
-    naming = get_next_name(conn, "stock_revaluation", company_id=company_id)
+        # Re-read the stock balance under the head and re-run its refusals.
+        balance = get_stock_balance(conn, item_id, warehouse_id)
+        current_qty = to_decimal(balance["qty"])
+        old_rate_d = to_decimal(balance["valuation_rate"])
+        old_value = to_decimal(balance["stock_value"])
 
-    # --- Single atomic transaction ---
+        if current_qty <= 0:
+            conn.rollback()
+            err(f"Cannot revalue: no stock on hand for item '{item_row['item_name']}' "
+                f"in warehouse '{wh_row['name']}' (qty={current_qty})")
 
-    # 1. Insert the zero-qty valuation SLE row through the shared repricing helper.
-    # For moving-average items this is byte-identical to the historical inline
-    # INSERT; for FIFO items the helper ALSO resets the open layer rates to the new
-    # rate (R1: revaluation previously skipped FIFO layers, so FIFO stock kept
-    # consuming at stale costs). The GL side is unchanged and posted below.
-    reprice_stock_valuation(
-        conn, item_id, warehouse_id,
-        voucher_type="stock_revaluation",
-        voucher_id=reval_id,
-        posting_date=posting_date,
-        new_rate=str(new_rate_d),
-        fiscal_year=fiscal_year,
-    )
+        if new_rate_d == old_rate_d:
+            conn.rollback()
+            err(f"New rate ({new_rate_d}) is the same as current rate ({old_rate_d}). No revaluation needed.")
 
-    # 2. Create GL entries for the value adjustment
-    gl_ids = []
-    if adjustment != 0:
-        # Stock-in-Hand account (from warehouse)
-        warehouse_account_id = wh_row["account_id"]
-        if not warehouse_account_id:
-            stock_acct_t = Table("account")
-            stock_acct_q = (Q.from_(stock_acct_t).select(stock_acct_t.id)
-                            .where(stock_acct_t.account_type == "stock")
-                            .where(stock_acct_t.company_id == P())
-                            .where(stock_acct_t.is_group == 0)
-                            .limit(1))
-            stock_acct = conn.execute(stock_acct_q.get_sql(), (company_id,)).fetchone()
-            warehouse_account_id = stock_acct["id"] if stock_acct else None
+        # Compute adjustment from the re-read values.
+        new_value = round_currency(current_qty * new_rate_d)
+        adjustment = round_currency(new_value - old_value)
 
-        # Stock Adjustment account (contra)
-        adj_acct_t = Table("account")
-        adj_acct_q = (Q.from_(adj_acct_t).select(adj_acct_t.id)
-                      .where(adj_acct_t.account_type == "stock_adjustment")
-                      .where(adj_acct_t.company_id == P())
-                      .where(adj_acct_t.is_group == 0)
-                      .limit(1))
-        stock_adj_acct = conn.execute(adj_acct_q.get_sql(), (company_id,)).fetchone()
-        stock_adj_account_id = stock_adj_acct["id"] if stock_adj_acct else None
+        fiscal_year = get_fiscal_year(conn, posting_date, company_id=wh_row["company_id"])
+        cost_center_id = (dims_obj or {}).get("cost_center") or _get_cost_center(conn, company_id)
 
-        if warehouse_account_id and stock_adj_account_id:
-            abs_adj = abs(adjustment)
-            gl_entries = []
-            if adjustment > 0:
-                # Rate increased: DR Stock-in-Hand, CR Stock Adjustment
-                gl_entries.append({
-                    "account_id": warehouse_account_id,
-                    "debit": str(round_currency(abs_adj)),
-                    "credit": "0",
-                })
-                gl_entries.append({
-                    "account_id": stock_adj_account_id,
-                    "debit": "0",
-                    "credit": str(round_currency(abs_adj)),
-                    "cost_center_id": cost_center_id,
-                })
-            else:
-                # Rate decreased: DR Stock Adjustment, CR Stock-in-Hand
-                gl_entries.append({
-                    "account_id": stock_adj_account_id,
-                    "debit": str(round_currency(abs_adj)),
-                    "credit": "0",
-                    "cost_center_id": cost_center_id,
-                })
-                gl_entries.append({
-                    "account_id": warehouse_account_id,
-                    "debit": "0",
-                    "credit": str(round_currency(abs_adj)),
-                })
+        # Generate IDs
+        reval_id = str(uuid.uuid4())
 
-            if dims_obj:
+        # Naming series
+        naming = get_next_name(conn, "stock_revaluation", company_id=company_id)
+
+        # 1. Insert the zero-qty valuation SLE row through the shared repricing helper.
+        # For moving-average items this is byte-identical to the historical inline
+        # INSERT; for FIFO items the helper ALSO resets the open layer rates to the new
+        # rate (R1: revaluation previously skipped FIFO layers, so FIFO stock kept
+        # consuming at stale costs). The GL side is unchanged and posted below.
+        reprice_stock_valuation(
+            conn, item_id, warehouse_id,
+            voucher_type="stock_revaluation",
+            voucher_id=reval_id,
+            posting_date=posting_date,
+            new_rate=str(new_rate_d),
+            fiscal_year=fiscal_year,
+        )
+
+        # 2. Create GL entries for the value adjustment
+        gl_ids = []
+        if adjustment != 0:
+            # Stock-in-Hand account (from warehouse)
+            warehouse_account_id = wh_row["account_id"]
+            if not warehouse_account_id:
+                stock_acct_t = Table("account")
+                stock_acct_q = (Q.from_(stock_acct_t).select(stock_acct_t.id)
+                                .where(stock_acct_t.account_type == "stock")
+                                .where(stock_acct_t.company_id == P())
+                                .where(stock_acct_t.is_group == 0)
+                                .limit(1))
+                stock_acct = conn.execute(stock_acct_q.get_sql(), (company_id,)).fetchone()
+                warehouse_account_id = stock_acct["id"] if stock_acct else None
+
+            # Stock Adjustment account (contra)
+            adj_acct_t = Table("account")
+            adj_acct_q = (Q.from_(adj_acct_t).select(adj_acct_t.id)
+                          .where(adj_acct_t.account_type == "stock_adjustment")
+                          .where(adj_acct_t.company_id == P())
+                          .where(adj_acct_t.is_group == 0)
+                          .limit(1))
+            stock_adj_acct = conn.execute(adj_acct_q.get_sql(), (company_id,)).fetchone()
+            stock_adj_account_id = stock_adj_acct["id"] if stock_adj_acct else None
+
+            if warehouse_account_id and stock_adj_account_id:
+                abs_adj = abs(adjustment)
+                gl_entries = []
+                if adjustment > 0:
+                    # Rate increased: DR Stock-in-Hand, CR Stock Adjustment
+                    gl_entries.append({
+                        "account_id": warehouse_account_id,
+                        "debit": str(round_currency(abs_adj)),
+                        "credit": "0",
+                    })
+                    gl_entries.append({
+                        "account_id": stock_adj_account_id,
+                        "debit": "0",
+                        "credit": str(round_currency(abs_adj)),
+                        "cost_center_id": cost_center_id,
+                    })
+                else:
+                    # Rate decreased: DR Stock Adjustment, CR Stock-in-Hand
+                    gl_entries.append({
+                        "account_id": stock_adj_account_id,
+                        "debit": str(round_currency(abs_adj)),
+                        "credit": "0",
+                        "cost_center_id": cost_center_id,
+                    })
+                    gl_entries.append({
+                        "account_id": warehouse_account_id,
+                        "debit": "0",
+                        "credit": str(round_currency(abs_adj)),
+                    })
+
+                if dims_obj:
+                    for gle in gl_entries:
+                        gle["dimensions"] = dict(dims_obj)
+
                 for gle in gl_entries:
-                    gle["dimensions"] = dict(dims_obj)
+                    gle["fiscal_year"] = fiscal_year
 
-            for gle in gl_entries:
-                gle["fiscal_year"] = fiscal_year
+                try:
+                    gl_ids = insert_gl_entries(
+                        conn, gl_entries,
+                        voucher_type="stock_revaluation",
+                        voucher_id=reval_id,
+                        posting_date=posting_date,
+                        company_id=company_id,
+                        remarks=f"Stock Revaluation {naming}: "
+                                f"{item_row['item_name']} rate {old_rate_d} → {new_rate_d}",
+                    )
+                except ValueError as e:
+                    sys.stderr.write(f"[erpclaw-inventory] GL posting failed: {e}\n")
+                    err(f"GL posting failed: {e}")
 
-            try:
-                gl_ids = insert_gl_entries(
-                    conn, gl_entries,
-                    voucher_type="stock_revaluation",
-                    voucher_id=reval_id,
-                    posting_date=posting_date,
-                    company_id=company_id,
-                    remarks=f"Stock Revaluation {naming}: "
-                            f"{item_row['item_name']} rate {old_rate_d} → {new_rate_d}",
-                )
-            except ValueError as e:
-                sys.stderr.write(f"[erpclaw-inventory] GL posting failed: {e}\n")
-                err(f"GL posting failed: {e}")
+        # 3. Insert stock_revaluation record
+        # Uses CAST(CURRENT_TIMESTAMP AS TEXT) for created_at and updated_at — kept as raw SQL
+        conn.execute(
+            """INSERT INTO stock_revaluation (
+                id, naming_series, company_id, item_id, warehouse_id,
+                posting_date, current_qty, old_rate, new_rate,
+                adjustment_amount, reason, dimensions_json, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted',
+                      CAST(CURRENT_TIMESTAMP AS TEXT), CAST(CURRENT_TIMESTAMP AS TEXT))""",
+            (
+                reval_id, naming, company_id, item_id, warehouse_id,
+                posting_date,
+                str(round_currency(current_qty)),
+                str(round_currency(old_rate_d)),
+                str(round_currency(new_rate_d)),
+                str(adjustment),
+                reason,
+                dims_text,
+            ),
+        )
 
-    # 3. Insert stock_revaluation record
-    # Uses CAST(CURRENT_TIMESTAMP AS TEXT) for created_at and updated_at — kept as raw SQL
-    conn.execute(
-        """INSERT INTO stock_revaluation (
-            id, naming_series, company_id, item_id, warehouse_id,
-            posting_date, current_qty, old_rate, new_rate,
-            adjustment_amount, reason, dimensions_json, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted',
-                  CAST(CURRENT_TIMESTAMP AS TEXT), CAST(CURRENT_TIMESTAMP AS TEXT))""",
-        (
-            reval_id, naming, company_id, item_id, warehouse_id,
-            posting_date,
-            str(round_currency(current_qty)),
-            str(round_currency(old_rate_d)),
-            str(round_currency(new_rate_d)),
-            str(adjustment),
-            reason,
-            dims_text,
-        ),
-    )
-
-    audit(conn, "erpclaw-inventory", "revalue-stock", "stock_revaluation",
-          reval_id, new_values={
-              "item_id": item_id, "warehouse_id": warehouse_id,
-              "old_rate": str(old_rate_d), "new_rate": str(new_rate_d),
-              "adjustment": str(adjustment), "gl_count": len(gl_ids),
-          })
-    conn.commit()
+        audit(conn, "erpclaw-inventory", "revalue-stock", "stock_revaluation",
+              reval_id, new_values={
+                  "item_id": item_id, "warehouse_id": warehouse_id,
+                  "old_rate": str(old_rate_d), "new_rate": str(new_rate_d),
+                  "adjustment": str(adjustment), "gl_count": len(gl_ids),
+              })
+        conn.commit()
+    except SystemExit:
+        conn.rollback()
+        raise
 
     ok({
         "revaluation_id": reval_id,

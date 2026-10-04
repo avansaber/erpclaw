@@ -95,16 +95,22 @@ def _run_postgres(db_path):
         if add_dimensions:
             conn.execute(_ADD_DIMENSIONS_JSON)
             print("  PostgreSQL: gl_entry.dimensions_json: added.")
+        elif not _gl_exists:
+            print("  PostgreSQL: gl_entry absent; gl_entry.dimensions_json not added")
         else:
             print("  PostgreSQL: gl_entry.dimensions_json: already present")
         if add_payment_method:
             conn.execute(_ADD_PAYMENT_METHOD)
             print("  PostgreSQL: payment_entry.payment_method: added.")
+        elif not _pay_exists:
+            print("  PostgreSQL: payment_entry absent; payment_entry.payment_method not added")
         else:
             print("  PostgreSQL: payment_entry.payment_method: already present")
         if add_project_index:
             conn.execute(_ADD_PROJECT_INDEX)
             print("  PostgreSQL: idx_gl_entry_project: added.")
+        elif not _gl_exists:
+            print("  PostgreSQL: gl_entry absent; idx_gl_entry_project not added")
         else:
             print("  PostgreSQL: idx_gl_entry_project: already present")
         _seed_registries(conn)
@@ -324,8 +330,20 @@ def _seed_registries(conn):
           f"3 party types, 21 account types")
 
 
+def _build_parser():
+    """Build the command-line parser, resolving the default at call time.
+
+    On a PostgreSQL dialect the configured URL is the target, so `--db-path`
+    defaults to None; on SQLite it defaults to the install database file.
+    """
+    if os.environ.get("ERPCLAW_DB_DIALECT", "sqlite") == "postgresql":
+        _default = None
+    else:
+        _default = os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "data.sqlite")
+    _parser = argparse.ArgumentParser(description="Migration 001: Registry tables")
+    _parser.add_argument("--db-path", default=_default)
+    return _parser
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Migration 001: Registry tables")
-    parser.add_argument("--db-path", default=DEFAULT_DB_PATH)
-    args = parser.parse_args()
-    run_migration(args.db_path)
+    run_migration(_build_parser().parse_args().db_path)

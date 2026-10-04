@@ -251,6 +251,14 @@
    "doc_ref": "prov:internal:11819eef",
    "class": "direct"
   },
+  "authority_bootstrap_challenge": {
+   "doc_ref": "prov:module-spec:erpclaw",
+   "class": "module_spec"
+  },
+  "authority_credential": {
+   "doc_ref": "prov:module-spec:erpclaw",
+   "class": "module_spec"
+  },
   "authority_delegation": {
    "doc_ref": "prov:module-spec:erpclaw",
    "class": "module_spec"
@@ -264,6 +272,10 @@
    "class": "module_spec"
   },
   "authority_delegation_usage": {
+   "doc_ref": "prov:module-spec:erpclaw",
+   "class": "module_spec"
+  },
+  "authority_deployment": {
    "doc_ref": "prov:module-spec:erpclaw",
    "class": "module_spec"
   },
@@ -283,6 +295,11 @@
    "doc_ref": "prov:module-spec:erpclaw",
    "class": "module_spec"
   },
+  "authority_session": {
+   "doc_ref": "prov:module-spec:erpclaw",
+   "class": "module_spec"
+  },
+
   "automotiveclaw_buyer_order": {
    "doc_ref": "prov:module-spec:automotiveclaw",
    "class": "module_spec",
@@ -2577,6 +2594,10 @@
    "class": "module_spec"
   },
   "operation_authorization_envelope": {
+   "doc_ref": "prov:module-spec:erpclaw",
+   "class": "module_spec"
+  },
+  "operation_authorization_issuer": {
    "doc_ref": "prov:module-spec:erpclaw",
    "class": "module_spec"
   },

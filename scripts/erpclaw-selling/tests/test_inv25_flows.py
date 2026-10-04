@@ -98,9 +98,10 @@ def test_inv25_green_across_invoice_lifecycle(conn, env):
 
 
 def test_inv25_green_with_credit_note_pair(conn, env):
-    """Real CN flow (create-credit-note + submit): the CN's negative
-    outstanding matches its own PLE row; the original keeps full outstanding —
-    both sides of the by-design split stay green, always-on."""
+    """Real CN flow (create-credit-note + submit): submitting the note applies
+    it to its invoice (m783a) — the 500.00 invoice falls to 300.00
+    partially_paid, the fully-absorbed note reads "0" with its posting row
+    plus the allocation pair; INV-25 stays green, always-on."""
     si_id = _create_invoice(conn, env)
     r = call_action(mod.submit_sales_invoice, conn, ns(sales_invoice_id=si_id))
     assert is_ok(r)
@@ -125,15 +126,26 @@ def test_inv25_green_with_credit_note_pair(conn, env):
         "SELECT amount, against_voucher_type, against_voucher_id "
         "FROM payment_ledger_entry WHERE voucher_type='credit_note' "
         "AND voucher_id=? AND delinked=0", (cn_id,)).fetchall()
-    assert len(cn_ple) == 1
-    # exact expected relationship (sweep hard-case 1): CN outstanding ≡ its own
-    # PLE row (negative); against points at the ORIGINAL invoice.
-    assert Decimal(cn_row["outstanding_amount"]) == Decimal(cn_ple[0]["amount"]) == Decimal("-200.00")
-    assert cn_ple[0]["against_voucher_type"] == "sales_invoice"
-    assert cn_ple[0]["against_voucher_id"] == si_id
-    # original untouched by design
+    assert len(cn_ple) == 3
+    # the note is fully absorbed: posting row -200.00 self, allocation pair
+    # +200.00 self / -200.00 against the original; outstanding "0".
+    assert Decimal(cn_row["outstanding_amount"]) == Decimal("0")
+    amounts = sorted(Decimal(r["amount"]) for r in cn_ple)
+    assert amounts == [Decimal("-200.00"), Decimal("-200.00"), Decimal("200.00")]
+    self_rows = sorted(
+        Decimal(r["amount"]) for r in cn_ple
+        if r["against_voucher_type"] == "credit_note"
+        and r["against_voucher_id"] == cn_id)
+    assert self_rows == [Decimal("-200.00"), Decimal("200.00")]
+    inv_rows = [
+        r for r in cn_ple if r["against_voucher_type"] == "sales_invoice"
+        and r["against_voucher_id"] == si_id]
+    assert len(inv_rows) == 1
+    assert Decimal(inv_rows[0]["amount"]) == Decimal("-200.00")
+    # the original absorbs the note: 500.00 -> 300.00 partially_paid
     orig = conn.execute(
-        "SELECT outstanding_amount FROM sales_invoice WHERE id=?", (si_id,)).fetchone()
-    assert Decimal(orig["outstanding_amount"]) == Decimal("500.00")
+        "SELECT outstanding_amount, status FROM sales_invoice WHERE id=?", (si_id,)).fetchone()
+    assert Decimal(orig["outstanding_amount"]) == Decimal("300.00")
+    assert orig["status"] == "partially_paid"
 
     assert _inv25(conn) is None  # both documents green under the derived formula

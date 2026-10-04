@@ -102,7 +102,8 @@ CREATE TABLE IF NOT EXISTS audit_log (
     authorization_id TEXT,
     authorization_status TEXT,
     scope_company_ids TEXT,
-    scope_status TEXT
+    scope_status TEXT,
+    actor_session_digest TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp);
@@ -4786,6 +4787,7 @@ def _init_db_postgres(db_path: str) -> None:
         from erpclaw_lib import seam
         seam.provision_authority_core(db_path)
         seam.provision_authority_envelope(db_path)
+        seam.provision_authority_sessions(db_path)
 
         table_count = conn.execute(
             "SELECT COUNT(*) FROM information_schema.tables "
@@ -4872,6 +4874,7 @@ def init_db(db_path: str = None) -> None:
         from erpclaw_lib import seam
         seam.provision_authority_core(db_path)
         seam.provision_authority_envelope(db_path)
+        seam.provision_authority_sessions(db_path)
 
         # Verify: count tables
         cursor = conn.execute(

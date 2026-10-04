@@ -790,6 +790,70 @@ def _catalog_fk_ondelete(table, db_path=None):
     return out
 
 
+def _normalise_partial_predicate(raw):
+    """Dialect-neutral text of one partial-index predicate.
+
+    The SQLite reflection hands back a bound-text object while the PostgreSQL
+    reflection hands back plain text, and the latter may spell a comparison
+    with an explicit type suffix; neither difference changes which rows the
+    index covers, so both are folded away here. One enclosing pair of
+    parentheses is stripped while the whole predicate is wrapped in exactly
+    one, because each backend parenthesises the stored form its own way.
+    """
+    import re as _re
+
+    text = " ".join(str(raw).split())
+    text = _re.sub(r"::[A-Za-z_][A-Za-z0-9_ ]*", "", text)
+    text = " ".join(text.split())
+    while len(text) >= 2 and text.startswith("(") and text.endswith(")"):
+        depth = 0
+        wrapped = True
+        for pos, char in enumerate(text):
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+            if depth == 0 and pos < len(text) - 1:
+                wrapped = False
+                break
+        if not wrapped:
+            break
+        text = " ".join(text[1:-1].split())
+    return text
+
+
+def _partial_unique_entries(table, db_path=None):
+    """`(name, columns, predicate)` for each live partial unique index.
+
+    Columns come from the inspector's own index listing; the predicate comes
+    from the same listing's backend-specific qualifier, or — where the
+    vendored reflection leaves that qualifier empty — from the text after the
+    qualifier keyword in this table's already-reported index definition, so
+    no second trip to the backend catalog is needed here.
+    """
+    insp = _inspector(db_path)
+    if get_dialect() == "postgresql":
+        first_key, second_key = "postgresql_where", "sqlite_where"
+    else:
+        first_key, second_key = "sqlite_where", "postgresql_where"
+    defs = index_definitions(table, db_path)
+    out = []
+    for entry in insp.get_indexes(table):
+        if not entry.get("unique"):
+            continue
+        options = entry.get("dialect_options") or {}
+        raw = options.get(first_key, options.get(second_key))
+        if raw is None or str(raw).strip() == "":
+            definition = defs.get(entry.get("name") or "")
+            parts = (definition or "").split(" WHERE ", 1)
+            if len(parts) != 2:
+                continue
+            raw = parts[1]
+        out.append((entry.get("name"), tuple(entry.get("column_names") or []),
+                    _normalise_partial_predicate(raw)))
+    return sorted(out)
+
+
 def describe_constraints(table, db_path=None):
     """CHECK bodies, foreign keys and column defaults — what `describe_table` omits.
 
@@ -838,7 +902,8 @@ def describe_constraints(table, db_path=None):
         | _catalog_unique_columns(table, db_path))
     return {"checks": checks, "foreign_keys": foreign_keys,
             "defaults": defaults, "uniques": uniques,
-            "index_defs": index_definitions(table, db_path)}
+            "index_defs": index_definitions(table, db_path),
+            "partial_unique": _partial_unique_entries(table, db_path)}
 
 
 def describe_table(table, db_path=None):
@@ -1202,6 +1267,173 @@ def provision_authority_envelope(db_path=None) -> dict:
     meta.create_all(
         get_engine(db_path),
         tables=[meta.tables[name] for name in _AUTHORITY_ENVELOPE_TABLES],
+        checkfirst=True)
+    return {"created": absent}
+
+
+_AUTHORITY_SESSION_TABLES = (
+    "authority_deployment",
+    "authority_credential",
+    "authority_session",
+    "authority_bootstrap_challenge",
+    "operation_authorization_issuer",
+)
+
+
+def authority_session_metadata():
+    """The shipped declaration of the five session/credential tables."""
+    sa = _sqlalchemy()
+    meta = authority_envelope_metadata()
+    sa.Table(
+        "authority_deployment", meta,
+        sa.Column("install_id", sa.Text, primary_key=True),
+        sa.Column("operator_account", sa.Text, nullable=False),
+        sa.Column("service_account", sa.Text, nullable=False),
+        sa.Column("model_accounts", sa.Text, nullable=False),
+        sa.Column("expected_install_id", sa.Text, nullable=False),
+        sa.Column("recorded_at",
+                  sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+                  nullable=False),
+        sa.ForeignKeyConstraint(
+            ["install_id"], ["authority_install.install_id"],
+            onupdate="RESTRICT", ondelete="RESTRICT"),
+        sa.CheckConstraint("operator_account <> service_account"),
+        sa.CheckConstraint("recorded_at >= 0"),
+        sa.CheckConstraint("length(operator_account) BETWEEN 1 AND 64"),
+        sa.CheckConstraint("length(service_account) BETWEEN 1 AND 64"),
+        sa.CheckConstraint("length(expected_install_id) BETWEEN 1 AND 128"),
+    )
+    sa.Table(
+        "authority_credential", meta,
+        sa.Column("install_id", sa.Text, nullable=False),
+        sa.Column("id", sa.Text, nullable=False),
+        sa.Column("principal_id", sa.Text, nullable=False),
+        sa.Column("scheme", sa.Text, nullable=False),
+        sa.Column("verifier", sa.Text, nullable=False),
+        sa.Column("created_at",
+                  sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+                  nullable=False),
+        sa.Column("retired_at",
+                  sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+                  nullable=True),
+        sa.PrimaryKeyConstraint("install_id", "id"),
+        sa.ForeignKeyConstraint(
+            ["install_id", "principal_id"],
+            ["authority_principal.install_id", "authority_principal.id"],
+            onupdate="RESTRICT", ondelete="RESTRICT"),
+        sa.CheckConstraint("scheme = 'pbkdf2-sha256'"),
+        sa.CheckConstraint(
+            "substr(verifier, 1, 14) = 'pbkdf2:600000$'"),
+        sa.CheckConstraint("length(verifier) = 111"),
+        sa.CheckConstraint(
+            "retired_at IS NULL OR retired_at >= created_at"),
+        sa.Index("ux_authority_credential_live", "install_id",
+                 "principal_id", unique=True,
+                 sqlite_where=sa.text("retired_at IS NULL"),
+                 postgresql_where=sa.text("retired_at IS NULL")),
+    )
+    sa.Table(
+        "authority_session", meta,
+        sa.Column("install_id", sa.Text, nullable=False),
+        sa.Column("id_digest", sa.Text, nullable=False),
+        sa.Column("principal_id", sa.Text, nullable=False),
+        sa.Column("created_at",
+                  sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+                  nullable=False),
+        sa.Column("expires_at",
+                  sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+                  nullable=False),
+        sa.Column("revoked_at",
+                  sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+                  nullable=True),
+        sa.Column("created_account", sa.Text, nullable=False),
+        sa.Column("route", sa.Text, nullable=False),
+        sa.PrimaryKeyConstraint("install_id", "id_digest"),
+        sa.ForeignKeyConstraint(
+            ["install_id", "principal_id"],
+            ["authority_principal.install_id", "authority_principal.id"],
+            onupdate="RESTRICT", ondelete="RESTRICT"),
+        sa.CheckConstraint("length(id_digest) = 64"),
+        sa.CheckConstraint("created_at < expires_at"),
+        sa.CheckConstraint("expires_at - created_at <= 28800000"),
+        sa.CheckConstraint(
+            "revoked_at IS NULL OR revoked_at >= created_at"),
+        sa.CheckConstraint("route IN ('operator-tty')"),
+    )
+    sa.Table(
+        "authority_bootstrap_challenge", meta,
+        sa.Column("install_id", sa.Text, nullable=False),
+        sa.Column("id", sa.Text, nullable=False),
+        sa.Column("digest", sa.Text, nullable=False),
+        sa.Column("issued_at",
+                  sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+                  nullable=False),
+        sa.Column("expires_at",
+                  sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+                  nullable=False),
+        sa.Column("consumed_at",
+                  sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+                  nullable=True),
+        sa.Column("rotated_at",
+                  sa.BigInteger().with_variant(sa.Integer(), "sqlite"),
+                  nullable=True),
+        sa.Column("consumed_by", sa.Text, nullable=True),
+        sa.Column("state", sa.Text, nullable=False),
+        sa.PrimaryKeyConstraint("install_id", "id"),
+        sa.ForeignKeyConstraint(
+            ["install_id"], ["authority_install.install_id"],
+            onupdate="RESTRICT", ondelete="RESTRICT"),
+        sa.CheckConstraint("length(digest) = 64"),
+        sa.CheckConstraint("state IN ('issued', 'consumed', 'rotated')"),
+        sa.CheckConstraint(
+            "(state = 'issued' AND consumed_at IS NULL AND "
+            "rotated_at IS NULL AND consumed_by IS NULL) OR "
+            "(state = 'consumed' AND consumed_at IS NOT NULL AND "
+            "consumed_by IS NOT NULL AND rotated_at IS NULL) OR "
+            "(state = 'rotated' AND rotated_at IS NOT NULL AND "
+            "consumed_at IS NULL AND consumed_by IS NULL)"),
+        sa.CheckConstraint(
+            "issued_at < expires_at AND expires_at - issued_at <= 3600000"),
+        sa.Index("ux_authority_bootstrap_issued", "install_id", unique=True,
+                 sqlite_where=sa.text("state = 'issued'"),
+                 postgresql_where=sa.text("state = 'issued'")),
+    )
+    sa.Table(
+        "operation_authorization_issuer", meta,
+        sa.Column("authorization_id", sa.Text, primary_key=True),
+        sa.Column("install_id", sa.Text, nullable=False),
+        sa.Column("issuer_id", sa.Text, nullable=False),
+        sa.Column("session_digest", sa.Text, nullable=False),
+        sa.ForeignKeyConstraint(
+            ["authorization_id"], ["operation_authorization.id"],
+            onupdate="RESTRICT", ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(
+            ["install_id", "issuer_id"],
+            ["authority_principal.install_id", "authority_principal.id"],
+            onupdate="RESTRICT", ondelete="RESTRICT"),
+        sa.CheckConstraint("length(session_digest) = 64"),
+    )
+    return meta
+
+
+def provision_authority_sessions(db_path=None) -> dict:
+    """Ensure the five session/credential tables exist, empty.
+
+    Tables are added only when absent; rows already stored are never
+    changed. The authority core and the authorization envelope must already
+    be present.
+    """
+    have = set(table_names(db_path))
+    if any(name not in have
+           for name in _AUTHORITY_CORE_TABLES + _AUTHORITY_ENVELOPE_TABLES):
+        raise RuntimeError(
+            "authority sessions need the authorization envelope: "
+            "ENVELOPE_ABSENT")
+    absent = [name for name in _AUTHORITY_SESSION_TABLES if name not in have]
+    meta = authority_session_metadata()
+    meta.create_all(
+        get_engine(db_path),
+        tables=[meta.tables[name] for name in _AUTHORITY_SESSION_TABLES],
         checkfirst=True)
     return {"created": absent}
 

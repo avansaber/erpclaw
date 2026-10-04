@@ -1333,7 +1333,7 @@
         },
         "CHANGELOG.md": {
           "executable": false,
-          "sha256": "5dcaf1690549a4692636623c406ff87a372eddc9ec1b2f5980932a4594668d6e"
+          "sha256": "4ea8787c83e03aeb483a52d1a07ed8049003e85935e0c4a6bde7c177d27dbc50"
         },
         "LICENSE.txt": {
           "executable": false,
@@ -1341,11 +1341,11 @@
         },
         "README.md": {
           "executable": false,
-          "sha256": "9ed2659863765b0cecac1d4f46b93152259ad33db58343a9f3cf2487909551d2"
+          "sha256": "60523eb7a96b04908f77ced490d4c3fbf147ada03f10dd5e2532e0ee220d6da5"
         },
         "SKILL.md": {
           "executable": false,
-          "sha256": "c4a42349aa89e64b6602d001dd53a947c5816768eb7a580b792d36468cb5c9a0"
+          "sha256": "7e5918dccf6e24f2d7e06d6ba38cedd01c96eedefc67532d3429a3b0bb25a0e1"
         },
         "UI.yaml": {
           "executable": false,
@@ -1873,7 +1873,7 @@
         },
         "scripts/erpclaw-inventory/db_query.py": {
           "executable": false,
-          "sha256": "643087d0888515fa927c521198481269a2cfe1ccbe196fa480f61441d1588a61"
+          "sha256": "8ff753a1d98b5015bf6985b8452c24ce43a347986c2115ee781d7e22d8b173b5"
         },
         "scripts/erpclaw-inventory/tests/conftest.py": {
           "executable": false,
@@ -1942,6 +1942,10 @@
         "scripts/erpclaw-inventory/tests/test_resolve_item.py": {
           "executable": false,
           "sha256": "ec1a75af56b24f45da2aae1b0caebe5b008ead46c61c28a459b49e6edd448fad"
+        },
+        "scripts/erpclaw-inventory/tests/test_revalue_stock_lock_order.py": {
+          "executable": false,
+          "sha256": "28fa1f60b546dcb8da5ed7c3de5b7a18d935fa5eec717e823f86a8d225f43a6e"
         },
         "scripts/erpclaw-inventory/tests/test_s7_item_alternatives.py": {
           "executable": false,
@@ -2233,7 +2237,7 @@
         },
         "scripts/erpclaw-payments/tests/test_customer_refund_credit_note.py": {
           "executable": false,
-          "sha256": "fa477817820df1b13e214279dc16ba8f30c0f6e1625c9c2ce5b8b86911710dfe"
+          "sha256": "ea5c0de58919c0df960781b81662496cc858446759ac15b232c7d4f4f2ff72a9"
         },
         "scripts/erpclaw-payments/tests/test_expense_claim_currency_and_status.py": {
           "executable": false,
@@ -2425,7 +2429,7 @@
         },
         "scripts/erpclaw-selling/db_query.py": {
           "executable": false,
-          "sha256": "dcd4608750b8be307cc9de49f387da17629d14aeaebcc734a323ed51f74a95f2"
+          "sha256": "f13e1d52fa86ad430eb0174aacccf167b43f6aba1cb7844560495c629cfe059c"
         },
         "scripts/erpclaw-selling/tests/conftest.py": {
           "executable": false,
@@ -2471,9 +2475,25 @@
           "executable": false,
           "sha256": "faa33f34ccac0c8ed9bf7fb2b6fcd774c46c8edd8d6f1b77a2cbd94643f34ad7"
         },
+        "scripts/erpclaw-selling/tests/test_credit_note_allocation.py": {
+          "executable": false,
+          "sha256": "84fadfeb66c9f798f6029a62189a1c5429dc0b3a9e1be87b303c8291a207622a"
+        },
+        "scripts/erpclaw-selling/tests/test_credit_note_allocation_pg.py": {
+          "executable": false,
+          "sha256": "d0337741c997e8cb978f6b2a20451f9d9c316be82c6477d3cf7dc5c27a69f189"
+        },
         "scripts/erpclaw-selling/tests/test_credit_note_create_says_draft.py": {
           "executable": false,
           "sha256": "cf8b33438803560724faf94c52e2fd35cde9a0da5035fd3d0826a736b3f19721"
+        },
+        "scripts/erpclaw-selling/tests/test_credit_note_guard_other_cancel_routes.py": {
+          "executable": false,
+          "sha256": "7fe9e3aa4522830b3a5587467330aec06422badf287b9679abcbb112a3b6d51f"
+        },
+        "scripts/erpclaw-selling/tests/test_credit_note_original_cancel.py": {
+          "executable": false,
+          "sha256": "1603139fdbb1c356ba2550d38d4ca0ad3ed08bff894f3881b6dfbef5e13d78a0"
         },
         "scripts/erpclaw-selling/tests/test_credit_note_submit_credit_policy.py": {
           "executable": false,
@@ -2529,7 +2549,7 @@
         },
         "scripts/erpclaw-selling/tests/test_inv25_flows.py": {
           "executable": false,
-          "sha256": "413d902104045635d77d4a4e3e5c172bc55fb0a3834a5676484004b0435a1d04"
+          "sha256": "8a6418d50cae9ffd56661782fcc52ba67dc3518432fdfb173f429b8af85e4086"
         },
         "scripts/erpclaw-selling/tests/test_m325_strong_depth.py": {
           "executable": false,
@@ -2541,7 +2561,7 @@
         },
         "scripts/erpclaw-selling/tests/test_m612_pg_product_sql.py": {
           "executable": false,
-          "sha256": "805c4499071e70275f8d6a47d64de2b7cd292b7cd802121202f758e71686f0ad"
+          "sha256": "c3eb298be95bdff363aff82e91e13b7009caa259417572967dbac0e63dfd4665"
         },
         "scripts/erpclaw-selling/tests/test_m626_strong_depth_selling.py": {
           "executable": false,
@@ -2577,7 +2597,7 @@
         },
         "scripts/erpclaw-selling/tests/test_sales_invoice_envelope_gate.py": {
           "executable": false,
-          "sha256": "771826d4ce5fc3ceeb86b8d60473dd56fac68c5b18994acf0d32f5f3e6fdbbe0"
+          "sha256": "db913f7a93ba49740feb6518b509153efd12699ae350eb82f4560df89b767c28"
         },
         "scripts/erpclaw-selling/tests/test_sales_invoice_projection.py": {
           "executable": false,
@@ -2617,7 +2637,7 @@
         },
         "scripts/erpclaw-setup/init_schema.py": {
           "executable": false,
-          "sha256": "cf10c12753d03fc268e8e4c4ca4d6a54533409cb18870dcc54fcfed991257073"
+          "sha256": "d2331ded305a24ed6854cbc6c09c7bfefcfb2bca7a04cc64f32c943387e8adc5"
         },
         "scripts/erpclaw-setup/lib/erpclaw_lib/__init__.py": {
           "executable": false,
@@ -2785,7 +2805,7 @@
         },
         "scripts/erpclaw-setup/lib/erpclaw_lib/party_ledger.py": {
           "executable": false,
-          "sha256": "13086f84166d598f4611087f5e0089dbc4cf7a8e60a5c1fdaef26ecdae40de47"
+          "sha256": "f7f08d63efc5876e5eb533d96e16a342a1e0866d041ec39f5d92e31e14c6704f"
         },
         "scripts/erpclaw-setup/lib/erpclaw_lib/passwords.py": {
           "executable": false,
@@ -2797,7 +2817,7 @@
         },
         "scripts/erpclaw-setup/lib/erpclaw_lib/payment_clearing.py": {
           "executable": false,
-          "sha256": "1a40f48cf80304e674a3c943f3464dfb74af4d6780f52c9406d80ae4e8ccdd93"
+          "sha256": "7ce713e4d7b1900ab85de6574ee18195743b770aeefacf6448e45a28ebb5f36f"
         },
         "scripts/erpclaw-setup/lib/erpclaw_lib/query.py": {
           "executable": false,
@@ -2817,7 +2837,7 @@
         },
         "scripts/erpclaw-setup/lib/erpclaw_lib/seam.py": {
           "executable": false,
-          "sha256": "c3aa434aa36ce91c12c9710b7c0cda16d06545e9be24792c32a20a96adb28dc2"
+          "sha256": "5a767584ce9a91125606d0718883f94e473ae97f914ffc9212f8917288a9d032"
         },
         "scripts/erpclaw-setup/lib/erpclaw_lib/signing.py": {
           "executable": false,
@@ -3765,11 +3785,11 @@
         },
         "scripts/erpclaw-setup/migrations/001_registry_tables.py": {
           "executable": false,
-          "sha256": "357738af60c13be6c65564a6995684747cc5f45ae1d7dc22415e08ffedc70741"
+          "sha256": "4699fedd6310fb905bdedce8935fe575476a4f06bd681012603951fd047501b1"
         },
         "scripts/erpclaw-setup/migrations/002_credit_dunning.py": {
           "executable": false,
-          "sha256": "14d679a977775aa308c48d6231eb4a25c5047945ecc2d07c2d491c7642d0259d"
+          "sha256": "7538fddc6d2f05cc27a5ad4863e41e20d036841c72be75cefef1a5fb7f212d8b"
         },
         "scripts/erpclaw-setup/migrations/003_displace_account_check.py": {
           "executable": false,
@@ -3967,6 +3987,18 @@
           "executable": false,
           "sha256": "abe67d445a84db20be394fbadbf601cd4f050fc9cfad1bef4adcf1d50c374f2f"
         },
+        "scripts/erpclaw-setup/migrations/052_credit_note_allocation.py": {
+          "executable": false,
+          "sha256": "cc6c342a2fa63a72a8ec6a6e018e2086de7ddd804061cc3babd7aa453d2f3558"
+        },
+        "scripts/erpclaw-setup/migrations/053_authority_sessions.py": {
+          "executable": false,
+          "sha256": "41fac4f2e6db387a0ff3e1f8ea206e2067be82e24ede8a82d399bbe1e28c058d"
+        },
+        "scripts/erpclaw-setup/migrations/054_foundation_001_002_on_postgresql.py": {
+          "executable": false,
+          "sha256": "ef31402118293c10e3af0de78c092777dd639ef3878546934c52ea7f96ab82cc"
+        },
         "scripts/erpclaw-setup/references/authority-and-read-only.md": {
           "executable": false,
           "sha256": "d909542251de5dd5751418780a9b6cdd014b09bb95dc72077e6ffa87bfe86551"
@@ -4145,7 +4177,7 @@
         },
         "scripts/erpclaw-setup/tests/test_migration_041_audit_actor_columns.py": {
           "executable": false,
-          "sha256": "c6bb68516679d3012be4f043d4fb605f6a6b226056fe362e9c0789742f9a9db4"
+          "sha256": "afea177da4bad127e993c4725c99f1cb71a3386d281a024288e2a2b32a2959b0"
         },
         "scripts/erpclaw-setup/tests/test_migration_042_foodclaw_voucher_types.py": {
           "executable": false,
@@ -4161,7 +4193,7 @@
         },
         "scripts/erpclaw-setup/tests/test_migration_045_authorization_envelope.py": {
           "executable": false,
-          "sha256": "df1c3cbd06d6b4abb0f2150d4601bfc1bfa49cf84f08bf42feb64732c5f6b4ba"
+          "sha256": "5eb0b7c0433d49128ebc9669b1d72be59ec0b0dd334af73bc6b061b1dcd40634"
         },
         "scripts/erpclaw-setup/tests/test_migration_046_document_dimensions.py": {
           "executable": false,
@@ -4169,7 +4201,7 @@
         },
         "scripts/erpclaw-setup/tests/test_migration_047_audit_company_scope.py": {
           "executable": false,
-          "sha256": "839177ef80343bb0b9973956791e0972c399a7cae06a75f553190f2d4df1e87c"
+          "sha256": "096374442ce16df789784b4cebe1670e834628061378f3226ad12017f8b3c4f9"
         },
         "scripts/erpclaw-setup/tests/test_migration_048_authority_timestamps_bigint.py": {
           "executable": false,
@@ -4187,6 +4219,18 @@
           "executable": false,
           "sha256": "254d43049c468b981193a7a8752eaf44732c54d774d1c464360ce592ba19097d"
         },
+        "scripts/erpclaw-setup/tests/test_migration_053_authority_sessions.py": {
+          "executable": false,
+          "sha256": "18c9103d54902e1d0bf8ebb8bf9538cc89b0480cad7932b6a088c0f032c0ec46"
+        },
+        "scripts/erpclaw-setup/tests/test_migration_054_foundation_repair_m842b.py": {
+          "executable": false,
+          "sha256": "b95ecb241e6e5370f8669bd21634b0259a11def0abcb2ac2469ff13f77666086"
+        },
+        "scripts/erpclaw-setup/tests/test_migration_credit_note_allocation.py": {
+          "executable": false,
+          "sha256": "1f9481ca6ce53eef29aa73c748cf68b158da10c8966c47bad5853c0cd3c9e711"
+        },
         "scripts/erpclaw-setup/tests/test_migration_pg_drop_constraint.py": {
           "executable": false,
           "sha256": "0d97de151896b6b0d0ad50e2a05e7f3e0ca41c578da4bce77e8d8f954ece4292"
@@ -4201,11 +4245,11 @@
         },
         "scripts/erpclaw-setup/tests/test_migrations_001_002_older_schema_m842.py": {
           "executable": false,
-          "sha256": "ac60a46e24e20e40affb40f8f5e5b4f3ba2afc981f719ab5421126389c09ca4f"
+          "sha256": "c1bc3e1ab8ede013844dbb6215948b305aec8e1c359af53e21bda83d6f885c14"
         },
         "scripts/erpclaw-setup/tests/test_migrations_reach_postgresql_m842.py": {
           "executable": false,
-          "sha256": "faf46045036427d9e2d092f6ba198d071a7b71d25bceb58499f063ef111f3d62"
+          "sha256": "6f72ec406d41534f4c4a2ff9972e7b3985ddd8c19414bfa289f1f5c88a76fb9b"
         },
         "scripts/erpclaw-setup/tests/test_payment_terms_uom.py": {
           "executable": false,
@@ -4217,7 +4261,7 @@
         },
         "scripts/erpclaw-setup/tests/test_pg_init_redaction.py": {
           "executable": false,
-          "sha256": "6476e6dcd049e37d2ca81d76c4670f734a1a8d10faf81ba6ad2a9bc917f282c5"
+          "sha256": "91ba180e55c5b01683bf82b7315bea09fdec0af41a981face4f791be4492a863"
         },
         "scripts/erpclaw-setup/tests/test_pg_initialize_database_target_m843.py": {
           "executable": false,
@@ -4289,7 +4333,7 @@
         },
         "scripts/table_provenance.json": {
           "executable": false,
-          "sha256": "b87d5f9a9563e46342a08a3ca12896cb3fd4de259dcf85c1c27178dbe7a03349"
+          "sha256": "1e0cd10652c1416f741d481b7a601dac2e7a995e6fcf48976195dad3e1587bda"
         },
         "scripts/tests/test_dangerous_actions_gate.py": {
           "executable": false,
@@ -4733,7 +4777,7 @@
         },
         "erpclaw-growth/scripts/erpclaw-analytics/tests/test_analytics_depth_m461.py": {
           "executable": false,
-          "sha256": "9c101a61e4cda735463e9d1009464e3b4deb17ece2555666b7f93271a7de5d9d"
+          "sha256": "e732d39b4edb7f3fbfdaae0936aa18b9bd617262a905ee11c13d63d1abc46bfd"
         },
         "erpclaw-growth/scripts/erpclaw-analytics/tests/test_analytics_depth_m462.py": {
           "executable": false,
@@ -5101,7 +5145,7 @@
         },
         "erpclaw-integrations-stripe/SKILL.md": {
           "executable": false,
-          "sha256": "eaf2a5ad97b6ec95c457e3378f2940bfce315a760c53fc27ad0d5b89af5623ae"
+          "sha256": "fab668081ca99be02173577c2924abb12bc808ab9cd33d9fdd4cf86b7cd6d935"
         },
         "erpclaw-integrations-stripe/init_db.py": {
           "executable": false,
@@ -5149,7 +5193,7 @@
         },
         "erpclaw-integrations-stripe/scripts/reports.py": {
           "executable": false,
-          "sha256": "3c2c2d2cd7b30ac31df4950342c89dbd051ebbf2ee446438f9d9d733c775fa9a"
+          "sha256": "cb9b85c95fa1993f4030d6e7724e3981cdbbf57134ea21fe3df81c047fd7a4d9"
         },
         "erpclaw-integrations-stripe/scripts/rev_rec.py": {
           "executable": false,
@@ -5187,9 +5231,13 @@
           "executable": false,
           "sha256": "e8501874cc4a670836cfe6b5cf52b79720222b0ac0251d56c0c27d9cb3a327ec"
         },
+        "erpclaw-integrations-stripe/scripts/tests/test_fee_report_mixed_itemization.py": {
+          "executable": false,
+          "sha256": "5d3688688ea7564559c7b4dc5b10a83ea4fd41aa90391217210db75d4eac4318"
+        },
         "erpclaw-integrations-stripe/scripts/tests/test_fee_report_numeric_money.py": {
           "executable": false,
-          "sha256": "19bff4c77620cc3090e7c1dce3e0a21f628ae01ed9f48521baef3cb91bdbd380"
+          "sha256": "b4c7a1279b66b50e3015f6d3d53805da1ad6a76febea70fa10f3da2f91d2c77c"
         },
         "erpclaw-integrations-stripe/scripts/tests/test_gl_posting.py": {
           "executable": false,
@@ -5218,6 +5266,10 @@
         "erpclaw-integrations-stripe/scripts/tests/test_money_exact.py": {
           "executable": false,
           "sha256": "12399b8b533d88b30d862aa3c8e7f216fdaa8981abdcf2dd23126ae84003da41"
+        },
+        "erpclaw-integrations-stripe/scripts/tests/test_mrr_exact_currency.py": {
+          "executable": false,
+          "sha256": "41d4ec8bad887c3233063f2a825c2c61fabde0d5c5b4e9eba05b58791a56fa7f"
         },
         "erpclaw-integrations-stripe/scripts/tests/test_reconcile_payout_behaviour.py": {
           "executable": false,
@@ -5401,11 +5453,11 @@
         },
         "erpclaw-loans/scripts/loans.py": {
           "executable": false,
-          "sha256": "5840edfe3004a33f0be745c753ff78de72b991d8b0aeb4f83d54e9e3608600b0"
+          "sha256": "42d6ef8c5983fbfb0eaaf219d570343007780e113025cec4c1304dcc8f4112f2"
         },
         "erpclaw-loans/scripts/repayments.py": {
           "executable": false,
-          "sha256": "358906488cc65500afdebbeb32507d619b879c69b3aee89d366247dcae5775f8"
+          "sha256": "6d0c15b9a2659c64c8499c84b3449dfad689a2da087c53d01e9dd85e03b504f9"
         },
         "erpclaw-loans/scripts/reports.py": {
           "executable": false,
@@ -5419,13 +5471,17 @@
           "executable": false,
           "sha256": "62feda4176af65e5bbd62142b2f1aaa9664ed1a97299208fa1d2605a5ad69b7f"
         },
+        "erpclaw-loans/scripts/tests/test_loan_application_status_race.py": {
+          "executable": false,
+          "sha256": "5118121d52778ed65f4922cad822ddf36a953e426e0bb57009078f00fbfc02f1"
+        },
         "erpclaw-loans/scripts/tests/test_loan_gl_values.py": {
           "executable": false,
           "sha256": "1a57a1c1f112c4c2952a27fecd636406290ce8dc88981b0b9586d2c3a24401de"
         },
         "erpclaw-loans/scripts/tests/test_loan_lock_order.py": {
           "executable": false,
-          "sha256": "96076311459bd3f0a54b87d68116282c01c4a4f229530260515402d477ef4b54"
+          "sha256": "48e482450370697b412a0cc853f02e08d542e25eab2e37ad97bcb6b262e17237"
         },
         "erpclaw-loans/scripts/tests/test_loans.py": {
           "executable": false,
@@ -5469,7 +5525,7 @@
         },
         "erpclaw-logistics/scripts/freight.py": {
           "executable": false,
-          "sha256": "9eb52901c85cb1953d68e54912c6f17c0b838cb0e44f89736b784067111eebb3"
+          "sha256": "59ba1d7889bd29d2856561ce88db9f4babbd32a0d91eac0d298dbf1381a648f6"
         },
         "erpclaw-logistics/scripts/reports.py": {
           "executable": false,
@@ -5490,6 +5546,10 @@
         "erpclaw-logistics/scripts/tests/logistics_helpers.py": {
           "executable": false,
           "sha256": "3cca3f3626772414fc5d13d278b974e78effea4d5664f72198b45b304851711f"
+        },
+        "erpclaw-logistics/scripts/tests/test_carrier_invoice_amount_and_company.py": {
+          "executable": false,
+          "sha256": "7c44ac9a4a61426fc97debe437e3c2b20dc9ae2b2ea6282ca95069f0acb4fb78"
         },
         "erpclaw-logistics/scripts/tests/test_carrier_invoice_freight_report_behaviour.py": {
           "executable": false,
@@ -5681,7 +5741,7 @@
         },
         "erpclaw-ops/scripts/erpclaw-manufacturing/db_query.py": {
           "executable": false,
-          "sha256": "1fc4930dccf7d6ea01c21da04af92dea41f4a8ed77d6b980a3c8d091087646e3"
+          "sha256": "0b9ccc9663ee9d0932ae6a32b3ef4ea2e220892f69ab8408d12710fdef690f6c"
         },
         "erpclaw-ops/scripts/erpclaw-manufacturing/references/.gitkeep": {
           "executable": false,
@@ -5702,6 +5762,10 @@
         "erpclaw-ops/scripts/erpclaw-manufacturing/tests/test_cancel_work_order_ledger.py": {
           "executable": false,
           "sha256": "bad0cfeccb1441798dfcdea7ce9c83d465affd197834b997cb80461805a589fc"
+        },
+        "erpclaw-ops/scripts/erpclaw-manufacturing/tests/test_cancel_work_order_lock_order.py": {
+          "executable": false,
+          "sha256": "7017fcfc711574533ca04457365e45546565f1bc32afa91d84d9c003f09d9686"
         },
         "erpclaw-ops/scripts/erpclaw-manufacturing/tests/test_fiscal_year_stamp_company.py": {
           "executable": false,
@@ -6211,9 +6275,13 @@
           "executable": false,
           "sha256": "914f4ded29ff209b799ac1ab4ca24a8c74d29185e1ded0426360ef84769d18be"
         },
+        "erpclaw-pos/scripts/tests/test_void_refuses_under_credit_note.py": {
+          "executable": false,
+          "sha256": "5ad1a5689ea64beb78d98f38e017642e45ab70e4c7196700ef44a76c06bde471"
+        },
         "erpclaw-pos/scripts/transactions.py": {
           "executable": false,
-          "sha256": "ae00f7b63ae82502902b2e63b322a5642fb06144e51748560f5a58c3e9d9a517"
+          "sha256": "ef8778187b35535e08ea7c0f1c74b154cd199fe9b007e004e608c382245b1444"
         },
         "erpclaw-selfservice/LICENSE.txt": {
           "executable": false,
@@ -6529,7 +6597,7 @@
         },
         "erpclaw-region-in/scripts/db_query.py": {
           "executable": false,
-          "sha256": "3757e317c07bd8dbc28a261bfd295bc65dc7707dac267938afbe68f86f3508a3"
+          "sha256": "2b69e66cf7256bd8abda9c7c799b9b508aa75caf8cb60f3e748cb02c8a9c3ded"
         },
         "erpclaw-region-in/scripts/tests/conftest.py": {
           "executable": false,
@@ -6538,6 +6606,10 @@
         "erpclaw-region-in/scripts/tests/in_helpers.py": {
           "executable": false,
           "sha256": "847fe2233614202dbfb1f1b9111ae54335e46c94aff6b10f68d87a55af5e24c1"
+        },
+        "erpclaw-region-in/scripts/tests/test_in_form16_form24q_real_slips.py": {
+          "executable": false,
+          "sha256": "821c45da24169d2cf98728fa268f7c6eb2f17d7fecd90092f238251fb7eba993"
         },
         "erpclaw-region-in/scripts/tests/test_in_payroll_seed_summary.py": {
           "executable": false,
@@ -6557,7 +6629,7 @@
         },
         "erpclaw-region-in/scripts/tests/test_region_in_depth.py": {
           "executable": false,
-          "sha256": "8fbc06e9f4f6e4afe24bcf3ede03a848a16125233d4b42cd1e32b5aa6f9a2a2a"
+          "sha256": "7fcc9dea56592f73e38a52723558117da2b5c2bfbc38baea6ede3430ad8947fa"
         },
         "erpclaw-region-in/scripts/tests/test_region_in_depth_m464.py": {
           "executable": false,
@@ -7149,11 +7221,11 @@
         },
         "skills/erpclaw/README.md": {
           "executable": false,
-          "sha256": "9ed2659863765b0cecac1d4f46b93152259ad33db58343a9f3cf2487909551d2"
+          "sha256": "60523eb7a96b04908f77ced490d4c3fbf147ada03f10dd5e2532e0ee220d6da5"
         },
         "skills/erpclaw/SKILL.md": {
           "executable": false,
-          "sha256": "c4a42349aa89e64b6602d001dd53a947c5816768eb7a580b792d36468cb5c9a0"
+          "sha256": "7e5918dccf6e24f2d7e06d6ba38cedd01c96eedefc67532d3429a3b0bb25a0e1"
         },
         "skills/erpclaw/assets/demo.svg": {
           "executable": false,
@@ -7217,7 +7289,7 @@
         },
         "skills/erpclaw/scripts/erpclaw-inventory/db_query.py": {
           "executable": false,
-          "sha256": "643087d0888515fa927c521198481269a2cfe1ccbe196fa480f61441d1588a61"
+          "sha256": "8ff753a1d98b5015bf6985b8452c24ce43a347986c2115ee781d7e22d8b173b5"
         },
         "skills/erpclaw/scripts/erpclaw-journals/db_query.py": {
           "executable": false,
@@ -7277,7 +7349,7 @@
         },
         "skills/erpclaw/scripts/erpclaw-selling/db_query.py": {
           "executable": false,
-          "sha256": "dcd4608750b8be307cc9de49f387da17629d14aeaebcc734a323ed51f74a95f2"
+          "sha256": "f13e1d52fa86ad430eb0174aacccf167b43f6aba1cb7844560495c629cfe059c"
         },
         "skills/erpclaw/scripts/erpclaw-setup/assets/currencies.json": {
           "executable": false,
@@ -7301,7 +7373,7 @@
         },
         "skills/erpclaw/scripts/erpclaw-setup/init_schema.py": {
           "executable": false,
-          "sha256": "cf10c12753d03fc268e8e4c4ca4d6a54533409cb18870dcc54fcfed991257073"
+          "sha256": "d2331ded305a24ed6854cbc6c09c7bfefcfb2bca7a04cc64f32c943387e8adc5"
         },
         "skills/erpclaw/scripts/erpclaw-setup/lib/erpclaw_lib/__init__.py": {
           "executable": false,
@@ -7469,7 +7541,7 @@
         },
         "skills/erpclaw/scripts/erpclaw-setup/lib/erpclaw_lib/party_ledger.py": {
           "executable": false,
-          "sha256": "13086f84166d598f4611087f5e0089dbc4cf7a8e60a5c1fdaef26ecdae40de47"
+          "sha256": "f7f08d63efc5876e5eb533d96e16a342a1e0866d041ec39f5d92e31e14c6704f"
         },
         "skills/erpclaw/scripts/erpclaw-setup/lib/erpclaw_lib/passwords.py": {
           "executable": false,
@@ -7481,7 +7553,7 @@
         },
         "skills/erpclaw/scripts/erpclaw-setup/lib/erpclaw_lib/payment_clearing.py": {
           "executable": false,
-          "sha256": "1a40f48cf80304e674a3c943f3464dfb74af4d6780f52c9406d80ae4e8ccdd93"
+          "sha256": "7ce713e4d7b1900ab85de6574ee18195743b770aeefacf6448e45a28ebb5f36f"
         },
         "skills/erpclaw/scripts/erpclaw-setup/lib/erpclaw_lib/query.py": {
           "executable": false,
@@ -7501,7 +7573,7 @@
         },
         "skills/erpclaw/scripts/erpclaw-setup/lib/erpclaw_lib/seam.py": {
           "executable": false,
-          "sha256": "c3aa434aa36ce91c12c9710b7c0cda16d06545e9be24792c32a20a96adb28dc2"
+          "sha256": "5a767584ce9a91125606d0718883f94e473ae97f914ffc9212f8917288a9d032"
         },
         "skills/erpclaw/scripts/erpclaw-setup/lib/erpclaw_lib/signing.py": {
           "executable": false,
@@ -8449,11 +8521,11 @@
         },
         "skills/erpclaw/scripts/erpclaw-setup/migrations/001_registry_tables.py": {
           "executable": false,
-          "sha256": "357738af60c13be6c65564a6995684747cc5f45ae1d7dc22415e08ffedc70741"
+          "sha256": "4699fedd6310fb905bdedce8935fe575476a4f06bd681012603951fd047501b1"
         },
         "skills/erpclaw/scripts/erpclaw-setup/migrations/002_credit_dunning.py": {
           "executable": false,
-          "sha256": "14d679a977775aa308c48d6231eb4a25c5047945ecc2d07c2d491c7642d0259d"
+          "sha256": "7538fddc6d2f05cc27a5ad4863e41e20d036841c72be75cefef1a5fb7f212d8b"
         },
         "skills/erpclaw/scripts/erpclaw-setup/migrations/003_displace_account_check.py": {
           "executable": false,
@@ -8651,6 +8723,18 @@
           "executable": false,
           "sha256": "abe67d445a84db20be394fbadbf601cd4f050fc9cfad1bef4adcf1d50c374f2f"
         },
+        "skills/erpclaw/scripts/erpclaw-setup/migrations/052_credit_note_allocation.py": {
+          "executable": false,
+          "sha256": "cc6c342a2fa63a72a8ec6a6e018e2086de7ddd804061cc3babd7aa453d2f3558"
+        },
+        "skills/erpclaw/scripts/erpclaw-setup/migrations/053_authority_sessions.py": {
+          "executable": false,
+          "sha256": "41fac4f2e6db387a0ff3e1f8ea206e2067be82e24ede8a82d399bbe1e28c058d"
+        },
+        "skills/erpclaw/scripts/erpclaw-setup/migrations/054_foundation_001_002_on_postgresql.py": {
+          "executable": false,
+          "sha256": "ef31402118293c10e3af0de78c092777dd639ef3878546934c52ea7f96ab82cc"
+        },
         "skills/erpclaw/scripts/erpclaw-setup/references/authority-and-read-only.md": {
           "executable": false,
           "sha256": "d909542251de5dd5751418780a9b6cdd014b09bb95dc72077e6ffa87bfe86551"
@@ -8673,7 +8757,7 @@
         },
         "skills/erpclaw/scripts/table_provenance.json": {
           "executable": false,
-          "sha256": "b87d5f9a9563e46342a08a3ca12896cb3fd4de259dcf85c1c27178dbe7a03349"
+          "sha256": "1e0cd10652c1416f741d481b7a601dac2e7a995e6fcf48976195dad3e1587bda"
         },
         "skills/erpclaw/scripts/uninstall_bin.py": {
           "executable": true,
@@ -9811,10 +9895,10 @@
       "description": "Complete ERP foundation: accounting, inventory, selling, buying, billing, payments, tax, journals, GL, HR, payroll, reports, and setup. 475 actions across 14 domains.",
       "display_name": "ERPClaw Core",
       "files_sha256": {
-        "CHANGELOG.md": "5dcaf1690549a4692636623c406ff87a372eddc9ec1b2f5980932a4594668d6e",
+        "CHANGELOG.md": "4ea8787c83e03aeb483a52d1a07ed8049003e85935e0c4a6bde7c177d27dbc50",
         "LICENSE.txt": "7bb0c0eb1db8b40884cd154315e459fadacd2bff10190df3516639282608ed0c",
-        "README.md": "9ed2659863765b0cecac1d4f46b93152259ad33db58343a9f3cf2487909551d2",
-        "SKILL.md": "c4a42349aa89e64b6602d001dd53a947c5816768eb7a580b792d36468cb5c9a0",
+        "README.md": "60523eb7a96b04908f77ced490d4c3fbf147ada03f10dd5e2532e0ee220d6da5",
+        "SKILL.md": "7e5918dccf6e24f2d7e06d6ba38cedd01c96eedefc67532d3429a3b0bb25a0e1",
         "UI.yaml": "608435fd7d9c08f6b985c3fe9281d4228ee3c25c9987398f28762b1628e96162",
         "assets/demo.svg": "a54a4d95a3bc98d4408c9f952899f1f37dd22b7a5d18b4b5a8b17a79acaa784f",
         "assets/logo.svg": "dd36f8427bfaa377aad2d037bd97d502055428477fe6f90afabb3a54ca0496da",
@@ -9837,7 +9921,7 @@
         "scripts/erpclaw-gl/assets/charts/us_gaap.json": "499de6f1fb8eb15fd625db56b532ca14280dbbef7ddbe51299827a9027f2ea70",
         "scripts/erpclaw-gl/db_query.py": "9f74c9e865d914394b2bc440c64a45773d31b51e8251f5680c5187698b38629e",
         "scripts/erpclaw-hr/db_query.py": "18195d78cef33d0743679e5b12e58f6bcad539738b2145d1830f12052ab6b553",
-        "scripts/erpclaw-inventory/db_query.py": "643087d0888515fa927c521198481269a2cfe1ccbe196fa480f61441d1588a61",
+        "scripts/erpclaw-inventory/db_query.py": "8ff753a1d98b5015bf6985b8452c24ce43a347986c2115ee781d7e22d8b173b5",
         "scripts/erpclaw-journals/db_query.py": "810c72de946a0c8d25f65d86a8a4c4bc488a669d08e50898827a71b2b18893c0",
         "scripts/erpclaw-meta/db_query.py": "868f8494adc5665c0ec3410f17ac774e481efbff9338d137ba16b3d0ed33bb2a",
         "scripts/erpclaw-os/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -9852,13 +9936,13 @@
         "scripts/erpclaw-payments/db_query.py": "70461854c5864d209ea29c175e932854180723801400849c5a9ecb3db3dcba4d",
         "scripts/erpclaw-payroll/db_query.py": "654c4270d10e26d9346356f88008fdcb4ee86c58f2e1bca8638ae393ecaade94",
         "scripts/erpclaw-reports/db_query.py": "cf52ac4525d4debf8f1b70e9b12b3268b806ceaf4317844cf253bc320626f877",
-        "scripts/erpclaw-selling/db_query.py": "dcd4608750b8be307cc9de49f387da17629d14aeaebcc734a323ed51f74a95f2",
+        "scripts/erpclaw-selling/db_query.py": "f13e1d52fa86ad430eb0174aacccf167b43f6aba1cb7844560495c629cfe059c",
         "scripts/erpclaw-setup/assets/currencies.json": "2083f522591709fca496a3dda1fb3e655b0a22afb35ec3d8ad699aed7767a161",
         "scripts/erpclaw-setup/assets/default_payment_terms.json": "a7756c0d203cad525e9b5db7f6ad768cedba2308154fcb448df42b21f733d80d",
         "scripts/erpclaw-setup/assets/default_uom.json": "baca02db1311acee08226ec22dc2ec98f2306c30f7cfa6cd46840b0711b83259",
         "scripts/erpclaw-setup/assets/us_gaap.json": "499de6f1fb8eb15fd625db56b532ca14280dbbef7ddbe51299827a9027f2ea70",
         "scripts/erpclaw-setup/db_query.py": "b1741060e12ce0651a5752efef6e2d90720af1ff3a8fa9e20fa7c69a8c75d528",
-        "scripts/erpclaw-setup/init_schema.py": "cf10c12753d03fc268e8e4c4ca4d6a54533409cb18870dcc54fcfed991257073",
+        "scripts/erpclaw-setup/init_schema.py": "d2331ded305a24ed6854cbc6c09c7bfefcfb2bca7a04cc64f32c943387e8adc5",
         "scripts/erpclaw-setup/lib/erpclaw_lib/__init__.py": "a8461da36a0e441b06a747566bc8464371237bb35d0ca9a3940d90d74b5c17e9",
         "scripts/erpclaw-setup/lib/erpclaw_lib/action_impact.py": "51ea8965630b19889b0922c3890f447158c37cc575392a368f4f8b900370006d",
         "scripts/erpclaw-setup/lib/erpclaw_lib/action_validators.py": "51379bc8ba9ae2bebf55e42ec0f24df0a30cd84b5c24ae9d5f9bfb51e25758dd",
@@ -9900,15 +9984,15 @@
         "scripts/erpclaw-setup/lib/erpclaw_lib/master_key.py": "63bbcff3cea18c1a5543385965dc66474c75e8b73ec100dfdaebc729852e56aa",
         "scripts/erpclaw-setup/lib/erpclaw_lib/naming.py": "6706c42d54c9cb742a83387ba2e86dd659905c34660b81ad661fca0029ba2fa1",
         "scripts/erpclaw-setup/lib/erpclaw_lib/pagination.py": "ffdbe600d38dda98bd6d54d785b0da2ee337cf8271751960bbd3290d3900f735",
-        "scripts/erpclaw-setup/lib/erpclaw_lib/party_ledger.py": "13086f84166d598f4611087f5e0089dbc4cf7a8e60a5c1fdaef26ecdae40de47",
+        "scripts/erpclaw-setup/lib/erpclaw_lib/party_ledger.py": "f7f08d63efc5876e5eb533d96e16a342a1e0866d041ec39f5d92e31e14c6704f",
         "scripts/erpclaw-setup/lib/erpclaw_lib/passwords.py": "f49f2959f8c559f2896091f8765a588edb5469619541de6a28a377b77dd3d2f9",
         "scripts/erpclaw-setup/lib/erpclaw_lib/paths.py": "1a8e0a727058a69e8ce9b93d7b7640af1078a1e8615e123793edaead1080f9cc",
-        "scripts/erpclaw-setup/lib/erpclaw_lib/payment_clearing.py": "1a40f48cf80304e674a3c943f3464dfb74af4d6780f52c9406d80ae4e8ccdd93",
+        "scripts/erpclaw-setup/lib/erpclaw_lib/payment_clearing.py": "7ce713e4d7b1900ab85de6574ee18195743b770aeefacf6448e45a28ebb5f36f",
         "scripts/erpclaw-setup/lib/erpclaw_lib/query.py": "56328c2a125efa8faf58e3f3be3dfda6610cdad24a2184a3bfa6fb176ef09cb2",
         "scripts/erpclaw-setup/lib/erpclaw_lib/query_helpers.py": "4d8a7da96775dfa11708219eb59cbf901a89a1653675692d3c9122fe42e90597",
         "scripts/erpclaw-setup/lib/erpclaw_lib/rbac.py": "a4a0bbe2f434288fa8bd5a877ecca94a2c82e3ebbd9c1b51a5016d0c068b3afa",
         "scripts/erpclaw-setup/lib/erpclaw_lib/response.py": "59a124e2f9b627a815e06da6e9422f06d833a57ddda4ef9558b8f92c8f4f29e4",
-        "scripts/erpclaw-setup/lib/erpclaw_lib/seam.py": "c3aa434aa36ce91c12c9710b7c0cda16d06545e9be24792c32a20a96adb28dc2",
+        "scripts/erpclaw-setup/lib/erpclaw_lib/seam.py": "5a767584ce9a91125606d0718883f94e473ae97f914ffc9212f8917288a9d032",
         "scripts/erpclaw-setup/lib/erpclaw_lib/signing.py": "25c9046f51068e96d6941bf213deda9c61891553a7389e5aeb45565d43415b76",
         "scripts/erpclaw-setup/lib/erpclaw_lib/skip_filters.py": "36ac48a995a2d55135b791c985cf1d444652654c195856819b0f7235f8e3d48a",
         "scripts/erpclaw-setup/lib/erpclaw_lib/stock_posting.py": "88bdf13a85f4134094a7a3d3ca267c8f79b5d7a9711abeaab450db1741bf84f9",
@@ -10145,8 +10229,8 @@
         "scripts/erpclaw-setup/lib/erpclaw_lib/vendor/sqlalchemy/util/typing.py": "e248ac239398adcb45dbfa15650d59616202327aea270f930613ef3df97165ca",
         "scripts/erpclaw-setup/lib/erpclaw_lib/voucher_types.py": "c78f463bc96bb0d67fb87e2989b2dbd09a546df4362901a0609fc80668d51579",
         "scripts/erpclaw-setup/migration_runner.py": "80cc5b43aa554a458afb808f00d03f540a250ab548a142996896b7d593220b28",
-        "scripts/erpclaw-setup/migrations/001_registry_tables.py": "357738af60c13be6c65564a6995684747cc5f45ae1d7dc22415e08ffedc70741",
-        "scripts/erpclaw-setup/migrations/002_credit_dunning.py": "14d679a977775aa308c48d6231eb4a25c5047945ecc2d07c2d491c7642d0259d",
+        "scripts/erpclaw-setup/migrations/001_registry_tables.py": "4699fedd6310fb905bdedce8935fe575476a4f06bd681012603951fd047501b1",
+        "scripts/erpclaw-setup/migrations/002_credit_dunning.py": "7538fddc6d2f05cc27a5ad4863e41e20d036841c72be75cefef1a5fb7f212d8b",
         "scripts/erpclaw-setup/migrations/003_displace_account_check.py": "7e66eda7d18caa9f8199cdd2eb11c21e8ad85d575dd6f79d24cb47b6ad2ce6f0",
         "scripts/erpclaw-setup/migrations/004_displace_gl_entry_checks.py": "3a8c4736b20265b1e29f0791875b4aa26f0d4bdd5adf6c6f5ca94f963d7048b3",
         "scripts/erpclaw-setup/migrations/005_displace_sle_check.py": "ed9112887a0c9a60f7724261895c64b760eb16be948e32752f5aee5904106d83",
@@ -10196,12 +10280,15 @@
         "scripts/erpclaw-setup/migrations/049_legalclaw_trust_voucher_types.py": "564a9af6fc3ff81b0a68f71d9c07df97f9fcc584ab325beb7566a7436c6eab38",
         "scripts/erpclaw-setup/migrations/050_expense_claim_payment_allocation_voucher_type.py": "cfa2bb9373233fa024335c0252bf61ea72ab469ac4331e11a071e7a941d0aed0",
         "scripts/erpclaw-setup/migrations/051_backfill_expense_claim_ple.py": "abe67d445a84db20be394fbadbf601cd4f050fc9cfad1bef4adcf1d50c374f2f",
+        "scripts/erpclaw-setup/migrations/052_credit_note_allocation.py": "cc6c342a2fa63a72a8ec6a6e018e2086de7ddd804061cc3babd7aa453d2f3558",
+        "scripts/erpclaw-setup/migrations/053_authority_sessions.py": "41fac4f2e6db387a0ff3e1f8ea206e2067be82e24ede8a82d399bbe1e28c058d",
+        "scripts/erpclaw-setup/migrations/054_foundation_001_002_on_postgresql.py": "ef31402118293c10e3af0de78c092777dd639ef3878546934c52ea7f96ab82cc",
         "scripts/erpclaw-setup/references/authority-and-read-only.md": "d909542251de5dd5751418780a9b6cdd014b09bb95dc72077e6ffa87bfe86551",
         "scripts/erpclaw-tax/db_query.py": "b6b1497d9e71a8b8f0c67cadac5cf736b996dc582c49b46a9dbda34361b85264",
         "scripts/install_bin.py": "b1cf400544d5600228be8550da25980ca011743f16da5b81b12b8276aa5cbbab",
         "scripts/module_manager.py": "78f4c206bd4bd33800bf19468d65fdc47b621315825519b7d99e02d3cba557e0",
         "scripts/onboarding.py": "616b5aa8d43b3c0dcaf4a1daf4a05a042dc71c0e03b4608829ab7229098e603c",
-        "scripts/table_provenance.json": "b87d5f9a9563e46342a08a3ca12896cb3fd4de259dcf85c1c27178dbe7a03349",
+        "scripts/table_provenance.json": "1e0cd10652c1416f741d481b7a601dac2e7a995e6fcf48976195dad3e1587bda",
         "scripts/uninstall_bin.py": "012b5aad68ee6b49a9ed7242c7970d5b4e38d359cd3f6ed1af87eb5ada82a26e"
       },
       "github": "avansaber/erpclaw",
@@ -10226,7 +10313,7 @@
         "user",
         "rbac"
       ],
-      "version": "4.15.1"
+      "version": "4.15.2"
     },
     "erpclaw-alerts": {
       "action_count": 21,
@@ -10622,7 +10709,7 @@
       "display_name": "ERPClaw Stripe Integration",
       "files_sha256": {
         "CHANGELOG.md": "810da41c89d2cba81e33bbdea64b8308a3fcefea548a56a83e68bc2a9e55ff43",
-        "SKILL.md": "eaf2a5ad97b6ec95c457e3378f2940bfce315a760c53fc27ad0d5b89af5623ae",
+        "SKILL.md": "fab668081ca99be02173577c2924abb12bc808ab9cd33d9fdd4cf86b7cd6d935",
         "init_db.py": "eff0e49809118a9e884fcafb64e44d5016351c507be752295e9357be88b9e0fa",
         "migrations/001_widen_sync_job_object_types.py": "ff27507b334124122e1a6d9f01d347c409a3cd62168dd2a852e452f5be72cab5",
         "scripts/accounts.py": "31b4b58cfd638c404a819d11d346b8a1370e4290ea4266cf2e045b71a8ffc6a7",
@@ -10633,7 +10720,7 @@
         "scripts/gl_posting.py": "22e431aa1bdcea08da43e73ac9a69413f24336da7c0583701d81c9d93e9c01e9",
         "scripts/gl_rules.py": "ef9e8efd44cc75e692c1dae4213b112dbaffd8dc0cda2ef2095740ad764efa66",
         "scripts/reconciliation.py": "630a6657a23e961d958f33fe46734b40427425bd6e20ebfeda3389d341678948",
-        "scripts/reports.py": "3c2c2d2cd7b30ac31df4950342c89dbd051ebbf2ee446438f9d9d733c775fa9a",
+        "scripts/reports.py": "cb9b85c95fa1993f4030d6e7724e3981cdbbf57134ea21fe3df81c047fd7a4d9",
         "scripts/rev_rec.py": "906fb53e224e8428508e6dd136e32ed50f0abb9d14d568af213c881a4e8bfa6a",
         "scripts/stripe_helpers.py": "5f1356d7bfa5ba063bd3d2ac27b261d2d167844912bf3b5fd69928e5bbf08c36",
         "scripts/sync.py": "1edc9288405f8c2f82fbaf45e87f64bdf5f2af0daa09863957f2c547e436cacd",
@@ -10665,8 +10752,8 @@
         "UI.yaml": "6684da0428bf1d9b61be69a0c7446745f271d16846d94abf24f21fd508b84791",
         "init_db.py": "17f9a2ce67631d682a5f5e614c5d1f5d34da7f5c743689126598cf2e2657758d",
         "scripts/db_query.py": "fe5a582697dd9458d46d5ba4b7680a1e2a3a27e7b3aa8a4e90bf6a6e46cc5ba0",
-        "scripts/loans.py": "5840edfe3004a33f0be745c753ff78de72b991d8b0aeb4f83d54e9e3608600b0",
-        "scripts/repayments.py": "358906488cc65500afdebbeb32507d619b879c69b3aee89d366247dcae5775f8",
+        "scripts/loans.py": "42d6ef8c5983fbfb0eaaf219d570343007780e113025cec4c1304dcc8f4112f2",
+        "scripts/repayments.py": "6d0c15b9a2659c64c8499c84b3449dfad689a2da087c53d01e9dd85e03b504f9",
         "scripts/reports.py": "4dddd461b150b6e9f242f7199a0e8f752bef815fce52a1e515a0dfd0f90d25b1"
       },
       "github": "avansaber/erpclaw-addons",
@@ -10699,7 +10786,7 @@
         "scripts/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "scripts/carriers.py": "f5d931d66c01c37eb3ac9926d37bd0c1ed064e7bf1bacac84c750426d462c9ed",
         "scripts/db_query.py": "a9f0d5e3148e80506c995f297c9cd87a75b304456737ae7eb21fe80414682abb",
-        "scripts/freight.py": "9eb52901c85cb1953d68e54912c6f17c0b838cb0e44f89736b784067111eebb3",
+        "scripts/freight.py": "59ba1d7889bd29d2856561ce88db9f4babbd32a0d91eac0d298dbf1381a648f6",
         "scripts/reports.py": "8a97baee2360aa913a988f72686504aa8c5f9e5dfeffdeaec073ac040ccfa64a",
         "scripts/routes.py": "9c687f4cb7b2ea649539c287ba99c4eb2dd0364442037ca938706c00f4bd8b63",
         "scripts/shipments.py": "86248547a8f208f6ae9efcfd76d5a185cf2d18caa6dd21433a6a3ffcc8e0583a"
@@ -10774,7 +10861,7 @@
         "scripts/erpclaw-advmfg/shop_floor.py": "a72ae9eacc7d8d411a8ff1d47c7317c02de23d89b4942745e6e390e1f9693512",
         "scripts/erpclaw-advmfg/tools.py": "712d6cc4e480d0265c024c8ba56217393a961b207a7a6b21f01ca157eb8fc37f",
         "scripts/erpclaw-assets/db_query.py": "01f3cfa02d11678f3965b6498284978ef47555fb006aa7cf2ceec650083f7c2e",
-        "scripts/erpclaw-manufacturing/db_query.py": "1fc4930dccf7d6ea01c21da04af92dea41f4a8ed77d6b980a3c8d091087646e3",
+        "scripts/erpclaw-manufacturing/db_query.py": "0b9ccc9663ee9d0932ae6a32b3ef4ea2e220892f69ab8408d12710fdef690f6c",
         "scripts/erpclaw-projects/db_query.py": "0db921bdda2857e73eabdd7998acd50e4d15186ddb50a21ac3ae5f485e67faa3",
         "scripts/erpclaw-quality/db_query.py": "24320f535acf4d74f7531cfdc7766863f153d72f451e10b9645f91dea7189082",
         "scripts/erpclaw-support/db_query.py": "66fcb69119c5905613516a385c873ee4d56d65d9bb727e38bcbb04a5ae94a443"
@@ -10909,7 +10996,7 @@
         "scripts/profiles.py": "20e52fa26adbc8a4676b72d15094bccc97a02d6ee48f55b7042f42ae59fc23d2",
         "scripts/reports.py": "0ca1e204d3ff84b5f405d0dcd0e7e36a8f489092ebafb47b3d9e17daf89d8791",
         "scripts/sessions.py": "3fe7d008ea9de7000de18cb1b79872a17b40f924eb7d5fdb31f4e9156edb22b1",
-        "scripts/transactions.py": "ae00f7b63ae82502902b2e63b322a5642fb06144e51748560f5a58c3e9d9a517"
+        "scripts/transactions.py": "ef8778187b35535e08ea7c0f1c74b154cd199fe9b007e004e608c382245b1444"
       },
       "github": "avansaber/erpclaw-addons",
       "has_init_db": true,
@@ -11018,7 +11105,7 @@
         "assets/indian_states.json": "aa6d78f923fcf42a75f10a7afcd7235653f7e8266599b78c6c16630cc3a44ad5",
         "assets/professional_tax_slabs.json": "4614a709df4bb1104199dfb491d43f0a4f25eb5675e56db4e6609e841a26489a",
         "assets/tds_sections.json": "1c96015383c4b699965b3f6102e8c8a26f771d49214999333838960dced2f370",
-        "scripts/db_query.py": "3757e317c07bd8dbc28a261bfd295bc65dc7707dac267938afbe68f86f3508a3"
+        "scripts/db_query.py": "2b69e66cf7256bd8abda9c7c799b9b508aa75caf8cb60f3e748cb02c8a9c3ded"
       },
       "github": "avansaber/erpclaw-regions",
       "has_init_db": false,
@@ -11583,8 +11670,8 @@
       "version": "1.1.0"
     }
   },
-  "registry_version": 96,
-  "signed_at": "2026-10-03T15:42:41Z",
+  "registry_version": 97,
+  "signed_at": "2026-10-03T23:03:53Z",
   "total_actions": 3234,
-  "version": "4.15.1"
+  "version": "4.15.2"
 }
