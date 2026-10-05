@@ -3838,6 +3838,143 @@ def cancel_payroll_run(conn: sqlite3.Connection, args) -> None:
 # ACTION 17: generate_w2_data
 # ============================================================================
 
+def _payroll_tax_filing_data(conn, args, form):
+    """Read posted payroll amounts into a draft, without recalculating tax."""
+    company_id = args.company_id
+    if not company_id:
+        err("--company-id is required")
+    try:
+        year = int(args.tax_year)
+        if year < 2000 or year > 2100:
+            raise ValueError()
+    except (ValueError, TypeError):
+        err("--tax-year must be an integer between 2000 and 2100")
+    quarter = None
+    if form == "941":
+        try:
+            quarter = int(args.quarter)
+            if quarter not in (1, 2, 3, 4):
+                raise ValueError()
+        except (ValueError, TypeError):
+            err("--quarter must be an integer from 1 to 4 for Form 941")
+    elif getattr(args, "quarter", None) is not None:
+        err("Form 940 is annual; do not supply --quarter")
+    _validate_company_exists(conn, company_id)
+    month = (quarter - 1) * 3 + 1 if quarter else 1
+    start = date(year, month, 1)
+    end = (date(year + 1, 1, 1) if month == 10 or not quarter
+           else date(year, month + 3, 1)) - timedelta(days=1)
+    slips, runs = Table("salary_slip"), Table("payroll_run")
+    query = (Q.from_(slips).join(runs).on(runs.id == slips.payroll_run_id)
+             .select(slips.id, slips.employee_id, slips.payroll_run_id, slips.gross_pay)
+             .where(slips.company_id == P()).where(runs.company_id == P())
+             .where(slips.status == "submitted")
+             .where(runs.status.isin(("submitted", "paid")))
+             .where(slips.period_end >= P()).where(slips.period_end <= P())
+             .orderby(slips.id))
+    rows = conn.execute(query.get_sql(),
+                        (company_id, company_id, start.isoformat(), end.isoformat())).fetchall()
+    run_ids = sorted({row["payroll_run_id"] for row in rows})
+    totals = {name: Decimal("0") for name in (
+        "gross_wages", "federal_income_tax_withheld", "employee_social_security",
+        "employee_medicare", "combined_social_security", "combined_medicare",
+        "futa_tax_posted")}
+    component_fields = {"Federal Income Tax": "federal_income_tax_withheld",
+                        "Social Security Tax": "employee_social_security",
+                        "Medicare Tax": "employee_medicare"}
+    details, components = Table("salary_slip_detail"), Table("salary_component")
+    detail_query = (Q.from_(details).join(components)
+                    .on(components.id == details.salary_component_id)
+                    .select(details.amount, components.name)
+                    .where(details.salary_slip_id == P())
+                    .where(details.component_type == "deduction"))
+    for row in rows:
+        totals["gross_wages"] += to_decimal(row["gross_pay"])
+        for detail in conn.execute(detail_query.get_sql(), (row["id"],)).fetchall():
+            field = component_fields.get(detail["name"])
+            if field:
+                totals[field] += to_decimal(detail["amount"])
+
+    # Match the posting path's tax-account names, but refuse multiple matches.
+    # No current rate or wage base can rewrite a previously posted amount.
+    patterns = {"combined_social_security": ("%social%security%", "%ss%payable%"),
+                "combined_medicare": ("%medicare%",),
+                "futa_tax_posted": ("%futa%",),
+                "federal_income_tax_withheld": ("%federal%", "%income tax%withheld%")}
+    accounts, ledger = Table("account"), Table("gl_entry")
+    account_ids = {}
+    posted_federal = Decimal("0")
+    if rows:
+        fields = (tuple(patterns) if form == "940" else
+                  ("combined_social_security", "combined_medicare",
+                   "federal_income_tax_withheld"))
+        for field in fields:
+            condition = Criterion.any([fn.Lower(accounts.name).like(pattern)
+                                       for pattern in patterns[field]])
+            account_query = (Q.from_(accounts).select(accounts.id)
+                             .where(accounts.company_id == P())
+                             .where(accounts.root_type == "liability")
+                             .where(accounts.is_group == 0).where(condition))
+            matches = conn.execute(account_query.get_sql(), (company_id,)).fetchall()
+            if len(matches) != 1:
+                err(f"Cannot prepare Form {form}: expected one {field} account, "
+                    f"found {len(matches)}. Review the payroll tax account mapping.")
+            account_ids[field] = matches[0]["id"]
+        if len(set(account_ids.values())) != len(account_ids):
+            err("Payroll tax account mappings overlap; review them before preparing a draft")
+        ledger_query = (Q.from_(ledger).join(accounts).on(accounts.id == ledger.account_id)
+                        .select(ledger.account_id, ledger.debit, ledger.credit)
+                        .where(accounts.company_id == P())
+                        .where(ledger.voucher_type == "payroll_entry")
+                        .where(ledger.voucher_id == P()).where(ledger.is_cancelled == 0))
+        for run_id in run_ids:
+            entries = conn.execute(ledger_query.get_sql(), (company_id, run_id)).fetchall()
+            if not entries:
+                err(f"Submitted payroll run {run_id} has no active posted ledger entries")
+            for entry in entries:
+                for field, account_id in account_ids.items():
+                    if entry["account_id"] == account_id:
+                        amount = to_decimal(entry["credit"]) - to_decimal(entry["debit"])
+                        if field == "federal_income_tax_withheld":
+                            posted_federal += amount
+                        else:
+                            totals[field] += amount
+        if posted_federal != totals["federal_income_tax_withheld"]:
+            err("Posted federal withholding differs from selected salary slip deductions")
+    for name in ("social_security", "medicare"):
+        employer = totals["combined_" + name] - totals["employee_" + name]
+        if employer < 0:
+            err(f"Posted {name} is smaller than the selected employee deductions")
+        totals["employer_" + name] = employer
+    totals["recorded_941_taxes"] = (totals["federal_income_tax_withheld"]
+                                   + totals["combined_social_security"]
+                                   + totals["combined_medicare"])
+    if form == "941":
+        totals.pop("futa_tax_posted")
+    ok({"form": form, "artifact_status": "draft", "filed": False,
+        "company_id": company_id, "tax_year": year, "quarter": quarter,
+        "period_start": start.isoformat(), "period_end": end.isoformat(),
+        "period_basis": "salary slip period end, consistent with payroll reporting",
+        "employee_count": len({row["employee_id"] for row in rows}),
+        "slip_count": len(rows), "payroll_run_ids": run_ids,
+        "tax_account_ids": account_ids,
+        "totals": {field: str(round_currency(amount)) for field, amount in totals.items()},
+        "review_required": ["Confirm payment-date attribution before filing",
+                            "Taxable wage bases, exemptions and adjustments",
+                            "Deposits, credits and agency form completion"],
+        "note": "Draft recorded amounts only; no filing or new tax calculation."})
+
+
+def generate_form941_data(conn, args):
+    """Prepare quarterly draft amounts from submitted payroll and posted taxes."""
+    _payroll_tax_filing_data(conn, args, "941")
+
+
+def generate_form940_data(conn, args):
+    """Prepare annual draft amounts, including already posted FUTA tax."""
+    _payroll_tax_filing_data(conn, args, "940")
+
+
 def generate_w2_data(conn: sqlite3.Connection, args) -> None:
     """Generate year-end W-2 data for all employees.
 
@@ -4870,6 +5007,8 @@ ACTIONS = {
     "submit-payroll-run": submit_payroll_run,
     "cancel-payroll-run": cancel_payroll_run,
     "generate-w2-data": generate_w2_data,
+    "generate-form941-data": generate_form941_data,
+    "generate-form940-data": generate_form940_data,
 
     # --- Part 3: Wage Garnishment ---
     "add-garnishment": add_garnishment,
@@ -4985,6 +5124,7 @@ def main():
                              "Each: {from_amount, to_amount, rate}")
     parser.add_argument("--tax-year",
                         help="Tax year (integer, e.g., 2026)")
+    parser.add_argument("--quarter", help="Quarter 1 to 4 for draft Form 941 data")
     parser.add_argument("--ss-wage-base",
                         help="Social Security wage base (e.g., '168600')")
     parser.add_argument("--ss-employee-rate",

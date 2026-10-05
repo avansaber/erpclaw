@@ -921,6 +921,21 @@ CREATE TABLE IF NOT EXISTS dunning_run (
 CREATE INDEX IF NOT EXISTS idx_dunning_run_customer ON dunning_run(customer_id);
 CREATE INDEX IF NOT EXISTS idx_dunning_run_date ON dunning_run(run_date);
 
+-- Follow-up agent Pack 1 (v1). follow_up_threshold holds one active
+-- staleness threshold per company; run-follow-up-cycle reports customers
+-- whose oldest overdue invoice age meets it. The cycle is read-only.
+CREATE TABLE IF NOT EXISTS follow_up_threshold (
+    id              TEXT PRIMARY KEY,
+    company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE CASCADE,
+    days_stale      INTEGER NOT NULL CHECK(days_stale BETWEEN 1 AND 366),
+    is_active       INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(company_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_follow_up_threshold_company ON follow_up_threshold(company_id);
+
 CREATE TABLE IF NOT EXISTS price_list (
     id              TEXT PRIMARY KEY,
     name            TEXT NOT NULL UNIQUE,

@@ -394,3 +394,195 @@ class TestDunningEmailRetrofit:
         assert result["emails"] == {"sent": 0, "skipped": 0}
         assert not m.called
         assert result["actions"]["hold"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Follow-up agent Pack 1 v1: set-follow-up-threshold + run-follow-up-cycle
+# ---------------------------------------------------------------------------
+
+_FOLLOW_RUN_DATE = "2026-10-04"  # threshold 30: due 2026-08-31 (34d) in, 2026-09-20 (14d) out
+_FOLLOW_OLD_DUE = "2026-08-31"
+_FOLLOW_NEW_DUE = "2026-09-20"
+
+
+def _set_threshold(conn, company_id, days):
+    return call_action(mod.set_follow_up_threshold, conn, ns(
+        company_id=company_id, days_stale=days))
+
+
+def _run_follow_up(conn, company_id, run_date=_FOLLOW_RUN_DATE):
+    return call_action(mod.run_follow_up_cycle, conn, ns(
+        company_id=company_id, run_date=run_date))
+
+
+def _seed_follow_invoice(conn, company_id, customer_id, due_date,
+                         amount="500", status="submitted"):
+    inv_id = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO sales_invoice (id, customer_id, posting_date, due_date, "
+        "grand_total, outstanding_amount, status, is_return, company_id) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (inv_id, customer_id, "2026-03-15", due_date, amount, amount,
+         status, 0, company_id),
+    )
+    conn.commit()
+    return inv_id
+
+
+def _threshold_rows(conn, company_id):
+    return conn.execute(
+        "SELECT id, days_stale, is_active FROM follow_up_threshold "
+        "WHERE company_id=?", (company_id,)).fetchall()
+
+
+def _table_count(conn, table):
+    return conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+
+
+class TestSetFollowUpThreshold:
+    def test_set_and_update_same_row(self, conn, env):
+        company_id = env["company_id"]
+        first = _set_threshold(conn, company_id, 30)
+        assert is_ok(first)
+        assert first["days_stale"] == 30
+        assert first["company_id"] == company_id
+        assert first["created"] is True
+
+        second = _set_threshold(conn, company_id, 45)
+        assert is_ok(second)
+        assert second["days_stale"] == 45
+        assert second["created"] is False
+        assert second["id"] == first["id"]
+        rows = _threshold_rows(conn, company_id)
+        assert len(rows) == 1
+        assert rows[0]["days_stale"] == 45
+
+    def test_invalid_days_refuse_without_writes(self, conn, env):
+        company_id = env["company_id"]
+        before = _table_count(conn, "follow_up_threshold")
+        for bad in (0, -5, 367, "abc", None):
+            result = _set_threshold(conn, company_id, bad)
+            assert is_error(result), bad
+        assert _table_count(conn, "follow_up_threshold") == before
+
+    def test_missing_company_refuses(self, conn, env):
+        result = _set_threshold(conn, "non-existent-company", 30)
+        assert is_error(result)
+
+
+class TestRunFollowUpCycle:
+    def test_threshold_boundary(self, conn, env):
+        """34-day-old invoice qualifies at threshold 30; 14-day-old does not."""
+        company_id = env["company_id"]
+        customer_id = env["customer"]
+        assert is_ok(_set_threshold(conn, company_id, 30))
+        old_id = _seed_follow_invoice(conn, company_id, customer_id,
+                                      _FOLLOW_OLD_DUE, amount="500")
+        _seed_follow_invoice(conn, company_id, customer_id,
+                             _FOLLOW_NEW_DUE, amount="700")
+
+        result = _run_follow_up(conn, company_id)
+        assert is_ok(result)
+        assert result["run_date"] == _FOLLOW_RUN_DATE
+        assert result["days_stale"] == 30
+        assert result["count"] == 1
+        customer = result["customers"][0]
+        assert customer["customer_id"] == customer_id
+        assert customer["invoice_ids"] == [old_id]
+        assert customer["oldest_due_date"] == _FOLLOW_OLD_DUE
+        assert customer["days_stale"] == 34
+        assert Decimal(customer["outstanding_total"]) == Decimal("500")
+
+    def test_exact_total_and_stable_ordering(self, conn, env):
+        """Two qualifying invoices total exactly (Decimal) in sorted order."""
+        company_id = env["company_id"]
+        customer_id = env["customer"]
+        assert is_ok(_set_threshold(conn, company_id, 30))
+        first_id = _seed_follow_invoice(conn, company_id, customer_id,
+                                        "2026-08-15", amount="0.10")
+        second_id = _seed_follow_invoice(conn, company_id, customer_id,
+                                         _FOLLOW_OLD_DUE, amount="0.20")
+
+        result = _run_follow_up(conn, company_id)
+        assert is_ok(result)
+        assert result["count"] == 1
+        customer = result["customers"][0]
+        assert customer["invoice_ids"] == sorted([first_id, second_id])
+        assert customer["oldest_due_date"] == "2026-08-15"
+        assert Decimal(customer["outstanding_total"]) == Decimal("0.30")
+        assert customer["outstanding_total"] == str(
+            Decimal("0.10") + Decimal("0.20"))
+
+        # Deterministic across runs.
+        again = _run_follow_up(conn, company_id)
+        assert is_ok(again)
+        assert again["customers"] == result["customers"]
+
+    def test_excluded_invoices(self, conn, env):
+        """Paid, cancelled, zero-outstanding, foreign, and future invoices out."""
+        company_id = env["company_id"]
+        customer_id = env["customer"]
+        other_company = seed_company(conn)
+        assert is_ok(_set_threshold(conn, company_id, 30))
+        _seed_follow_invoice(conn, company_id, customer_id,
+                             _FOLLOW_OLD_DUE, status="paid")
+        _seed_follow_invoice(conn, company_id, customer_id,
+                             _FOLLOW_OLD_DUE, status="cancelled")
+        _seed_follow_invoice(conn, company_id, customer_id,
+                             _FOLLOW_OLD_DUE, amount="0.00")
+        other_customer = seed_customer(conn, other_company, "Other Co")
+        _seed_follow_invoice(conn, other_company, other_customer,
+                             _FOLLOW_OLD_DUE, amount="900")
+        _seed_follow_invoice(conn, company_id, customer_id,
+                             "2026-10-10", amount="900")
+
+        result = _run_follow_up(conn, company_id)
+        assert is_ok(result)
+        assert result["customers"] == []
+        assert result["count"] == 0
+
+    def test_missing_threshold_refuses_without_writes(self, conn, env):
+        company_id = env["company_id"]
+        customer_id = env["customer"]
+        _seed_follow_invoice(conn, company_id, customer_id, _FOLLOW_OLD_DUE)
+        before_threshold = _table_count(conn, "follow_up_threshold")
+        before_invoices = _table_count(conn, "sales_invoice")
+        before_audit = _table_count(conn, "audit_log")
+
+        result = _run_follow_up(conn, company_id)
+        assert is_error(result)
+        assert _table_count(conn, "follow_up_threshold") == before_threshold
+        assert _table_count(conn, "sales_invoice") == before_invoices
+        assert _table_count(conn, "audit_log") == before_audit
+
+    def test_malformed_run_date_refuses_without_writes(self, conn, env):
+        company_id = env["company_id"]
+        assert is_ok(_set_threshold(conn, company_id, 30))
+        before_threshold = _table_count(conn, "follow_up_threshold")
+        before_audit = _table_count(conn, "audit_log")
+        for bad in ("not-a-date", "2026-13-01", "10/04/2026", None):
+            result = _run_follow_up(conn, company_id, run_date=bad)
+            assert is_error(result), bad
+        assert _table_count(conn, "follow_up_threshold") == before_threshold
+        assert _table_count(conn, "audit_log") == before_audit
+
+    def test_cycle_writes_nothing(self, conn, env):
+        """Two identical runs change no row and no audit record."""
+        company_id = env["company_id"]
+        customer_id = env["customer"]
+        assert is_ok(_set_threshold(conn, company_id, 30))
+        _seed_follow_invoice(conn, company_id, customer_id, _FOLLOW_OLD_DUE)
+
+        first = _run_follow_up(conn, company_id)
+        assert is_ok(first)
+        before = {
+            "follow_up_threshold": _table_count(conn, "follow_up_threshold"),
+            "sales_invoice": _table_count(conn, "sales_invoice"),
+            "audit_log": _table_count(conn, "audit_log"),
+        }
+        second = _run_follow_up(conn, company_id)
+        assert is_ok(second)
+        assert second == first
+        assert _table_count(conn, "follow_up_threshold") == before["follow_up_threshold"]
+        assert _table_count(conn, "sales_invoice") == before["sales_invoice"]
+        assert _table_count(conn, "audit_log") == before["audit_log"]

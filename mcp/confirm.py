@@ -183,11 +183,18 @@ READ_REPORTS = frozenset({
     "budget-vs-actual",
     "budget-variance",
     "dimension-balance-report",
+    "flux-variance-narrative",
+    "generate-form940-data",
+    "generate-form941-data",
+    "inventory-demand-forecast",
     "multi-dim-trial-balance",
+    "standard-cost-variance-report",
+    "run-follow-up-cycle",
     "stock-balance",
     "stock-balance-report",
     "stock-ledger-report",
     "status",
+    "weekly-digest",
 })
 
 
@@ -201,6 +208,8 @@ READ_REPORTS = frozenset({
 # Extend only by re-running the sweep and pasting its pass set here; an L0
 # test holds this set equal to the sweep's result.
 PINNED_READS = frozenset({
+    "generate-form941-data",
+    "generate-form940-data",
     "accounting-adv-status",
     "ap-aging",
     "ar-aging",
@@ -212,6 +221,7 @@ PINNED_READS = frozenset({
     "cash-flow",
     "comparative-pl",
     "dimension-balance-report",
+    "flux-variance-narrative",
     "general-ledger",
     "get-account",
     "get-account-balance",
@@ -266,6 +276,7 @@ PINNED_READS = frozenset({
     "gl-status",
     "gl-summary",
     "hr-status",
+    "inventory-demand-forecast",
     "inventory-status",
     "journals-status",
     "list-account-types",
@@ -364,14 +375,17 @@ PINNED_READS = frozenset({
     "payroll-status",
     "profit-and-loss",
     "reports-status",
+    "run-follow-up-cycle",
     "selling-status",
     "status",
     "stock-balance",
     "stock-balance-report",
     "stock-ledger-report",
+    "standard-cost-variance-report",
     "tax-status",
     "tax-summary",
     "trial-balance",
+    "weekly-digest",
 })
 
 

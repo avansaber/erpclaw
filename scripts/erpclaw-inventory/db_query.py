@@ -15,8 +15,8 @@ import os
 import sqlite3
 import sys
 import uuid
-from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 # Add shared lib to path
 try:
@@ -3181,6 +3181,313 @@ def check_reorder(conn, args):
 
 
 # ---------------------------------------------------------------------------
+# inventory-demand-forecast
+# ---------------------------------------------------------------------------
+
+# Quantities on the demand forecast are reported at six decimal places.
+DEMAND_QTY_PRECISION = Decimal("0.000001")
+
+# History and horizon windows are explicit day counts, capped at one leap year.
+DEMAND_MAX_DAYS = 366
+
+
+def _parse_demand_date(raw, flag):
+    """Require an ISO calendar date (YYYY-MM-DD) for a demand forecast flag."""
+    if raw is None or (isinstance(raw, str) and raw.strip() == ""):
+        err(f"{flag} is required")
+    if not isinstance(raw, str):
+        err(f"{flag} must be an ISO date (YYYY-MM-DD)")
+    text = raw.strip()
+    if len(text) != 10 or text[4] != "-" or text[7] != "-":
+        err(f"{flag} must be an ISO date (YYYY-MM-DD)")
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").date()
+    except ValueError:
+        err(f"{flag} must be an ISO date (YYYY-MM-DD)")
+
+
+def _parse_demand_days(raw, flag):
+    """Require a positive integer day count in 1..366 for a forecast flag."""
+    if raw is None or (isinstance(raw, str) and str(raw).strip() == ""):
+        err(f"{flag} is required")
+    if isinstance(raw, bool):
+        err(f"{flag} must be a positive integer (1-366)")
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text.isdigit():
+            err(f"{flag} must be a positive integer (1-366)")
+        value = int(text)
+    elif isinstance(raw, int):
+        value = raw
+    else:
+        err(f"{flag} must be a positive integer (1-366)")
+    if value < 1 or value > DEMAND_MAX_DAYS:
+        err(f"{flag} must be a positive integer (1-366)")
+    return value
+
+
+def inventory_demand_forecast(conn, args):
+    """Historical consumption forecast for an item in a warehouse.
+
+    Transparent baseline, not a purchase recommendation: sums the absolute
+    value of posted (non-cancelled) outbound stock ledger quantities over the
+    inclusive history window ending on --as-of-date, divides by the history
+    day count for the daily velocity, and projects that exact rate over the
+    horizon day count. Read only: posts no ledger, GL, or audit rows.
+    """
+    company_id_arg = getattr(args, "company_id", None)
+    company_name_arg = getattr(args, "company_name", None)
+    if not company_id_arg and not company_name_arg:
+        err("--company-id is required")
+    item_id = getattr(args, "item_id", None)
+    if not item_id:
+        err("--item-id is required")
+    warehouse_id = getattr(args, "warehouse_id", None)
+    if not warehouse_id:
+        err("--warehouse-id is required")
+    as_of_date = _parse_demand_date(
+        getattr(args, "as_of_date", None), "--as-of-date")
+    history_days = _parse_demand_days(
+        getattr(args, "history_days", None), "--history-days")
+    horizon_days = _parse_demand_days(
+        getattr(args, "horizon_days", None), "--horizon-days")
+
+    company_id = resolve_scope_company(conn, company_id_arg, company_name_arg)
+
+    item_t = Table("item")
+    item_q = (Q.from_(item_t)
+              .select(item_t.id)
+              .where(item_t.id == P()))
+    if not conn.execute(item_q.get_sql(), (item_id,)).fetchone():
+        err(f"Item {item_id} not found")
+
+    wh_t = Table("warehouse")
+    wh_q = (Q.from_(wh_t)
+            .select(wh_t.id, wh_t.company_id)
+            .where(wh_t.id == P()))
+    wh_row = conn.execute(wh_q.get_sql(), (warehouse_id,)).fetchone()
+    if not wh_row:
+        err(f"Warehouse {warehouse_id} not found")
+    if wh_row["company_id"] != company_id:
+        err(f"Warehouse {warehouse_id} belongs to another company")
+
+    window_end = as_of_date
+    window_start = as_of_date - timedelta(days=history_days - 1)
+
+    sle = Table("stock_ledger_entry")
+    rows_q = (Q.from_(sle)
+              .select(sle.actual_qty)
+              .where(sle.item_id == P())
+              .where(sle.warehouse_id == P())
+              .where(sle.is_cancelled == 0)
+              .where(sle.posting_date >= P())
+              .where(sle.posting_date <= P()))
+    rows = conn.execute(
+        rows_q.get_sql(),
+        (item_id, warehouse_id,
+         window_start.isoformat(), window_end.isoformat()),
+    ).fetchall()
+
+    total_consumed = Decimal("0")
+    rows_used = 0
+    for row in rows:
+        qty = to_decimal(str(row["actual_qty"]))
+        if qty < 0:
+            total_consumed += -qty
+            rows_used += 1
+
+    daily_velocity = (total_consumed / Decimal(history_days)).quantize(
+        DEMAND_QTY_PRECISION, rounding=ROUND_HALF_UP)
+    projected_demand = (daily_velocity * Decimal(horizon_days)).quantize(
+        DEMAND_QTY_PRECISION, rounding=ROUND_HALF_UP)
+
+    ok({
+        "company_id": company_id,
+        "item_id": item_id,
+        "warehouse_id": warehouse_id,
+        "as_of_date": window_end.isoformat(),
+        "history_days": history_days,
+        "horizon_days": horizon_days,
+        "window_start": window_start.isoformat(),
+        "window_end": window_end.isoformat(),
+        "basis": "posted_outbound_stock",
+        "rows_used": rows_used,
+        "total_consumed": str(total_consumed.quantize(
+            DEMAND_QTY_PRECISION, rounding=ROUND_HALF_UP)),
+        "daily_velocity": str(daily_velocity),
+        "projected_demand": str(projected_demand),
+    })
+
+
+# ---------------------------------------------------------------------------
+# standard-cost-variance-report
+# ---------------------------------------------------------------------------
+
+def _parse_variance_date(raw, flag):
+    """Require an ISO calendar date (YYYY-MM-DD) for a variance report flag."""
+    if raw is None or (isinstance(raw, str) and raw.strip() == ""):
+        err(f"{flag} is required")
+    if not isinstance(raw, str):
+        err(f"{flag} must be an ISO date (YYYY-MM-DD)")
+    text = raw.strip()
+    if len(text) != 10 or text[4] != "-" or text[7] != "-":
+        err(f"{flag} must be an ISO date (YYYY-MM-DD)")
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").date()
+    except ValueError:
+        err(f"{flag} must be an ISO date (YYYY-MM-DD)")
+
+
+def standard_cost_variance_report(conn, args):
+    """Read-only standard cost variance report for one company and date range.
+
+    Uses existing posted (non-cancelled) stock ledger rows only: each row's
+    quantity is valued at the item's standard_rate (standard value) and
+    compared with the row's posted stock_value_difference (actual value).
+    The variance is actual minus standard. All money is exact Decimal,
+    quantized to two places. Company scope comes from the row's warehouse.
+    Optional item and warehouse filters narrow the rows; a foreign or
+    missing filter record is refused. Posts nothing: no ledger, GL, or
+    audit row is written.
+    """
+    company_id_arg = getattr(args, "company_id", None)
+    company_name_arg = getattr(args, "company_name", None)
+    if not company_id_arg and not company_name_arg:
+        err("--company-id is required")
+    from_date = _parse_variance_date(
+        getattr(args, "from_date", None), "--from-date")
+    to_date = _parse_variance_date(
+        getattr(args, "to_date", None), "--to-date")
+    if from_date > to_date:
+        err("--from-date must not be later than --to-date")
+
+    company_id = resolve_scope_company(conn, company_id_arg, company_name_arg)
+
+    item_id = getattr(args, "item_id", None)
+    warehouse_id = getattr(args, "warehouse_id", None)
+
+    if item_id:
+        item_t = Table("item")
+        item_q = (Q.from_(item_t)
+                  .select(item_t.id)
+                  .where(item_t.id == P()))
+        if not conn.execute(item_q.get_sql(), (item_id,)).fetchone():
+            err(f"Item {item_id} not found")
+
+    if warehouse_id:
+        wh_t = Table("warehouse")
+        wh_q = (Q.from_(wh_t)
+                .select(wh_t.id, wh_t.company_id)
+                .where(wh_t.id == P()))
+        wh_row = conn.execute(wh_q.get_sql(), (warehouse_id,)).fetchone()
+        if not wh_row:
+            err(f"Warehouse {warehouse_id} not found")
+        if wh_row["company_id"] != company_id:
+            err(f"Warehouse {warehouse_id} belongs to another company")
+
+    sle = Table("stock_ledger_entry").as_("sle")
+    item_alias = Table("item").as_("i")
+    wh_alias = Table("warehouse").as_("w")
+
+    rows_q = (Q.from_(sle)
+              .join(item_alias).on(item_alias.id == sle.item_id)
+              .join(wh_alias).on(wh_alias.id == sle.warehouse_id)
+              .select(
+                  sle.id.as_("sle_id"),
+                  sle.posting_date,
+                  sle.created_at,
+                  sle.item_id,
+                  sle.warehouse_id,
+                  sle.actual_qty,
+                  sle.stock_value_difference,
+                  sle.valuation_rate,
+                  item_alias.item_code,
+                  item_alias.item_name,
+                  item_alias.standard_rate,
+                  wh_alias.name.as_("warehouse_name"))
+              .where(wh_alias.company_id == P())
+              .where(sle.is_cancelled == 0)
+              .where(sle.posting_date >= P())
+              .where(sle.posting_date <= P())
+              .orderby(sle.posting_date, order=Order.asc)
+              .orderby(sle.created_at, order=Order.asc)
+              .orderby(sle.id, order=Order.asc))
+
+    params = [company_id, from_date.isoformat(), to_date.isoformat()]
+    if item_id:
+        rows_q = rows_q.where(sle.item_id == P())
+        params.append(item_id)
+    if warehouse_id:
+        rows_q = rows_q.where(sle.warehouse_id == P())
+        params.append(warehouse_id)
+
+    rows = conn.execute(rows_q.get_sql(), params).fetchall()
+
+    details = []
+    total_quantity = Decimal("0")
+    total_standard = Decimal("0")
+    total_actual = Decimal("0")
+    for row in rows:
+        qty = to_decimal(str(row["actual_qty"]))
+        std_rate = to_decimal(str(row["standard_rate"]
+                                  if row["standard_rate"] is not None else "0"))
+        standard_value = round_currency(qty * std_rate)
+        actual_value = round_currency(to_decimal(str(row["stock_value_difference"])))
+        variance = round_currency(actual_value - standard_value)
+        total_quantity += qty
+        total_standard += standard_value
+        total_actual += actual_value
+        details.append({
+            "stock_ledger_entry_id": row["sle_id"],
+            "posting_date": row["posting_date"],
+            "item_id": row["item_id"],
+            "item_code": row["item_code"],
+            "item_name": row["item_name"],
+            "warehouse_id": row["warehouse_id"],
+            "warehouse_name": row["warehouse_name"],
+            "quantity": str(round_currency(qty)),
+            "qty": str(round_currency(qty)),
+            "standard_rate": str(round_currency(std_rate)),
+            "standard_value": str(standard_value),
+            "actual_value": str(actual_value),
+            "variance": str(variance),
+        })
+
+    total_quantity_s = str(round_currency(total_quantity))
+    total_standard_s = str(round_currency(total_standard))
+    total_actual_s = str(round_currency(total_actual))
+    total_variance_s = str(round_currency(total_actual - total_standard))
+
+    ok({
+        "company_id": company_id,
+        "item_id": item_id,
+        "warehouse_id": warehouse_id,
+        "from_date": from_date.isoformat(),
+        "to_date": to_date.isoformat(),
+        "scope": "recorded_stock_rows",
+        "basis": "recorded_stock_rows",
+        "details": details,
+        "rows": details,
+        "row_count": len(details),
+        "count": len(details),
+        "totals": {
+            "quantity": total_quantity_s,
+            "standard_value": total_standard_s,
+            "actual_value": total_actual_s,
+            "variance": total_variance_s,
+        },
+        "total_quantity": total_quantity_s,
+        "quantity": total_quantity_s,
+        "total_standard_value": total_standard_s,
+        "standard_value": total_standard_s,
+        "total_actual_value": total_actual_s,
+        "actual_value": total_actual_s,
+        "total_variance": total_variance_s,
+        "variance": total_variance_s,
+    })
+
+
+# ---------------------------------------------------------------------------
 # import-items
 # ---------------------------------------------------------------------------
 
@@ -4585,6 +4892,7 @@ ACTIONS = {
     "stock-balance": stock_balance_report,  # alias — "stock balance" routes to company-wide report
     "stock-balance-report": stock_balance_report,
     "stock-ledger-report": stock_ledger_report,
+    "standard-cost-variance-report": standard_cost_variance_report,
     "add-batch": add_batch,
     "list-batches": list_batches,
     "add-serial-number": add_serial_number,
@@ -4600,6 +4908,7 @@ ACTIONS = {
     "get-stock-revaluation": get_stock_revaluation,
     "cancel-stock-revaluation": cancel_stock_revaluation,
     "check-reorder": check_reorder,
+    "inventory-demand-forecast": inventory_demand_forecast,
     "import-items": import_items,
     "get-projected-qty": get_projected_qty,
     "add-item-attribute": add_item_attribute,
@@ -4721,6 +5030,11 @@ def main():
     parser.add_argument("--discount-percentage")
     parser.add_argument("--pricing-rule-rate", dest="pr_rate")
     parser.add_argument("--priority", type=int, default=None)
+
+    # inventory-demand-forecast
+    parser.add_argument("--as-of-date")
+    parser.add_argument("--history-days")
+    parser.add_argument("--horizon-days")
 
     # Stock reconciliation
     parser.add_argument("--stock-reconciliation-id")

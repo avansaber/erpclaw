@@ -8,12 +8,15 @@ Usage: python3 db_query.py --action <action-name> [--flags ...]
 Output: JSON to stdout, exit 0 on success, exit 1 on error.
 """
 import argparse
+import csv
+import io
 import json
 import os
 import sqlite3
 import sys
-from datetime import datetime
-from decimal import Decimal
+from datetime import datetime, timedelta
+from contextlib import redirect_stdout
+from decimal import Decimal, InvalidOperation
 
 # Add shared lib to path
 try:
@@ -25,7 +28,7 @@ try:
     from erpclaw_lib.validation import check_input_lengths
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.dependencies import check_required_tables
+    from erpclaw_lib.dependencies import check_required_tables, table_exists
     from erpclaw_lib.query_helpers import resolve_company_id, resolve_scope_company
     from erpclaw_lib.voucher_types import canonical_voucher_type
     # Aliased: this module already has a `party_ledger` ACTION function (the
@@ -1039,6 +1042,180 @@ def ap_aging(conn, args):
 
 
 # ---------------------------------------------------------------------------
+# Shared budget/actual basis + flux variance narrative (v1)
+# ---------------------------------------------------------------------------
+
+def _budget_actual_amounts(conn, fy, budget_row):
+    """Shared budget and actual basis for the budget variance reports.
+
+    Single source of the ledger calculation behind both `budget-vs-actual`
+    (alias `budget-variance`) and `flux-variance-narrative`: the stored
+    budget amount plus the fiscal-year actuals as signed debit-minus-credit
+    over non-cancelled GL entries. Callers differ only in presentation
+    (percent nullability, thresholds, narrative), never in these amounts.
+    """
+    budget_amt = _d(budget_row["budget_amount"])
+
+    gl_t = Table("gl_entry").as_("g")
+    actual_q = (
+        Q.from_(gl_t)
+        .select(
+            fn.Coalesce(DecimalSum(gl_t.debit), "0").as_("total_debit"),
+            fn.Coalesce(DecimalSum(gl_t.credit), "0").as_("total_credit"),
+        )
+        .where(gl_t.is_cancelled == 0)
+        .where(gl_t.posting_date >= P())
+        .where(gl_t.posting_date <= P())
+    )
+    actual_params = [fy["start_date"], fy["end_date"]]
+
+    if budget_row["account_id"]:
+        actual_q = actual_q.where(gl_t.account_id == P())
+        actual_params.append(budget_row["account_id"])
+    if budget_row["cost_center_id"]:
+        actual_q = actual_q.where(gl_t.cost_center_id == P())
+        actual_params.append(budget_row["cost_center_id"])
+
+    actual = conn.execute(actual_q.get_sql(), actual_params).fetchone()
+    actual_amt = _d(actual["total_debit"]) - _d(actual["total_credit"])
+    return budget_amt, actual_amt
+
+
+def _parse_materiality(value, name):
+    """Parse an optional exact-decimal threshold; refuse invalid/negative."""
+    raw = value if value is not None else "0.00"
+    if isinstance(raw, float):
+        err(f"Invalid Decimal for {name}: {raw!r}")
+    if isinstance(raw, Decimal):
+        parsed = raw
+    else:
+        try:
+            parsed = to_decimal(str(raw))
+        except (ValueError, TypeError, InvalidOperation):
+            err(f"Invalid Decimal for {name}: {raw!r}")
+    if not parsed.is_finite():
+        err(f"Invalid Decimal for {name}: {raw!r}")
+    if parsed < 0:
+        err(f"{name} must be nonnegative")
+    return parsed
+
+
+def flux_variance_narrative(conn, args):
+    """Deterministic plain-language reading of one budget variance row.
+
+    Read-only: only SELECTs, then `ok()`. Reuses `_budget_actual_amounts`,
+    the exact basis behind `budget-variance`, and adds an exact Decimal
+    variance percent (null when the budget is zero), caller-threshold
+    classification and a traceable narrative. No model call, no stored
+    narrative, no writes.
+    """
+    if not getattr(args, "fiscal_year_id", None):
+        err("--fiscal-year-id is required")
+    if not getattr(args, "company_id", None) and not getattr(
+            args, "company_name", None):
+        err("--company-id is required")
+    if not getattr(args, "account_id", None):
+        err("--account-id is required")
+    company_id = resolve_company_id(conn,
+                                    getattr(args, "company_id", None),
+                                    getattr(args, "company_name", None))
+
+    mat_amt = _parse_materiality(
+        getattr(args, "materiality_amount", None), "--materiality-amount")
+    mat_pct = _parse_materiality(
+        getattr(args, "materiality_percent", None), "--materiality-percent")
+
+    fy_t = Table("fiscal_year")
+    fy = conn.execute(
+        Q.from_(fy_t).select(fy_t.star).where(fy_t.id == P()).get_sql(),
+        (args.fiscal_year_id,)).fetchone()
+    if not fy:
+        err(f"Fiscal year not found: {args.fiscal_year_id}")
+    if fy["company_id"] != company_id:
+        err(f"Fiscal year {args.fiscal_year_id} does not belong "
+            f"to company {company_id}")
+
+    acct_t = Table("account")
+    acct = conn.execute(
+        Q.from_(acct_t).select(acct_t.star).where(acct_t.id == P()).get_sql(),
+        (args.account_id,)).fetchone()
+    if not acct:
+        err(f"Account not found: {args.account_id}")
+    if acct["company_id"] != company_id:
+        err(f"Account {args.account_id} does not belong "
+            f"to company {company_id}")
+
+    b_t = Table("budget")
+    brow = conn.execute(
+        Q.from_(b_t).select(b_t.star)
+        .where(b_t.fiscal_year_id == P())
+        .where(b_t.company_id == P())
+        .where(b_t.account_id == P()).get_sql(),
+        (args.fiscal_year_id, company_id, args.account_id)).fetchone()
+    if not brow:
+        err(f"Budget not found for account {args.account_id} "
+            f"in fiscal year {args.fiscal_year_id}")
+
+    budget_amt, actual_amt = _budget_actual_amounts(conn, fy, brow)
+    variance = budget_amt - actual_amt
+    if budget_amt == 0:
+        pct = None
+    else:
+        pct = variance / budget_amt * 100
+
+    budget_s = _s(budget_amt)
+    actual_s = _s(actual_amt)
+    variance_s = _s(variance)
+    pct_s = None if pct is None else _s(pct)
+
+    material = abs(variance) >= mat_amt or (
+        pct is not None and abs(pct) >= mat_pct)
+    classification = "material" if material else "within_threshold"
+    direction = "unfavorable" if variance < 0 else "favorable"
+
+    account_name = acct["name"]
+    if pct_s is None:
+        narrative = (
+            "Account '%s': budget %s, actual %s, variance %s; "
+            "no percentage comparison is available (budget is zero); "
+            "direction is %s; classification: %s."
+            % (account_name, budget_s, actual_s, variance_s,
+               direction, classification)
+        )
+    else:
+        narrative = (
+            "Account '%s': budget %s, actual %s, variance %s (%s%%) is %s; "
+            "classification: %s."
+            % (account_name, budget_s, actual_s, variance_s,
+               pct_s, direction, classification)
+        )
+
+    ok({
+        "account": account_name,
+        "account_id": args.account_id,
+        "company_id": company_id,
+        "fiscal_year_id": args.fiscal_year_id,
+        "budget": budget_s,
+        "actual": actual_s,
+        "variance": variance_s,
+        "variance_pct": pct_s,
+        "variance_percent": pct_s,
+        "direction": direction,
+        "classification": classification,
+        "narrative": narrative,
+        "basis": {
+            "company_id": company_id,
+            "fiscal_year_id": args.fiscal_year_id,
+            "account_id": args.account_id,
+            "account": account_name,
+            "materiality_amount": _s(mat_amt),
+            "materiality_percent": _s(mat_pct),
+            "report_action": "budget-variance",
+        },
+    })
+
+
+# ---------------------------------------------------------------------------
 # Budget vs Actual
 # ---------------------------------------------------------------------------
 
@@ -1087,31 +1264,7 @@ def budget_vs_actual(conn, args):
 
     items = []
     for b in budgets:
-        budget_amt = _d(b["budget_amount"])
-
-        # Build actual query dynamically
-        gl_t = Table("gl_entry").as_("g")
-        actual_q = (
-            Q.from_(gl_t)
-            .select(
-                fn.Coalesce(DecimalSum(gl_t.debit), "0").as_("total_debit"),
-                fn.Coalesce(DecimalSum(gl_t.credit), "0").as_("total_credit"),
-            )
-            .where(gl_t.is_cancelled == 0)
-            .where(gl_t.posting_date >= P())
-            .where(gl_t.posting_date <= P())
-        )
-        actual_params = [fy["start_date"], fy["end_date"]]
-
-        if b["account_id"]:
-            actual_q = actual_q.where(gl_t.account_id == P())
-            actual_params.append(b["account_id"])
-        if b["cost_center_id"]:
-            actual_q = actual_q.where(gl_t.cost_center_id == P())
-            actual_params.append(b["cost_center_id"])
-
-        actual = conn.execute(actual_q.get_sql(), actual_params).fetchone()
-        actual_amt = _d(actual["total_debit"]) - _d(actual["total_credit"])
+        budget_amt, actual_amt = _budget_actual_amounts(conn, fy, b)
 
         variance = budget_amt - actual_amt
         variance_pct = (variance / budget_amt * 100) if budget_amt else Decimal("0")
@@ -1532,6 +1685,219 @@ def comparative_pl(conn, args):
 
 
 # ---------------------------------------------------------------------------
+# Weekly Digest
+# ---------------------------------------------------------------------------
+
+_WEEK_LEN_DAYS = 7
+
+_SALES_STATUSES = ["submitted", "partially_paid", "paid", "overdue"]
+_OVERDUE_STATUSES = ["submitted", "partially_paid", "overdue"]
+_OPEN_ORDER_STATUSES = ["draft", "confirmed", "partially_delivered",
+                        "fully_delivered", "partially_invoiced"]
+
+
+def _unavailable(table):
+    return {"status": "unavailable",
+            "reason": "Table '%s' is not installed; section unavailable" % table}
+
+
+def weekly_digest(conn, args):
+    """Deterministic read-only seven-day business digest for one company.
+
+    Requires ``--company-id`` (or ``--company``) and ``--start-date``
+    YYYY-MM-DD; the inclusive end date is exactly start + 6 days. Reports
+    exact Decimal sales (submitted sales invoices posted in the window),
+    collections (submitted receive payments in the window), spending
+    (submitted purchase bills posted in the window), overdue receivables
+    (open submitted invoices due before the week end), and point-in-time
+    open sales/purchase order counts. Every query is company scoped.
+    A missing optional table yields a section-level ``unavailable`` result,
+    never an invented zero. Only SELECTs; deterministic key order, no
+    timestamps, so two identical calls return identical JSON.
+    """
+    if not getattr(args, "company_id", None) and not getattr(
+            args, "company_name", None):
+        err("--company-id is required")
+    company_id = resolve_company_id(conn,
+                                    getattr(args, "company_id", None),
+                                    getattr(args, "company_name", None))
+
+    comp_t = Table("company")
+    found = conn.execute(
+        Q.from_(comp_t).select(comp_t.id)
+        .where(comp_t.id == P()).get_sql(),
+        (company_id,)).fetchone()
+    if not found:
+        err("Company not found: %s" % company_id)
+
+    raw_start = getattr(args, "start_date", None) or getattr(
+        args, "from_date", None)
+    if not raw_start:
+        err("--start-date is required")
+    try:
+        start_dt = datetime.strptime(raw_start, "%Y-%m-%d")
+        if start_dt.strftime("%Y-%m-%d") != raw_start:
+            raise ValueError()
+    except (TypeError, ValueError):
+        err("Invalid --start-date '%s': expected YYYY-MM-DD" % raw_start)
+    week_start = start_dt.strftime("%Y-%m-%d")
+    week_end = (start_dt + timedelta(days=_WEEK_LEN_DAYS - 1)).strftime(
+        "%Y-%m-%d")
+
+    sections = ["sales", "collections", "spending",
+                "overdue_receivables", "operations"]
+
+    if table_exists(conn, "sales_invoice"):
+        si_t = Table("sales_invoice")
+        sales_sql = (
+            Q.from_(si_t)
+            .select(fn.Count("*").as_("cnt"),
+                    fn.Coalesce(DecimalSum(si_t.grand_total), "0")
+                    .as_("total"))
+            .where(si_t.company_id == P())
+            .where(si_t.posting_date >= P())
+            .where(si_t.posting_date <= P())
+            .where(si_t.status.isin(_SALES_STATUSES))
+            .get_sql()
+        )
+        sales_row = conn.execute(
+            sales_sql, (company_id, week_start, week_end)).fetchone()
+        sales = {"status": "available",
+                 "invoice_count": sales_row["cnt"],
+                 "total": _s(_d(sales_row["total"]))}
+    else:
+        sales = _unavailable("sales_invoice")
+
+    if table_exists(conn, "payment_entry"):
+        pe_t = Table("payment_entry")
+        coll_sql = (
+            Q.from_(pe_t)
+            .select(fn.Count("*").as_("cnt"),
+                    fn.Coalesce(DecimalSum(pe_t.paid_amount), "0")
+                    .as_("total"))
+            .where(pe_t.company_id == P())
+            .where(pe_t.status == "submitted")
+            .where(pe_t.payment_type == "receive")
+            .where(pe_t.posting_date >= P())
+            .where(pe_t.posting_date <= P())
+            .get_sql()
+        )
+        coll_row = conn.execute(
+            coll_sql, (company_id, week_start, week_end)).fetchone()
+        collections = {"status": "available",
+                       "receipt_count": coll_row["cnt"],
+                       "total": _s(_d(coll_row["total"]))}
+    else:
+        collections = _unavailable("payment_entry")
+
+    if table_exists(conn, "purchase_invoice"):
+        pi_t = Table("purchase_invoice")
+        spend_sql = (
+            Q.from_(pi_t)
+            .select(fn.Count("*").as_("cnt"),
+                    fn.Coalesce(DecimalSum(pi_t.grand_total), "0")
+                    .as_("total"))
+            .where(pi_t.company_id == P())
+            .where(pi_t.posting_date >= P())
+            .where(pi_t.posting_date <= P())
+            .where(pi_t.status.isin(_SALES_STATUSES))
+            .get_sql()
+        )
+        spend_row = conn.execute(
+            spend_sql, (company_id, week_start, week_end)).fetchone()
+        spending = {"status": "available",
+                    "bill_count": spend_row["cnt"],
+                    "total": _s(_d(spend_row["total"]))}
+    else:
+        spending = _unavailable("purchase_invoice")
+
+    if table_exists(conn, "sales_invoice"):
+        od_t = Table("sales_invoice")
+        od_sql = (
+            Q.from_(od_t)
+            .select(od_t.id, od_t.grand_total,
+                    od_t.outstanding_amount, od_t.due_date)
+            .where(od_t.company_id == P())
+            .where(od_t.status.isin(_OVERDUE_STATUSES))
+            .where(od_t.due_date < P())
+            .orderby(od_t.due_date)
+            .orderby(od_t.id)
+            .get_sql()
+        )
+        od_rows = conn.execute(od_sql, (company_id, week_end)).fetchall()
+        end_dt = datetime.strptime(week_end, "%Y-%m-%d")
+        overdue_total = Decimal("0")
+        overdue_invoices = []
+        for row in od_rows:
+            outstanding = _d(row["outstanding_amount"])
+            if outstanding <= 0:
+                continue
+            due_dt = datetime.strptime(row["due_date"], "%Y-%m-%d")
+            overdue_total += outstanding
+            overdue_invoices.append({
+                "id": row["id"],
+                "due_date": row["due_date"],
+                "days_overdue": (end_dt - due_dt).days,
+                "grand_total": _s(_d(row["grand_total"])),
+                "outstanding": _s(outstanding),
+            })
+        overdue = {"status": "available",
+                   "overdue_count": len(overdue_invoices),
+                   "total_overdue": _s(overdue_total),
+                   "invoices": overdue_invoices}
+    else:
+        overdue = _unavailable("sales_invoice")
+
+    ops_missing = []
+    open_so = None
+    open_po = None
+    if table_exists(conn, "sales_order"):
+        so_t = Table("sales_order")
+        so_sql = (
+            Q.from_(so_t)
+            .select(fn.Count("*").as_("cnt"))
+            .where(so_t.company_id == P())
+            .where(so_t.status.isin(_OPEN_ORDER_STATUSES))
+            .get_sql()
+        )
+        open_so = conn.execute(so_sql, (company_id,)).fetchone()["cnt"]
+    else:
+        ops_missing.append("sales_order")
+    if table_exists(conn, "purchase_order"):
+        po_t = Table("purchase_order")
+        po_sql = (
+            Q.from_(po_t)
+            .select(fn.Count("*").as_("cnt"))
+            .where(po_t.company_id == P())
+            .where(po_t.status.isin(_OPEN_ORDER_STATUSES))
+            .get_sql()
+        )
+        open_po = conn.execute(po_sql, (company_id,)).fetchone()["cnt"]
+    else:
+        ops_missing.append("purchase_order")
+    if open_so is None and open_po is None:
+        operations = _unavailable("sales_order+purchase_order")
+    else:
+        operations = {"status": "available",
+                      "open_sales_orders": open_so,
+                      "open_purchase_orders": open_po}
+        if ops_missing:
+            operations["unavailable_tables"] = ops_missing
+
+    ok({
+        "company_id": company_id,
+        "week_start": week_start,
+        "week_end": week_end,
+        "sections": sections,
+        "sales": sales,
+        "collections": collections,
+        "spending": spending,
+        "overdue_receivables": overdue,
+        "operations": operations,
+    })
+
+
+# ---------------------------------------------------------------------------
 # Status
 # ---------------------------------------------------------------------------
 
@@ -1929,6 +2295,221 @@ def dimension_balance_report(conn, args):
     })
 
 
+_CSV_REPORTS = frozenset({
+    "trial-balance", "profit-and-loss", "balance-sheet", "general-ledger",
+})
+
+
+def _csv_cell(value):
+    """Keep exact amount strings and quote spreadsheet formulas as text."""
+    if value is None:
+        return ""
+    text = json.dumps(value, sort_keys=True) if isinstance(value, (dict, list)) else str(value)
+    if text.lstrip().startswith(("=", "+", "-", "@")) or text.startswith(("\t", "\r", "\n")):
+        try:
+            amount = Decimal(text)
+        except InvalidOperation:
+            return "'" + text
+        if not amount.is_finite():
+            return "'" + text
+    return text
+
+
+def export_financial_csv(conn, args):
+    """Export existing statement results without changing filters or books."""
+    if args.action not in _CSV_REPORTS:
+        err("CSV export supports trial-balance, profit-and-loss, balance-sheet and general-ledger")
+    captured = io.StringIO()
+    exit_code = 0
+    with redirect_stdout(captured):
+        try:
+            ACTIONS[args.action](conn, args)
+        except SystemExit as result:
+            exit_code = result.code
+    if exit_code != 0:
+        print(captured.getvalue(), end="")
+        sys.exit(exit_code)
+    data = json.loads(captured.getvalue())
+    rows = []
+    for section, value in data.items():
+        if section == "status":
+            continue
+        if isinstance(value, list):
+            for item in value:
+                rows.append({"section": section, **item})
+        else:
+            rows.append({"section": "summary", "metric": section, "value": value})
+    columns = ["section"]
+    for row in rows:
+        for key in row:
+            if key not in columns:
+                columns.append(key)
+    stream = io.StringIO(newline="")
+    writer = csv.DictWriter(stream, fieldnames=columns, lineterminator="\r\n")
+    writer.writeheader()
+    writer.writerows({key: _csv_cell(value) for key, value in row.items()} for row in rows)
+    ok({"report": args.action, "format": "csv", "row_count": len(rows),
+        "columns": columns, "csv": stream.getvalue()})
+def nonprofit_statement_set(conn, args):
+    """Read a two-class statement set from explicitly classified company books."""
+    from datetime import date
+
+    company_id = resolve_company_id(conn, getattr(args, "company_id", None),
+                                    getattr(args, "company_name", None))
+    start, end = getattr(args, "from_date", None), getattr(args, "to_date", None)
+    try:
+        if not start or not end or date.fromisoformat(start) > date.fromisoformat(end) or (
+                date.fromisoformat(start).isoformat() != start or
+                date.fromisoformat(end).isoformat() != end):
+            raise ValueError()
+    except (TypeError, ValueError):
+        err("Valid --from-date and --to-date in ascending order are required")
+    key = (getattr(args, "net_asset_dimension", None) or "").strip()
+    if not key:
+        err("--net-asset-dimension is required; untagged entries are not classified")
+    registry = Table("dimension_registry")
+    registered = conn.execute(Q.from_(registry).select(
+        registry.is_active, registry.data_type, registry.allowed_values_json).where(
+        registry.key == P()).get_sql(), (key,)).fetchone()
+    if not registered or not registered["is_active"]:
+        err("The net-asset dimension must be registered and active")
+    classes = ("without_donor_restrictions", "with_donor_restrictions")
+    try:
+        declared_classes = json.loads(registered["allowed_values_json"] or "null")
+    except (TypeError, ValueError):
+        declared_classes = None
+    if registered["data_type"] != "enum" or not isinstance(declared_classes, list) or (
+            any(not isinstance(value, str) for value in declared_classes)) or (
+            set(declared_classes) != set(classes)):
+        err("The registered dimension must declare exactly the two donor-restriction classes")
+    mapping = _parse_json_arg(getattr(args, "cash_flow_account_map", None),
+                              "cash-flow-account-map")
+    categories = ("operating", "investing", "financing")
+    if not isinstance(mapping, dict) or any(
+            not isinstance(account_id, str) or category not in categories
+            for account_id, category in mapping.items()):
+        err("--cash-flow-account-map must map non-cash account IDs to operating, investing or financing")
+    releases = set(v.strip() for v in
+                   (getattr(args, "release_voucher_types", None) or "").split(",") if v.strip())
+    if _CLOSING_VOUCHER_TYPE in releases:
+        err("Period-closing vouchers cannot be release vouchers")
+    position = {name: {"assets": Decimal("0"), "liabilities": Decimal("0"),
+                       "net_assets": Decimal("0")} for name in classes}
+    activity = {name: {"opening_net_assets": Decimal("0"), "revenue": Decimal("0"),
+                       "releases": Decimal("0"), "expenses": Decimal("0"),
+                       "change_in_net_assets": Decimal("0"),
+                       "closing_net_assets": Decimal("0")} for name in classes}
+    flow = {name: Decimal("0") for name in categories}
+    opening_cash = closing_cash = Decimal("0")
+    release_groups = {}
+    flow_groups = {}
+    accounts = Table("account")
+    entries = Table("gl_entry")
+    query = Q.from_(entries).join(accounts).on(entries.account_id == accounts.id).select(
+        entries.id, entries.posting_date, entries.debit_base, entries.credit_base,
+        entries.dimensions_json, entries.voucher_type, entries.voucher_id,
+        accounts.id.as_("account_id"), accounts.root_type, accounts.account_type
+    ).where(accounts.company_id == P()).where(entries.is_cancelled == 0).where(
+        entries.posting_date <= P())
+    rows = conn.execute(query.get_sql(), (company_id, end)).fetchall()
+    for row in rows:
+        try:
+            tags = json.loads(row["dimensions_json"] or "{}")
+        except (TypeError, ValueError):
+            err("A ledger entry has invalid accounting dimensions")
+        if not isinstance(tags, dict) or tags.get(key) not in classes:
+            err("Every included ledger entry needs a recognised net-asset class tag")
+        class_name = tags[key]
+        debit, credit = _d(row["debit_base"]), _d(row["credit_base"])
+        if not debit.is_finite() or not credit.is_finite():
+            err("Ledger amounts must be finite exact decimals")
+        movement = debit - credit
+        root = row["root_type"]
+        period = row["posting_date"] >= start
+        is_release = row["voucher_type"] in releases
+        is_closing = row["voucher_type"] == _CLOSING_VOUCHER_TYPE
+        if is_release and root != "equity":
+            err("Named release vouchers must contain only net-asset equity transfers")
+        if root == "asset":
+            position[class_name]["assets"] += movement
+        elif root == "liability":
+            position[class_name]["liabilities"] -= movement
+        elif root in ("equity", "income", "expense"):
+            position[class_name]["net_assets"] -= movement
+            activity[class_name]["closing_net_assets"] -= movement
+            if not period:
+                activity[class_name]["opening_net_assets"] -= movement
+        else:
+            err("Unsupported account root in the nonprofit statement set")
+        cash = root == "asset" and row["account_type"] in ("bank", "cash")
+        if cash:
+            closing_cash += movement
+            if not period:
+                opening_cash += movement
+        if not period or is_closing:
+            continue
+        voucher = (row["voucher_type"], row["voucher_id"])
+        if not is_release:
+            group = flow_groups.setdefault(voucher, {
+                "cash": Decimal("0"), **{name: Decimal("0") for name in categories}})
+            if cash:
+                group["cash"] += movement
+        if is_release:
+            activity[class_name]["releases"] -= movement
+            release_groups.setdefault(voucher, {name: Decimal("0") for name in classes})
+            release_groups[voucher][class_name] -= movement
+        elif root == "income":
+            activity[class_name]["revenue"] -= movement
+        elif root == "expense":
+            if class_name != "without_donor_restrictions":
+                err("Expenses must reduce net assets without donor restrictions")
+            activity[class_name]["expenses"] += movement
+        elif root == "equity" and movement:
+            err("Period equity movements require an explicit release voucher type")
+        if not cash and not is_release and movement:
+            category = mapping.get(row["account_id"])
+            if category is None:
+                err("Every non-cash account with period movement needs a cash-flow category")
+            group[category] -= movement
+    for group in flow_groups.values():
+        classified = sum((group[name] for name in categories), Decimal("0"))
+        if classified != group["cash"]:
+            err("Each voucher's classified cash flows must reconcile to its cash movement")
+        if not group["cash"] and any(group[name] for name in categories):
+            err("Non-cash vouchers cannot create classified cash flows")
+        for name in categories:
+            flow[name] += group[name]
+    for balances in release_groups.values():
+        if sum(balances.values(), Decimal("0")) != 0 or (
+                balances["without_donor_restrictions"] < 0):
+            err("Each release voucher must balance between the two classes in the release direction")
+    for class_name in classes:
+        values = activity[class_name]
+        values["change_in_net_assets"] = values["revenue"] + values["releases"] - values["expenses"]
+        if values["opening_net_assets"] + values["change_in_net_assets"] != values["closing_net_assets"]:
+            err("Net-asset opening, activity and closing balances do not reconcile")
+    totals = {name: sum((p[name] for p in position.values()), Decimal("0"))
+              for name in ("assets", "liabilities", "net_assets")}
+    if totals["assets"] - totals["liabilities"] != totals["net_assets"]:
+        err("The company financial position does not balance")
+    cash_change = closing_cash - opening_cash
+    if sum(flow.values(), Decimal("0")) != cash_change:
+        err("Classified cash flows do not reconcile to the cash balance movement")
+    net_asset_change = sum((a["change_in_net_assets"] for a in activity.values()), Decimal("0"))
+    ok({
+        "company_id": company_id, "from_date": start, "to_date": end,
+        "net_asset_dimension": key, "basis": "company base currency, explicitly tagged posted ledger",
+        "financial_position": {"classes": {name: {k: _s(v) for k, v in p.items()}
+                                              for name, p in position.items()},
+                               "totals": {k: _s(v) for k, v in totals.items()}},
+        "activities": {name: {k: _s(v) for k, v in a.items()} for name, a in activity.items()},
+        "cash_flow": {**{k: _s(v) for k, v in flow.items()},
+                      "opening_cash": _s(opening_cash), "closing_cash": _s(closing_cash),
+                      "net_change": _s(cash_change), "change_in_net_assets": _s(net_asset_change),
+                      "operating_reconciliation_adjustment": _s(flow["operating"] - net_asset_change)},
+    })
+
+
 ACTIONS = {
     "trial-balance": trial_balance,
     "profit-and-loss": profit_and_loss,
@@ -1937,16 +2518,19 @@ ACTIONS = {
     "general-ledger": general_ledger,
     "multi-dim-trial-balance": multi_dim_trial_balance,
     "dimension-balance-report": dimension_balance_report,
+    "nonprofit-statement-set": nonprofit_statement_set,
     "ar-aging": ar_aging,
     "ap-aging": ap_aging,
     "budget-vs-actual": budget_vs_actual,
     "budget-variance": budget_vs_actual,  # alias
+    "flux-variance-narrative": flux_variance_narrative,
     "party-ledger": party_ledger,
     "tax-summary": tax_summary,
     "payment-summary": payment_summary,
     "gl-summary": gl_summary,
     "comparative-pl": comparative_pl,
     "check-overdue": check_overdue,
+    "weekly-digest": weekly_digest,
     "add-elimination-rule": add_elimination_rule,
     "list-elimination-rules": list_elimination_rules,
     "run-elimination": run_elimination,
@@ -1959,6 +2543,7 @@ def main():
     parser = SafeArgumentParser(description="ERPClaw Reports Skill")
     parser.add_argument("--action", required=True, choices=sorted(ACTIONS.keys()))
     parser.add_argument("--db-path", default=None)
+    parser.add_argument("--format", choices=("json", "csv"), default="json")
 
     # Common filters
     parser.add_argument("--company-id")
@@ -1966,6 +2551,7 @@ def main():
     parser.add_argument("--from-date")
     parser.add_argument("--to-date")
     parser.add_argument("--as-of-date")
+    parser.add_argument("--start-date")
     parser.add_argument("--account-id")
     parser.add_argument("--cost-center-id")
     parser.add_argument("--project-id")
@@ -1981,6 +2567,9 @@ def main():
     parser.add_argument("--group-by", dest="group_by")
     parser.add_argument("--dimension", dest="dimension")
     parser.add_argument("--values", dest="values")
+    parser.add_argument("--net-asset-dimension")
+    parser.add_argument("--cash-flow-account-map")
+    parser.add_argument("--release-voucher-types")
 
     # Aging
     parser.add_argument("--customer-id")
@@ -1989,6 +2578,8 @@ def main():
 
     # Budget
     parser.add_argument("--fiscal-year-id")
+    parser.add_argument("--materiality-amount", default="0.00")
+    parser.add_argument("--materiality-percent", default="0.00")
 
     # P&L periodicity
     parser.add_argument("--periodicity", default="annual")
@@ -2023,7 +2614,10 @@ def main():
         sys.exit(1)
 
     try:
-        ACTIONS[args.action](conn, args)
+        if args.format == "csv":
+            export_financial_csv(conn, args)
+        else:
+            ACTIONS[args.action](conn, args)
     finally:
         conn.close()
 

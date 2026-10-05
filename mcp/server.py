@@ -339,10 +339,7 @@ def build_server():
     from mcp.server import Server
     import mcp.types as types
 
-    server = Server("erpclaw")
-
-    @server.list_tools()
-    async def list_tools():
+    def tool_list():
         tools = []
         for spec in _tool_specs():
             ann = spec.get("annotations") or {}
@@ -356,6 +353,28 @@ def build_server():
                 ),
             ))
         return tools
+
+    if not hasattr(Server, "list_tools"):
+        async def list_tools_v2(_ctx, _params):
+            return types.ListToolsResult(tools=tool_list())
+
+        async def call_tool_v2(_ctx, params):
+            result = handle_tool_call(params.name, params.arguments or {})
+            return types.CallToolResult(content=[
+                types.TextContent(type="text", text=json.dumps(result, default=str)),
+            ])
+
+        return Server(
+            "erpclaw",
+            on_list_tools=list_tools_v2,
+            on_call_tool=call_tool_v2,
+        )
+
+    server = Server("erpclaw")
+
+    @server.list_tools()
+    async def list_tools():
+        return tool_list()
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict):

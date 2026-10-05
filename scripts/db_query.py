@@ -248,12 +248,14 @@ ACTION_MAP = {
     "ap-aging": "erpclaw-reports",
     "budget-vs-actual": "erpclaw-reports",
     "budget-variance": "erpclaw-reports",
+    "flux-variance-narrative": "erpclaw-reports",
     "party-ledger": "erpclaw-reports",
     "tax-summary": "erpclaw-reports",
     "payment-summary": "erpclaw-reports",
     "gl-summary": "erpclaw-reports",
     "comparative-pl": "erpclaw-reports",
     "check-overdue": "erpclaw-reports",
+    "weekly-digest": "erpclaw-reports",
     "add-elimination-rule": "erpclaw-reports",
     "list-elimination-rules": "erpclaw-reports",
     "run-elimination": "erpclaw-reports",
@@ -346,6 +348,7 @@ ACTION_MAP = {
     "submit-purchase-receipt": "erpclaw-buying",
     "cancel-purchase-receipt": "erpclaw-buying",
     "create-purchase-invoice": "erpclaw-buying",
+    "add-vendor-bill-intake": "erpclaw-buying",
     "update-purchase-invoice": "erpclaw-buying",
     "get-purchase-invoice": "erpclaw-buying",
     "list-purchase-invoices": "erpclaw-buying",
@@ -418,6 +421,8 @@ ACTION_MAP = {
     "cancel-stock-revaluation": "erpclaw-inventory",
     "check-reorder": "erpclaw-inventory",
     "import-items": "erpclaw-inventory",
+    "inventory-demand-forecast": "erpclaw-inventory",
+    "standard-cost-variance-report": "erpclaw-inventory",
     "inventory-status": "erpclaw-inventory",
     "get-projected-qty": "erpclaw-inventory",
     "add-item-attribute": "erpclaw-inventory",
@@ -598,6 +603,8 @@ ACTION_MAP = {
     "submit-payroll-run": "erpclaw-payroll",
     "cancel-payroll-run": "erpclaw-payroll",
     "generate-w2-data": "erpclaw-payroll",
+    "generate-form941-data": "erpclaw-payroll",
+    "generate-form940-data": "erpclaw-payroll",
     "add-garnishment": "erpclaw-payroll",
     "update-garnishment": "erpclaw-payroll",
     "list-garnishments": "erpclaw-payroll",
@@ -693,6 +700,8 @@ ACTION_MAP = {
     "place-customer-on-hold": "erpclaw-selling",
     "add-dunning-level": "erpclaw-selling",
     "run-dunning-cycle": "erpclaw-selling",
+    "set-follow-up-threshold": "erpclaw-selling",
+    "run-follow-up-cycle": "erpclaw-selling",
     "list-dunning-runs": "erpclaw-selling",
     # Payments — advance handling.
     "apply-advance-to-invoice": "erpclaw-payments",
@@ -700,6 +709,7 @@ ACTION_MAP = {
     # Reports — multi-dimensional reporting.
     "multi-dim-trial-balance": "erpclaw-reports",
     "dimension-balance-report": "erpclaw-reports",
+    "nonprofit-statement-set": "erpclaw-reports",
 }
 
 # Aliases: actions that need to be forwarded with a different --action name
@@ -1365,6 +1375,8 @@ _READONLY_CARVE_OUT = frozenset({
 # storage the router runs no other foundation action, so the router CLI and
 # the MCP door hold the same list. An L0 test keeps the two sets equal.
 _READONLY_PINNED_READS = frozenset({
+    "generate-form941-data",
+    "generate-form940-data",
     "accounting-adv-status",
     "ap-aging",
     "ar-aging",
@@ -1376,6 +1388,7 @@ _READONLY_PINNED_READS = frozenset({
     "cash-flow",
     "comparative-pl",
     "dimension-balance-report",
+    "flux-variance-narrative",
     "general-ledger",
     "get-account",
     "get-account-balance",
@@ -1430,6 +1443,7 @@ _READONLY_PINNED_READS = frozenset({
     "gl-status",
     "gl-summary",
     "hr-status",
+    "inventory-demand-forecast",
     "inventory-status",
     "journals-status",
     "list-account-types",
@@ -1528,14 +1542,17 @@ _READONLY_PINNED_READS = frozenset({
     "payroll-status",
     "profit-and-loss",
     "reports-status",
+    "run-follow-up-cycle",
     "selling-status",
     "status",
     "stock-balance",
     "stock-balance-report",
     "stock-ledger-report",
+    "standard-cost-variance-report",
     "tax-status",
     "tax-summary",
     "trial-balance",
+    "weekly-digest",
 })
 
 def _refuse_readonly_non_read(action):

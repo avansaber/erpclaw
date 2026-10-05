@@ -15,6 +15,7 @@ import sqlite3
 import sys
 import uuid
 import calendar
+import re
 from datetime import datetime, timezone, timedelta, date as date_type
 from decimal import Decimal, InvalidOperation
 
@@ -2332,6 +2333,77 @@ def _document_currency(conn, supplier_row, company_id):
 # 25. create-purchase-invoice
 # ---------------------------------------------------------------------------
 
+def add_vendor_bill_intake(conn, args):
+    """Turn reviewed, structured email fields into a draft, never a posting."""
+    raw = getattr(args, "bill_json", None)
+    if not isinstance(raw, str) or not raw or len(raw) > 5000:
+        err("--bill-json must be a JSON object of at most 5000 characters")
+    try:
+        bill = json.loads(raw)
+    except (ValueError, TypeError):
+        err("Invalid JSON for --bill-json")
+    required = {"source_message_id", "supplier_id", "company_id", "posting_date", "items"}
+    if not isinstance(bill, dict) or not required.issubset(bill):
+        err("--bill-json requires source_message_id, supplier_id, company_id, posting_date and items")
+    if set(bill) - (required | {"due_date"}):
+        err("--bill-json contains unsupported fields; intake saves drafts only")
+    for key in ("source_message_id", "supplier_id", "company_id"):
+        value = bill[key]
+        if not isinstance(value, str) or not value.strip() or len(value) > 200:
+            err(f"{key} must be nonempty text of at most 200 characters")
+    if not getattr(args, "company_id", None) or args.company_id != bill["company_id"]:
+        err("--company-id must match the reviewed bill's company_id")
+    for key in ("posting_date", "due_date"):
+        value = bill.get(key)
+        if key == "due_date" and value is None:
+            continue
+        try:
+            if not isinstance(value, str) or date_type.fromisoformat(value).isoformat() != value:
+                raise ValueError()
+        except ValueError:
+            err(f"{key} must be an ISO date (YYYY-MM-DD)")
+    if bill.get("due_date") and bill["due_date"] < bill["posting_date"]:
+        err("due_date must not precede posting_date")
+    items = bill["items"]
+    if not isinstance(items, list) or not items or len(items) > 100:
+        err("items must be a nonempty array of at most 100 lines")
+    normalized = []
+    supplier_t = Table("supplier")
+    supplier_query = (Q.from_(supplier_t).select(supplier_t.status)
+                      .where(supplier_t.id == P()))
+    supplier = conn.execute(supplier_query.get_sql(), (bill["supplier_id"],)).fetchone()
+    if supplier is None or supplier["status"] != "active":
+        err("supplier_id must identify an active supplier")
+    item_t = Table("item")
+    for index, line in enumerate(items):
+        if not isinstance(line, dict) or set(line) != {"item_id", "qty", "rate"}:
+            err(f"Item {index}: requires only item_id, qty and rate")
+        item_id = line["item_id"]
+        if not isinstance(item_id, str) or not item_id or len(item_id) > 200:
+            err(f"Item {index}: item_id must be nonempty text")
+        query = Q.from_(item_t).select(item_t.status).where(item_t.id == P())
+        item = conn.execute(query.get_sql(), (item_id,)).fetchone()
+        if item is None or item["status"] == "disabled":
+            err(f"Item {index}: item_id must identify an active item")
+        for key in ("qty", "rate"):
+            value = line[key]
+            if (not isinstance(value, str)
+                    or re.fullmatch(r"[0-9]{1,12}(?:\.[0-9]{1,2})?", value) is None
+                    or Decimal(value) <= 0):
+                err(f"Item {index}: {key} must be positive Decimal text with at most two decimal places")
+        if round_currency(Decimal(line["qty"]) * Decimal(line["rate"])) <= 0:
+            err(f"Item {index}: line amount must be at least 0.01")
+        normalized.append(dict(line))
+    draft_args = argparse.Namespace(
+        supplier_id=bill["supplier_id"], company_id=bill["company_id"],
+        posting_date=bill["posting_date"], due_date=bill.get("due_date"),
+        items=json.dumps(normalized), purchase_order_id=None,
+        purchase_receipt_id=None, tax_template_id=None,
+        _intake_source_message_id=bill["source_message_id"],
+    )
+    create_purchase_invoice(conn, draft_args)
+
+
 def create_purchase_invoice(conn, args):
     """Create a purchase invoice (from PO, GRN, or standalone)."""
     company_id = args.company_id
@@ -2592,11 +2664,16 @@ def create_purchase_invoice(conn, args):
     for row_params in pi_items:
         conn.execute(pii_sql, row_params)
 
+    audit_values = {"supplier_id": supplier_id,
+                    "grand_total": str(grand_total),
+                    "update_stock": update_stock,
+                    "line_discounts": _bill_line_discounts}
+    intake_source = getattr(args, "_intake_source_message_id", None)
+    if intake_source is not None:
+        audit_values["intake_source"] = "email"
+        audit_values["source_message_id"] = intake_source
     audit(conn, "erpclaw-buying", "create-purchase-invoice", "purchase_invoice", pi_id,
-           new_values={"supplier_id": supplier_id,
-                       "grand_total": str(grand_total),
-                       "update_stock": update_stock,
-                       "line_discounts": _bill_line_discounts})
+          new_values=audit_values)
     conn.commit()
     ok({"purchase_invoice_id": pi_id,
          "total_amount": str(round_currency(total_amount)),
@@ -6167,6 +6244,7 @@ ACTIONS = {
     "submit-purchase-receipt": submit_purchase_receipt,
     "cancel-purchase-receipt": cancel_purchase_receipt,
     "create-purchase-invoice": create_purchase_invoice,
+    "add-vendor-bill-intake": add_vendor_bill_intake,
     "update-purchase-invoice": update_purchase_invoice,
     "get-purchase-invoice": get_purchase_invoice,
     "list-purchase-invoices": list_purchase_invoices,
@@ -6249,6 +6327,7 @@ def main():
     parser.add_argument("--subcontract-charge-rate", dest="subcontract_charge_rate")
 
     # Purchase invoice
+    parser.add_argument("--bill-json")
     parser.add_argument("--purchase-invoice-id")
     parser.add_argument("--due-date")
     parser.add_argument("--pi-status", dest="pi_status")

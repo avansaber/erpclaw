@@ -80,6 +80,7 @@ _t_sales_invoice = Table("sales_invoice")
 _t_sales_invoice_item = Table("sales_invoice_item")
 _t_dunning_level = Table("dunning_level")
 _t_dunning_run = Table("dunning_run")
+_t_follow_up_threshold = Table("follow_up_threshold")
 _t_sales_partner = Table("sales_partner")
 _t_recurring_template = Table("recurring_invoice_template")
 _t_recurring_template_item = Table("recurring_invoice_template_item")
@@ -3297,6 +3298,184 @@ def add_dunning_level(conn, args):
         "days_overdue": days, "action": args.dunning_action})
 
 
+def _parse_follow_up_days(raw):
+    """Validate the follow-up staleness threshold: integer days, 1-366."""
+    if isinstance(raw, bool):
+        err("--days-stale must be a positive integer no greater than 366")
+    if isinstance(raw, int):
+        days = raw
+    elif isinstance(raw, str):
+        text = raw.strip()
+        if not text.isdigit():
+            err("--days-stale must be a positive integer no greater than 366")
+        days = int(text)
+    else:
+        err("--days-stale must be a positive integer no greater than 366")
+    if not 1 <= days <= 366:
+        err("--days-stale must be a positive integer no greater than 366")
+    return days
+
+
+def set_follow_up_threshold(conn, args):
+    """Configure the customer follow-up staleness threshold for a company.
+
+    Requires --company-id and --days-stale (positive integer, 1-366).
+    Repeated calls update the company's row; v1 keeps one active row per
+    company. Writes the threshold row plus an audit record.
+    """
+    if not args.company_id:
+        err("--company-id is required")
+    raw_days = getattr(args, "days_stale", None)
+    if raw_days is None:
+        raw_days = getattr(args, "days", None)
+    if raw_days is None:
+        raw_days = getattr(args, "days_overdue", None)
+    if raw_days is None:
+        err("--days-stale is required (positive integer, 1-366)")
+    days = _parse_follow_up_days(raw_days)
+    company = conn.execute(
+        Q.from_(_t_company).select(_t_company.id)
+         .where(_t_company.id == P()).get_sql(),
+        (args.company_id,),
+    ).fetchone()
+    if not company:
+        err(f"Company {args.company_id} not found")
+    existing = conn.execute(
+        Q.from_(_t_follow_up_threshold).select(_t_follow_up_threshold.id)
+         .where(_t_follow_up_threshold.company_id == P()).get_sql(),
+        (args.company_id,),
+    ).fetchone()
+    now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    if existing:
+        row_id = row_to_dict(existing)["id"]
+        conn.execute(
+            Q.update(_t_follow_up_threshold)
+             .set(_t_follow_up_threshold.days_stale, P())
+             .set(_t_follow_up_threshold.updated_at, P())
+             .where(_t_follow_up_threshold.id == P())
+             .get_sql(),
+            (days, now_ts, row_id),
+        )
+        created = False
+    else:
+        row_id = str(uuid.uuid4())
+        conn.execute(
+            Q.into(_t_follow_up_threshold)
+             .columns("id", "company_id", "days_stale", "is_active",
+                      "created_at", "updated_at")
+             .insert(P(), P(), P(), P(), P(), P())
+             .get_sql(),
+            (row_id, args.company_id, days, 1, now_ts, now_ts),
+        )
+        created = True
+    conn.commit()
+    audit(conn, "erpclaw-selling", "set-follow-up-threshold",
+          "follow_up_threshold", row_id,
+          new_values={"company_id": args.company_id, "days_stale": days})
+    ok({"id": row_id, "company_id": args.company_id, "days_stale": days,
+        "is_active": 1, "created": created})
+
+
+def _active_follow_up_threshold(conn, company_id):
+    """Return the company's active staleness threshold in days, or None."""
+    rows = conn.execute(
+        Q.from_(_t_follow_up_threshold).select(_t_follow_up_threshold.star)
+         .where(_t_follow_up_threshold.company_id == P()).get_sql(),
+        (company_id,),
+    ).fetchall()
+    for row in rows:
+        data = row_to_dict(row)
+        if data.get("is_active") in (1, True) or str(data.get("is_active")) == "1":
+            try:
+                return int(data["days_stale"])
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def run_follow_up_cycle(conn, args):
+    """Run the deterministic v1 customer follow-up cycle (read-only).
+
+    Requires --company-id and --run-date (ISO YYYY-MM-DD). Reads submitted
+    sales invoices with exact positive outstanding amounts due earlier than
+    the run date, groups by customer, and reports only customers whose oldest
+    overdue invoice age meets the company's active threshold. Cancelled,
+    paid, zero-outstanding, foreign-company, and future-due invoices are
+    excluded. Customers and invoice IDs sort deterministically.
+
+    A missing active threshold refuses. Writes no row and no audit record;
+    safe to call without --user-confirmed.
+    """
+    if not args.company_id:
+        err("--company-id is required")
+    run_raw = getattr(args, "run_date", None)
+    if not run_raw:
+        err("--run-date is required (ISO YYYY-MM-DD)")
+    try:
+        run_day = datetime.strptime(str(run_raw), "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        err(f"Invalid --run-date '{run_raw}': expected ISO YYYY-MM-DD")
+    run_text = run_day.strftime("%Y-%m-%d")
+    threshold = _active_follow_up_threshold(conn, args.company_id)
+    if threshold is None:
+        err(f"No active follow-up threshold for company {args.company_id}; "
+            "set one first (set-follow-up-threshold --company-id ID --days-stale N)")
+    rows = conn.execute(
+        Q.from_(_t_sales_invoice)
+         .select(_t_sales_invoice.id, _t_sales_invoice.customer_id,
+                 _t_sales_invoice.due_date,
+                 _t_sales_invoice.outstanding_amount)
+         .where(_t_sales_invoice.company_id == P())
+         .where(_t_sales_invoice.status.isin([
+             ValueWrapper("submitted"), ValueWrapper("overdue"),
+             ValueWrapper("partially_paid")]))
+         .where(_t_sales_invoice.is_return == ValueWrapper(0))
+         # outstanding_amount is TEXT: compare its numeric value, so "0.00"
+         # (a fully discounted invoice) is never followed up.
+         .where(fn.Cast(_t_sales_invoice.outstanding_amount, "NUMERIC") > 0)
+         .where(_t_sales_invoice.due_date < ValueWrapper(run_text))
+         .get_sql(),
+        (args.company_id,),
+    ).fetchall()
+    by_customer = {}
+    for row in rows:
+        inv = row_to_dict(row)
+        try:
+            outstanding = to_decimal(inv.get("outstanding_amount"))
+        except (InvalidOperation, ValueError, TypeError, AttributeError):
+            continue
+        if outstanding <= 0:
+            continue
+        try:
+            due = datetime.strptime(str(inv.get("due_date")), "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            continue
+        if due >= run_day:
+            continue
+        # Only invoices that crossed the threshold join the follow-up; the
+        # customer's oldest such invoice drives days_stale below.
+        if (run_day - due).days < threshold:
+            continue
+        by_customer.setdefault(inv["customer_id"], []).append(
+            (inv["id"], due, outstanding))
+    customers = []
+    for customer_id in sorted(by_customer):
+        invoices = by_customer[customer_id]
+        oldest_due = min(due for _, due, _ in invoices)
+        days_stale = (run_day - oldest_due).days
+        invoice_ids = sorted(inv_id for inv_id, _, _ in invoices)
+        total = sum((amount for _, _, amount in invoices), Decimal("0"))
+        customers.append({
+            "customer_id": customer_id,
+            "invoice_ids": invoice_ids,
+            "oldest_due_date": oldest_due.strftime("%Y-%m-%d"),
+            "days_stale": days_stale,
+            "outstanding_total": str(total),
+        })
+    ok({"company_id": args.company_id, "run_date": run_text,
+        "days_stale": threshold, "customers": customers,
+        "count": len(customers)})
+
 def _resolve_customer_email(conn, customer_id):
     """READ-only lookup of a customer's contact email from the customer record.
 
@@ -6256,6 +6435,8 @@ ACTIONS = {
     "place-customer-on-hold": place_customer_on_hold,
     "add-dunning-level": add_dunning_level,
     "run-dunning-cycle": run_dunning_cycle,
+    "set-follow-up-threshold": set_follow_up_threshold,
+    "run-follow-up-cycle": run_follow_up_cycle,
     "list-dunning-runs": list_dunning_runs,
     "cancel-sales-invoice": cancel_sales_invoice,
     "delete-sales-invoice": delete_sales_invoice,
@@ -6315,6 +6496,7 @@ def main():
     # --template-id, --limit already declared elsewhere; reused.
     parser.add_argument("--level", type=int)
     parser.add_argument("--days-overdue", type=int)
+    parser.add_argument("--days-stale", dest="days_stale", type=int)
     parser.add_argument("--dunning-action", dest="dunning_action")
     parser.add_argument("--description")
     parser.add_argument("--run-date")

@@ -2,6 +2,41 @@
 
 All notable changes to the ERPClaw foundation skill.
 
+## [4.15.3] — 2026-10-05 — first versions across the floor plan
+
+First versions (basic tests) of many planned capabilities. Each is a starting point; deeper coverage follows in later releases.
+
+### Added — accounting and reporting
+- Nonprofit: classified financial statements, release of donor restrictions, classification of conditional contributions, endowment appropriation, and split-receipt donor substantiation.
+- Financial statements export to CSV with exact amounts and a company filter.
+- A plain-language explanation of an account's budget-to-actual (flux) variance, with exact amounts and no model call.
+- Draft employer tax return amounts (Forms 941 and 940) prepared from posted payroll.
+- A weekly business digest report.
+- Nonprofit: a Form 990 preparation worksheet.
+
+### Added — operations
+- Selling: a read-only follow-up list of customers whose oldest overdue invoice has passed a set number of days, with exact outstanding totals.
+- Buying: draft vendor bills from reviewed email fields.
+- Inventory: a first demand forecast and a standard-cost variance report. Logistics: an inventory traceability report. POS: a measure of recorded retail volume.
+- Construction: a cost-to-cost work-in-progress schedule.
+- Legal: a three-way trust account reconciliation.
+
+### Added — industry and compliance
+- Health: patient revenue posted to the ledger, approved charity care applied, a claim (X12 837) preview, and a 340B accumulator.
+- Higher education: student receivables posted to the ledger and an IPEDS completions preview.
+- Compliance: exclusion screening and an attestation readiness report.
+
+### Added — integrations and growth
+- QuickBooks import staging and offline bank-feed file import.
+- A local CRM account brief and insights over imported commerce data.
+- The module generator validates generated modules safely before use.
+
+### Fixed
+- The ERPClaw MCP server works with the current Python MCP SDK.
+
+### Database
+- Foundation migration 058 adds the follow-up threshold store; nonprofit migration 002 adds donor substantiation columns. Neither changes existing data.
+
 ## [4.15.2] — 2026-10-03 — credit notes, Stripe reports and safer concurrent updates
 
 ### Fixed — money
