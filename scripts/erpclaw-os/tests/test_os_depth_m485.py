@@ -497,6 +497,72 @@ class TestListArticlesDepth:
 # and no ledger assertion can hold for it.
 # ---------------------------------------------------------------------------
 class TestValidateModuleDepth:
+    def test_full_validation_runs_module_tests_without_changing_books(
+            self, conn, db_path, tmp_path):
+        module = _write_valid_module(str(tmp_path))
+        tests = os.path.join(module, "scripts", "tests", "test_basic.py")
+        with open(tests, "w") as handle:
+            handle.write(textwrap.dedent("""\
+                from decimal import Decimal
+
+                def test_m485_add_item_exact_money():
+                    assert Decimal('500.00') + Decimal('12.50') == Decimal('512.50')
+
+                def test_status_control():
+                    assert 'draft' != 'submitted'
+            """))
+        before = _snapshot(conn, db_path)
+        result = _call_ok_handler(DBQ.handle_validate_module, ns(
+            module_path=module, validation_type="full", db_path=db_path))
+        assert result["status"] == "ok"
+        assert result["result"] == "pass", result
+        assert result["articles"]["9"] == "pass"
+        assert result["runtime"]["result"] == "pass"
+        assert result["runtime"]["tests_run"] == 2
+        assert result["runtime"]["tests_passed"] == 2
+        assert result["runtime"]["tests_failed"] == 0
+        assert result["validation_type"] == "full"
+        assert result["violations"] == []
+        assert _snapshot(conn, db_path) == before
+
+    def test_full_validation_reports_a_real_failing_module_test(
+            self, conn, db_path, tmp_path):
+        module = _write_valid_module(str(tmp_path))
+        tests = os.path.join(module, "scripts", "tests", "test_basic.py")
+        with open(tests, "w") as handle:
+            handle.write(textwrap.dedent("""\
+                from decimal import Decimal
+
+                def test_m485_add_item_status_reject_inexact_total():
+                    assert Decimal('500.00') == Decimal('499.99')
+            """))
+        before = _snapshot(conn, db_path)
+        result = _call_ok_handler(DBQ.handle_validate_module, ns(
+            module_path=module, validation_type="full", db_path=db_path))
+        assert result["status"] == "ok"
+        assert result["result"] == "fail"
+        assert result["articles"]["9"] == "fail", result
+        assert result["runtime"]["result"] == "fail"
+        assert result["runtime"]["tests_run"] == 1
+        assert result["runtime"]["tests_failed"] == 1
+        assert "test_m485_add_item_status_reject_inexact_total" in result["runtime"]["output"]
+        assert result["violations"] == []
+        assert _snapshot(conn, db_path) == before
+
+    def test_runtime_validation_refuses_a_module_without_tests(
+            self, conn, db_path, tmp_path):
+        module = tmp_path / "untestedclaw"
+        module.mkdir()
+        before = _snapshot(conn, db_path)
+        result = _call_ok_handler(DBQ.handle_validate_module, ns(
+            module_path=str(module), validation_type="runtime", db_path=db_path))
+        assert result["status"] == "ok"
+        assert result["result"] == "fail"
+        assert result["tests_run"] == 0
+        assert result["output"] == "No tests/ directory found"
+        assert result["validation_type"] == "runtime"
+        assert _snapshot(conn, db_path) == before
+
     def test_valid_module_passes_with_exact_articles_and_writes_nothing(
             self, conn, db_path, tmp_path):
         module = _write_valid_module(str(tmp_path))
@@ -553,6 +619,81 @@ class TestValidateModuleDepth:
 # and no leg assertion can hold for it.
 # ---------------------------------------------------------------------------
 class TestSchemaPlanDepth:
+    def test_schema_plan_after_apply_is_noop_and_preserves_money(
+            self, conn, db_path, tmp_path):
+        module = _write_valid_module(str(tmp_path))
+        first = SM.handle_schema_plan(ns(
+            module_path=module, db_path=db_path, src_root=None))
+        assert SM.handle_schema_apply(ns(
+            migration_id=first["migration_id"], db_path=db_path))["result"] == "applied"
+        _insert(conn, "m485claw_item", {
+            "id": _u(), "name": "Widget", "price": "125.50", "company_id": "fixture",
+        })
+        before = _snapshot(conn, db_path, SNAPSHOT_TABLES + ("m485claw_item",))
+        tables_before = seam.table_names(db_path)
+        result = SM.handle_schema_plan(ns(
+            module_path=module, db_path=db_path, src_root=None))
+        assert result["result"] == "no_changes"
+        assert result["matching_tables"] == ["m485claw_item"]
+        assert "migration_id" not in result
+        assert seam.table_names(db_path) == tables_before
+        assert _snapshot(conn, db_path, SNAPSHOT_TABLES + ("m485claw_item",)) == before
+        assert _all(conn, "m485claw_item")[0]["price"] == "125.50"
+        assert Decimal(_all(conn, "m485claw_item")[0]["price"]) == Decimal("125.50")
+
+    def test_schema_plan_refuses_foreign_column_without_creating_a_plan(
+            self, conn, db_path, tmp_path):
+        owners = tmp_path / "owners"
+        owner = _write_valid_module(str(owners), name="ownerclaw")
+        first = SM.handle_schema_plan(ns(
+            module_path=owner, db_path=db_path, src_root=None))
+        assert SM.handle_schema_apply(ns(
+            migration_id=first["migration_id"], db_path=db_path))["result"] == "applied"
+        contender = _write_valid_module(str(tmp_path / "contenders"), name="otherclaw")
+        init_path = os.path.join(contender, "init_db.py")
+        with open(init_path) as handle:
+            declaration = handle.read()
+        with open(init_path, "w") as handle:
+            handle.write(declaration.replace(
+                "name        TEXT NOT NULL,",
+                "name        TEXT NOT NULL,\n                    note TEXT,"))
+        before = _snapshot(conn, db_path)
+        columns_before = seam.column_names("m485claw_item", db_path)
+        result = SM.handle_schema_plan(ns(
+            module_path=contender, db_path=db_path, src_root=str(owners)))
+        assert result["result"] == "blocked"
+        assert result["error"] == "Cross-module write protection"
+        assert len(result["conflicts"]) == 1
+        assert "Cannot add column to 'm485claw_item'" in result["conflicts"][0]
+        assert "owned by 'ownerclaw'" in result["conflicts"][0]
+        assert "migration_id" not in result
+        assert seam.column_names("m485claw_item", db_path) == columns_before
+        assert _snapshot(conn, db_path) == before
+
+    def test_schema_plan_refuses_foreign_drop_before_planning_new_tables(
+            self, conn, db_path, tmp_path):
+        owners = tmp_path / "owners"
+        owner = _write_valid_module(str(owners), name="ownerclaw")
+        first = SM.handle_schema_plan(ns(
+            module_path=owner, db_path=db_path, src_root=None))
+        assert SM.handle_schema_apply(ns(
+            migration_id=first["migration_id"], db_path=db_path))["result"] == "applied"
+        contender = _write_schema_module(str(tmp_path / "contenders"), name="otherclaw")
+        before = _snapshot(conn, db_path)
+        tables_before = seam.table_names(db_path)
+        result = SM.handle_schema_plan(ns(
+            module_path=contender, db_path=db_path, src_root=str(owners)))
+        assert result["result"] == "blocked"
+        assert result["error"] == "Cross-module write protection"
+        assert len(result["conflicts"]) == 1
+        assert "Cannot drop table 'm485claw_item'" in result["conflicts"][0]
+        assert "owned by 'ownerclaw'" in result["conflicts"][0]
+        assert "migration_id" not in result
+        assert seam.table_names(db_path) == tables_before
+        assert not seam.table_exists("m485_widget", db_path)
+        assert not seam.table_exists("m485_order", db_path)
+        assert _snapshot(conn, db_path) == before
+
     def test_plan_inserts_exact_migration_row_and_creates_nothing(
             self, conn, db_path, tmp_path):
         module = _write_schema_module(str(tmp_path))
@@ -607,6 +748,57 @@ class TestSchemaPlanDepth:
 # Decimal. This action never reaches the ledger.
 # ---------------------------------------------------------------------------
 class TestSchemaApplyDepth:
+    def test_schema_apply_repeated_call_refuses_and_preserves_money(
+            self, conn, db_path, tmp_path):
+        module = _write_schema_module(str(tmp_path))
+        plan = SM.handle_schema_plan(ns(
+            module_path=module, db_path=db_path, src_root=None))
+        first = SM.handle_schema_apply(ns(
+            migration_id=plan["migration_id"], db_path=db_path))
+        assert first["result"] == "applied"
+        widget_id = _u()
+        _insert(conn, "m485_widget", {
+            "id": widget_id, "company_id": "fixture", "name": "Widget",
+            "price": "125.50", "status": "active",
+        })
+        tables = SNAPSHOT_TABLES + ("m485_widget", "m485_order")
+        before = _snapshot(conn, db_path, tables)
+        schema_before = seam.describe_table("m485_widget", db_path)
+        result = SM.handle_schema_apply(ns(
+            migration_id=plan["migration_id"], db_path=db_path))
+        assert result["result"] == "error"
+        assert result["error"] == (
+            f"Migration {plan['migration_id']} has status 'applied', expected 'planned'")
+        assert _snapshot(conn, db_path, tables) == before
+        assert seam.describe_table("m485_widget", db_path) == schema_before
+        stored = _row(conn, "m485_widget", widget_id)
+        assert stored["price"] == "125.50"
+        assert Decimal(stored["price"]) == Decimal("125.50")
+
+    @pytest.mark.parametrize("status", ["failed", "rolled_back"])
+    def test_schema_apply_refuses_nonplanned_status_before_executing_ddl(
+            self, conn, db_path, tmp_path, status):
+        module = _write_schema_module(str(tmp_path))
+        plan = SM.handle_schema_plan(ns(
+            module_path=module, db_path=db_path, src_root=None))
+        original = _migration_row(conn, plan["migration_id"])
+        refused_id = _u()
+        refused_row = dict(original, id=refused_id, status=status)
+        _insert(conn, "erpclaw_schema_migration", refused_row)
+        before = _snapshot(conn, db_path)
+        tables_before = seam.table_names(db_path)
+        result = SM.handle_schema_apply(ns(
+            migration_id=refused_id, db_path=db_path))
+        assert result["result"] == "error"
+        assert result["error"] == (
+            f"Migration {refused_id} has status '{status}', expected 'planned'")
+        assert _migration_row(conn, refused_id) == refused_row
+        assert _migration_row(conn, plan["migration_id"]) == original
+        assert _snapshot(conn, db_path) == before
+        assert seam.table_names(db_path) == tables_before
+        assert not seam.table_exists("m485_widget", db_path)
+        assert not seam.table_exists("m485_order", db_path)
+
     def test_apply_creates_tables_and_marks_row_applied(
             self, conn, db_path, tmp_path):
         module = _write_schema_module(str(tmp_path))
@@ -666,6 +858,87 @@ class TestSchemaApplyDepth:
 # This action never reaches the ledger.
 # ---------------------------------------------------------------------------
 class TestSchemaRollbackDepth:
+    def test_schema_rollback_repeated_call_preserves_backup_money(
+            self, conn, db_path, tmp_path):
+        module = _write_valid_module(str(tmp_path))
+        plan = SM.handle_schema_plan(ns(
+            module_path=module, db_path=db_path, src_root=None))
+        assert SM.handle_schema_apply(ns(
+            migration_id=plan["migration_id"], db_path=db_path))["result"] == "applied"
+        item_id = _u()
+        _insert(conn, "m485claw_item", {
+            "id": item_id, "name": "Widget", "price": "125.50", "company_id": "fixture",
+        })
+        first = SM.handle_schema_rollback(ns(
+            migration_id=plan["migration_id"], db_path=db_path))
+        assert first["result"] == "rolled_back"
+        assert first["tables_dropped"] == ["m485claw_item"]
+        backup = "m485claw_item_backup_" + plan["migration_id"][:8]
+        assert first["backups_created"] == [{
+            "original": "m485claw_item", "backup": backup, "rows": 1,
+        }]
+        before = _snapshot(conn, db_path, SNAPSHOT_TABLES + (backup,))
+        tables_before = seam.table_names(db_path)
+        result = SM.handle_schema_rollback(ns(
+            migration_id=plan["migration_id"], db_path=db_path))
+        assert result["result"] == "error"
+        assert result["error"] == (
+            f"Migration {plan['migration_id']} has status 'rolled_back', expected 'applied'")
+        assert _snapshot(conn, db_path, SNAPSHOT_TABLES + (backup,)) == before
+        assert seam.table_names(db_path) == tables_before
+        assert not seam.table_exists("m485claw_item", db_path)
+        stored = _row(conn, backup, item_id)
+        assert stored["price"] == "125.50"
+        assert Decimal(stored["price"]) == Decimal("125.50")
+
+    @pytest.mark.parametrize("status", ["failed", "rolled_back"])
+    def test_schema_rollback_refuses_nonapplied_plan_and_keeps_live_rows(
+            self, conn, db_path, tmp_path, status):
+        module = _write_valid_module(str(tmp_path))
+        plan = SM.handle_schema_plan(ns(
+            module_path=module, db_path=db_path, src_root=None))
+        assert SM.handle_schema_apply(ns(
+            migration_id=plan["migration_id"], db_path=db_path))["result"] == "applied"
+        item_id = _u()
+        _insert(conn, "m485claw_item", {
+            "id": item_id, "name": "Widget", "price": "125.50", "company_id": "fixture",
+        })
+        original = _migration_row(conn, plan["migration_id"])
+        refused_id = _u()
+        refused_row = dict(original, id=refused_id, status=status)
+        _insert(conn, "erpclaw_schema_migration", refused_row)
+        before = _snapshot(conn, db_path, SNAPSHOT_TABLES + ("m485claw_item",))
+        tables_before = seam.table_names(db_path)
+        result = SM.handle_schema_rollback(ns(migration_id=refused_id, db_path=db_path))
+        assert result["result"] == "error"
+        assert result["error"] == (
+            f"Migration {refused_id} has status '{status}', expected 'applied'")
+        assert _migration_row(conn, refused_id) == refused_row
+        assert _migration_row(conn, plan["migration_id"]) == original
+        assert _snapshot(conn, db_path, SNAPSHOT_TABLES + ("m485claw_item",)) == before
+        assert seam.table_names(db_path) == tables_before
+        assert _row(conn, "m485claw_item", item_id)["price"] == "125.50"
+
+    def test_schema_rollback_empty_table_needs_no_backup_and_keeps_other_tables(
+            self, conn, db_path, tmp_path):
+        module = _write_valid_module(str(tmp_path))
+        plan = SM.handle_schema_plan(ns(
+            module_path=module, db_path=db_path, src_root=None))
+        assert SM.handle_schema_apply(ns(
+            migration_id=plan["migration_id"], db_path=db_path))["result"] == "applied"
+        untouched = tuple(table for table in SNAPSHOT_TABLES
+                          if table != "erpclaw_schema_migration")
+        before = _snapshot(conn, db_path, untouched)
+        tables_before = set(seam.table_names(db_path))
+        result = SM.handle_schema_rollback(ns(
+            migration_id=plan["migration_id"], db_path=db_path))
+        assert result["result"] == "rolled_back"
+        assert result["tables_dropped"] == ["m485claw_item"]
+        assert result["backups_created"] == []
+        assert set(seam.table_names(db_path)) == tables_before - {"m485claw_item"}
+        assert _migration_row(conn, plan["migration_id"])["status"] == "rolled_back"
+        assert _snapshot(conn, db_path, untouched) == before
+
     def test_rollback_drops_and_backs_up_exact_rows(
             self, conn, db_path, tmp_path):
         module = _write_schema_module(str(tmp_path))
@@ -738,6 +1011,82 @@ class TestSchemaRollbackDepth:
 # and no ledger assertion can hold for it.
 # ---------------------------------------------------------------------------
 class TestSchemaDriftDepth:
+    def test_schema_drift_type_mismatch_preserves_rows_and_money(
+            self, conn, db_path, tmp_path):
+        module = _write_valid_module(str(tmp_path))
+        plan = SM.handle_schema_plan(ns(
+            module_path=module, db_path=db_path, src_root=None))
+        assert SM.handle_schema_apply(ns(
+            migration_id=plan["migration_id"], db_path=db_path))["result"] == "applied"
+        _insert(conn, "m485claw_item", {
+            "id": _u(), "name": "Widget", "price": "125.50", "company_id": "fixture",
+        })
+        init_path = os.path.join(module, "init_db.py")
+        with open(init_path) as handle:
+            declaration = handle.read()
+        with open(init_path, "w") as handle:
+            handle.write(declaration.replace("name        TEXT", "name        BLOB"))
+        before = _snapshot(conn, db_path, SNAPSHOT_TABLES + ("m485claw_item",))
+        result = SM.handle_schema_drift(ns(module_path=module, db_path=db_path))
+        assert result["result"] == "drift_detected"
+        assert result["findings"] == [{
+            "type": "type_mismatch", "table": "m485claw_item", "column": "name",
+            "details": "Column 'name' in 'm485claw_item': declared as BLOB, DB has TEXT",
+        }]
+        assert result["finding_count"] == 1
+        assert _snapshot(conn, db_path, SNAPSHOT_TABLES + ("m485claw_item",)) == before
+        assert _all(conn, "m485claw_item")[0]["price"] == "125.50"
+        assert Decimal(_all(conn, "m485claw_item")[0]["price"]) == Decimal("125.50")
+
+    def test_schema_drift_extra_column_is_reported_without_removing_it(
+            self, conn, db_path, tmp_path):
+        module = _write_valid_module(str(tmp_path))
+        plan = SM.handle_schema_plan(ns(
+            module_path=module, db_path=db_path, src_root=None))
+        assert SM.handle_schema_apply(ns(
+            migration_id=plan["migration_id"], db_path=db_path))["result"] == "applied"
+        init_path = os.path.join(module, "init_db.py")
+        with open(init_path) as handle:
+            lines = handle.readlines()
+        with open(init_path, "w") as handle:
+            handle.writelines(line for line in lines if "company_id" not in line)
+        before = _snapshot(conn, db_path)
+        columns_before = seam.column_names("m485claw_item", db_path)
+        result = SM.handle_schema_drift(ns(module_path=module, db_path=db_path))
+        assert result["findings"] == [{
+            "type": "extra_column", "table": "m485claw_item", "column": "company_id",
+            "details": "Column 'company_id' exists in DB table 'm485claw_item' but not in init_db.py",
+        }]
+        assert result["result"] == "drift_detected"
+        assert result["finding_count"] == 1
+        assert seam.column_names("m485claw_item", db_path) == columns_before
+        assert _snapshot(conn, db_path) == before
+
+    def test_schema_drift_flags_only_own_extra_table_and_does_not_drop_it(
+            self, conn, db_path, tmp_path):
+        module = _write_valid_module(str(tmp_path))
+        plan = SM.handle_schema_plan(ns(
+            module_path=module, db_path=db_path, src_root=None))
+        assert SM.handle_schema_apply(ns(
+            migration_id=plan["migration_id"], db_path=db_path))["result"] == "applied"
+        clean = SM.handle_schema_drift(ns(module_path=module, db_path=db_path))
+        assert clean["result"] == "no_drift"
+        assert clean["findings"] == []
+        assert seam.table_exists("company", db_path)
+        with open(os.path.join(module, "init_db.py"), "w") as handle:
+            handle.write('DDL = """"""\n')
+        before = _snapshot(conn, db_path)
+        tables_before = seam.table_names(db_path)
+        result = SM.handle_schema_drift(ns(module_path=module, db_path=db_path))
+        assert result["findings"] == [{
+            "type": "extra_table", "table": "m485claw_item",
+            "details": "Table 'm485claw_item' exists in DB but not in init_db.py",
+        }]
+        assert result["result"] == "drift_detected"
+        assert result["finding_count"] == 1
+        assert seam.table_names(db_path) == tables_before
+        assert _snapshot(conn, db_path) == before
+
     def test_missing_column_detected_with_exact_finding_and_writes_nothing(
             self, conn, db_path, tmp_path):
         module = _write_schema_module(str(tmp_path))

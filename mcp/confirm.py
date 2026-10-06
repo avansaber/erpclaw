@@ -168,6 +168,7 @@ class ReadonlyModeInvalid(Exception):
 # ``get-*``/``list-*`` foundation read. Pinned verbatim by the m261b product
 # rule; extend only by changing this set and its tests together.
 READ_REPORTS = frozenset({
+    "evaluate-rule",
     "trial-balance",
     "general-ledger",
     "balance-sheet",
@@ -182,6 +183,7 @@ READ_REPORTS = frozenset({
     "comparative-pl",
     "budget-vs-actual",
     "budget-variance",
+    "continuous-close-readiness",
     "dimension-balance-report",
     "flux-variance-narrative",
     "generate-form940-data",
@@ -208,6 +210,7 @@ READ_REPORTS = frozenset({
 # Extend only by re-running the sweep and pasting its pass set here; an L0
 # test holds this set equal to the sweep's result.
 PINNED_READS = frozenset({
+    "evaluate-rule",
     "generate-form941-data",
     "generate-form940-data",
     "accounting-adv-status",
@@ -220,6 +223,7 @@ PINNED_READS = frozenset({
     "buying-status",
     "cash-flow",
     "comparative-pl",
+    "continuous-close-readiness",
     "dimension-balance-report",
     "flux-variance-narrative",
     "general-ledger",
@@ -227,6 +231,7 @@ PINNED_READS = frozenset({
     "get-account-balance",
     "get-amendment-history",
     "get-audit-log",
+    "get-audit-checkpoint",
     "get-best-alternative-for-item",
     "get-billing-period",
     "get-billing-run",

@@ -617,6 +617,22 @@ def test_update_foundation_refuses_dev_tree_and_writes_nothing(iso):
         "registry_cache.json", "registry_cache.json.sig"]
 
 
+def test_update_foundation_refuses_a_busy_installed_tree(iso, monkeypatch):
+    monkeypatch.setattr(mm, "FOUNDATION_INSTALL_ROOT", str(iso.home))
+    _insert_module_row(iso.db, "keeperclaw", version="3.0.0")
+    before = _dump(iso.db)
+    lock = mm._acquire_sync_lock()
+    assert lock is not None
+    try:
+        code, payload = _call(mm.update_foundation_action)
+    finally:
+        mm._release_sync_lock(lock)
+    assert code == 1
+    assert payload["status"] == "error"
+    assert "in progress" in payload["message"]
+    assert _dump(iso.db) == before
+
+
 # ---------------------------------------------------------------------------
 # rollback-foundation: restores .bak files; files only, never schema
 # ---------------------------------------------------------------------------
@@ -658,6 +674,55 @@ def test_rollback_foundation_refuses_when_lock_held(iso):
         mm._release_sync_lock(fh)
     assert code == 1
     assert "in progress" in payload["message"]
+    assert _dump(iso.db) == before
+
+
+def test_rollback_foundation_restores_nested_backups_and_is_idempotent(
+        iso, tmp_path, monkeypatch):
+    install = tmp_path / "install"
+    nested = install / "scripts" / "nested"
+    nested.mkdir(parents=True)
+    monkeypatch.setattr(mm, "FOUNDATION_INSTALL_ROOT", str(install))
+    _insert_module_row(iso.db, "keeperclaw", version="3.0.0")
+    before = _dump(iso.db)
+    targets = {install / "SKILL.md": b"previous skill\n",
+               nested / "rule.txt": b"previous rule\n"}
+    for target, previous in targets.items():
+        target.write_bytes(b"current content\n")
+        target.with_name(target.name + ".bak").write_bytes(previous)
+    unrelated = nested / "unchanged.txt"
+    unrelated.write_bytes(b"keep this file\n")
+    code, payload = _call(mm.rollback_foundation_action)
+    assert code is None
+    assert payload["status"] == "ok"
+    assert payload["restored"] == ["SKILL.md", "scripts/nested/rule.txt"]
+    assert payload["skipped"] == []
+    for target, previous in targets.items():
+        assert target.read_bytes() == previous
+        assert not target.with_name(target.name + ".bak").exists()
+    assert unrelated.read_bytes() == b"keep this file\n"
+    code, repeated = _call(mm.rollback_foundation_action)
+    assert code is None
+    assert repeated == {"status": "ok", "restored": [], "skipped": []}
+    assert _dump(iso.db) == before
+
+
+def test_rollback_foundation_leaves_excluded_cache_backups_untouched(
+        iso, tmp_path, monkeypatch):
+    install = tmp_path / "install"
+    cache = install / "__pycache__"
+    cache.mkdir(parents=True)
+    monkeypatch.setattr(mm, "FOUNDATION_INSTALL_ROOT", str(install))
+    target = cache / "cached.pyc"
+    backup = cache / "cached.pyc.bak"
+    target.write_bytes(b"current cache\n")
+    backup.write_bytes(b"previous cache\n")
+    before = _dump(iso.db)
+    code, payload = _call(mm.rollback_foundation_action)
+    assert code is None
+    assert payload == {"status": "ok", "restored": [], "skipped": []}
+    assert target.read_bytes() == b"current cache\n"
+    assert backup.read_bytes() == b"previous cache\n"
     assert _dump(iso.db) == before
 
 

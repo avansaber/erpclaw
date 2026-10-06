@@ -2037,11 +2037,22 @@ def _setup_web_dashboard_moved_stub(args):
 # Action Router
 # ---------------------------------------------------------------------------
 
+def evaluate_rule(args):
+    """Preview caller-supplied predicates without reading or changing books."""
+    from erpclaw_lib.rule_evaluation import evaluate_rule as evaluate
+    try:
+        result = evaluate(args.rule_json, args.facts_json)
+    except ValueError as exc:
+        output_error(str(exc))
+    print(json.dumps({"status": "ok", **result}, indent=2))
+
+
 ACTIONS = {
     "check-installation": check_installation,
     "install-guide": install_guide,
     "seed-demo-data": seed_demo_data,
     "setup-web-dashboard": _setup_web_dashboard_moved_stub,
+    "evaluate-rule": evaluate_rule,
 }
 
 
@@ -2056,6 +2067,8 @@ def main():
         help="Action to perform",
     )
     parser.add_argument("--db-path", default=None)
+    parser.add_argument("--rule-json")
+    parser.add_argument("--facts-json")
     parser.add_argument(
         "--company-id",
         help="Use an existing company instead of creating Stark Manufacturing (seed-demo-data)",

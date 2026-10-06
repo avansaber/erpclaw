@@ -2,6 +2,19 @@
 
 All notable changes to the ERPClaw foundation skill.
 
+## [4.15.4] — 2026-10-06 — correct trust and WIP reports, close readiness
+
+### Fixed — money
+- **Legal three-way trust reconciliation:** transfers between trust accounts and account-level interest now count correctly on both the transaction and client totals, so a valid transfer no longer makes an account look unreconciled. Deposits and disbursements recorded without a matter stay unassigned, so a client shortfall is still flagged. A transaction or matter from another company is refused.
+- **Construction WIP schedule:** earned revenue uses the exact cost-to-cost ratio (rounded once, at the end) and is capped at 100 percent of the contract. Approved and executed change orders are included in the revised contract, and only submitted and approved progress bills count as billed. The response adds the change-order and revised-contract amounts.
+
+### Added
+- A read-only continuous close readiness preview for one company and date: draft journals, unbalanced posted vouchers, unapplied payments and fiscal-year coverage.
+- A 24-month business simulation report. It is a projection only and never touches the books.
+- A read-only business-rule preview, and exact percent, duration, rating and clock custom-field types.
+- An audit-log checkpoint: a fingerprint of the stored audit log that can be compared with a trusted earlier value.
+- Schema drift and planning tools can inspect PostgreSQL schemas.
+
 ## [4.15.3] — 2026-10-05 — first versions across the floor plan
 
 First versions (basic tests) of many planned capabilities. Each is a starting point; deeper coverage follows in later releases.

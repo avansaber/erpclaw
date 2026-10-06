@@ -35,6 +35,7 @@ try:
     # `party-ledger` report at :1049), and a bare import would be shadowed by it.
     from erpclaw_lib import party_ledger as party_ledger_rules
     from erpclaw_lib.query import Q, P, Table, Field, Case, fn, DecimalSum, DecimalAbs, json_get
+    from erpclaw_lib.rule_evaluation import evaluate_rule
     from erpclaw_lib.vendor.pypika import Order
     from erpclaw_lib.vendor.pypika.terms import LiteralValue
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
@@ -2154,6 +2155,264 @@ def list_elimination_entries(conn, args):
 
 
 # ---------------------------------------------------------------------------
+# Continuous Close Readiness
+# ---------------------------------------------------------------------------
+
+_CLOSE_READINESS_LIMITATION = (
+    "This report is a read-only readiness preview. It does not perform, "
+    "approve, or complete a period close, and it does not substitute for "
+    "human review."
+)
+
+
+def _close_readiness_check(name, rule, facts, explanation, details):
+    verdict = evaluate_rule(json.dumps(rule), json.dumps(facts))
+    return {
+        "name": name,
+        "rule": rule,
+        "facts": facts,
+        "matched": verdict["matched"],
+        "result": "pass" if verdict["matched"] else "block",
+        "explanation": explanation,
+        "details": details,
+    }
+
+
+def continuous_close_readiness(conn, args):
+    if not getattr(args, "company_id", None) and not getattr(
+            args, "company_name", None):
+        err("--company-id is required")
+    raw_asof = getattr(args, "as_of_date", None) or getattr(
+        args, "to_date", None)
+    if not raw_asof:
+        err("--as-of-date is required")
+    try:
+        asof_dt = datetime.strptime(raw_asof, "%Y-%m-%d")
+        if asof_dt.strftime("%Y-%m-%d") != raw_asof:
+            raise ValueError()
+    except (TypeError, ValueError):
+        err("Invalid --as-of-date '%s': expected YYYY-MM-DD" % raw_asof)
+    as_of = asof_dt.strftime("%Y-%m-%d")
+
+    company_id = resolve_company_id(conn,
+                                    getattr(args, "company_id", None),
+                                    getattr(args, "company_name", None))
+    comp_t = Table("company")
+    found = conn.execute(
+        Q.from_(comp_t).select(comp_t.id)
+        .where(comp_t.id == P()).get_sql(),
+        (company_id,)).fetchone()
+    if not found:
+        err("Company not found: %s" % company_id)
+
+    je_t = Table("journal_entry")
+    draft_sql = (
+        Q.from_(je_t)
+        .select(je_t.id, je_t.posting_date)
+        .where(je_t.company_id == P())
+        .where(je_t.status == "draft")
+        .where(je_t.posting_date <= P())
+        .orderby(je_t.id)
+        .get_sql()
+    )
+    draft_rows = conn.execute(draft_sql, (company_id, as_of)).fetchall()
+    draft_ids = sorted(row["id"] for row in draft_rows)
+
+    posted_sql = (
+        Q.from_(je_t)
+        .select(je_t.id, je_t.total_debit, je_t.total_credit)
+        .where(je_t.company_id == P())
+        .where(je_t.status == "submitted")
+        .where(je_t.posting_date <= P())
+        .orderby(je_t.id)
+        .get_sql()
+    )
+    posted_rows = conn.execute(posted_sql, (company_id, as_of)).fetchall()
+    imbalanced = {}
+    for row in posted_rows:
+        debit = _d(row["total_debit"])
+        credit = _d(row["total_credit"])
+        if debit != credit:
+            imbalanced[("journal_entry", row["id"])] = {
+                "voucher_type": "journal_entry",
+                "voucher_id": row["id"],
+                "total_debit": _s(debit),
+                "total_credit": _s(credit),
+            }
+
+    gl_t = Table("gl_entry").as_("g")
+    acct_t = Table("account").as_("a")
+    voucher_sql = (
+        Q.from_(gl_t)
+        .join(acct_t).on(acct_t.id == gl_t.account_id)
+        .select(
+            gl_t.voucher_type,
+            gl_t.voucher_id,
+            fn.Coalesce(DecimalSum(gl_t.debit), "0").as_("total_debit"),
+            fn.Coalesce(DecimalSum(gl_t.credit), "0").as_("total_credit"),
+        )
+        .where(acct_t.company_id == P())
+        .where(gl_t.is_cancelled == 0)
+        .where(gl_t.posting_date <= P())
+        .groupby(gl_t.voucher_type, gl_t.voucher_id)
+        .get_sql()
+    )
+    voucher_rows = conn.execute(voucher_sql, (company_id, as_of)).fetchall()
+    for row in voucher_rows:
+        debit = _d(row["total_debit"])
+        credit = _d(row["total_credit"])
+        if debit != credit:
+            key = (row["voucher_type"], row["voucher_id"])
+            if key not in imbalanced:
+                imbalanced[key] = {
+                    "voucher_type": row["voucher_type"],
+                    "voucher_id": row["voucher_id"],
+                    "total_debit": _s(debit),
+                    "total_credit": _s(credit),
+                }
+    imbalanced_vouchers = [imbalanced[k] for k in sorted(imbalanced)]
+
+    pe_t = Table("payment_entry")
+    pay_sql = (
+        Q.from_(pe_t)
+        .select(pe_t.id, pe_t.payment_type, pe_t.posting_date,
+                pe_t.paid_amount, pe_t.unallocated_amount)
+        .where(pe_t.company_id == P())
+        .where(pe_t.status == "submitted")
+        .where(pe_t.posting_date <= P())
+        .orderby(pe_t.id)
+        .get_sql()
+    )
+    pay_rows = conn.execute(pay_sql, (company_id, as_of)).fetchall()
+    unallocated = []
+    unallocated_total = Decimal("0")
+    for row in pay_rows:
+        residual = _d(row["unallocated_amount"])
+        if residual > 0:
+            unallocated.append({
+                "payment_entry_id": row["id"],
+                "payment_type": row["payment_type"],
+                "posting_date": row["posting_date"],
+                "paid_amount": _s(_d(row["paid_amount"])),
+                "unallocated_amount": _s(residual),
+            })
+            unallocated_total += residual
+    unallocated.sort(key=lambda e: e["payment_entry_id"])
+
+    fy_t = Table("fiscal_year")
+    fy_sql = (
+        Q.from_(fy_t)
+        .select(fy_t.id, fy_t.name, fy_t.start_date, fy_t.end_date)
+        .where(fy_t.company_id == P())
+        .where(fy_t.is_closed == 0)
+        .where(fy_t.start_date <= P())
+        .where(fy_t.end_date >= P())
+        .orderby(fy_t.id)
+        .get_sql()
+    )
+    fy_rows = conn.execute(fy_sql, (company_id, as_of, as_of)).fetchall()
+    open_fy = fy_rows[0] if fy_rows else None
+
+    if draft_ids:
+        draft_explanation = (
+            "%d draft journal %s waiting through %s. Drafts are not in "
+            "the ledger yet, so the books may still move; submit or cancel "
+            "them before closing."
+            % (len(draft_ids),
+               "entries are" if len(draft_ids) != 1 else "entry is",
+               as_of))
+    else:
+        draft_explanation = (
+            "No draft journal entries remain through %s; every journal is "
+            "submitted or cancelled." % as_of)
+    draft_check = _close_readiness_check(
+        "draft_journal_entries",
+        {"match": "all", "conditions": [
+            {"field": "draft_count", "operator": "=", "value": "0"}]},
+        {"draft_count": str(len(draft_ids))},
+        draft_explanation,
+        [{"journal_entry_id": i} for i in draft_ids])
+
+    if imbalanced_vouchers:
+        imbalance_explanation = (
+            "%d posted %s do not balance: total debits differ from total "
+            "credits. A close needs every voucher balanced; correct and "
+            "repost them before closing."
+            % (len(imbalanced_vouchers),
+               "vouchers" if len(imbalanced_vouchers) != 1 else "voucher"))
+    else:
+        imbalance_explanation = (
+            "Every posted voucher through %s balances: total debits equal "
+            "total credits." % as_of)
+    imbalance_check = _close_readiness_check(
+        "balanced_posted_vouchers",
+        {"match": "all", "conditions": [
+            {"field": "imbalanced_voucher_count", "operator": "=",
+             "value": "0"}]},
+        {"imbalanced_voucher_count": str(len(imbalanced_vouchers))},
+        imbalance_explanation,
+        imbalanced_vouchers)
+
+    if unallocated_total > 0:
+        unallocated_explanation = (
+            "Submitted payments still hold %s unapplied through %s. Apply "
+            "or refund the open amounts so party balances are final before "
+            "closing." % (_s(unallocated_total), as_of))
+    else:
+        unallocated_explanation = (
+            "No submitted payment holds unapplied amounts through %s."
+            % as_of)
+    unallocated_check = _close_readiness_check(
+        "allocated_submitted_payments",
+        {"match": "all", "conditions": [
+            {"field": "unallocated_total", "operator": "<=",
+             "value": "0.00"}]},
+        {"unallocated_total": _s(unallocated_total)},
+        unallocated_explanation,
+        unallocated)
+
+    if open_fy is None:
+        fy_explanation = (
+            "No open fiscal year contains %s, so there is no open period "
+            "to close into." % as_of)
+    else:
+        fy_explanation = (
+            "Fiscal year '%s' is open and contains %s."
+            % (open_fy["name"], as_of))
+    fy_check = _close_readiness_check(
+        "open_fiscal_year_contains_date",
+        {"match": "all", "conditions": [
+            {"field": "open_fiscal_year_count", "operator": ">=",
+             "value": "1"}]},
+        {"open_fiscal_year_count": str(len(fy_rows))},
+        fy_explanation,
+        [{"fiscal_year_id": r["id"], "name": r["name"],
+          "start_date": r["start_date"], "end_date": r["end_date"]}
+         for r in fy_rows])
+
+    checks = [draft_check, imbalance_check, unallocated_check, fy_check]
+    ready = all(c["matched"] for c in checks)
+
+    ok({
+        "company_id": company_id,
+        "as_of_date": as_of,
+        "ready": ready,
+        "preview_only": True,
+        "limitation": _CLOSE_READINESS_LIMITATION,
+        "draft_journal_count": len(draft_ids),
+        "draft_journal_ids": draft_ids,
+        "imbalanced_voucher_count": len(imbalanced_vouchers),
+        "imbalanced_vouchers": imbalanced_vouchers,
+        "unallocated_payment_count": len(unallocated),
+        "unallocated_total": _s(unallocated_total),
+        "unallocated_payments": unallocated,
+        "open_fiscal_year": open_fy is not None,
+        "fiscal_year_id": open_fy["id"] if open_fy is not None else None,
+        "checks": checks,
+    })
+
+
+# ---------------------------------------------------------------------------
 # Action dispatch
 # ---------------------------------------------------------------------------
 
@@ -2531,6 +2790,7 @@ ACTIONS = {
     "comparative-pl": comparative_pl,
     "check-overdue": check_overdue,
     "weekly-digest": weekly_digest,
+    "continuous-close-readiness": continuous_close_readiness,
     "add-elimination-rule": add_elimination_rule,
     "list-elimination-rules": list_elimination_rules,
     "run-elimination": run_elimination,

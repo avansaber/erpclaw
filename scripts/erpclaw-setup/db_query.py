@@ -9,6 +9,7 @@ Output: JSON to stdout, exit 0 on success, exit 1 on error.
 """
 import argparse
 import glob as glob_mod
+import hashlib
 import json
 import os
 import re
@@ -750,6 +751,53 @@ def get_audit_log(conn, args):
             entry["new_values"] = json.loads(entry["new_values"])
         entries.append(entry)
     ok({"entries": entries})
+
+
+AUDIT_CHECKPOINT_MAX_RECORDS = 100000
+AUDIT_CHECKPOINT_ALGORITHM = "erpclaw-audit-checkpoint-v1"
+
+
+def _audit_checkpoint(conn, expected=None):
+    """Hash all stored audit columns and rows without repairing or appending."""
+    if expected is not None and (not isinstance(expected, str)
+                                 or re.fullmatch(r"[0-9a-f]{64}", expected) is None):
+        raise ValueError("Checkpoint must be a lowercase SHA-256 from a trusted prior record")
+    table = Table("audit_log")
+    cursor = conn.execute(Q.from_(table).select(table.star).limit(AUDIT_CHECKPOINT_MAX_RECORDS + 1).get_sql())
+    columns = sorted(column[0] for column in cursor.description)
+    if not columns or "id" not in columns or len(set(columns)) != len(columns):
+        raise ValueError("Audit checkpoint requires an unambiguous audit row schema")
+    rows = [dict(row) for row in cursor.fetchall()]
+    if len(rows) > AUDIT_CHECKPOINT_MAX_RECORDS:
+        raise ValueError("Audit checkpoint exceeds 100000 records; no partial digest was returned")
+    ids = set()
+    for row in rows:
+        if not isinstance(row["id"], str) or not row["id"] or row["id"] in ids:
+            raise ValueError("Audit checkpoint requires unique nonempty text row ids")
+        ids.add(row["id"])
+        if any(value is not None and not isinstance(value, str) for value in row.values()):
+            raise ValueError("Audit checkpoint supports the declared TEXT audit schema only")
+    digest = hashlib.sha256()
+    header = {"algorithm": AUDIT_CHECKPOINT_ALGORITHM, "columns": columns}
+    digest.update(json.dumps(header, sort_keys=True, separators=(",", ":"),
+                             ensure_ascii=True).encode("ascii") + b"\n")
+    for row in sorted(rows, key=lambda entry: entry["id"]):
+        values = [row[column] for column in columns]
+        digest.update(json.dumps(values, separators=(",", ":"),
+                                 ensure_ascii=True).encode("ascii") + b"\n")
+    result = digest.hexdigest()
+    return {"algorithm": AUDIT_CHECKPOINT_ALGORITHM, "scope": "entire-audit-log", "records": len(rows),
+            "sha256": result, "checkpoint_matches": None if expected is None else result == expected,
+            "empty": not rows, "external_anchor_required": True}
+
+
+def get_audit_checkpoint(conn, args):
+    """Compare the complete audit content with a caller-retained checkpoint."""
+    try:
+        result = _audit_checkpoint(conn, getattr(args, "audit_checkpoint_sha256", None))
+    except ValueError as exc:
+        err(str(exc))
+    ok(result)
 
 
 def get_schema_version(conn, args):
@@ -3173,7 +3221,8 @@ def migrate_action(conn, args):
 # Custom fields (M1 — UDF runtime admin surface; wraps erpclaw_lib.custom_fields)
 # ---------------------------------------------------------------------------
 
-_VALID_CF_TYPES = ("text", "int", "float", "date", "select", "link", "json")
+_VALID_CF_TYPES = ("text", "int", "float", "date", "select", "link", "json",
+                   "percent", "duration", "rating", "time")
 
 
 def add_custom_field_action(conn, args):
@@ -3203,6 +3252,8 @@ def add_custom_field_action(conn, args):
             default_value=args.default, field_options=field_options)
     except sqlite3.IntegrityError:
         err(f"Custom field '{field}' already exists on {table}")
+    except ValueError as exc:
+        err(str(exc))
     audit(conn, "erpclaw-setup", "create", "custom_field", field_id,
           new_values={"table_name": table, "field_name": field, "field_type": ftype})
     conn.commit()
@@ -3457,6 +3508,7 @@ ACTIONS = {
     "add-uom-conversion": add_uom_conversion,
     "seed-defaults": seed_defaults,
     "get-audit-log": get_audit_log,
+    "get-audit-checkpoint": get_audit_checkpoint,
     "get-schema-version": get_schema_version,
     "update-regional-settings": update_regional_settings,
     "backup-database": backup_database,
@@ -3570,6 +3622,7 @@ def main():
     parser.add_argument("--entity-type", default=None)
     parser.add_argument("--entity-id", default=None)
     parser.add_argument("--audit-action", default=None)
+    parser.add_argument("--audit-checkpoint-sha256", default=None)
     parser.add_argument("--from-date", default=None)
     parser.add_argument("--to-date", default=None)
     parser.add_argument("--limit", type=int, default=None)

@@ -204,10 +204,30 @@ def parse_ddl_text(ddl_text):
 
 
 def get_live_schema(db_path):
-    """Query sqlite_master for current tables and their columns.
+    """Read table shape from the configured database.
 
-    Returns dict: {table_name: {columns: [{name, type, is_pk}], indexes: [...]}}
+    Returns dict: {table_name: {columns: [{name, type, is_pk}], indexes: [...]}}.
+    PostgreSQL uses the shared catalog reader without treating its URL as a
+    local file. SQLite retains its existing file and column representation.
+    This describes shape, not check constraints or foreign-key behaviour.
     """
+    from erpclaw_lib.db import get_dialect
+    if get_dialect() == "postgresql":
+        from erpclaw_lib.seam import table_names, describe_table
+        tables = {}
+        for table_name in table_names(db_path):
+            shape = describe_table(table_name, db_path)
+            primary_key = set(shape["primary_key"])
+            tables[table_name] = {
+                "columns": [
+                    {"name": column["name"], "type": column["type"],
+                     "is_pk": column["name"] in primary_key}
+                    for column in shape["columns"]
+                ],
+                "indexes": shape["indexes"],
+            }
+        return tables
+
     if not os.path.isfile(db_path):
         return {}
 

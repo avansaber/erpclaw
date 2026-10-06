@@ -106,6 +106,7 @@ ACTION_MAP = {
     "add-uom-conversion": "erpclaw-setup",
     "seed-defaults": "erpclaw-setup",
     "get-audit-log": "erpclaw-setup",
+    "get-audit-checkpoint": "erpclaw-setup",
     "get-schema-version": "erpclaw-setup",
     "update-regional-settings": "erpclaw-setup",
     "backup-database": "erpclaw-setup",
@@ -148,6 +149,7 @@ ACTION_MAP = {
     # === Meta (4 actions) ===
     "check-installation": "erpclaw-meta",
     "install-guide": "erpclaw-meta",
+    "evaluate-rule": "erpclaw-meta",
     "seed-demo-data": "erpclaw-meta",
     # setup-web-dashboard moved to erpclaw-os-engine addon as os-setup-web-dashboard
     # (2026-05-04 split per CLAWHUB_FIX_C_PLAN; bare name now returns missing-addon error)
@@ -238,7 +240,7 @@ ACTION_MAP = {
     "generate-1099-data": "erpclaw-tax",
     "tax-status": "erpclaw-tax",
 
-    # === Financial Reports (21 actions) ===
+    # === Financial Reports (22 actions) ===
     "trial-balance": "erpclaw-reports",
     "profit-and-loss": "erpclaw-reports",
     "balance-sheet": "erpclaw-reports",
@@ -256,6 +258,7 @@ ACTION_MAP = {
     "comparative-pl": "erpclaw-reports",
     "check-overdue": "erpclaw-reports",
     "weekly-digest": "erpclaw-reports",
+    "continuous-close-readiness": "erpclaw-reports",
     "add-elimination-rule": "erpclaw-reports",
     "list-elimination-rules": "erpclaw-reports",
     "run-elimination": "erpclaw-reports",
@@ -1375,6 +1378,7 @@ _READONLY_CARVE_OUT = frozenset({
 # storage the router runs no other foundation action, so the router CLI and
 # the MCP door hold the same list. An L0 test keeps the two sets equal.
 _READONLY_PINNED_READS = frozenset({
+    "evaluate-rule",
     "generate-form941-data",
     "generate-form940-data",
     "accounting-adv-status",
@@ -1394,6 +1398,7 @@ _READONLY_PINNED_READS = frozenset({
     "get-account-balance",
     "get-amendment-history",
     "get-audit-log",
+    "get-audit-checkpoint",
     "get-best-alternative-for-item",
     "get-billing-period",
     "get-billing-run",
@@ -1553,6 +1558,7 @@ _READONLY_PINNED_READS = frozenset({
     "tax-summary",
     "trial-balance",
     "weekly-digest",
+    "continuous-close-readiness",
 })
 
 def _refuse_readonly_non_read(action):

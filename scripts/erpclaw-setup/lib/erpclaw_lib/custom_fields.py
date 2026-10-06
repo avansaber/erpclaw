@@ -10,6 +10,8 @@ Schema (from init_db.py):
 import json
 import re
 import uuid
+from datetime import time
+from decimal import Decimal
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +53,8 @@ def add_custom_field(
         conn: database connection
         table_name: target table/doctype to extend
         field_name: unique field name (snake_case)
-        field_type: one of 'text', 'int', 'float', 'date', 'select', 'link', 'json'
+        field_type: text, int, float, date, select, link, json, percent,
+            duration (whole seconds), rating, or time (local clock)
         owner_skill: skill that owns this custom field
         label: human-readable label (defaults to field_name)
         required: whether field is required (default False)
@@ -62,6 +65,14 @@ def add_custom_field(
     Returns:
         the generated UUID for the new field definition
     """
+    if field_type not in _VALID_FIELD_TYPES:
+        raise ValueError("Unsupported custom field type")
+    if field_type in _EXTENDED_FIELD_TYPES:
+        _rating_limit(field_options) if field_type == "rating" else _no_options(field_options)
+        if default_value is not None:
+            problem = _extended_value_error(field_type, default_value, field_options)
+            if problem:
+                raise ValueError(f"Invalid custom field default: {problem}")
     field_id = str(uuid.uuid4())
     conn.execute(
         """INSERT INTO custom_field
@@ -119,7 +130,60 @@ def remove_custom_field(conn, table_name, field_name, owner_skill):
 # Validation
 # ---------------------------------------------------------------------------
 
-_VALID_FIELD_TYPES = {"text", "int", "float", "date", "select", "link", "json"}
+_EXTENDED_FIELD_TYPES = {"percent", "duration", "rating", "time"}
+_VALID_FIELD_TYPES = {"text", "int", "float", "date", "select", "link", "json"} | _EXTENDED_FIELD_TYPES
+
+
+def _no_options(options):
+    if options not in (None, ""):
+        raise ValueError("This custom field type accepts no options")
+
+
+def _rating_limit(options):
+    if options in (None, ""):
+        return 5
+    try:
+        parsed = json.loads(options)
+    except (ValueError, TypeError):
+        raise ValueError("Rating options must be a JSON object with integer max") from None
+    if (not isinstance(parsed, dict) or set(parsed) != {"max"}
+            or type(parsed["max"]) is not int or not 1 <= parsed["max"] <= 100):
+        raise ValueError("Rating max must be an integer from 1 to 100")
+    return parsed["max"]
+
+
+def _extended_value_error(field_type, value, options):
+    """Validate exact text values without binary floating-point conversion."""
+    if value is None or value == "":
+        return None
+    if type(value) not in (str, int, Decimal):
+        return "use text or an exact integer, not a float or boolean"
+    text = str(value)
+    if field_type == "percent":
+        if (not re.fullmatch(r"[0-9]{1,3}(?:\.[0-9]{1,6})?", text)
+                or Decimal(text) > Decimal("100")):
+            return "percent must be from 0 to 100, with at most six decimal places"
+    elif field_type == "duration":
+        if not re.fullmatch(r"[0-9]{1,18}", text):
+            return "duration must be whole nonnegative seconds, at most 18 digits"
+    elif field_type == "rating":
+        try:
+            maximum = _rating_limit(options)
+        except ValueError as exc:
+            return str(exc)
+        if not re.fullmatch(r"[0-9]{1,3}", text) or int(text) > maximum:
+            return f"rating must be a whole number from 0 to {maximum}"
+    elif field_type == "time":
+        if not re.fullmatch(r"[0-9]{2}:[0-9]{2}(?::[0-9]{2})?", text):
+            return "time must be a local clock value in HH:MM or HH:MM:SS"
+        components = [int(part) for part in text.split(":")]
+        if components[0] > 23 or any(part > 59 for part in components[1:]):
+            return "time must be a valid local clock value"
+        try:
+            time.fromisoformat(text)
+        except ValueError:
+            return "time must be a valid local clock value"
+    return None
 
 
 def validate_custom_field_values(conn, table_name, values):
@@ -157,7 +221,12 @@ def validate_custom_field_values(conn, table_name, values):
             continue
 
         # Type-specific validation
-        if ftype == "int":
+        if ftype in _EXTENDED_FIELD_TYPES:
+            problem = _extended_value_error(ftype, value, fdef.get("field_options"))
+            if problem:
+                errors.append(f"Custom field '{fname}': {problem}")
+
+        elif ftype == "int":
             try:
                 int(value)
             except (ValueError, TypeError):

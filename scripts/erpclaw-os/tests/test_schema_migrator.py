@@ -223,6 +223,173 @@ class TestGetLiveSchema:
         result = get_live_schema(str(tmp_path / "nope.sqlite"))
         assert result == {}
 
+    def test_postgresql_catalog_keeps_columns_keys_and_indexes(self, monkeypatch):
+        import schema_diff
+        from erpclaw_lib import db, seam
+
+        target = "postgresql://schema-test.invalid/disposable"
+        calls = []
+        monkeypatch.setattr(db, "get_dialect", lambda: "postgresql")
+        monkeypatch.setattr(seam, "table_names", lambda path: ["invoice"])
+
+        def describe(table, path):
+            calls.append((table, path))
+            return {
+                "columns": [
+                    {"name": "company_id", "type": "TEXT", "nullable": False},
+                    {"name": "id", "type": "TEXT", "nullable": False},
+                    {"name": "amount", "type": "TEXT", "nullable": True},
+                ],
+                "primary_key": ["company_id", "id"],
+                "indexes": ["idx_invoice_company"],
+            }
+
+        monkeypatch.setattr(seam, "describe_table", describe)
+        assert schema_diff.get_live_schema(target) == {
+            "invoice": {
+                "columns": [
+                    {"name": "company_id", "type": "TEXT", "is_pk": True},
+                    {"name": "id", "type": "TEXT", "is_pk": True},
+                    {"name": "amount", "type": "TEXT", "is_pk": False},
+                ],
+                "indexes": ["idx_invoice_company"],
+            },
+        }
+        assert calls == [("invoice", target)]
+
+    def test_postgresql_catalog_failure_is_not_an_empty_schema(self, monkeypatch):
+        from erpclaw_lib import db, seam
+
+        monkeypatch.setattr(db, "get_dialect", lambda: "postgresql")
+
+        def refuse(_target):
+            raise RuntimeError("catalog unavailable")
+
+        monkeypatch.setattr(seam, "table_names", refuse)
+        with pytest.raises(RuntimeError, match="catalog unavailable"):
+            get_live_schema("postgresql://schema-test.invalid/disposable")
+
+    def test_postgresql_reader_matches_real_sqlite_catalog_shape(self, db_path, monkeypatch):
+        from erpclaw_lib import db, seam
+
+        before = get_live_schema(db_path)
+        try:
+            shapes = {table: seam.describe_table(table, db_path)
+                      for table in seam.table_names(db_path)}
+            monkeypatch.setattr(db, "get_dialect", lambda: "postgresql")
+            monkeypatch.setattr(seam, "table_names", lambda _path: list(shapes))
+            monkeypatch.setattr(seam, "describe_table", lambda table, _path: shapes[table])
+            reflected = get_live_schema(db_path)
+            assert reflected == before
+        finally:
+            seam.dispose_engines()
+
+    def test_postgresql_empty_catalog_has_no_invented_tables(self, monkeypatch):
+        from erpclaw_lib import db, seam
+
+        seen = []
+        monkeypatch.setattr(db, "get_dialect", lambda: "postgresql")
+        monkeypatch.setattr(seam, "table_names", lambda path: seen.append(path) or [])
+        target = "postgresql://schema-test.invalid/disposable"
+        assert get_live_schema(target) == {}
+        assert seen == [target]
+
+    def test_postgresql_live_socket_catalog_preserves_text_amounts(self, tmp_path, monkeypatch):
+        from decimal import Decimal
+        from urllib.parse import parse_qs, urlsplit
+        from erpclaw_lib import seam
+        from erpclaw_lib.db import get_connection
+        from erpclaw_lib.query import Q, Table
+
+        target = os.environ.get("ERPCLAW_TEST_PG_URL")
+        if not target:
+            pytest.skip("requires an empty disposable socket-only PostgreSQL target")
+        parsed = urlsplit(target)
+        query = parse_qs(parsed.query)
+        hosts = query.get("host", [])
+        if (parsed.scheme not in {"postgresql", "postgres"}
+                or parsed.hostname is not None or parsed.port is not None
+                or parsed.password is not None
+                or not parsed.path.lstrip("/").startswith("erpclaw_muse_t_")
+                or len(hosts) != 1 or not hosts[0].startswith("/")
+                or set(query) - {"host", "port"}):
+            raise RuntimeError("live schema proof requires a disposable socket-only target")
+
+        monkeypatch.setenv("ERPCLAW_DB_DIALECT", "postgresql")
+        seam.dispose_engines()
+        try:
+            if seam.table_names(target):
+                raise RuntimeError("live schema proof requires an empty database")
+            metadata = seam.MetaData()
+            probe = seam.Table(
+                "os_schema_probe", metadata,
+                seam.Column("id", seam.Text, primary_key=True),
+                seam.Column("amount", seam.Text, nullable=False),
+            )
+            seam.Index("idx_os_schema_probe_amount", probe.c.amount)
+            seam.provision(metadata, target)
+            conn = get_connection(target)
+            table = Table("os_schema_probe")
+            expected = Decimal("123.45")
+            try:
+                conn.execute(Q.into(table).columns("id", "amount")
+                             .insert("probe", str(expected)).get_sql())
+                conn.commit()
+                before = conn.execute(Q.from_(table).select(table.id, table.amount)
+                                      .get_sql()).fetchall()
+                shape = get_live_schema(target)["os_schema_probe"]
+                assert shape["columns"] == [
+                    {"name": "id", "type": "TEXT", "is_pk": True},
+                    {"name": "amount", "type": "TEXT", "is_pk": False},
+                ]
+                assert "idx_os_schema_probe_amount" in shape["indexes"]
+                declared = tmp_path / "init_db.py"
+                declared.write_text(
+                    "from erpclaw_lib.seam import MetaData, Table, Column, Text\n"
+                    "metadata = MetaData()\n"
+                    "probe = Table('os_schema_probe', metadata,\n"
+                    "    Column('id', Text, primary_key=True),\n"
+                    "    Column('amount', Text, nullable=False))\n",
+                    encoding="utf-8",
+                )
+                difference = diff_schema(target, str(declared))
+                assert difference["matching_tables"] == ["os_schema_probe"]
+                assert difference["has_differences"] is False
+                after = conn.execute(Q.from_(table).select(table.id, table.amount)
+                                     .get_sql()).fetchall()
+                assert [tuple(row) for row in before] == [tuple(row) for row in after]
+                assert after[0][1] == "123.45"
+                assert Decimal(after[0][1]) == expected
+            finally:
+                conn.close()
+        finally:
+            seam.dispose_engines()
+
+    @pytest.mark.parametrize("target", [
+        "postgresql://example.invalid/erpclaw_muse_t_catalog?host=/tmp/probe",
+        "postgresql:///postgres?host=/tmp/probe",
+        "postgresql:///erpclaw_muse_t_catalog",
+        "postgresql:///erpclaw_muse_t_catalog?host=localhost",
+        "postgresql:///erpclaw_muse_t_catalog?host=/tmp/probe&service=other",
+    ])
+    def test_live_catalog_refuses_other_targets_before_open(self, target, tmp_path, monkeypatch):
+        from erpclaw_lib import seam
+
+        monkeypatch.setenv("ERPCLAW_TEST_PG_URL", target)
+        monkeypatch.setattr(seam, "table_names", lambda _path: pytest.fail("opened catalog"))
+        with pytest.raises(RuntimeError, match="disposable socket-only target"):
+            self.test_postgresql_live_socket_catalog_preserves_text_amounts(tmp_path, monkeypatch)
+
+    def test_live_catalog_refuses_nonempty_target_before_writes(self, tmp_path, monkeypatch):
+        from erpclaw_lib import seam
+
+        monkeypatch.setenv("ERPCLAW_TEST_PG_URL",
+                           "postgresql:///erpclaw_muse_t_catalog?host=/tmp/probe")
+        monkeypatch.setattr(seam, "table_names", lambda _path: ["company"])
+        monkeypatch.setattr(seam, "provision", lambda *_args: pytest.fail("wrote schema"))
+        with pytest.raises(RuntimeError, match="empty database"):
+            self.test_postgresql_live_socket_catalog_preserves_text_amounts(tmp_path, monkeypatch)
+
 
 class TestDiffSchema:
     """Test schema comparison between DB and init_db.py."""
