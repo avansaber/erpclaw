@@ -30,6 +30,7 @@ structured error object -- never swallowed, never narrated. Validation errors
 never echo submitted values.
 """
 import ast
+from functools import lru_cache
 import json
 import os
 import re
@@ -215,6 +216,309 @@ def _extract_parser_options(path):
     if "help" not in options:
         options["help"] = {"action": "store_true", "flag": "--help"}
     return dict(options)
+
+
+@lru_cache(maxsize=None)
+def _receiver_tree(path):
+    try:
+        text = open(path).read()
+    except Exception as exc:
+        raise RouterGateUnavailable(path, "%s: %s" % (type(exc).__name__, exc))
+    try:
+        return ast.parse(text)
+    except Exception as exc:
+        raise RouterGateUnavailable(path, "%s: %s" % (type(exc).__name__, exc))
+
+
+@lru_cache(maxsize=None)
+def _receiver_handlers(path):
+    handlers = {}
+    for node in ast.walk(_receiver_tree(path)):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(target, ast.Name) and target.id == "ACTIONS"
+                   for target in node.targets):
+            continue
+        if not isinstance(node.value, ast.Dict):
+            continue
+        for key, value in zip(node.value.keys, node.value.values):
+            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                continue
+            if isinstance(value, ast.Name):
+                handlers[key.value] = value.id
+            elif isinstance(value, ast.Constant) and value.value is None:
+                handlers[key.value] = None
+    return handlers
+
+
+@lru_cache(maxsize=None)
+def _receiver_imported_action_paths(path):
+    """Return local modules whose literal ``ACTIONS`` maps feed a receiver."""
+    paths_out = []
+    parent = os.path.dirname(path)
+    for node in _receiver_tree(path).body:
+        if not isinstance(node, ast.ImportFrom) or node.level:
+            continue
+        if not any(alias.name == "ACTIONS" for alias in node.names):
+            continue
+        if not node.module:
+            continue
+        candidate = os.path.join(parent, *node.module.split(".")) + ".py"
+        if os.path.isfile(candidate):
+            paths_out.append(candidate)
+    return tuple(paths_out)
+
+
+@lru_cache(maxsize=None)
+def _receiver_imported_functions(path):
+    """Map local imported function names to their source module and name."""
+    functions = {}
+    parent = os.path.dirname(path)
+    for node in _receiver_tree(path).body:
+        if not isinstance(node, ast.ImportFrom) or node.level or not node.module:
+            continue
+        candidate = os.path.join(parent, *node.module.split(".")) + ".py"
+        if not os.path.isfile(candidate):
+            continue
+        for alias in node.names:
+            if alias.name != "ACTIONS":
+                functions[alias.asname or alias.name] = (candidate, alias.name)
+    return functions
+
+
+@lru_cache(maxsize=None)
+def _receiver_functions(path):
+    return {
+        node.name: node for node in _receiver_tree(path).body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+
+def _action_handler_source(path, action_name):
+    handlers = _receiver_handlers(path)
+    if action_name in handlers and handlers[action_name] is not None:
+        return path, handlers[action_name]
+    for imported_path in _receiver_imported_action_paths(path):
+        handlers = _receiver_handlers(imported_path)
+        if action_name in handlers and handlers[action_name] is not None:
+            return imported_path, handlers[action_name]
+    return None
+
+
+@lru_cache(maxsize=None)
+def _dispatch_branch_contract(path, action_name):
+    """Resolve a literal ``if action == ...`` branch in receiver ``main``."""
+    functions = _receiver_functions(path)
+    imported_functions = _receiver_imported_functions(path)
+    main = functions.get("main")
+    if main is None:
+        return None
+    for node in ast.walk(main):
+        if not isinstance(node, ast.If) or not isinstance(node.test, ast.Compare):
+            continue
+        test = node.test
+        if not (isinstance(test.left, ast.Name) and test.left.id == "action"
+                and len(test.ops) == 1 and isinstance(test.ops[0], ast.Eq)
+                and len(test.comparators) == 1
+                and isinstance(test.comparators[0], ast.Constant)
+                and test.comparators[0].value == action_name):
+            continue
+        argument_names = set()
+        requirements = set()
+        handler_source = None
+        for statement in node.body:
+            for child in ast.walk(statement):
+                if (isinstance(child, ast.Attribute)
+                        and isinstance(child.value, ast.Name)
+                        and child.value.id == "args"):
+                    argument_names.add(child.attr)
+                if (isinstance(child, ast.Call)
+                        and isinstance(child.func, ast.Name)
+                        and any(isinstance(item, ast.Name) and item.id == "args"
+                                for item in child.args)):
+                    local_name = child.func.id
+                    if local_name in functions:
+                        handler_source = (path, local_name)
+                    elif local_name in imported_functions:
+                        handler_source = imported_functions[local_name]
+                text_value = _joined_text(child)
+                if "required" in text_value.lower() and "--" in text_value:
+                    requirements.add(text_value)
+        if handler_source is not None:
+            source_path, handler_name = handler_source
+            return source_path, handler_name, argument_names, requirements
+    return None
+
+
+def _literal_value(node):
+    """Return a JSON-safe literal from an AST node, or ``None`` if dynamic."""
+    try:
+        value = ast.literal_eval(node)
+    except (ValueError, TypeError, SyntaxError):
+        return None
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (list, tuple, set)) and all(
+            item is None or isinstance(item, (str, int, float, bool))
+            for item in value):
+        return list(value)
+    return None
+
+
+@lru_cache(maxsize=None)
+def _extract_parser_argument_specs(path):
+    """Return receiver argument metadata keyed by argparse destination.
+
+    This is presentation metadata for ``erpclaw_describe_action``. Execution
+    validation continues to use ``_extract_parser_options`` so extending the
+    model-facing contract cannot relax the transport gate.
+    """
+    tree = _receiver_tree(path)
+    specs = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not (isinstance(node.func, ast.Attribute)
+                and node.func.attr == "add_argument"):
+            continue
+        option_strings = [
+            item.value for item in node.args
+            if isinstance(item, ast.Constant) and isinstance(item.value, str)
+            and item.value.startswith("--")
+        ]
+        if not option_strings:
+            continue
+        flag = option_strings[0]
+        keywords = {kw.arg: kw.value for kw in node.keywords if kw.arg is not None}
+        dest_node = keywords.get("dest")
+        dest = (_literal_value(dest_node) if dest_node is not None
+                else flag[2:].replace("-", "_"))
+        if not isinstance(dest, str):
+            continue
+        action = _literal_value(keywords.get("action")) if "action" in keywords else None
+        kind = ("boolean" if action in ("store_true", "store_false")
+                else "repeatable" if action == "append" else "value")
+        spec = {"name": dest, "flag": flag, "kind": kind}
+        if "choices" in keywords:
+            choices = _literal_value(keywords["choices"])
+            if isinstance(choices, list):
+                spec["choices"] = choices
+        if "default" in keywords:
+            default = _literal_value(keywords["default"])
+            if default is not None:
+                spec["default"] = default
+        help_text = _literal_value(keywords.get("help")) if "help" in keywords else None
+        if isinstance(help_text, str) and help_text:
+            spec["description"] = help_text
+        specs[dest] = spec
+    if not specs:
+        raise RouterGateUnavailable(path, "no literal long-form parser arguments found")
+    return specs
+
+
+def _joined_text(node):
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        parts = []
+        for item in node.values:
+            if isinstance(item, ast.Constant) and isinstance(item.value, str):
+                parts.append(item.value)
+            elif isinstance(item, ast.FormattedValue):
+                parts.append("<value>")
+        return "".join(parts)
+    return ""
+
+
+@lru_cache(maxsize=None)
+def _action_function_contract(path, action_name):
+    """Statically bind one ACTIONS entry to the args its handler reads."""
+    handler_source = _action_handler_source(path, action_name)
+    argument_names = set()
+    requirements = set()
+    if handler_source is None:
+        branch = _dispatch_branch_contract(path, action_name)
+        if branch is None:
+            raise RouterGateUnavailable(
+                path, "ACTIONS handler for %r is not statically resolvable" % action_name)
+        source_path, handler_name, branch_names, branch_requirements = branch
+        argument_names.update(branch_names)
+        requirements.update(branch_requirements)
+    else:
+        source_path, handler_name = handler_source
+
+    functions = _receiver_functions(source_path)
+    if handler_name not in functions:
+        raise RouterGateUnavailable(source_path, "handler %r not found" % handler_name)
+
+    pending = [handler_name]
+    visited = set()
+    while pending:
+        name = pending.pop()
+        if name in visited or name not in functions:
+            continue
+        visited.add(name)
+        function = functions[name]
+        for node in ast.walk(function):
+            if (isinstance(node, ast.Attribute)
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id == "args"):
+                argument_names.add(node.attr)
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "getattr" and len(node.args) >= 2
+                    and isinstance(node.args[0], ast.Name)
+                    and node.args[0].id == "args"
+                    and isinstance(node.args[1], ast.Constant)
+                    and isinstance(node.args[1].value, str)):
+                argument_names.add(node.args[1].value)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                if any(isinstance(item, ast.Name) and item.id == "args"
+                       for item in node.args):
+                    pending.append(node.func.id)
+            text_value = _joined_text(node)
+            if "required" in text_value.lower() and "--" in text_value:
+                requirements.add(text_value)
+    ordered_requirements = sorted(requirements)
+    requirements = [
+        item for item in ordered_requirements
+        if not any(other != item and other.startswith(item)
+                   for other in ordered_requirements)
+    ]
+    return argument_names, requirements
+
+
+def action_argument_contract(action_name):
+    """Return exact model-facing argument metadata for one exposed action."""
+    module_actions, onboarding_actions, aliases, _action_map = _router_maps()
+    if action_name in module_actions or action_name in onboarding_actions:
+        return {
+            "arguments": [],
+            "requirements": [],
+            "argument_contract_available": False,
+            "args_hint": (
+                "This orchestration action has no static action-specific "
+                "argument contract; pass documented router arguments only."
+            ),
+        }
+    effective_action = aliases.get(action_name, (None, action_name))[1]
+    receiver_path = _receiver_parser_path(action_name)
+    if receiver_path is None:
+        raise RouterGateUnavailable(_ROUTER, "no static receiver for %r" % action_name)
+    specs = _extract_parser_argument_specs(receiver_path)
+    names, requirements = _action_function_contract(receiver_path, effective_action)
+    arguments = [
+        specs[name] for name in sorted(names)
+        if name in specs and name not in {"action", "db_path"}
+    ]
+    return {
+        "arguments": arguments,
+        "requirements": requirements,
+        "argument_contract_available": True,
+        "args_hint": (
+            "Pass only the listed argument names in erpclaw_action.args. "
+            "Use JSON values; repeatable arguments accept an array."
+        ),
+    }
 
 
 def _resolve_against_receiver(norm, declared):

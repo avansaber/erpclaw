@@ -581,6 +581,12 @@ NO_COMPANY_RESOLVES = frozenset({
 
 INSTALL_GLOBAL_EXEMPT = frozenset({"setup-company"})
 
+# These global diagnostic reads are deliberately not MCP/read-only pinned.
+# In an active install they require an attested principal whose membership
+# covers every company, which is the authority-core definition of an
+# installation administrator for a cross-company read.
+INSTALL_GLOBAL_READS = frozenset({"get-system-audit-log"})
+
 _SCOPE_NOTE_ATTR = "_erpclaw_company_scope_note"
 
 
@@ -683,7 +689,8 @@ def gate_note(conn, action, argv, phase):
         raise ScopeRefused(REFUSAL_CODE)
     if verdict.refuse:
         raise ScopeRefused(REFUSAL_CODE)
-    if source == "none" and cls != "read":
+    if source == "none" and (
+            cls != "read" or action in INSTALL_GLOBAL_READS):
         try:
             table = Table("company")
             rows = conn.execute(

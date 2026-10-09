@@ -728,6 +728,164 @@ def _validate_not_group_account(conn, account_id: str, label: str) -> str:
 # 1. add-payment
 # ---------------------------------------------------------------------------
 
+def _cash_amount(value, label, *, allow_zero=False):
+    """Accept exact currency text without silently rounding an input."""
+    if not isinstance(value, str):
+        err(f"{label} must be decimal text")
+    parts = value.split(".")
+    if (len(parts) > 2 or not parts[0] or len(parts[0]) > 18
+            or any(not p or not p.isascii() or not p.isdigit() for p in parts)
+            or (len(parts) == 2 and len(parts[1]) > 2)):
+        err(f"{label} must be non-negative decimal text with at most two decimal places")
+    amount = Decimal(value)
+    if not allow_zero and amount <= 0:
+        err(f"{label} must be greater than zero")
+    return amount
+
+
+def _cash_application_inputs(conn, args):
+    """Resolve one customer's receipt without guessing currency or accounts."""
+    company_id = getattr(args, "company_id", None)
+    party_id = getattr(args, "party_id", None)
+    if not company_id or not party_id:
+        err("--company-id and --party-id are required")
+    company = conn.execute(Q.from_(COMPANY).select(COMPANY.default_currency)
+                           .where(COMPANY.id == P()).get_sql(), (company_id,)).fetchone()
+    customer = Table("customer")
+    party = conn.execute(Q.from_(customer).select(customer.company_id, customer.status)
+                         .where(customer.id == P()).get_sql(), (party_id,)).fetchone()
+    if company is None or party is None or party["company_id"] != company_id:
+        err("Company and customer must exist in the same company")
+    if party["status"] != "active":
+        err("Cash application requires an active customer")
+    currency = getattr(args, "payment_currency", None)
+    if not currency or currency != company["default_currency"]:
+        err("--payment-currency must equal the company's currency; no conversion is supported")
+    amount = _cash_amount(getattr(args, "paid_amount", None), "--paid-amount")
+    for flag in ("paid_from_account", "paid_to_account"):
+        account_id = getattr(args, flag, None)
+        account = conn.execute(Q.from_(ACCOUNT).select(ACCOUNT.star)
+                               .where(ACCOUNT.id == P()).get_sql(), (account_id,)).fetchone()
+        if (account is None or account["company_id"] != company_id
+                or account["currency"] != currency or account["root_type"] != "asset"
+                or account["is_group"] or account["disabled"] or account["is_frozen"]):
+            err(f"{flag.replace('_', '-')} must be a usable same-company currency asset leaf")
+        if flag == "paid_to_account" and account["account_type"] not in ("bank", "cash"):
+            err("paid-to-account must be a bank or cash account")
+        if flag == "paid_from_account" and account["account_type"] in ("bank", "cash"):
+            err("paid-from-account must be the invoice receivable account")
+    if args.paid_from_account == args.paid_to_account:
+        err("Receipt accounts must be distinct")
+    return company_id, party_id, currency, amount
+
+
+def _cash_application_invoices(conn, args, company_id, party_id, currency):
+    """Read open sales invoices and their actual receivable account."""
+    rows = conn.execute(Q.from_(SI).select(SI.star)
+                        .where(SI.company_id == P()).where(SI.customer_id == P())
+                        .where(SI.status.isin(_RECONCILE_CANDIDATE_STATUSES))
+                        .where(SI.is_return == P()).get_sql(),
+                        (company_id, party_id, 0)).fetchall()
+    candidates = []
+    for row in rows:
+        if row["currency"] != currency:
+            continue
+        outstanding = _cash_amount(row["outstanding_amount"], "Invoice outstanding", allow_zero=True)
+        if outstanding == 0:
+            continue
+        accounts = conn.execute(Q.from_(PLE).select(PLE.account_id)
+                                .where(PLE.voucher_type == P()).where(PLE.voucher_id == P())
+                                .where(PLE.party_type == P()).where(PLE.party_id == P())
+                                .where(PLE.delinked == P()).get_sql(),
+                                ("sales_invoice", row["id"], "customer", party_id, 0)).fetchall()
+        if {r["account_id"] for r in accounts} != {args.paid_from_account}:
+            continue
+        candidates.append({"invoice_id": row["id"], "reference": row["naming_series"],
+                           "posting_date": row["posting_date"], "due_date": row["due_date"],
+                           "outstanding_amount": f"{outstanding:.2f}"})
+    return candidates
+
+
+def preview_cash_application(conn, args):
+    """Propose allocations for review, without changing books or drafts."""
+    company_id, party_id, currency, amount = _cash_application_inputs(conn, args)
+    candidates = _cash_application_invoices(conn, args, company_id, party_id, currency)
+    reference = getattr(args, "reference_number", None)
+    def priority(row):
+        if reference and row["reference"] == reference:
+            return (0, row["due_date"] or row["posting_date"], row["invoice_id"])
+        if Decimal(row["outstanding_amount"]) == amount:
+            return (1, row["due_date"] or row["posting_date"], row["invoice_id"])
+        return (2, row["due_date"] or row["posting_date"], row["invoice_id"])
+    candidates.sort(key=priority)
+    remaining, proposed = amount, []
+    for row in candidates:
+        allocated = min(remaining, Decimal(row["outstanding_amount"]))
+        if allocated <= 0:
+            break
+        proposed.append({"invoice_id": row["invoice_id"], "allocated_amount": f"{allocated:.2f}"})
+        remaining -= allocated
+    ok({"company_id": company_id, "customer_id": party_id, "currency": currency,
+        "paid_amount": f"{amount:.2f}", "candidates": candidates,
+        "proposed_allocations": proposed, "unallocated_amount": f"{remaining:.2f}",
+        "requires_review": True, "matching_order": "reference, exact amount, oldest due date"})
+
+
+def create_cash_application_payment(conn, args):
+    """Create only an ordinary receipt draft from explicitly reviewed rows."""
+    company_id, party_id, currency, amount = _cash_application_inputs(conn, args)
+    if (getattr(args, "allocations", None) or getattr(args, "deductions", None)
+            or getattr(args, "payment_type", None) not in (None, "receive")
+            or getattr(args, "party_type", None) not in (None, "customer")
+            or str(getattr(args, "exchange_rate", None) or "1") != "1"):
+        err("Use reviewed invoice allocations for a customer receipt without deductions or conversion")
+    posting_date = getattr(args, "posting_date", None)
+    try:
+        if datetime.strptime(posting_date, "%Y-%m-%d").date().isoformat() != posting_date:
+            raise ValueError
+    except (ValueError, TypeError):
+        err("--posting-date must be an ISO date")
+    try:
+        reviewed = json.loads(getattr(args, "reviewed_allocations", None) or "null")
+    except (ValueError, TypeError):
+        err("--reviewed-allocations must be a JSON list")
+    if not isinstance(reviewed, list) or not reviewed:
+        err("--reviewed-allocations must explicitly name at least one invoice and amount")
+    candidates = {r["invoice_id"]: r for r in
+                  _cash_application_invoices(conn, args, company_id, party_id, currency)}
+    seen, allocations, total = set(), [], Decimal("0")
+    for row in reviewed:
+        if not isinstance(row, dict) or set(row) != {"invoice_id", "allocated_amount"}:
+            err("Each reviewed allocation requires only invoice_id and allocated_amount")
+        invoice_id = row["invoice_id"]
+        if not isinstance(invoice_id, str) or invoice_id in seen or invoice_id not in candidates:
+            err("Reviewed invoices must be unique eligible customer invoices in this company and currency")
+        allocated = _cash_amount(row["allocated_amount"], "Reviewed allocation")
+        if allocated > Decimal(candidates[invoice_id]["outstanding_amount"]):
+            err("Reviewed allocation exceeds the invoice's current outstanding amount")
+        seen.add(invoice_id)
+        total += allocated
+        allocations.append({"voucher_type": "sales_invoice", "voucher_id": invoice_id,
+                            "allocated_amount": f"{allocated:.2f}"})
+    if total > amount:
+        err("Reviewed allocations exceed paid amount")
+    draft_args = argparse.Namespace(**vars(args))
+    draft_args.payment_type, draft_args.party_type = "receive", "customer"
+    draft_args.paid_amount, draft_args.exchange_rate = f"{amount:.2f}", "1"
+    draft_args.allocations, draft_args.deductions = json.dumps(allocations), None
+    draft_args.reference_number = getattr(args, "reference_number", None)
+    draft_args.reference_date = getattr(args, "reference_date", None)
+    try:
+        add_payment(conn, draft_args)
+    except SystemExit as exc:
+        if exc.code:
+            conn.rollback()
+        raise
+    except Exception:
+        conn.rollback()
+        raise
+
+
 def add_payment(conn, args):
     """Create a new draft payment entry."""
     company_id = args.company_id
@@ -2913,6 +3071,8 @@ def status(conn, args):
 # ---------------------------------------------------------------------------
 
 ACTIONS = {
+    "preview-cash-application": preview_cash_application,
+    "create-cash-application-payment": create_cash_application_payment,
     "add-payment": add_payment,
     "update-payment": update_payment,
     "get-payment": get_payment,
@@ -2943,6 +3103,7 @@ def main():
 
     # Payment entry fields
     parser.add_argument("--payment-entry-id")
+    parser.add_argument("--reviewed-allocations", help="JSON array of explicitly reviewed {invoice_id, allocated_amount}; creates a draft only")
     parser.add_argument("--company-id")
     parser.add_argument("--company", dest="company_name", default=None)  # NL: company by name
     parser.add_argument("--payment-type")

@@ -176,8 +176,11 @@ class TestGeneralLedgerExact:
 class TestPartyLedgerExact:
     def test_opening_and_closing_are_exact(self, conn):
         e = _std_env(conn)
+        ar = _extra_account(conn, e["company_id"],
+                            "Accounts Receivable", "1100",
+                            "asset", "receivable")
         pid = _mk_customer(conn, e["company_id"], "Exact Customer")
-        _gl(conn, e["bank"], "2026-02-10", BIG, "0",
+        _gl(conn, ar, "2026-02-10", BIG, "0",
             party_type="customer", party_id=pid)
         conn.commit()
         res = call_action(REP.party_ledger, conn, _base_ns(

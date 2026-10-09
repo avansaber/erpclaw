@@ -41,7 +41,7 @@ and a committed change always has one; and because only rows whose target
 differs are written at all, a re-run on a migrated install writes neither an
 UPDATE nor an audit row. Read it back with
 
-    get-audit-log --audit-action "migration:033_rederive_billing_period_invoice_state"
+    get-system-audit-log --audit-action "migration:033_rederive_billing_period_invoice_state"
 
 This one is worth stating plainly: the migration RE-DERIVES a state flag from
 another table, so without the trail there is no record anywhere that the flag was
@@ -237,7 +237,7 @@ def _print_report(updates, report, report_only):
               f"{len(report['unknown_invoice_status'])}")
     if updates and not report_only:
         print(f"    audit trail: {len(updates)} audit_log row(s), committed with "
-              f"the change. Read them back with:  get-audit-log "
+              f"the change. Read them back with:  get-system-audit-log "
               f'--audit-action "{migration_action(MIGRATION_ID)}"')
     elif updates:
         print(f"    report-only: no audit_log row is written — a trail for a "

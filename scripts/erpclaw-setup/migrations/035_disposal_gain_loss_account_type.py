@@ -86,7 +86,7 @@ never a row for a change that rolled back and never a committed change without
 its row. `--report-only` writes none, and a second run retypes nothing and so
 writes nothing: the trail cannot duplicate. Read it back with
 
-    get-audit-log --audit-action "migration:035_disposal_gain_loss_account_type"
+    get-system-audit-log --audit-action "migration:035_disposal_gain_loss_account_type"
 
 which is what makes the reversal in the paragraph above possible after the
 terminal output is gone: the operator no longer has to remember which accounts
@@ -473,7 +473,7 @@ def run_migration(db_path=None, report_only=False):
         conn.commit()
         if audit_rows:
             print("  audit trail: %d audit_log row(s), committed with the change. "
-                  "Read them back with:  get-audit-log --audit-action \"%s\""
+                  "Read them back with:  get-system-audit-log --audit-action \"%s\""
                   % (audit_rows, migration_action(MIGRATION_ID)))
 
         if not retype and already:

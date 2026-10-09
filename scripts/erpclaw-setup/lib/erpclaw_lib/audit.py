@@ -297,7 +297,7 @@ def scope_columns_present(conn) -> bool:
     return _has_scope_columns(conn)
 
 # Prefix that makes a migration's rows findable through the shipped read action:
-#   get-audit-log --audit-action "migration:035_disposal_gain_loss_account_type"
+#   get-system-audit-log --audit-action "migration:035_disposal_gain_loss_account_type"
 # The stem is the migration_runner ledger id, so the audit trail and the
 # migration ledger name the same thing the same way.
 MIGRATION_ACTION_PREFIX = "migration:"

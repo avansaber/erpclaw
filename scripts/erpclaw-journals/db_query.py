@@ -8,13 +8,15 @@ Usage: python3 db_query.py --action <action-name> [--flags ...]
 Output: JSON to stdout, exit 0 on success, exit 1 on error.
 """
 import argparse
+import calendar
 import json
 import os
+import re
 import sqlite3
 import sys
 import uuid
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 
 # Add shared lib to path
 try:
@@ -44,7 +46,7 @@ try:
     from erpclaw_lib.audit import audit
     from erpclaw_lib.dependencies import check_required_tables
     from erpclaw_lib.query_helpers import resolve_company_id, resolve_scope_company
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, line_order
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, line_order, insert_row
     from erpclaw_lib import authority_gate
     from erpclaw_lib.authorization_consumption import INPUT_INVALID
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
@@ -62,6 +64,7 @@ _t_account = Table("account")
 _t_company = Table("company")
 _t_cost_center = Table("cost_center")
 _t_rjt = Table("recurring_journal_template")
+_t_fy = Table("fiscal_year")
 
 VALID_ENTRY_TYPES = (
     "journal", "opening", "closing", "depreciation",
@@ -258,6 +261,192 @@ def _get_je_lines(conn, journal_entry_id: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 # 1. add-journal-entry
 # ---------------------------------------------------------------------------
+
+def create_expense_allocation(conn, args):
+    """Prepare a balanced, explicitly weighted internal expense recharge."""
+    company_id = getattr(args, "company_id", None)
+    source_account = getattr(args, "source_account_id", None)
+    source_center = getattr(args, "source_cost_center_id", None)
+    if not all(isinstance(value, str) and value for value in (company_id, source_account, source_center)):
+        err("--company-id, --source-account-id and --source-cost-center-id are required")
+    if any(getattr(args, name, None) for name in ("dimensions", "dimension_key", "dimension_value")):
+        err("Expense allocation sets its cost-centre tags; other dimension arguments are not supported")
+    posting_date = getattr(args, "posting_date", None)
+    try:
+        if date.fromisoformat(posting_date).isoformat() != posting_date:
+            raise ValueError
+    except (TypeError, ValueError):
+        err("--posting-date must be an ISO date")
+    raw = getattr(args, "amount", None)
+    try:
+        if isinstance(raw, (bool, float)):
+            raise ValueError
+        amount = Decimal(str(raw))
+        if not amount.is_finite() or amount <= 0 or amount > Decimal("1000000000000"):
+            raise ValueError
+        amount = round_currency(amount)
+        if amount <= 0:
+            raise ValueError
+    except (InvalidOperation, ValueError):
+        err("--amount must be positive and finite, up to 1000000000000, and round to at least one cent")
+    try:
+        targets = json.loads(getattr(args, "allocations", None))
+    except (TypeError, ValueError):
+        err("--allocations must be a JSON array")
+    if not isinstance(targets, list) or not 1 <= len(targets) <= 100:
+        err("--allocations requires between one and 100 targets")
+
+    def validate_account(account_id):
+        query = (Q.from_(_t_account).select(_t_account.id).where(_t_account.id == P())
+                 .where(_t_account.company_id == P()).where(_t_account.root_type == "expense")
+                 .where(_t_account.is_group == 0).where(_t_account.is_frozen == 0))
+        if not conn.execute(query.get_sql(), (account_id, company_id)).fetchone():
+            err("Every allocation account must be an unfrozen leaf expense account belonging to --company-id")
+
+    def validate_center(center_id):
+        query = (Q.from_(_t_cost_center).select(_t_cost_center.id)
+                 .where(_t_cost_center.id == P()).where(_t_cost_center.company_id == P())
+                 .where(_t_cost_center.is_group == 0))
+        if not conn.execute(query.get_sql(), (center_id, company_id)).fetchone():
+            err("Every allocation cost centre must be an owned leaf")
+
+    validate_account(source_account)
+    validate_center(source_center)
+    prepared, seen, total = [], set(), Decimal("0")
+    for target in targets:
+        if not isinstance(target, dict) or set(target) - {"account_id", "cost_center_id", "percentage"}:
+            err("Each allocation needs cost_center_id and percentage, with optional account_id")
+        center_id = target.get("cost_center_id")
+        if not isinstance(center_id, str) or not center_id or center_id == source_center or center_id in seen:
+            err("Targets must name distinct cost centres different from the source")
+        seen.add(center_id)
+        validate_center(center_id)
+        account_id = target.get("account_id", source_account)
+        if not isinstance(account_id, str) or not account_id:
+            err("Target account_id must be a nonempty id")
+        validate_account(account_id)
+        raw_percent = target.get("percentage")
+        try:
+            if isinstance(raw_percent, (bool, float)):
+                raise ValueError
+            percent = Decimal(str(raw_percent))
+            if (not percent.is_finite() or percent <= 0 or percent > 100
+                    or percent != percent.quantize(Decimal("0.000001"))):
+                raise ValueError
+        except (ValueError, InvalidOperation):
+            err("Percentages must be positive exact values up to 100 with at most six decimal places")
+        dims = {"cost_center": center_id}
+        prepared.append((account_id, center_id, percent, dims))
+        total += percent
+    if total != Decimal("100"):
+        err("Allocation percentages must total exactly 100")
+    cents = amount * 100
+    portions = [cents * target[2] / 100 for target in prepared]
+    allocated = [int(value.to_integral_value(rounding=ROUND_DOWN)) for value in portions]
+    remaining = int(cents) - sum(allocated)
+    ranking = sorted(range(len(portions)), key=lambda i: (-(portions[i] - allocated[i]), i))
+    for index in ranking[:remaining]:
+        allocated[index] += 1
+    lines = [{"account_id": source_account, "debit": "0.00", "credit": str(amount),
+              "cost_center_id": source_center, "dimensions": {"cost_center": source_center}}]
+    for (account_id, center_id, _, dims), share in zip(prepared, allocated):
+        if share:
+            lines.append({"account_id": account_id, "debit": str(round_currency(Decimal(share) / 100)),
+                          "credit": "0.00", "cost_center_id": center_id, "dimensions": dims})
+    draft_args = argparse.Namespace(**vars(args))
+    draft_args.entry_type = "journal"
+    draft_args.cwip_asset_id = None
+    draft_args.remark = getattr(args, "remark", None) or "Internal expense allocation"
+    draft_args.lines = json.dumps(lines)
+    add_journal_entry(conn, draft_args)
+
+
+def add_interfund_transfer(conn, args):
+    """Prepare a reciprocal transfer draft balanced within both registered funds."""
+    company_id = getattr(args, "company_id", None)
+    fund_key = getattr(args, "fund_dimension", None) or "fund"
+    source = getattr(args, "from_fund", None)
+    target = getattr(args, "to_fund", None)
+    if not company_id or not isinstance(source, str) or not isinstance(target, str):
+        err("--company-id, --from-fund and --to-fund are required")
+    if source != source.strip() or target != target.strip() or not source or not target or source == target:
+        err("Use two distinct non-empty registered fund values without surrounding spaces")
+    if getattr(args, "lines", None) or getattr(args, "cwip_asset_id", None) or (
+            getattr(args, "entry_type", None) not in (None, "journal")):
+        err("Interfund drafts construct their own journal lines and cannot capitalise an asset")
+    raw = getattr(args, "amount", None)
+    if not isinstance(raw, str) or not re.fullmatch(r"[0-9]{1,18}(?:\.[0-9]{1,2})?", raw):
+        err("--amount must be positive decimal text with at most two fractional digits")
+    amount = Decimal(raw)
+    if amount <= 0:
+        err("--amount must be positive")
+    posting = getattr(args, "posting_date", None)
+    try:
+        if date.fromisoformat(posting).isoformat() != posting:
+            raise ValueError()
+    except (TypeError, ValueError):
+        err("--posting-date must be YYYY-MM-DD")
+    registry = Table("dimension_registry")
+    row = conn.execute(Q.from_(registry).select(
+        registry.is_active, registry.data_type, registry.allowed_values_json
+    ).where(registry.key == P()).get_sql(), (fund_key,)).fetchone()
+    try:
+        allowed = json.loads(row["allowed_values_json"]) if row else None
+    except (TypeError, ValueError):
+        allowed = None
+    if not row or not row["is_active"] or row["data_type"] != "enum" or (
+            not isinstance(allowed, list) or source not in allowed or target not in allowed):
+        err("Both funds must belong to the selected active registered enum dimension")
+    header = _parse_header_dimensions(args) or {}
+    if fund_key in header:
+        err("Give fund values with --from-fund and --to-fund, not header dimensions")
+    specs = (("source_cash_account_id", "asset", True),
+             ("target_cash_account_id", "asset", True),
+             ("due_from_account_id", "asset", False),
+             ("due_to_account_id", "liability", False))
+    ids = {}
+    for field, root, cash in specs:
+        account_id = getattr(args, field, None)
+        account = conn.execute(Q.from_(_t_account).select(
+            _t_account.company_id, _t_account.root_type, _t_account.account_type,
+            _t_account.is_group, _t_account.disabled, _t_account.is_frozen
+        ).where(_t_account.id == P()).get_sql(), (account_id,)).fetchone()
+        if not account or account["company_id"] != company_id or account["root_type"] != root or (
+                account["is_group"] or account["disabled"] or account["is_frozen"]):
+            err(f"--{field.replace('_', '-')} must be an enabled, unfrozen {root} leaf of this company")
+        if cash != (account["account_type"] in ("cash", "bank")):
+            err("Cash legs require cash or bank accounts; due accounts must not be cash accounts")
+        ids[field] = account_id
+    if len({ids["due_from_account_id"], ids["due_to_account_id"],
+            ids["source_cash_account_id"]}) < 3 or (
+            ids["target_cash_account_id"] in (ids["due_from_account_id"], ids["due_to_account_id"])):
+        err("Due-to and due-from accounts must differ from each other and the cash accounts")
+    text = format(amount, ".2f")
+    lines = [
+        {"account_id": ids["source_cash_account_id"], "debit": "0.00", "credit": text,
+         "dimensions": {fund_key: source}},
+        {"account_id": ids["due_from_account_id"], "debit": text, "credit": "0.00",
+         "dimensions": {fund_key: source}},
+        {"account_id": ids["target_cash_account_id"], "debit": text, "credit": "0.00",
+         "dimensions": {fund_key: target}},
+        {"account_id": ids["due_to_account_id"], "debit": "0.00", "credit": text,
+         "dimensions": {fund_key: target}},
+    ]
+    forwarded = argparse.Namespace(**vars(args))
+    forwarded.lines = json.dumps(lines)
+    forwarded.entry_type = "journal"
+    forwarded.cwip_asset_id = None
+    forwarded.remark = f"Interfund reciprocal transfer {source} to {target}; {getattr(args, 'remark', None) or ''}"
+    try:
+        add_journal_entry(conn, forwarded)
+    except SystemExit as exc:
+        if exc.code not in (None, 0):
+            conn.rollback()
+        raise
+    except Exception:
+        conn.rollback()
+        raise
+
 
 def add_journal_entry(conn, args):
     """Create a new draft journal entry with lines."""
@@ -645,6 +834,10 @@ def submit_journal_entry(conn, args):
             if effective:
                 gl_entry["dimensions"] = effective
             gl_entries.append(gl_entry)
+
+        # Registry rules can change while a journal remains a draft. Check the
+        # effective posting tags again on the locked submit connection.
+        _validate_effective_dimensions(conn, {}, gl_entries)
 
         # Single transaction: validate GL, insert GL entries, update JE status
         try:
@@ -1263,6 +1456,113 @@ def _advance_date(d: date, frequency: str) -> date:
 VALID_FREQUENCIES = ("daily", "weekly", "monthly", "quarterly", "annual")
 
 
+def add_expense_schedule(conn, args):
+    """Create monthly accrual or prepaid recognition drafts using recurring JEs."""
+    company_id = getattr(args, "company_id", None)
+    name = getattr(args, "template_name", None)
+    kind = getattr(args, "schedule_kind", None)
+    if not company_id or not isinstance(name, str) or not name.strip():
+        err("--company-id and --template-name are required")
+    if kind not in ("prepaid", "accrual"):
+        err("--schedule-kind must be prepaid or accrual")
+    if getattr(args, "auto_submit", None):
+        err("Expense schedules generate drafts; submit each journal through the normal approval path")
+    raw_amount = getattr(args, "amount", None)
+    if not isinstance(raw_amount, str) or not re.fullmatch(
+            r"[0-9]{1,18}(?:\.[0-9]{1,2})?", raw_amount):
+        err("--amount must be positive decimal text with at most two fractional digits")
+    total = Decimal(raw_amount)
+    if total <= 0:
+        err("--amount must be positive")
+    raw_periods = getattr(args, "periods", None)
+    if not isinstance(raw_periods, str) or not re.fullmatch(r"[1-9][0-9]{0,2}", raw_periods):
+        err("--periods must be an integer from 1 to 120")
+    periods = int(raw_periods)
+    if periods > 120 or int(total * 100) < periods:
+        err("Use 1 to 120 periods, with at least one cent in every period")
+    start_text = getattr(args, "start_date", None)
+    try:
+        start = date.fromisoformat(start_text)
+        if start.isoformat() != start_text:
+            raise ValueError("noncanonical date")
+        dates = []
+        for offset in range(periods):
+            month_index = start.year * 12 + start.month - 1 + offset
+            year, month_zero = divmod(month_index, 12)
+            month = month_zero + 1
+            dates.append(date(year, month, min(start.day, calendar.monthrange(year, month)[1])))
+    except (TypeError, ValueError, OverflowError):
+        err("--start-date must be YYYY-MM-DD and the schedule must fit the supported calendar")
+
+    company_q = Q.from_(_t_company).select(_t_company.id).where(_t_company.id == P())
+    if not conn.execute(company_q.get_sql(), (company_id,)).fetchone():
+        err("Company not found")
+    expense_id = getattr(args, "expense_account_id", None)
+    balance_id = getattr(args, "balance_account_id", None)
+    expected_balance_root = "asset" if kind == "prepaid" else "liability"
+    for account_id, root, flag in (
+            (expense_id, "expense", "expense-account-id"),
+            (balance_id, expected_balance_root, "balance-account-id")):
+        account_q = Q.from_(_t_account).select(
+            _t_account.company_id, _t_account.root_type, _t_account.is_group,
+            _t_account.disabled, _t_account.is_frozen).where(_t_account.id == P())
+        row = conn.execute(account_q.get_sql(), (account_id,)).fetchone()
+        if (not row or row["company_id"] != company_id or row["root_type"] != root
+                or row["is_group"] or row["disabled"] or row["is_frozen"]):
+            err(f"--{flag} must be an enabled, unfrozen {root} leaf account of this company")
+    if expense_id == balance_id:
+        err("Expense and balance accounts must differ")
+    dimensions = _parse_header_dimensions(args) or {}
+    if "cost_center" in dimensions:
+        center_q = (Q.from_(_t_cost_center).select(_t_cost_center.id)
+                    .where(_t_cost_center.id == P())
+                    .where(_t_cost_center.company_id == P())
+                    .where(_t_cost_center.is_group == 0))
+        if not conn.execute(center_q.get_sql(),
+                            (dimensions["cost_center"], company_id)).fetchone():
+            err("Cost centre must be a leaf centre of this company")
+    prototype = [{"account_id": expense_id, "debit": "0.01", "credit": "0.00"},
+                 {"account_id": balance_id, "debit": "0.00", "credit": "0.01"}]
+    _validate_effective_dimensions(conn, dimensions, prototype)
+    cents, remainder = divmod(int(total * 100), periods)
+    schedule_id = str(uuid.uuid4())
+    results = []
+    conn.execute("SAVEPOINT expense_schedule")
+    try:
+        for offset, due in enumerate(dates):
+            amount = format(Decimal(cents + (1 if offset < remainder else 0)) / 100, ".2f")
+            lines = [{"account_id": expense_id, "debit": amount, "credit": "0.00"},
+                     {"account_id": balance_id, "debit": "0.00", "credit": amount}]
+            template_id = str(uuid.uuid4())
+            naming = get_next_name(conn, "recurring_journal_template", company_id=company_id)
+            values = {
+                "id": template_id, "naming_series": naming, "company_id": company_id,
+                "name": f"{name.strip()} ({offset + 1}/{periods})", "frequency": "monthly",
+                "start_date": due.isoformat(), "end_date": due.isoformat(),
+                "next_run_date": due.isoformat(), "entry_type": "journal",
+                "lines": json.dumps(lines), "auto_submit": 0, "status": "active",
+                "remark": f"{kind} schedule {schedule_id}; {getattr(args, 'remark', None) or name.strip()}",
+                "dimensions_json": dimensions_json_text(dimensions),
+            }
+            sql, columns = insert_row("recurring_journal_template", {key: P() for key in values})
+            conn.execute(sql, tuple(values[key] for key in columns))
+            audit(conn, "erpclaw-journals", "add-expense-schedule",
+                  "recurring_journal_template", template_id,
+                  new_values={"schedule_id": schedule_id, "kind": kind,
+                              "amount": amount, "due_date": due.isoformat()})
+            results.append({"template_id": template_id, "due_date": due.isoformat(),
+                            "amount": amount})
+        conn.execute("RELEASE SAVEPOINT expense_schedule")
+    except Exception:
+        conn.execute("ROLLBACK TO SAVEPOINT expense_schedule")
+        conn.execute("RELEASE SAVEPOINT expense_schedule")
+        raise
+    conn.commit()
+    ok({"schedule_id": schedule_id, "schedule_kind": kind, "periods": periods,
+        "total": format(total, ".2f"), "templates": results, "auto_submit": False,
+        "next_step": "process-recurring generates due drafts; review and submit each journal"})
+
+
 # ---------------------------------------------------------------------------
 # 11. add-recurring-template
 # ---------------------------------------------------------------------------
@@ -1809,6 +2109,277 @@ def delete_recurring_template(conn, args):
 
 
 # ---------------------------------------------------------------------------
+# Month-end close v1
+#
+# One truthful server-side preview plus one bounded execution over the
+# existing recurring-template and journal lifecycles. Neither action closes
+# a fiscal year, locks a period, posts straight to the ledger, or reports
+# success while draft close entries remain.
+# ---------------------------------------------------------------------------
+
+def _parse_month_end_date(args):
+    """Return the month-end date (YYYY-MM-DD) or refuse."""
+    raw_month = getattr(args, "month_end_date", None)
+    raw_asof = getattr(args, "as_of_date", None)
+    if raw_month and raw_asof and raw_month != raw_asof:
+        err("--as-of-date and --month-end-date differ; pass one month-end date")
+    raw = raw_month or raw_asof
+    flag = "--month-end-date" if raw_month else "--as-of-date"
+    if not raw:
+        err("--as-of-date is required")
+    try:
+        parsed = datetime.strptime(raw, "%Y-%m-%d")
+        if parsed.strftime("%Y-%m-%d") != raw:
+            raise ValueError()
+    except (TypeError, ValueError):
+        err("Invalid %s '%s': expected YYYY-MM-DD" % (flag, raw))
+    return parsed.strftime("%Y-%m-%d")
+
+
+def _require_close_company(conn, args):
+    """Return the company id, refusing when it is missing or unknown."""
+    company_id = getattr(args, "company_id", None)
+    if not company_id:
+        err("--company-id is required")
+    q = Q.from_(_t_company).select(_t_company.id).where(_t_company.id == P())
+    found = conn.execute(q.get_sql(), (company_id,)).fetchone()
+    if not found:
+        err("Company not found: %s" % company_id)
+    return company_id
+
+
+def _close_fiscal_year(conn, company_id, month_end):
+    """First fiscal year of this company covering month_end, or None."""
+    q = (Q.from_(_t_fy)
+         .select(_t_fy.id, _t_fy.name, _t_fy.start_date, _t_fy.end_date,
+                 _t_fy.is_closed)
+         .where(_t_fy.company_id == P())
+         .where(_t_fy.start_date <= P())
+         .where(_t_fy.end_date >= P())
+         .orderby(_t_fy.id, order=Order.asc))
+    rows = conn.execute(q.get_sql(), (company_id, month_end, month_end)).fetchall()
+    return rows[0] if rows else None
+
+
+def _close_draft_entries(conn, company_id, month_end):
+    """Draft journal entries of this company posted on or before month_end."""
+    q = (Q.from_(_t_je)
+         .select(_t_je.id, _t_je.posting_date, _t_je.total_debit,
+                 _t_je.total_credit)
+         .where(_t_je.company_id == P())
+         .where(_t_je.status == "draft")
+         .where(_t_je.posting_date <= P())
+         .orderby(_t_je.posting_date, order=Order.asc)
+         .orderby(_t_je.id, order=Order.asc))
+    return conn.execute(q.get_sql(), (company_id, month_end)).fetchall()
+
+
+def _close_due_templates(conn, company_id, month_end):
+    """Active recurring templates of this company due on or before month_end."""
+    q = (Q.from_(_t_rjt)
+         .select(_t_rjt.id, _t_rjt.name, _t_rjt.next_run_date)
+         .where(_t_rjt.company_id == P())
+         .where(_t_rjt.status == "active")
+         .where(_t_rjt.next_run_date <= P())
+         .orderby(_t_rjt.next_run_date, order=Order.asc)
+         .orderby(_t_rjt.id, order=Order.asc))
+    return conn.execute(q.get_sql(), (company_id, month_end)).fetchall()
+
+
+def _build_month_end_preview(conn, company_id, month_end):
+    """Shared read-only preview payload; performs no writes."""
+    drafts = _close_draft_entries(conn, company_id, month_end)
+    due = _close_due_templates(conn, company_id, month_end)
+    fy = _close_fiscal_year(conn, company_id, month_end)
+
+    draft_entries = [{
+        "journal_entry_id": row["id"],
+        "posting_date": row["posting_date"],
+        "total_debit": row["total_debit"],
+        "total_credit": row["total_credit"],
+    } for row in drafts]
+    due_templates = [{
+        "template_id": row["id"],
+        "name": row["name"],
+        "next_run_date": row["next_run_date"],
+    } for row in due]
+
+    if fy is None:
+        fy_state = "missing"
+        fy_info = None
+    else:
+        fy_state = "closed" if fy["is_closed"] else "open"
+        fy_info = {
+            "fiscal_year_id": fy["id"],
+            "name": fy["name"],
+            "start_date": fy["start_date"],
+            "end_date": fy["end_date"],
+            "is_closed": bool(fy["is_closed"]),
+        }
+
+    blockers = []
+    if draft_entries:
+        blockers.append({
+            "code": "draft_journal_entries",
+            "count": len(draft_entries),
+            "journal_entry_ids": [entry["journal_entry_id"]
+                                  for entry in draft_entries],
+        })
+    if due_templates:
+        blockers.append({
+            "code": "due_recurring_templates",
+            "count": len(due_templates),
+            "template_ids": [tmpl["template_id"] for tmpl in due_templates],
+        })
+    if fy_state == "missing":
+        blockers.append({"code": "fiscal_year_missing"})
+    elif fy_state == "closed":
+        blockers.append({
+            "code": "fiscal_year_closed",
+            "fiscal_year_id": fy_info["fiscal_year_id"],
+            "fiscal_year_name": fy_info["name"],
+        })
+
+    return {
+        "company_id": company_id,
+        "month_end_date": month_end,
+        "can_close": not blockers,
+        "draft_journal_count": len(draft_entries),
+        "draft_journal_entries": draft_entries,
+        "due_template_count": len(due_templates),
+        "due_recurring_templates": due_templates,
+        "fiscal_year_state": fy_state,
+        "fiscal_year": fy_info,
+        "blockers": blockers,
+    }
+
+
+def journal_month_end_close_preview(conn, args):
+    """Read-only month-end close preview for one company through one date.
+
+    Returns the draft journal entries and due active recurring templates
+    with the exact stored ids and amounts, plus the missing-or-closed
+    fiscal-year condition. Every row is scoped to the company. Writes
+    nothing: no entries, no ledger posts, no audit row.
+    """
+    company_id = _require_close_company(conn, args)
+    month_end = _parse_month_end_date(args)
+    ok(_build_month_end_preview(conn, company_id, month_end))
+
+
+def _parse_close_template_ids(args):
+    """Explicit template id list in the module's JSON-argument style."""
+    raw = getattr(args, "template_ids", None)
+    if not raw:
+        err("--template-ids is required")
+    try:
+        ids = json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        err("--template-ids must be valid JSON")
+    if not isinstance(ids, list) or not ids:
+        err("--template-ids must be a non-empty JSON array")
+    for tid in ids:
+        if not isinstance(tid, str) or not tid:
+            err("--template-ids must be a non-empty JSON array of template ID strings")
+    seen = set()
+    for tid in ids:
+        if tid in seen:
+            err("Duplicate template ID in --template-ids: %s" % tid)
+        seen.add(tid)
+    return ids
+
+
+def journal_run_month_end_close(conn, args):
+    """Bounded month-end close run over explicitly named recurring templates.
+
+    Refuses a template outside the company, an inactive template, a
+    template not due by the date, a closed or missing fiscal year, a
+    duplicate id, or any existing draft journal entry through the date,
+    writing nothing in every refusal case. Otherwise processes only the
+    named templates through the existing recurring-journal generator
+    inside one transaction, then returns the created journal ids with
+    their truthful lifecycle state plus a fresh preview. Reports
+    "incomplete" while any created entry remains a draft. Never closes a
+    fiscal year, locks a period, or posts straight to the ledger.
+    """
+    company_id = _require_close_company(conn, args)
+    month_end = _parse_month_end_date(args)
+    template_ids = _parse_close_template_ids(args)
+
+    fy = _close_fiscal_year(conn, company_id, month_end)
+    if fy is None:
+        err("No fiscal year covers %s for company %s" % (month_end, company_id))
+    if fy["is_closed"]:
+        err("Fiscal year '%s' is closed" % fy["name"])
+
+    drafts = _close_draft_entries(conn, company_id, month_end)
+    if drafts:
+        err("Draft journal entries remain through %s: %s" % (
+            month_end, ", ".join(row["id"] for row in drafts)))
+
+    q_tmpl = Q.from_(_t_rjt).select(_t_rjt.star).where(_t_rjt.id == P())
+    for tid in template_ids:
+        row = conn.execute(q_tmpl.get_sql(), (tid,)).fetchone()
+        if not row:
+            err("Recurring template %s not found" % tid)
+        tmpl = row_to_dict(row)
+        if tmpl["company_id"] != company_id:
+            err("Recurring template %s belongs to another company" % tid)
+        if tmpl["status"] != "active":
+            err("Recurring template %s is not active (status '%s')"
+                % (tid, tmpl["status"]))
+        if tmpl["next_run_date"] > month_end:
+            err("Recurring template %s is not due by %s (next_run_date %s)"
+                % (tid, month_end, tmpl["next_run_date"]))
+
+    created = []
+    try:
+        for tid in template_ids:
+            outcome = _process_one_recurring_template(
+                conn, tid, company_id, month_end)
+            entry = outcome["entry"]
+            q_je = (Q.from_(_t_je)
+                    .select(_t_je.id, _t_je.posting_date, _t_je.total_debit,
+                            _t_je.total_credit, _t_je.status)
+                    .where(_t_je.id == P()))
+            stored = conn.execute(
+                q_je.get_sql(), (entry["journal_entry_id"],)).fetchone()
+            created.append({
+                "journal_entry_id": stored["id"],
+                "template_id": tid,
+                "je_status": stored["status"],
+                "posting_date": stored["posting_date"],
+                "total_debit": stored["total_debit"],
+                "total_credit": stored["total_credit"],
+            })
+    except Exception as exc:
+        conn.rollback()
+        err(unexpected_error_message(exc))
+
+    audit(conn, "erpclaw-journals", "journal-run-month-end-close",
+          "recurring_journal_template", company_id,
+          new_values={"processed": len(created),
+                      "created_journal_ids": [entry["journal_entry_id"]
+                                              for entry in created]})
+    conn.commit()
+
+    preview = _build_month_end_preview(conn, company_id, month_end)
+    complete = (all(entry["je_status"] == "submitted" for entry in created)
+                and preview["can_close"])
+
+    ok({
+        "company_id": company_id,
+        "month_end_date": month_end,
+        "processed": len(created),
+        "created_journal_ids": [entry["journal_entry_id"]
+                                for entry in created],
+        "created_journals": created,
+        "state": "complete" if complete else "incomplete",
+        "preview": preview,
+    })
+
+
+# ---------------------------------------------------------------------------
 # 17. status
 # ---------------------------------------------------------------------------
 
@@ -1849,6 +2420,8 @@ def status(conn, args):
 
 ACTIONS = {
     "add-journal-entry": add_journal_entry,
+    "create-expense-allocation": create_expense_allocation,
+    "add-interfund-transfer": add_interfund_transfer,
     "update-journal-entry": update_journal_entry,
     "get-journal-entry": get_journal_entry,
     "list-journal-entries": list_journal_entries,
@@ -1859,11 +2432,14 @@ ACTIONS = {
     "duplicate-journal-entry": duplicate_journal_entry,
     "create-intercompany-je": create_intercompany_je,
     "add-recurring-template": add_recurring_template,
+    "add-expense-schedule": add_expense_schedule,
     "update-recurring-template": update_recurring_template,
     "list-recurring-templates": list_recurring_templates,
     "get-recurring-template": get_recurring_template,
     "process-recurring": process_recurring,
     "delete-recurring-template": delete_recurring_template,
+    "journal-month-end-close-preview": journal_month_end_close_preview,
+    "journal-run-month-end-close": journal_run_month_end_close,
     "status": status,
 }
 
@@ -1881,6 +2457,9 @@ def main():
     parser.add_argument("--entry-type")
     parser.add_argument("--remark")
     parser.add_argument("--lines")
+    parser.add_argument("--allocations")
+    parser.add_argument("--source-account-id")
+    parser.add_argument("--source-cost-center-id")
     parser.add_argument("--amended-from")
     # S3 CWIP hook (AVA-43): capitalise this JE's CWIP debit leg to an asset
     parser.add_argument("--cwip-asset-id")
@@ -1897,15 +2476,28 @@ def main():
     parser.add_argument("--target-company-id")
     parser.add_argument("--amount")
     parser.add_argument("--description")
+    parser.add_argument("--fund-dimension", default="fund")
+    parser.add_argument("--from-fund")
+    parser.add_argument("--to-fund")
+    parser.add_argument("--source-cash-account-id")
+    parser.add_argument("--target-cash-account-id")
+    parser.add_argument("--due-from-account-id")
+    parser.add_argument("--due-to-account-id")
 
     # Recurring template fields
     parser.add_argument("--template-id")
     parser.add_argument("--template-name")
+    parser.add_argument("--schedule-kind")
+    parser.add_argument("--periods")
+    parser.add_argument("--expense-account-id")
+    parser.add_argument("--balance-account-id")
     parser.add_argument("--frequency")
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
     parser.add_argument("--auto-submit", action="store_true", default=None)
     parser.add_argument("--as-of-date")
+    parser.add_argument("--month-end-date")  # floor-o040: alias for the close date
+    parser.add_argument("--template-ids")  # floor-o040: JSON array of template ids
     parser.add_argument("--resume-run-id")  # S1.3: resume a crashed billing_run
     parser.add_argument("--template-status")
 

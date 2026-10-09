@@ -86,7 +86,7 @@ _MEDIUM_FIELDS = {
     "description",
 }
 _JSON_FIELDS = {
-    "lines", "entries", "items", "allocations", "components", "operations",
+    "lines", "entries", "items", "allocations", "components", "operations", "scans",
     "periods", "metrics", "aging_buckets", "rules",
 }
 

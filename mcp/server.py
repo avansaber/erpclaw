@@ -4,7 +4,7 @@
 A thin transport that exposes the foundation action surface to any MCP-speaking
 runtime through three meta-tools over the ``db_query.py`` router:
 
-  - ``erpclaw_list_actions(module?)``      — discovery: the foundation catalog.
+  - ``erpclaw_list_actions(module?, query?, limit?)`` — bounded discovery.
   - ``erpclaw_describe_action(action_name)`` — grounding: one action's metadata.
   - ``erpclaw_action(action_name, args?, user_confirmed?)`` — the single
     execution tool; shells the router and returns its JSON verbatim.
@@ -21,6 +21,7 @@ router; Decimal/UUID/12-step-GL/immutable-GL stay enforced by the router.
 S0c) keeps backup/restore/credential/master-key actions off this surface.
 """
 import json
+import re
 
 # This package directory is named ``mcp`` (ADR-0024 / the plan's file layout),
 # which collides with the official ``mcp`` SDK. We therefore NEVER put
@@ -85,8 +86,9 @@ def _tool_specs():
             "description": (
                 "List the ERPClaw foundation actions available through this MCP "
                 "server. Returns each action's name, whether it is destructive "
-                "(requires confirmation), and a short description. Call this "
-                "first to ground any task in real, dispatchable actions."
+                "(requires confirmation), and a short description. Pass a short "
+                "query such as 'sales invoice' or 'payment' to keep discovery "
+                "compact; refine the query when results are truncated."
             ),
             "inputSchema": {
                 "type": "object",
@@ -95,6 +97,22 @@ def _tool_specs():
                         "type": "string",
                         "description": "Module scope (v1: foundation only).",
                         "default": "foundation",
+                    },
+                    "query": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100,
+                        "description": (
+                            "One to three business/action keywords used to "
+                            "filter action names and descriptions."
+                        ),
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 50,
+                        "default": 20,
+                        "description": "Maximum matches when query is present.",
                     },
                 },
                 "additionalProperties": False,
@@ -105,8 +123,9 @@ def _tool_specs():
             "name": DESCRIBE_ACTION,
             "description": (
                 "Describe one ERPClaw action: its description, whether it is "
-                "destructive, how to pass arguments, and whether a genuine "
-                "user confirmation is required before erpclaw_action will run it."
+                "destructive, its action-specific accepted JSON arguments and "
+                "requirements, and whether a genuine user confirmation is "
+                "required before erpclaw_action will run it."
             ),
             "inputSchema": {
                 "type": "object",
@@ -209,6 +228,91 @@ def _read_gate_sets():
     return dangerous, module_actions, onboarding_actions
 
 
+_DISCOVERY_SYNONYMS = {
+    "rent": (("expense",), ("profit", "loss"), ("general", "ledger")),
+    "spend": (("profit", "and", "loss"), ("expense",), ("spending",),
+              ("purchase",)),
+    "unpaid": (("outstanding",), ("overdue",)),
+}
+
+_DISCOVERY_FILLER_WORDS = frozenset({
+    "a", "an", "the", "that", "this", "what", "did", "we", "my",
+    "our", "on", "for", "from", "of", "to", "in", "me", "show",
+    "please",
+})
+
+
+def _discovery_tokens(value) -> tuple[str, ...]:
+    """Lowercase whole-word tokens with a small singular/plural fold."""
+    tokens = []
+    for token in re.findall(r"[a-z0-9]+", str(value).lower()):
+        if len(token) > 4 and token.endswith("ies"):
+            token = token[:-3] + "y"
+        elif (len(token) > 4 and token.endswith("s")
+              and not token.endswith(("ss", "us", "is"))):
+            token = token[:-1]
+        tokens.append(token)
+    return tuple(tokens)
+
+
+def _contains_tokens(haystack: tuple[str, ...], needle: tuple[str, ...]) -> bool:
+    """True when ``needle`` is a contiguous whole-token sequence."""
+    width = len(needle)
+    return any(haystack[index:index + width] == needle
+               for index in range(len(haystack) - width + 1))
+
+
+def _discovery_rank(entry: dict, variants: tuple[tuple[str, ...], ...]):
+    """Rank action-name exact/phrase/token matches ahead of descriptions."""
+    name_tokens = _discovery_tokens(entry.get("name", ""))
+    description_tokens = _discovery_tokens(entry.get("description", ""))
+    name_set = set(name_tokens)
+    combined = name_set | set(description_tokens)
+    best = None
+    for terms in variants:
+        if name_tokens == terms:
+            rank = 0
+        elif _contains_tokens(name_tokens, terms):
+            rank = 1
+        elif all(term in name_set for term in terms):
+            rank = 2
+        elif all(term in combined for term in terms):
+            rank = 3
+        else:
+            continue
+        best = rank if best is None else min(best, rank)
+    return best
+
+
+def _discovery_fallback_rank(entry: dict, terms: tuple[str, ...]):
+    """Rank entries matching any query term when all-word search is empty.
+
+    More independently matched query terms win.  Within that coverage, direct
+    words beat business synonyms and action-name matches beat descriptions.
+    """
+    matched = 0
+    direct_matches = 0
+    quality = 0
+    for term in dict.fromkeys(terms):
+        direct_rank = _discovery_rank(entry, ((term,),))
+        synonym_rank = _discovery_rank(
+            entry, _DISCOVERY_SYNONYMS.get(term, ()))
+        candidates = []
+        if direct_rank is not None:
+            candidates.append((direct_rank * 2, True))
+        if synonym_rank is not None:
+            candidates.append((synonym_rank * 2 + 1, False))
+        if not candidates:
+            continue
+        best_quality, is_direct = min(candidates)
+        matched += 1
+        direct_matches += int(is_direct)
+        quality += best_quality
+    if not matched:
+        return None
+    return (-matched, -direct_matches, quality)
+
+
 def call_list_actions(arguments: dict) -> dict:
     if arguments is None:
         arguments = {}
@@ -219,6 +323,19 @@ def call_list_actions(arguments: dict) -> dict:
     except confirm.ReadonlyModeInvalid:
         return confirm.invalid_mode()
     module = arguments.get("module", "foundation")
+    query = arguments.get("query")
+    limit = arguments.get("limit", 20)
+    if query is not None:
+        if not isinstance(query, str) or not query.strip():
+            return {"status": "error", "error": "invalid_query",
+                    "detail": "query must be a nonempty string."}
+        if len(query) > 100:
+            return {"status": "error", "error": "invalid_query",
+                    "detail": "query must be at most 100 characters."}
+        if (isinstance(limit, bool) or not isinstance(limit, int)
+                or not 1 <= limit <= 50):
+            return {"status": "error", "error": "invalid_limit",
+                    "detail": "limit must be an integer from 1 through 50."}
     result = skill_reader.list_actions(module)
     if isinstance(result, dict) and result.get("status") == "error":
         return result
@@ -234,7 +351,43 @@ def call_list_actions(arguments: dict) -> dict:
                 module_actions=module_actions,
                 onboarding_actions=onboarding_actions)
         ]
+    if query is not None:
+        query_words = tuple(re.findall(r"[a-z0-9]+", query.lower()))
+        if not query_words:
+            return {"status": "error", "error": "invalid_query",
+                    "detail": "query must contain a word or number."}
+        normalized_query = " ".join(query_words)
+        terms = tuple(
+            term for term in _discovery_tokens(normalized_query)
+            if term not in _DISCOVERY_FILLER_WORDS
+        )
+        if not terms:
+            return {"status": "error", "error": "invalid_query",
+                    "detail": "query must contain a searchable word or number."}
+        variants = [terms]
+        if len(terms) == 1:
+            variants.extend(_DISCOVERY_SYNONYMS.get(terms[0], ()))
+        variants = tuple(dict.fromkeys(variants))
+        ranked = []
+        for entry in result:
+            rank = _discovery_rank(entry, variants)
+            if rank is not None:
+                ranked.append((rank, str(entry.get("name", "")), entry))
+        if not ranked:
+            for entry in result:
+                rank = _discovery_fallback_rank(entry, terms)
+                if rank is not None:
+                    ranked.append((rank, str(entry.get("name", "")), entry))
+        ranked.sort(key=lambda item: (item[0], item[1]))
+        total_matches = len(ranked)
+        result = [item[2] for item in ranked[:limit]]
     envelope = {"status": "ok", "module": "foundation", "actions": result}
+    if query is not None:
+        envelope.update({
+            "query": normalized_query,
+            "total_matches": total_matches,
+            "truncated": total_matches > len(result),
+        })
     problems = skill_reader.discovery_problems()
     if problems:
         warnings = []
@@ -277,7 +430,20 @@ def call_describe_action(arguments: dict) -> dict:
                 module_actions=module_actions,
                 onboarding_actions=onboarding_actions):
             return confirm.refusal(action_name)
-    return skill_reader.describe_action(action_name)
+    result = skill_reader.describe_action(action_name)
+    if not isinstance(result, dict) or result.get("status") != "ok":
+        return result
+    try:
+        contract = tool_router.action_argument_contract(action_name)
+    except skill_reader.RouterGateUnavailable as exc:
+        return {
+            "status": "error",
+            "error": "parser_metadata_unavailable",
+            "detail": exc.reason,
+            "path": exc.path,
+        }
+    result.update(contract)
+    return result
 
 
 def call_action(arguments: dict) -> dict:

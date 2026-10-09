@@ -16,7 +16,7 @@ import sqlite3
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 
 # Add shared lib to path
 try:
@@ -747,6 +747,37 @@ def list_item_groups(conn, args):
 # 7. add-warehouse
 # ---------------------------------------------------------------------------
 
+def add_bin_location(conn, args):
+    """Create a stock-holding leaf beneath an owned warehouse group."""
+    if not getattr(args, "company_id", None) or not getattr(args, "parent_id", None):
+        err("--company-id and --parent-id are required")
+    name = getattr(args, "name", None)
+    if not isinstance(name, str) or not name.strip() or name != name.strip():
+        err("--name must be a nonempty bin name without surrounding whitespace")
+    wh = Table("warehouse")
+    query = (Q.from_(wh).select(wh.account_id).where(wh.id == P())
+             .where(wh.company_id == P()).where(wh.is_group == 1))
+    parent = conn.execute(query.get_sql(), (args.parent_id, args.company_id)).fetchone()
+    if not parent:
+        err("Parent must be a warehouse group belonging to --company-id")
+    account_id = getattr(args, "account_id", None) or parent["account_id"]
+    acct = Table("account")
+    query = (Q.from_(acct).select(acct.id).where(acct.id == P())
+             .where(acct.company_id == P()).where(acct.root_type == "asset")
+             .where(acct.account_type == "stock").where(acct.is_group == 0))
+    if not account_id or not conn.execute(query.get_sql(), (account_id, args.company_id)).fetchone():
+        err("An owned leaf stock account is required, through --account-id or the parent")
+    query = (Q.from_(wh).select(wh.id).where(wh.company_id == P())
+             .where(wh.parent_id == P()).where(wh.name == P()))
+    if conn.execute(query.get_sql(), (args.company_id, args.parent_id, name)).fetchone():
+        err("A warehouse with that name already exists beneath this parent")
+    bin_args = argparse.Namespace(**vars(args))
+    bin_args.account_id = account_id
+    bin_args.warehouse_type = "stores"
+    bin_args.is_group = "0"
+    add_warehouse(conn, bin_args)
+
+
 def add_warehouse(conn, args):
     """Create a warehouse."""
     if not args.name:
@@ -995,7 +1026,97 @@ def _guard_open_order_line(conn, entry_type, company_id, item_id):
                 f"delivered and the stock is not subtracted twice.")
 
 
-def add_stock_entry(conn, args):
+def add_location_resupply(conn, args):
+    """Create an ordinary transfer draft when a destination needs stock."""
+    required = ("company_id", "item_id", "warehouse_id", "target_warehouse_id",
+                "posting_date", "min_qty", "max_qty")
+    for name in required:
+        if getattr(args, name, None) in (None, ""):
+            err(f"--{name.replace('_', '-')} is required")
+    try:
+        day = datetime.strptime(args.posting_date, "%Y-%m-%d").date()
+        if day.isoformat() != args.posting_date:
+            raise ValueError
+    except (TypeError, ValueError):
+        err("--posting-date must be an ISO date")
+    limits = []
+    for name in ("min_qty", "max_qty"):
+        value = getattr(args, name)
+        try:
+            if isinstance(value, (bool, float)):
+                raise ValueError
+            amount = Decimal(str(value))
+            if (not amount.is_finite() or amount < 0 or amount > Decimal("1000000000")
+                    or amount != amount.quantize(Decimal("0.01"))):
+                raise ValueError
+        except (InvalidOperation, ValueError):
+            err(f"--{name.replace('_', '-')} must be a nonnegative quantity with at most two decimal places, up to 1000000000")
+        limits.append(amount)
+    minimum, maximum = limits
+    if maximum <= minimum:
+        err("--max-qty must be greater than --min-qty")
+    if args.warehouse_id == args.target_warehouse_id:
+        err("Source and target warehouses must differ")
+    co = Table("company")
+    query = Q.from_(co).select(co.id).where(co.id == P())
+    if not conn.execute(query.get_sql(), (args.company_id,)).fetchone():
+        err("Company not found")
+    wh = Table("warehouse")
+    for warehouse_id in (args.warehouse_id, args.target_warehouse_id):
+        query = (Q.from_(wh).select(wh.id).where(wh.id == P())
+                 .where(wh.company_id == P()).where(wh.is_group == 0))
+        if not conn.execute(query.get_sql(), (warehouse_id, args.company_id)).fetchone():
+            err("Both warehouses must be leaf warehouses belonging to --company-id")
+    # Items are shared catalogue records; stock is scoped through owned warehouses.
+    item = Table("item")
+    query = (Q.from_(item).select(item.id, item.is_stock_item, item.has_batch,
+                                 item.has_serial).where(item.id == P())
+             .where(item.status == "active"))
+    row = conn.execute(query.get_sql(), (args.item_id,)).fetchone()
+    if not row or not row["is_stock_item"]:
+        err("An active stock item is required")
+    if row["has_batch"] or row["has_serial"]:
+        err("Batch and serial items require an explicit stock-entry transfer")
+    destination = to_decimal(get_stock_balance(
+        conn, args.item_id, args.target_warehouse_id, args.posting_date)["qty"])
+    if destination >= minimum:
+        ok({"triggered": False, "destination_qty": str(destination)})
+    quantity = maximum - destination
+    if quantity <= 0 or quantity > Decimal("1000000000") or quantity != round_currency(quantity):
+        err("Required transfer quantity must be positive, at most two decimal places, and within 1000000000")
+    se, line = Table("stock_entry"), Table("stock_entry_item")
+    query = (Q.from_(se).join(line).on(line.stock_entry_id == se.id)
+             .select(se.id, se.naming_series).where(se.company_id == P())
+             .where(se.status == "draft").where(se.stock_entry_type == "material_transfer")
+             .where(line.item_id == P()).where(line.from_warehouse_id == P())
+             .where(line.to_warehouse_id == P()).orderby(se.id).limit(1))
+    existing = conn.execute(query.get_sql(), (args.company_id, args.item_id,
+                            args.warehouse_id, args.target_warehouse_id)).fetchone()
+    if existing:
+        ok({"stock_entry_id": existing["id"], "naming_series": existing["naming_series"],
+            "existing_draft": True, "triggered": True})
+    source = to_decimal(get_stock_balance(
+        conn, args.item_id, args.warehouse_id, args.posting_date)["qty"])
+    reservation = Table("stock_reservation_entry")
+    query = (Q.from_(reservation).join(wh).on(reservation.warehouse_id == wh.id)
+             .select(reservation.reserved_qty).where(wh.company_id == P())
+             .where(reservation.company_id == P())
+             .where(reservation.warehouse_id == P()).where(reservation.item_id == P())
+             .where(reservation.status == "active"))
+    reserved = sum((to_decimal(row["reserved_qty"]) for row in conn.execute(
+        query.get_sql(), (args.company_id, args.company_id, args.warehouse_id, args.item_id)).fetchall()),
+        Decimal("0"))
+    if source - reserved < quantity:
+        err("Source warehouse has insufficient unreserved stock for the requested maximum")
+    draft_args = argparse.Namespace(**vars(args))
+    draft_args.entry_type = "transfer"
+    draft_args.items = json.dumps([{"item_id": args.item_id, "qty": str(quantity),
+                                   "from_warehouse_id": args.warehouse_id,
+                                   "to_warehouse_id": args.target_warehouse_id}])
+    add_stock_entry(conn, draft_args)
+
+
+def add_stock_entry(conn, args, *, purpose_reference=None):
     """Create a stock entry in draft."""
     if not args.entry_type:
         err("--entry-type is required "
@@ -1034,6 +1155,10 @@ def add_stock_entry(conn, args):
     # the per-item loop rather than per line.
     purpose_ref_type = None
     purpose_ref_id = None
+    if purpose_reference is not None:
+        if entry_type != "material_transfer":
+            err("A putaway reference requires a transfer draft")
+        purpose_ref_type, purpose_ref_id = purpose_reference
 
     if entry_type == "send_to_subcontractor":
         # Materials move OUT to a supplier sub-store; that warehouse must be a
@@ -1237,6 +1362,154 @@ def add_stock_entry(conn, args):
          "total_incoming_value": str(round_currency(total_incoming)),
          "total_outgoing_value": str(round_currency(total_outgoing)),
          "value_difference": str(value_diff)})
+
+
+def _scan_company(conn, args):
+    company_id = getattr(args, "company_id", None)
+    if not company_id:
+        err("--company-id is required")
+    company = Table("company")
+    query = Q.from_(company).select(company.id).where(company.id == P())
+    if not conn.execute(query.get_sql(), (company_id,)).fetchone():
+        err("Company not found")
+    return company_id
+
+
+def _scan_decimal(value, label, *, allow_zero=False):
+    if not isinstance(value, str):
+        err(f"{label} must be a Decimal string")
+    try:
+        amount = Decimal(value)
+        if (not amount.is_finite() or amount < 0
+                or (not allow_zero and amount == 0)
+                or amount > Decimal("1000000000")
+                or amount != amount.quantize(Decimal("0.01"))):
+            err(f"{label} must be finite, within 1 billion and exact to cents")
+    except (InvalidOperation, ValueError):
+        err(f"Invalid {label}")
+    return str(amount.quantize(Decimal("0.01")))
+
+
+def _scan_item(conn, item_id):
+    item = Table("item")
+    query = Q.from_(item).select(
+        item.id, item.item_type, item.status, item.has_batch, item.has_serial,
+    ).where(item.id == P())
+    row = conn.execute(query.get_sql(), (item_id,)).fetchone()
+    if not row or row["status"] != "active" or row["item_type"] != "stock":
+        err("Barcode requires an active stock item")
+    if row["has_batch"] or row["has_serial"]:
+        err("Tracked stock needs the normal batch or serial document flow")
+    return row["id"]
+
+
+def add_item_barcode(conn, args):
+    """Register an explicit barcode for a company using the shared item catalogue."""
+    company_id = _scan_company(conn, args)
+    barcode = getattr(args, "barcode", None)
+    item_id = getattr(args, "item_id", None)
+    if not isinstance(barcode, str) or not barcode.strip() or barcode != barcode.strip():
+        err("--barcode must be a non-empty code without surrounding spaces")
+    if len(barcode) > 128 or any(ord(char) < 32 for char in barcode):
+        err("--barcode must be at most 128 characters without control characters")
+    _scan_item(conn, item_id)
+    mapping = Table("item_barcode")
+    existing = Q.from_(mapping).select(mapping.id).where(
+        (mapping.company_id == P()) & (mapping.barcode == P()))
+    if conn.execute(existing.get_sql(), (company_id, barcode)).fetchone():
+        err("Barcode already registered for this company")
+    mapping_id = str(uuid.uuid4())
+    query = Q.into(mapping).columns("id", "company_id", "item_id", "barcode").insert(
+        P(), P(), P(), P())
+    conn.execute(query.get_sql(), (mapping_id, company_id, item_id, barcode))
+    audit(conn, "erpclaw-inventory", "add-item-barcode", "item_barcode", mapping_id,
+          new_values={"company_id": company_id, "item_id": item_id, "barcode": barcode})
+    conn.commit()
+    ok({"item_barcode_id": mapping_id, "item_id": item_id, "barcode": barcode,
+        "company_id": company_id})
+
+
+def _scan_lines(conn, args, operation):
+    """Resolve all scan lines before the normal document writer is called."""
+    company_id = _scan_company(conn, args)
+    if getattr(args, "items", None):
+        err("Use --scans only, not --items")
+    try:
+        date = datetime.strptime(args.posting_date, "%Y-%m-%d")
+        if date.strftime("%Y-%m-%d") != args.posting_date:
+            err("--posting-date must be a valid YYYY-MM-DD date")
+    except (TypeError, ValueError, AttributeError):
+        err("--posting-date must be a valid YYYY-MM-DD date")
+    if (getattr(args, "dimensions", None) or getattr(args, "dimension_key", None)
+            or getattr(args, "dimension_value", None)):
+        err("Use the normal document flow for dimension-tagged stock")
+    scans = _parse_json_arg(getattr(args, "scans", None), "scans")
+    if not isinstance(scans, list) or not scans or len(scans) > 500:
+        err("--scans must be a non-empty JSON array of at most 500 lines")
+    lines, seen = [], set()
+    for scan in scans:
+        allowed = {"barcode", "qty"} | {
+            "receive": {"rate", "to_warehouse_id"},
+            "issue": {"from_warehouse_id"},
+            "transfer": {"from_warehouse_id", "to_warehouse_id"},
+            "count": {"valuation_rate", "warehouse_id"},
+        }[operation]
+        if not isinstance(scan, dict) or set(scan) - allowed:
+            err("Scan line has unsupported fields")
+        if not isinstance(scan.get("barcode"), str) or not scan["barcode"]:
+            err("Each scan needs a barcode string")
+        mapping = Table("item_barcode")
+        query = Q.from_(mapping).select(mapping.item_id).where(
+            (mapping.company_id == P()) & (mapping.barcode == P()))
+        row = conn.execute(query.get_sql(), (company_id, scan.get("barcode"))).fetchone()
+        if not row:
+            err("Barcode is not registered for this company")
+        item_id = _scan_item(conn, row["item_id"])
+        line = {"item_id": item_id, "qty": _scan_decimal(
+            scan.get("qty"), "qty", allow_zero=operation == "count")}
+        keys = ({"receive": ("to_warehouse_id",), "issue": ("from_warehouse_id",),
+                 "transfer": ("from_warehouse_id", "to_warehouse_id"),
+                 "count": ("warehouse_id",)})[operation]
+        for key in keys:
+            warehouse = Table("warehouse")
+            query = Q.from_(warehouse).select(warehouse.id).where(
+                (warehouse.id == P()) & (warehouse.company_id == P())
+                & (warehouse.is_group == 0))
+            if not conn.execute(query.get_sql(), (scan.get(key), company_id)).fetchone():
+                err(f"{key} must be a leaf warehouse belonging to this company")
+            line[key] = scan[key]
+        if operation == "transfer" and line[keys[0]] == line[keys[1]]:
+            err("Transfer source and destination must differ")
+        if operation in ("receive", "count"):
+            rate_key = "valuation_rate" if operation == "count" else "rate"
+            line[rate_key] = _scan_decimal(scan.get(rate_key), rate_key,
+                                           allow_zero=operation == "count")
+        elif "rate" in scan:
+            err("Issue and transfer rates come from existing stock valuation")
+        identity = (item_id,) + tuple(line[key] for key in keys)
+        if identity in seen:
+            err("Duplicate scanned item and warehouse line; combine its quantity")
+        seen.add(identity)
+        if operation in ("receive", "issue"):
+            _guard_open_order_line(conn, ENTRY_TYPE_MAP[operation], company_id, item_id)
+        lines.append(line)
+    return lines
+
+
+def add_scanned_stock_entry(conn, args):
+    """Create a normal receipt, issue or transfer draft from explicit scans."""
+    if getattr(args, "entry_type", None) not in ("receive", "issue", "transfer"):
+        err("--entry-type must be receive, issue or transfer")
+    lines = _scan_lines(conn, args, args.entry_type)
+    args.items = json.dumps(lines)
+    add_stock_entry(conn, args)
+
+
+def add_scanned_stock_count(conn, args):
+    """Create a normal physical-count draft from explicit scanned quantities."""
+    lines = _scan_lines(conn, args, "count")
+    args.items = json.dumps(lines)
+    add_stock_reconciliation(conn, args)
 
 
 def add_repack_stock_entry(conn, args):
@@ -3126,6 +3399,8 @@ def status_action(conn, args):
 
 def check_reorder(conn, args):
     """Find items whose current stock is at or below their reorder level."""
+    if getattr(args, "reorder_rules", None) is not None:
+        return _check_warehouse_reorder_rules(conn, args)
     company_id = resolve_company_id(conn,
                                     getattr(args, 'company_id', None),
                                     getattr(args, 'company_name', None))
@@ -3178,6 +3453,123 @@ def check_reorder(conn, args):
         "items_below_reorder": len(results),
         "items": results,
     })
+
+
+def _reorder_quantity(raw, field):
+    """Rule quantities are exact nonnegative text, with six-place precision."""
+    if isinstance(raw, bool) or not isinstance(raw, (str, int)):
+        err(f"{field} must be an exact non-negative quantity, supplied as text")
+    try:
+        value = Decimal(str(raw))
+    except (InvalidOperation, ValueError):
+        err(f"{field} must be an exact non-negative quantity, supplied as text")
+    if (not value.is_finite() or value < 0 or value > Decimal("1000000000000000000")
+            or value.as_tuple().exponent < -6):
+        err(f"{field} must be non-negative, at most 10^18, with at most six decimal places")
+    return value
+
+
+def _check_warehouse_reorder_rules(conn, args):
+    """Evaluate caller-managed warehouse rules without saving review state."""
+    company = getattr(args, "company_id", None)
+    company_name = getattr(args, "company_name", None)
+    if not company and not company_name:
+        err("--company-id is required for warehouse reorder rules")
+    company = resolve_scope_company(conn, company, company_name)
+    as_of = _parse_demand_date(getattr(args, "as_of_date", None), "--as-of-date")
+    rules = _parse_json_arg(args.reorder_rules, "reorder-rules")
+    if not isinstance(rules, list) or not 1 <= len(rules) <= 100:
+        err("--reorder-rules must contain between 1 and 100 rule objects")
+    allowed = {"item_id", "warehouse_id", "min_qty", "max_qty", "trigger",
+               "interval_days", "horizon_days", "history_days", "last_review_date"}
+    results = []
+    seen = set()
+    for rule in rules:
+        if not isinstance(rule, dict) or set(rule) - allowed:
+            err("Each reorder rule must be an object with only documented fields")
+        item_id = rule.get("item_id")
+        warehouse_id = rule.get("warehouse_id")
+        if any(not isinstance(value, str) or not value.strip() or len(value) > 200
+               for value in (item_id, warehouse_id)):
+            err("Each reorder rule needs item_id and warehouse_id")
+        key = (item_id, warehouse_id)
+        if key in seen:
+            err("Duplicate item and warehouse reorder rule")
+        seen.add(key)
+        minimum = _reorder_quantity(rule.get("min_qty"), "min_qty")
+        maximum = _reorder_quantity(rule.get("max_qty"), "max_qty")
+        if maximum < minimum:
+            err("max_qty must not be less than min_qty")
+        trigger = rule.get("trigger", "stock")
+        if trigger not in ("stock", "forecast"):
+            err("trigger must be stock or forecast")
+        interval = _parse_demand_days(rule.get("interval_days"), "interval_days")
+        horizon = _parse_demand_days(rule.get("horizon_days"), "horizon_days")
+        history = _parse_demand_days(rule.get("history_days", 30), "history_days")
+        last_review = rule.get("last_review_date")
+        if last_review is not None:
+            last_review = _parse_demand_date(last_review, "last_review_date")
+            if last_review > as_of:
+                err("last_review_date must not be later than --as-of-date")
+        try:
+            due_date = last_review + timedelta(days=interval) if last_review else as_of
+            due = as_of >= due_date
+            next_review = as_of + timedelta(days=interval) if due else due_date
+            history_start = as_of - timedelta(days=history - 1)
+        except OverflowError:
+            err("Review or history window exceeds the supported calendar")
+
+        item = Table("item")
+        item_q = (Q.from_(item).select(item.item_code, item.item_name)
+                  .where(item.id == P()).where(item.status == P())
+                  .where(item.is_stock_item == 1))
+        found = conn.execute(item_q.get_sql(), (item_id, "active")).fetchone()
+        if not found:
+            err(f"Active stock item {item_id} not found")
+        wh = Table("warehouse")
+        wh_q = (Q.from_(wh).select(wh.id).where(wh.id == P())
+                .where(wh.company_id == P()).where(wh.is_group == 0))
+        if not conn.execute(wh_q.get_sql(), (warehouse_id, company)).fetchone():
+            err(f"Warehouse {warehouse_id} is not a leaf store for this company")
+        sle = Table("stock_ledger_entry")
+        rows_q = (Q.from_(sle).join(wh).on(wh.id == sle.warehouse_id)
+                  .select(sle.actual_qty, sle.posting_date)
+                  .where(wh.company_id == P()).where(sle.item_id == P())
+                  .where(sle.warehouse_id == P()).where(sle.is_cancelled == 0)
+                  .where(sle.posting_date <= P()))
+        rows = conn.execute(rows_q.get_sql(),
+                            (company, item_id, warehouse_id, as_of.isoformat())).fetchall()
+        with localcontext() as ctx:
+            ctx.prec = 50
+            stock = Decimal("0")
+            consumed = Decimal("0")
+            for row in rows:
+                qty = to_decimal(str(row["actual_qty"]))
+                stock += qty
+                if qty < 0 and row["posting_date"] >= history_start.isoformat():
+                    consumed -= qty
+            demand = consumed * Decimal(horizon) / Decimal(history)
+            projected = stock - demand
+            available = projected if trigger == "forecast" else stock
+            triggered = due and available <= minimum and available < maximum
+            proposal = max(Decimal("0"), maximum - available) if triggered else Decimal("0")
+            def quantity(value):
+                return str(value.quantize(DEMAND_QTY_PRECISION, rounding=ROUND_HALF_UP))
+            results.append({
+                "item_id": item_id, "item_code": found["item_code"],
+                "item_name": found["item_name"], "warehouse_id": warehouse_id,
+                "min_qty": quantity(minimum), "max_qty": quantity(maximum),
+                "current_stock": quantity(stock), "projected_demand": quantity(demand),
+                "projected_stock": quantity(projected), "reorder_qty": quantity(proposal),
+                "trigger": trigger, "triggered": triggered, "review_due": due,
+                "review_due_date": due_date.isoformat(), "next_review_date": next_review.isoformat(),
+                "history_days": history, "horizon_days": horizon, "interval_days": interval,
+            })
+    proposals = [row for row in results if row["triggered"]]
+    ok({"company_id": company, "as_of_date": as_of.isoformat(),
+        "rules": results, "items": proposals, "items_below_reorder": len(proposals),
+        "basis": "posted_stock_and_outbound_history", "rules_saved": False,
+        "limits": "Caller-managed rules and review dates; no reservation or open-order netting, purchase creation or scheduling"})
 
 
 # ---------------------------------------------------------------------------
@@ -4231,6 +4623,100 @@ def _resolve_putaway_target(conn, company_id, item_id, item_group_value):
     return None
 
 
+def create_putaway_transfer(conn, args):
+    """Apply current receipt routing to an ordinary, unsubmitted transfer."""
+    company_id = getattr(args, "company_id", None)
+    receipt_id = getattr(args, "stock_entry_id", None)
+    posting_date = getattr(args, "posting_date", None)
+    if not company_id or not receipt_id or not posting_date:
+        err("--company-id, --stock-entry and --posting-date are required")
+    try:
+        if datetime.strptime(posting_date, "%Y-%m-%d").date().isoformat() != posting_date:
+            raise ValueError
+    except (ValueError, TypeError):
+        err("--posting-date must be an ISO date")
+    se, line, item, group = (Table(name) for name in
+                             ("stock_entry", "stock_entry_item", "item", "item_group"))
+    query = (Q.from_(se).select(se.id, se.posting_date).where(se.id == P())
+             .where(se.company_id == P()).where(se.status == "submitted")
+             .where(se.stock_entry_type == "material_receipt"))
+    receipt = conn.execute(query.get_sql(), (receipt_id, company_id)).fetchone()
+    if not receipt:
+        err("An owned submitted material receipt is required")
+    if posting_date < receipt["posting_date"]:
+        err("Putaway posting date cannot precede the receipt")
+    query = (Q.from_(se).select(se.id, se.naming_series, se.status)
+             .where(se.company_id == P()).where(se.purpose_reference_type == "putaway_receipt")
+             .where(se.purpose_reference_id == P()).where(se.status.isin(("draft", "submitted")))
+             .orderby(se.id).limit(1))
+    existing = conn.execute(query.get_sql(), (company_id, receipt_id)).fetchone()
+    if existing:
+        ok({"stock_entry_id": existing["id"], "naming_series": existing["naming_series"],
+            "existing_transfer": True, "transfer_status": existing["status"]})
+    query = (Q.from_(line).join(se).on(line.stock_entry_id == se.id)
+             .join(item).on(line.item_id == item.id).left_join(group)
+             .on((item.item_group_id == group.id)
+                 & ((group.company_id == P()) | group.company_id.isnull()))
+             .select(line.item_id, line.quantity, line.to_warehouse_id, item.standard_rate,
+                     item.has_batch, item.has_serial, item.is_stock_item, item.status,
+                     group.name.as_("group_name"))
+             .where(se.id == P()).where(se.company_id == P()).orderby(line.id))
+    rows = conn.execute(query.get_sql(), (company_id, receipt_id, company_id)).fetchall()
+    moves, required = [], {}
+    wh, rule, reservation = Table("warehouse"), Table("putaway_rule"), Table("stock_reservation_entry")
+    for row in rows:
+        match = None
+        for column, value in ((rule.match_item_id, row["item_id"]),
+                              (rule.match_item_group, row["group_name"])):
+            if not value:
+                continue
+            query = (Q.from_(rule).select(rule.target_warehouse_id).where(rule.company_id == P())
+                     .where(rule.is_active == 1).where(column == P())
+                     .orderby(rule.priority, rule.created_at, rule.id).limit(1))
+            match = conn.execute(query.get_sql(), (company_id, value)).fetchone()
+            if match:
+                break
+        if not match or match["target_warehouse_id"] == row["to_warehouse_id"]:
+            continue
+        source_id, target_id = row["to_warehouse_id"], match["target_warehouse_id"]
+        for warehouse_id in (source_id, target_id):
+            query = (Q.from_(wh).select(wh.id).where(wh.id == P())
+                     .where(wh.company_id == P()).where(wh.is_group == 0))
+            if not conn.execute(query.get_sql(), (warehouse_id, company_id)).fetchone():
+                err("Every putaway source and target must be an owned leaf warehouse")
+        if (row["has_batch"] or row["has_serial"] or not row["is_stock_item"]
+                or row["status"] != "active"):
+            err("Putaway requires active untracked stock items; use an explicit transfer for batches or serials")
+        try:
+            quantity, rate = Decimal(row["quantity"]), Decimal(row["standard_rate"])
+            if (not quantity.is_finite() or quantity <= 0 or quantity > Decimal("1000000000")
+                    or quantity != round_currency(quantity) or not rate.is_finite()
+                    or rate < 0 or rate > Decimal("1000000000000")):
+                raise ValueError
+        except (ValueError, InvalidOperation):
+            err("Putaway quantities and item rates must be finite, nonnegative and within supported limits")
+        key = (row["item_id"], source_id)
+        required[key] = required.get(key, Decimal("0")) + quantity
+        moves.append({"item_id": row["item_id"], "qty": str(quantity),
+                      "from_warehouse_id": source_id, "to_warehouse_id": target_id})
+    if not moves:
+        ok({"created": False, "reason": "No received line needs a putaway transfer"})
+    for (item_id, source_id), quantity in required.items():
+        available = to_decimal(get_stock_balance(conn, item_id, source_id, posting_date)["qty"])
+        query = (Q.from_(reservation).join(wh).on(reservation.warehouse_id == wh.id)
+                 .select(reservation.reserved_qty).where(reservation.company_id == P())
+                 .where(wh.company_id == P()).where(reservation.item_id == P())
+                 .where(reservation.warehouse_id == P()).where(reservation.status == "active"))
+        reserved = sum((to_decimal(r["reserved_qty"]) for r in conn.execute(
+            query.get_sql(), (company_id, company_id, item_id, source_id)).fetchall()), Decimal("0"))
+        if quantity > Decimal("1000000000") or available - reserved < quantity:
+            err("Putaway source has insufficient unreserved stock for all routed lines")
+    transfer_args = argparse.Namespace(**vars(args))
+    transfer_args.entry_type = "transfer"
+    transfer_args.items = json.dumps(moves)
+    add_stock_entry(conn, transfer_args, purpose_reference=("putaway_receipt", receipt_id))
+
+
 def apply_putaway_on_receipt(conn, args):
     """Compute putaway routing for a submitted material_receipt stock entry.
 
@@ -4867,6 +5353,9 @@ def remove_item_alternative(conn, args):
 # ---------------------------------------------------------------------------
 
 ACTIONS = {
+    "add-item-barcode": add_item_barcode,
+    "add-scanned-stock-entry": add_scanned_stock_entry,
+    "add-scanned-stock-count": add_scanned_stock_count,
     "add-item": add_item,
     "update-item": update_item,
     "get-item": get_item,
@@ -4875,9 +5364,11 @@ ACTIONS = {
     "add-item-group": add_item_group,
     "list-item-groups": list_item_groups,
     "add-warehouse": add_warehouse,
+    "add-bin-location": add_bin_location,
     "update-warehouse": update_warehouse,
     "list-warehouses": list_warehouses,
     "add-stock-entry": add_stock_entry,
+    "add-location-resupply": add_location_resupply,
     "add-repack-stock-entry": add_repack_stock_entry,
     "add-material-consumption": add_material_consumption,
     "get-stock-entry": get_stock_entry,
@@ -4924,6 +5415,7 @@ ACTIONS = {
     "update-putaway-rule": update_putaway_rule,
     "delete-putaway-rule": delete_putaway_rule,
     "apply-putaway-on-receipt": apply_putaway_on_receipt,
+    "create-putaway-transfer": create_putaway_transfer,
     "create-pick-list": create_pick_list,
     "add-pick-list-item": add_pick_list_item,
     "submit-pick-list": submit_pick_list,
@@ -4944,6 +5436,8 @@ ACTIONS = {
 def main():
     parser = SafeArgumentParser(description="ERPClaw Inventory Skill")
     parser.add_argument("--action", required=True, choices=sorted(ACTIONS.keys()))
+    parser.add_argument("--barcode")
+    parser.add_argument("--scans")
     parser.add_argument("--db-path", default=None)
 
     # Item fields
@@ -4959,6 +5453,7 @@ def main():
     parser.add_argument("--standard-rate")
     parser.add_argument("--reorder-level")
     parser.add_argument("--reorder-qty")
+    parser.add_argument("--reorder-rules")
     parser.add_argument("--status", dest="item_status")
 
     # Item group

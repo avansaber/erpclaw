@@ -2,6 +2,22 @@
 
 All notable changes to the ERPClaw foundation skill.
 
+## [4.15.5] — 2026-10-08 — company-safe workflows and stronger reporting
+
+### Added
+- Consolidation translation previews, benefit-liability calculations and contract-balance reporting.
+- Balanced reciprocal fund-transfer drafts and commitment worksheets.
+- Company-scoped supplier quotation drafts with bounded snapshots and opaque audit references.
+- Item barcodes for inventory records.
+
+### Fixed
+- Ordinary audit-log reads are scoped to the selected company and legacy or non-company rows fail closed outside the administrator-only system path.
+- Party-ledger behavior is corrected for the accepted accounting flows.
+- Action discovery keeps exact all-word matches and adds stable ranking plus a bounded multi-word fallback.
+
+### Database
+- Foundation migrations 059 and 060 add item barcodes and the company-scoped supplier quotation draft store. They are idempotent and preserve existing business data.
+
 ## [4.15.4] — 2026-10-06 — correct trust and WIP reports, close readiness
 
 ### Fixed — money

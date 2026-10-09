@@ -10,6 +10,7 @@ Output: JSON to stdout, exit 0 on success, exit 1 on error.
 """
 import argparse
 import json
+import re
 import os
 import subprocess
 import sys
@@ -1126,6 +1127,74 @@ def convert_quotation_to_so(conn, args):
 # 11. add-sales-order
 # ---------------------------------------------------------------------------
 
+def add_inbox_order(conn, args):
+    """Save reviewed inbox fields as a sales-order draft without transport."""
+    raw = getattr(args, "order_json", None)
+    if not isinstance(raw, str) or not raw or len(raw) > 5000:
+        err("--order-json must be a JSON object of at most 5000 characters")
+    try:
+        order = json.loads(raw)
+    except (ValueError, TypeError):
+        err("Invalid JSON for --order-json")
+    required = {"source_message_id", "customer_id", "company_id", "posting_date", "items"}
+    if not isinstance(order, dict) or not required.issubset(order):
+        err("--order-json requires source_message_id, customer_id, company_id, posting_date and items")
+    if set(order) - (required | {"delivery_date"}):
+        err("--order-json contains unsupported fields; inbox entry saves drafts only")
+    for key in ("source_message_id", "customer_id", "company_id"):
+        value = order[key]
+        if not isinstance(value, str) or not value.strip() or len(value) > 200:
+            err(f"{key} must be nonempty text of at most 200 characters")
+    if getattr(args, "company_id", None) != order["company_id"]:
+        err("--company-id must match the reviewed order's company_id")
+    for key in ("posting_date", "delivery_date"):
+        value = order.get(key)
+        if key == "delivery_date" and value is None:
+            continue
+        try:
+            if not isinstance(value, str) or date_type.fromisoformat(value).isoformat() != value:
+                raise ValueError()
+        except ValueError:
+            err(f"{key} must be an ISO date (YYYY-MM-DD)")
+    if order.get("delivery_date") and order["delivery_date"] < order["posting_date"]:
+        err("delivery_date must not precede posting_date")
+    query = (Q.from_(_t_customer).select(_t_customer.status, _t_customer.company_id)
+             .where(_t_customer.id == P()))
+    customer = conn.execute(query.get_sql(), (order["customer_id"],)).fetchone()
+    if customer is None or customer["status"] != "active":
+        err("customer_id must identify an active customer by exact ID")
+    if customer["company_id"] != order["company_id"]:
+        err("Customer belongs to another company")
+    items = order["items"]
+    if not isinstance(items, list) or not items or len(items) > 100:
+        err("items must be a nonempty array of at most 100 lines")
+    for index, line in enumerate(items):
+        if not isinstance(line, dict) or set(line) != {"item_id", "qty", "rate"}:
+            err(f"Item {index}: requires only item_id, qty and rate")
+        item_id = line["item_id"]
+        if not isinstance(item_id, str) or not item_id.strip() or len(item_id) > 200:
+            err(f"Item {index}: item_id must be nonempty text")
+        query = Q.from_(_t_item).select(_t_item.status).where(_t_item.id == P())
+        item = conn.execute(query.get_sql(), (item_id,)).fetchone()
+        if item is None or item["status"] == "disabled":
+            err(f"Item {index}: item_id must identify an active item")
+        for key in ("qty", "rate"):
+            value = line[key]
+            if (not isinstance(value, str)
+                    or re.fullmatch(r"[0-9]{1,12}(?:\.[0-9]{1,2})?", value) is None
+                    or Decimal(value) <= 0):
+                err(f"Item {index}: {key} must be positive Decimal text with at most two decimal places")
+        if round_currency(Decimal(line["qty"]) * Decimal(line["rate"])) <= 0:
+            err(f"Item {index}: line amount must be at least 0.01")
+    draft_args = argparse.Namespace(
+        customer_id=order["customer_id"], company_id=order["company_id"],
+        posting_date=order["posting_date"], delivery_date=order.get("delivery_date"),
+        items=json.dumps(items), tax_template_id=None,
+        _inbox_source_message_id=order["source_message_id"],
+    )
+    add_sales_order(conn, draft_args)
+
+
 def add_sales_order(conn, args):
     """Create a sales order in draft."""
     if not args.customer_id:
@@ -1195,8 +1264,13 @@ def add_sales_order(conn, args):
              row["warehouse_id"]),
         )
 
+    audit_values = {"customer_id": args.customer_id, "grand_total": str(grand_total)}
+    source_message_id = getattr(args, "_inbox_source_message_id", None)
+    if source_message_id is not None:
+        audit_values.update({"intake_source": "reviewed-inbox-fields",
+                             "source_message_id": source_message_id})
     audit(conn, "erpclaw-selling", "add-sales-order", "sales_order", so_id,
-           new_values={"customer_id": args.customer_id, "grand_total": str(grand_total)})
+          new_values=audit_values)
     conn.commit()
     ok({"sales_order_id": so_id, "total_amount": str(total_amount),
          "tax_amount": str(tax_amount), "grand_total": str(grand_total)})
@@ -6413,6 +6487,7 @@ ACTIONS = {
     "submit-quotation": submit_quotation,
     "convert-quotation-to-so": convert_quotation_to_so,
     "add-sales-order": add_sales_order,
+    "add-inbox-order": add_inbox_order,
     "update-sales-order": update_sales_order,
     "get-sales-order": get_sales_order,
     "list-sales-orders": list_sales_orders,
@@ -6516,6 +6591,7 @@ def main():
 
     # Sales order fields
     parser.add_argument("--sales-order-id")
+    parser.add_argument("--order-json")
     parser.add_argument("--delivery-date")
 
     # Delivery note fields

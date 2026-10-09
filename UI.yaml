@@ -8429,6 +8429,12 @@ action_map:
     default_sort: timestamp
     default_sort_dir: desc
     searchable: false
+    filters:
+    - key: company_id
+      label: Company
+      type: entity_lookup
+      entity: company
+      required: true
   setup-chart-of-accounts:
     component: WizardFlow
     entity: account

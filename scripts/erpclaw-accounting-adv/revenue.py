@@ -8,8 +8,8 @@ import os
 import re
 import sys
 import uuid
-from datetime import datetime, timezone
-from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
+from datetime import date, datetime, timezone
+from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP, localcontext
 
 try:
     import importlib.util
@@ -588,6 +588,84 @@ def modify_contract(conn, args):
 # ===========================================================================
 # 11. calculate-revenue-schedule
 # ===========================================================================
+def calculate_revenue_progress(conn, args):
+    """Calculate an operator's cumulative progress estimate without posting."""
+    company_id = getattr(args, "company_id", None)
+    _validate_company(conn, company_id)
+    obligation_id = getattr(args, "obligation_id", None)
+    if not obligation_id:
+        err("--obligation-id is required")
+    obligations = Table("advacct_performance_obligation")
+    contracts = Table("advacct_revenue_contract")
+    query = (Q.from_(obligations).join(contracts)
+             .on(contracts.id == obligations.contract_id)
+             .select(obligations.star)
+             .where(obligations.id == P())
+             .where(obligations.company_id == P())
+             .where(contracts.company_id == P()))
+    row = conn.execute(query.get_sql(),
+                       (obligation_id, company_id, company_id)).fetchone()
+    if row is None:
+        err("Performance obligation and contract must belong to the selected company")
+    obligation = row_to_dict(row)
+    if obligation["recognition_method"] != "over_time":
+        err("Progress calculation requires an over_time performance obligation")
+    basis = obligation["recognition_basis"]
+    if basis not in ("input", "output"):
+        err("Progress calculation requires an input or output recognition basis; "
+            "the existing time-based schedule is unchanged")
+    price = _money(obligation["allocated_price"])
+    prior = _money(getattr(args, "recognized_to_date", None))
+    if price is None or price < 0:
+        err("The performance obligation has an invalid allocated price")
+    if prior is None or prior < 0 or prior > price:
+        err("--recognized-to-date must be a non-negative two-decimal amount "
+            "no greater than the allocated price")
+
+    names = (("costs_incurred", "estimated_total_costs") if basis == "input"
+             else ("completed_units", "total_units"))
+    unused = (("completed_units", "total_units") if basis == "input"
+              else ("costs_incurred", "estimated_total_costs"))
+    if any(getattr(args, name, None) is not None for name in unused):
+        err(f"Use only the progress inputs for the stored {basis} recognition basis")
+    values = []
+    for name in names:
+        raw = getattr(args, name, None)
+        if basis == "input":
+            value = _money(raw)
+        elif isinstance(raw, str) and re.fullmatch(r"[0-9]+(?:\.[0-9]{1,6})?", raw):
+            value = Decimal(raw)
+        else:
+            value = None
+        if value is None or value < 0:
+            err(f"--{name.replace('_', '-')} must be a non-negative "
+                + ("two-decimal amount" if basis == "input" else "quantity with at most six decimals"))
+        values.append(value)
+    completed, total = values
+    if total <= 0:
+        err(f"--{names[1].replace('_', '-')} must be greater than zero")
+    if basis == "output" and completed > total:
+        err("--completed-units cannot exceed --total-units")
+    with localcontext() as context:
+        context.prec = max(50, sum(len(value.as_tuple().digits)
+                                  for value in (price, completed, total)) + 10)
+        fraction = min(Decimal("1"), completed / total)
+        target = (price * fraction).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        catch_up = (target - prior).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        percentage = (fraction * 100).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
+    ok({"obligation_id": obligation_id, "company_id": company_id,
+        "recognition_basis": basis, "result_kind": "calculation_only", "posted": False,
+        "progress_inputs": {name: str(value) for name, value in zip(names, values)},
+        "progress_percent": str(percentage), "allocated_price": str(price.quantize(Decimal("0.01"))),
+        "operator_recognized_to_date": str(prior.quantize(Decimal("0.01"))),
+        "cumulative_revenue_target": str(target), "current_period_catch_up": str(catch_up),
+        "remaining_allocated_revenue": str(price - target),
+        "input_cost_overrun": basis == "input" and completed > total,
+        "review_required": "Operator confirms over-time eligibility, allocation, eligible costs "
+                           "or output units, and prior recognized revenue. Negative catch-up needs "
+                           "a reviewed reversal; this calculation creates no schedule or ledger entry."})
+
+
 def calculate_revenue_schedule(conn, args):
     ob_id = getattr(args, "obligation_id", None)
     if not ob_id:
@@ -1012,9 +1090,111 @@ def recognize_schedule_entry(conn, args):
 
 
 # ---------------------------------------------------------------------------
+# Posted contract balance presentation
+# ---------------------------------------------------------------------------
+def contract_balance_report(conn, args):
+    """Present one net contract position per project without netting contracts."""
+    company_id = getattr(args, "company_id", None)
+    c = Table("company")
+    company = conn.execute(Q.from_(c).select(c.default_currency)
+                           .where(c.id == P()).get_sql(), (company_id,)).fetchone()
+    if not company:
+        err("--company-id must name an existing company")
+    as_of = getattr(args, "as_of_date", None)
+    try:
+        if date.fromisoformat(as_of).isoformat() != as_of:
+            raise ValueError("noncanonical date")
+    except (TypeError, ValueError):
+        err("--as-of-date must be YYYY-MM-DD")
+    selected = {
+        "contract_asset": getattr(args, "contract_asset_account_id", None),
+        "contract_liability": getattr(args, "contract_liability_account_id", None),
+        "receivable": getattr(args, "receivable_account_id", None),
+    }
+    if not selected["contract_asset"] or not selected["contract_liability"]:
+        err("--contract-asset-account-id and --contract-liability-account-id are required")
+    account_ids = [value for value in selected.values() if value]
+    if len(account_ids) != len(set(account_ids)):
+        err("The selected account roles must use distinct accounts")
+    account = Table("account")
+    for role, account_id in selected.items():
+        if not account_id:
+            continue
+        row = conn.execute(Q.from_(account).select(account.root_type, account.is_group)
+                           .where(account.id == P()).where(account.company_id == P())
+                           .get_sql(), (account_id, company_id)).fetchone()
+        root = "liability" if role == "contract_liability" else "asset"
+        if not row or row["root_type"] != root or row["is_group"]:
+            err(f"The {role} account must be a {root} leaf account of this company")
+    project = Table("project")
+    projects = {row["id"]: row["project_name"] for row in conn.execute(
+        Q.from_(project).select(project.id, project.project_name)
+        .where(project.company_id == P()).get_sql(), (company_id,)).fetchall()}
+    gl = Table("gl_entry")
+    ledger = conn.execute(Q.from_(gl).select(
+        gl.account_id, gl.project_id, gl.debit_base, gl.credit_base)
+        .where(gl.account_id.isin([P() for _ in account_ids]))
+        .where(gl.is_cancelled == 0).where(gl.posting_date <= P()).get_sql(),
+        tuple(account_ids) + (as_of,)).fetchall()
+    roles = {value: key for key, value in selected.items() if value}
+    balances = {}
+    with localcontext() as context:
+        context.prec = 60
+        for row in ledger:
+            project_id = row["project_id"]
+            if project_id not in projects:
+                err("Selected posted balances contain a missing or foreign project tag; "
+                    "reconcile contract tagging before using this report")
+            amounts = []
+            for column in ("debit_base", "credit_base"):
+                raw = row[column]
+                if not isinstance(raw, str) or not re.fullmatch(
+                        r"[0-9]{1,24}(?:\.[0-9]{1,6})?", raw):
+                    err("Selected posted balances contain invalid base-currency money")
+                amounts.append(Decimal(raw))
+            values = balances.setdefault(project_id, {
+                "contract_asset": Decimal("0"), "contract_liability": Decimal("0"),
+                "receivable": Decimal("0")})
+            role = roles[row["account_id"]]
+            values[role] += (amounts[1] - amounts[0] if role == "contract_liability"
+                             else amounts[0] - amounts[1])
+        rows = []
+        asset_total = liability_total = receivable_total = Decimal("0")
+        for project_id, values in sorted(balances.items()):
+            net = (values["contract_asset"] - values["contract_liability"]).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP)
+            receivable = values["receivable"].quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            asset = max(net, Decimal("0"))
+            liability = max(-net, Decimal("0"))
+            asset_total += asset
+            liability_total += liability
+            receivable_total += receivable
+            rows.append({"project_id": project_id, "contract_label": projects[project_id],
+                         "net_contract_position": _contract_balance_amount(net),
+                         "contract_asset": _contract_balance_amount(asset), "contract_liability": _contract_balance_amount(liability),
+                         "receivable": _contract_balance_amount(receivable)})
+        ok({"report": "contract_balances", "company_id": company_id, "as_of_date": as_of,
+            "currency": company["default_currency"], "account_mapping": selected,
+            "contract_grain": "operator-designated project_id", "rows": rows,
+            "gross_contract_assets": _contract_balance_amount(asset_total),
+            "gross_contract_liabilities": _contract_balance_amount(liability_total),
+            "receivables": _contract_balance_amount(receivable_total),
+            "basis": "Currently active posted base-currency balances through the selected date; "
+                     "each contract position is rounded half up to cents before gross presentation",
+            "scope_note": "Use one project tag per contract and designated accounts only. "
+                          "This report neither determines unconditional rights nor reclassifies "
+                          "receivables, registers account types or posts ledger entries."})
+
+
+def _contract_balance_amount(value):
+    return format(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), ".2f")
+
+
+# ---------------------------------------------------------------------------
 # Action registry
 # ---------------------------------------------------------------------------
 ACTIONS = {
+    "contract-balance-report": contract_balance_report,
     "add-revenue-contract": add_revenue_contract,
     "update-revenue-contract": update_revenue_contract,
     "get-revenue-contract": get_revenue_contract,
@@ -1027,6 +1207,7 @@ ACTIONS = {
     "list-variable-considerations": list_variable_considerations,
     "modify-contract": modify_contract,
     "calculate-revenue-schedule": calculate_revenue_schedule,
+    "calculate-revenue-progress": calculate_revenue_progress,
     "generate-revenue-entries": generate_revenue_entries,
     "update-schedule-amounts": update_schedule_amounts,
     "recognize-schedule-entry": recognize_schedule_entry,

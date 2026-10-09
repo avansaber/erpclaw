@@ -49,11 +49,11 @@ from erpclaw_lib.db import get_connection, DEFAULT_DB_PATH, get_dialect, integri
 from erpclaw_lib.decimal_utils import to_decimal
 from erpclaw_lib.validation import check_input_lengths
 from erpclaw_lib.response import ok, err, row_to_dict
-from erpclaw_lib.audit import audit
+from erpclaw_lib.audit import audit, scope_columns_present
 from erpclaw_lib.query import Q, P, Table, Field, fn, now, dynamic_update, insert_or_ignore
 from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
 from erpclaw_lib import custom_fields as cf
-from erpclaw_lib import actor, company_scope
+from erpclaw_lib import actor, authority_gate, company_scope
 from erpclaw_lib.vendor.pypika import Order
 from erpclaw_lib.vendor.pypika.terms import LiteralValue
 
@@ -717,11 +717,49 @@ def seed_defaults(conn, args):
     ok(counts)
 
 
-def get_audit_log(conn, args):
-    """Query audit log with optional filters."""
+AUDIT_LOG_DEFAULT_LIMIT = 50
+AUDIT_LOG_MAX_LIMIT = 1000
+
+
+def _audit_log_limit(args):
+    raw = getattr(args, "limit", None)
+    if raw is None:
+        return AUDIT_LOG_DEFAULT_LIMIT
+    if isinstance(raw, bool):
+        err("--limit must be a positive integer no greater than 1000")
+    try:
+        limit = int(raw)
+    except (TypeError, ValueError):
+        err("--limit must be a positive integer no greater than 1000")
+    if str(limit) != str(raw).strip() or not 1 <= limit <= AUDIT_LOG_MAX_LIMIT:
+        err("--limit must be a positive integer no greater than 1000")
+    return limit
+
+
+def _audit_scope_token(company_id):
+    if not isinstance(company_id, str) or not company_id or "," in company_id:
+        err("--company-id must be a non-empty comma-free identifier")
+    return company_id
+
+
+def _audit_log_entries(conn, args, company_id=None):
     t = Table("audit_log")
     q = Q.from_(t).select(t.star)
     params = []
+    if company_id is not None:
+        if not scope_columns_present(conn):
+            err("AUDIT_SCOPE_UNAVAILABLE")
+        # The writer stores a sorted, comma-free exact-token set. Surround
+        # both sides with commas so company "co-1" cannot match "co-10".
+        # Keep this predicate in SQL before ordering and limiting; foreign
+        # JSON therefore is neither fetched nor decoded.
+        q = q.where(t.scope_status == P())
+        params.append(company_scope.IN_SCOPE)
+        delimited = "(',' || COALESCE(\"scope_company_ids\", '') || ',')"
+        q = q.where(LiteralValue(
+            "REPLACE(" + delimited + ", ',' || ? || ',', '') <> "
+            + delimited))
+        params.append(_audit_scope_token(company_id))
     if args.entity_type:
         q = q.where(t.entity_type == P())
         params.append(args.entity_type)
@@ -737,8 +775,9 @@ def get_audit_log(conn, args):
     if args.to_date:
         q = q.where(t.timestamp <= P())
         params.append(args.to_date)
-    limit = int(args.limit or 50)
-    q = q.orderby(t.timestamp, order=Order.desc).limit(limit)
+    q = q.orderby(
+        t.timestamp, order=Order.desc
+    ).orderby(t.id, order=Order.desc).limit(_audit_log_limit(args))
 
     rows = conn.execute(q.get_sql(), params).fetchall()
     entries = []
@@ -750,6 +789,21 @@ def get_audit_log(conn, args):
         if entry.get("new_values"):
             entry["new_values"] = json.loads(entry["new_values"])
         entries.append(entry)
+    return entries
+
+
+def get_audit_log(conn, args):
+    """Return audit rows visible to one explicitly selected company."""
+    company_id = getattr(args, "company_id", None)
+    if not company_id:
+        err("--company-id is required")
+    entries = _audit_log_entries(conn, args, company_id=company_id)
+    ok({"entries": entries})
+
+
+def get_system_audit_log(conn, args):
+    """Return the global audit trail behind the all-company authority gate."""
+    entries = _audit_log_entries(conn, args)
     ok({"entries": entries})
 
 
@@ -3508,6 +3562,7 @@ ACTIONS = {
     "add-uom-conversion": add_uom_conversion,
     "seed-defaults": seed_defaults,
     "get-audit-log": get_audit_log,
+    "get-system-audit-log": get_system_audit_log,
     "get-audit-checkpoint": get_audit_checkpoint,
     "get-schema-version": get_schema_version,
     "update-regional-settings": update_regional_settings,
@@ -3575,7 +3630,9 @@ def main():
     parser.add_argument("--currency", default=None)
     parser.add_argument("--country", default=None)
     parser.add_argument("--industry", default=None)
-    parser.add_argument("--company-id", default=None)
+    parser.add_argument(
+        "--company-id", default=None,
+        help="Company scope (required by company-scoped actions such as get-audit-log)")
     parser.add_argument("--tax-id", default=None)
     parser.add_argument("--fiscal-year-start-month", type=int, default=None)
     parser.add_argument("--default-receivable-account-id", default=None)
@@ -3738,7 +3795,30 @@ def main():
     conn = get_connection(db_path)
 
     try:
-        ACTIONS[args.action](conn, args)
+        action_fn = ACTIONS[args.action]
+        if args.action in ("get-audit-log", "get-system-audit-log"):
+            raw = sys.argv[1:]
+            authority_gate.run(
+                conn, args.action, raw,
+                lambda handle: action_fn(handle, args),
+                option_strings=[
+                    option
+                    for parser_action in parser._actions
+                    for option in parser_action.option_strings
+                ],
+                repeatable_options=[
+                    option
+                    for parser_action in parser._actions
+                    if isinstance(parser_action, argparse._AppendAction)
+                    for option in parser_action.option_strings
+                ],
+            )
+        else:
+            action_fn(conn, args)
+    except authority_gate.AuthorityRefusal as refusal:
+        conn.rollback()
+        code = refusal.args[0] if refusal.args else "AUTHORIZATION_REFUSED"
+        err(code, suggestion=authority_gate.SUGGESTIONS.get(code))
     except Exception as e:
         err(str(e))
     finally:

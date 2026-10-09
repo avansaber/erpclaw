@@ -43,7 +43,7 @@ each ledger leg. Written on the SAME cursor inside the SAME transaction as the
 heal, so a rolled-back report mode and a crashed run both leave no trail, and a
 committed heal always has one. Read it back with
 
-    get-audit-log --audit-action "migration:031_allocation_delink_and_release"
+    get-system-audit-log --audit-action "migration:031_allocation_delink_and_release"
 
 Without it the release is invisible after the terminal output is gone: the
 allocation ids this run voided are the one fact a reversal needs and the one
@@ -328,7 +328,7 @@ def _print_summary(healed, skips, report_only):
               f"{s['payment_entry_id']}): {s['reason']}")
     if healed and not report_only:
         print(f"  audit trail: {len(healed)} audit_log row(s), committed with the "
-              f"heal. Read them back with:  get-audit-log --audit-action "
+              f"heal. Read them back with:  get-system-audit-log --audit-action "
               f'"{migration_action(MIGRATION_ID)}"')
     elif healed:
         print(f"  report-only: no audit_log row is written — a trail for a change "

@@ -829,20 +829,20 @@ def test_the_run_tells_the_operator_where_the_trail_is(conn, db_path, chart):
     that survives into the operator's terminal is the query that finds it later."""
     _result, out = _run(db_path)
     assert "audit trail: 3 audit_log row(s)" in out
-    assert 'get-audit-log --audit-action "migration:%s"' % mig.MIGRATION_ID in out
+    assert 'get-system-audit-log --audit-action "migration:%s"' % mig.MIGRATION_ID in out
 
 
 def test_the_migration_id_is_the_stem_the_runner_ledgers_it_under(conn, db_path):
     """The action string is derived from the filename, and the runner's ledger id
     is the same stem (`migration_runner.discover` takes `fn[:-3]`). If they ever
-    disagree, `get-audit-log --audit-action` finds nothing and nothing else fails.
+    disagree, `get-system-audit-log --audit-action` finds nothing and nothing else fails.
     """
     assert mig.MIGRATION_ID == "035_disposal_gain_loss_account_type"
     assert os.path.basename(_MIGRATION) == mig.MIGRATION_ID + ".py"
 
 
 def test_the_trail_is_retrievable_through_the_shipped_read_action(conn, db_path, chart):
-    """Driven through `get-audit-log`, not through raw SQL.
+    """Driven through `get-system-audit-log`, not through raw SQL.
 
     This is the answer to "an audit row the operator cannot see is worth little"
     (M99): the row is NOT delivered through the runner's stdout, which M99 shows
@@ -854,7 +854,7 @@ def test_the_trail_is_retrievable_through_the_shipped_read_action(conn, db_path,
     buf = io.StringIO()
     with redirect_stdout(buf):
         try:
-            setup_dq.ACTIONS["get-audit-log"](conn, _Args(
+            setup_dq.ACTIONS["get-system-audit-log"](conn, _Args(
                 audit_action="migration:" + mig.MIGRATION_ID, limit=50))
         except SystemExit:
             pass

@@ -97,6 +97,11 @@ def main():
     parser.add_argument("--recognition-method")
     parser.add_argument("--recognition-basis")
     parser.add_argument("--pct-complete")
+    parser.add_argument("--costs-incurred")
+    parser.add_argument("--estimated-total-costs")
+    parser.add_argument("--completed-units")
+    parser.add_argument("--total-units")
+    parser.add_argument("--recognized-to-date")
     parser.add_argument("--description")
     parser.add_argument("--estimated-amount")
     parser.add_argument("--constraint-amount")
@@ -105,6 +110,19 @@ def main():
     parser.add_argument("--deferred-revenue-account-id")
     parser.add_argument("--revenue-account-id")
     parser.add_argument("--cost-center-id")
+    parser.add_argument("--contract-asset-account-id")
+    parser.add_argument("--contract-liability-account-id")
+    parser.add_argument("--receivable-account-id")
+
+    # Operator-supplied benefit measurements
+    parser.add_argument("--benefit-type")
+    parser.add_argument("--measurement-date")
+    parser.add_argument("--reporting-date")
+    parser.add_argument("--total-benefit-liability")
+    parser.add_argument("--fiduciary-net-position")
+    parser.add_argument("--employer-share-percent")
+    parser.add_argument("--expense-before-deferrals")
+    parser.add_argument("--benefit-deferrals")
 
     # Lease fields
     parser.add_argument("--lessee-name")
@@ -142,6 +160,10 @@ def main():
     parser.add_argument("--functional-currency")
     parser.add_argument("--consolidation-method")
     parser.add_argument("--period-date")
+    parser.add_argument("--closing-rate")
+    parser.add_argument("--average-rate")
+    parser.add_argument("--translation-policy")
+    parser.add_argument("--review-reference")
     parser.add_argument("--as-of-date")
     # M114: remove-elimination-surplus is report-only by default; --confirm
     # executes the audited deletion. The foundation DANGEROUS_ACTIONS gate

@@ -1344,12 +1344,27 @@ def party_ledger(conn, args):
     else:
         scope_company_id = party["company_id"]
 
+    # A party may also be tagged on the balancing cash/bank leg of a
+    # payment. A party ledger is the control-account ledger, so include only
+    # receivable rows for customers, payable rows for suppliers, and both
+    # payable and payroll-payable rows for employees. Otherwise a customer
+    # invoice for 500 followed by a 200 payment can incorrectly remain at 500
+    # when both payment legs carry the party, or an employee ledger can omit
+    # net pay posted to Payroll Payable.
+    if args.party_type == "customer":
+        party_account_types = ("receivable",)
+    elif args.party_type == "employee":
+        party_account_types = ("payable", "payroll_payable")
+    else:
+        party_account_types = ("payable",)
+
     gl_t = Table("gl_entry").as_("g")
     acct_t = Table("account")
     acct_scope_sub = (
         Q.from_(acct_t)
         .select(acct_t.id)
         .where(acct_t.company_id == P())
+        .where(acct_t.account_type.isin([P() for _ in party_account_types]))
     )
 
     # Opening balance (before from_date)
@@ -1367,7 +1382,7 @@ def party_ledger(conn, args):
             .where(gl_t.account_id.isin(acct_scope_sub))
         )
         opening_params = [args.party_type, args.party_id, args.from_date,
-                          scope_company_id]
+                          scope_company_id] + list(party_account_types)
     else:
         # No from_date → no opening balance (1=0 condition)
         opening_q = (
@@ -1395,7 +1410,9 @@ def party_ledger(conn, args):
         .where(gl_t.is_cancelled == 0)
         .where(gl_t.account_id.isin(acct_scope_sub))
     )
-    entries_params = [args.party_type, args.party_id, scope_company_id]
+    entries_params = [
+        args.party_type, args.party_id, scope_company_id,
+    ] + list(party_account_types)
 
     if args.from_date:
         entries_q = entries_q.where(gl_t.posting_date >= P())
@@ -2769,6 +2786,312 @@ def nonprofit_statement_set(conn, args):
     })
 
 
+def sefa_readiness_report(conn, args):
+    """Prepare an award worksheet from explicitly mapped approved expenses."""
+    company_id = getattr(args, "company_id", None)
+    fiscal_year_id = getattr(args, "fiscal_year_id", None)
+    if not company_id or not fiscal_year_id:
+        err("--company-id and --fiscal-year-id are required")
+    company = Table("company")
+    owner = conn.execute(Q.from_(company).select(company.default_currency)
+                         .where(company.id == P()).get_sql(),
+                         (company_id,)).fetchone()
+    if not owner:
+        err("Company not found")
+    fy = Table("fiscal_year")
+    period = conn.execute(Q.from_(fy).select(fy.start_date, fy.end_date)
+                          .where(fy.id == P()).where(fy.company_id == P())
+                          .get_sql(), (fiscal_year_id, company_id)).fetchone()
+    if not period:
+        err("Fiscal year not found for this company")
+    start, end = period["start_date"], period["end_date"]
+    try:
+        if (datetime.strptime(start, "%Y-%m-%d").strftime("%Y-%m-%d") != start
+                or datetime.strptime(end, "%Y-%m-%d").strftime("%Y-%m-%d") != end
+                or start > end):
+            raise ValueError
+    except (ValueError, TypeError):
+        err("Fiscal year must have valid ordered ISO dates")
+    try:
+        awards = json.loads(getattr(args, "federal_awards", None))
+    except (ValueError, TypeError):
+        err("--federal-awards must be a JSON array of award objects")
+    if not isinstance(awards, list) or len(awards) > 500:
+        err("--federal-awards must be an array with at most 500 awards")
+    mapped = {}
+    warnings = []
+    fields = ("agency_name", "assistance_listing_number", "award_identifier",
+              "pass_through_entity")
+    for award in awards:
+        if not isinstance(award, dict) or not isinstance(award.get("grant_id"), str):
+            err("Every award must name a grant_id")
+        grant_id = award["grant_id"].strip()
+        if not grant_id or grant_id in mapped or len(grant_id) > 200:
+            err("Award grant IDs must be nonempty and unique")
+        metadata = {}
+        for field in fields:
+            value = award.get(field, "")
+            if not isinstance(value, str) or len(value) > 200:
+                err("Award metadata must be text of at most 200 characters")
+            metadata[field] = value.strip()
+        missing = [field for field in fields[:3] if not metadata[field]]
+        if missing:
+            warnings.append({"code": "missing_award_metadata", "grant_id": grant_id,
+                             "fields": missing})
+        mapped[grant_id] = {"grant_id": grant_id, **metadata,
+                            "expense_ids": [], "expenditures": Decimal("0")}
+    source_available = all(table_exists(conn, name) for name in
+                           ("nonprofitclaw_grant", "nonprofitclaw_grant_expense"))
+    omitted_ids = []
+    omitted_total = Decimal("0")
+    if not source_available:
+        if mapped:
+            err("NonprofitClaw grant and expense tables are required for awards")
+        warnings.append({"code": "grant_expense_source_unavailable"})
+    else:
+        grant = Table("nonprofitclaw_grant")
+        for grant_id, award in mapped.items():
+            row = conn.execute(Q.from_(grant).select(grant.name)
+                               .where(grant.id == P()).where(grant.company_id == P())
+                               .get_sql(), (grant_id, company_id)).fetchone()
+            if not row:
+                err("Every mapped grant must belong to this company")
+            award["grant_name"] = row["name"]
+        expense = Table("nonprofitclaw_grant_expense")
+        rows = conn.execute(Q.from_(expense).select(
+            expense.id, expense.grant_id, expense.amount)
+            .where(expense.company_id == P()).where(expense.status == P())
+            .where(expense.expense_date >= P()).where(expense.expense_date <= P())
+            .orderby(expense.id).get_sql(),
+            (company_id, "approved", start, end)).fetchall()
+        for row in rows:
+            try:
+                amount = Decimal(str(row["amount"]))
+                if not amount.is_finite() or amount < 0:
+                    raise InvalidOperation
+                # Refuse values that cannot be represented as currency amounts.
+                round_currency(amount)
+            except (InvalidOperation, ValueError, TypeError):
+                err("Approved grant expense contains an invalid amount")
+            award = mapped.get(row["grant_id"])
+            if award is None:
+                omitted_ids.append(row["id"])
+                omitted_total += amount
+            else:
+                award["expense_ids"].append(row["id"])
+                award["expenditures"] += amount
+    if omitted_ids:
+        warnings.append({"code": "unclassified_approved_expenses",
+                         "expense_ids": omitted_ids,
+                         "amount": _s(omitted_total)})
+    total = sum((award["expenditures"] for award in mapped.values()), Decimal("0"))
+    try:
+        for award in mapped.values():
+            award["expense_count"] = len(award["expense_ids"])
+            award["expenditures"] = _s(award["expenditures"])
+        total_text = _s(total) if source_available else None
+    except InvalidOperation:
+        err("Grant expense totals exceed the supported currency precision")
+    ok({"company_id": company_id, "fiscal_year_id": fiscal_year_id,
+        "from_date": start, "to_date": end, "currency": owner["default_currency"],
+        "basis": "approved grant expenses by expense date; explicit caller award mapping",
+        "source_available": source_available, "awards": list(mapped.values()),
+        "total_expenditures": total_text, "warnings": warnings,
+        "ready_for_review": source_available and bool(mapped) and not warnings,
+        "limitations": "Preparation worksheet only. Federal completeness, accounting basis, "
+                       "subrecipient expenditure data and audit eligibility require review."})
+
+
+def governmental_statement_set(conn, args):
+    """Reconcile explicitly classified governmental funds and posted full-accrual books."""
+    from datetime import date
+
+    company = resolve_company_id(conn, getattr(args, "company_id", None),
+                                 getattr(args, "company_name", None))
+    start, end = getattr(args, "from_date", None), getattr(args, "to_date", None)
+    try:
+        if not start or not end or date.fromisoformat(start) > date.fromisoformat(end) or (
+                date.fromisoformat(start).isoformat() != start or
+                date.fromisoformat(end).isoformat() != end):
+            raise ValueError()
+    except (TypeError, ValueError):
+        err("Valid --from-date and --to-date in ascending order are required")
+    fund_key = (getattr(args, "fund_dimension", None) or "").strip()
+    class_key = (getattr(args, "net_position_dimension", None) or "").strip()
+    if not fund_key or not class_key or fund_key == class_key:
+        err("Distinct --fund-dimension and --net-position-dimension are required")
+    classes = ("net_investment_in_capital_assets", "restricted_expendable",
+               "restricted_nonexpendable", "unrestricted")
+    registry = Table("dimension_registry")
+    declared = {}
+    for key in (fund_key, class_key):
+        registered = conn.execute(Q.from_(registry).select(
+            registry.is_active, registry.data_type, registry.allowed_values_json).where(
+            registry.key == P()).get_sql(), (key,)).fetchone()
+        if not registered or not registered["is_active"] or registered["data_type"] != "enum":
+            err("Both statement dimensions must be registered active enums")
+        try:
+            values = json.loads(registered["allowed_values_json"] or "null")
+        except (TypeError, ValueError):
+            values = None
+        if not isinstance(values, list) or not values or any(
+                not isinstance(v, str) or not v.strip() for v in values) or (
+                len(set(values)) != len(values)):
+            err("Statement dimensions must declare distinct non-empty string values")
+        declared[key] = values
+    if set(declared[class_key]) != set(classes):
+        err("The net-position dimension must declare exactly the four supported classes")
+    bases = _parse_json_arg(getattr(args, "fund_basis_map", None), "fund-basis-map")
+    if not isinstance(bases, dict) or set(bases) != set(declared[fund_key]) or any(
+            basis != "modified_accrual" for basis in bases.values()):
+        err("--fund-basis-map must explicitly assign modified_accrual to every declared fund")
+    roles = {"current_assets": "asset", "capital_assets": "asset",
+             "deferred_outflows": "asset", "current_liabilities": "liability",
+             "long_term_liabilities": "liability", "deferred_inflows": "liability",
+             "net_position": "equity", "revenues": "income", "expenses": "expense"}
+    mapping = _parse_json_arg(getattr(args, "government_account_map", None),
+                              "government-account-map")
+    if not isinstance(mapping, dict) or any(
+            not isinstance(aid, str) or not isinstance(role, str) or role not in roles
+            for aid, role in mapping.items()):
+        err("--government-account-map must map account IDs to supported statement roles")
+    accounts = Table("account")
+    owned = {row["id"]: row["root_type"] for row in conn.execute(
+        Q.from_(accounts).select(accounts.id, accounts.root_type).where(
+            accounts.company_id == P()).get_sql(), (company,)).fetchall()}
+    if any(aid not in owned or owned[aid] != roles[role] for aid, role in mapping.items()):
+        err("Mapped accounts must belong to the company and have compatible account roots")
+    conversions = _parse_json_arg(getattr(args, "conversion_voucher_types", None),
+                                  "conversion-voucher-types")
+    if not isinstance(conversions, list) or any(
+            not isinstance(v, str) or not v.strip() or v == _CLOSING_VOUCHER_TYPE
+            for v in conversions) or len(set(conversions)) != len(conversions):
+        err("--conversion-voucher-types must be an explicit JSON list of non-closing voucher types")
+    zero = Decimal("0")
+    closing = {role: zero for role in roles}
+    opening = closing.copy()
+    class_activity = {name: {"opening_net_position": zero, "revenues": zero,
+                            "expenses": zero, "other_changes": zero,
+                            "closing_net_position": zero} for name in classes}
+    funds = {name: {"basis": basis, "opening_fund_balance": zero,
+                    "closing_fund_balance": zero, "revenues": zero,
+                    "expenditures": zero, "other_financing_sources_and_uses": zero}
+             for name, basis in bases.items()}
+    conversion_current_open = conversion_current_close = zero
+    voucher_balances = {}
+    entries = Table("gl_entry")
+    query = Q.from_(entries).join(accounts).on(entries.account_id == accounts.id).select(
+        entries.account_id, entries.posting_date, entries.debit_base, entries.credit_base,
+        entries.dimensions_json, entries.voucher_type, entries.voucher_id
+    ).where(accounts.company_id == P()).where(entries.is_cancelled == 0).where(
+        entries.posting_date <= P())
+    for row in conn.execute(query.get_sql(), (company, end)).fetchall():
+        try:
+            tags = json.loads(row["dimensions_json"] or "{}")
+        except (TypeError, ValueError):
+            err("A ledger entry has invalid accounting dimensions")
+        if not isinstance(tags, dict) or not isinstance(tags.get(fund_key), str) or (
+                tags.get(fund_key) not in funds) or (
+                tags.get(class_key) not in classes):
+            err("Every included ledger leg needs recognised fund and net-position class tags")
+        role = mapping.get(row["account_id"])
+        if role is None:
+            err("Every included account needs an explicit government statement role")
+        try:
+            debit, credit = _d(row["debit_base"]), _d(row["credit_base"])
+        except (TypeError, ValueError):
+            err("Ledger amounts must be finite non-negative exact decimals")
+        if not debit.is_finite() or not credit.is_finite() or debit < 0 or credit < 0:
+            err("Ledger amounts must be finite non-negative exact decimals")
+        movement = debit - credit
+        signed = movement if roles[role] in ("asset", "expense") else -movement
+        period = row["posting_date"] >= start
+        conversion = row["voucher_type"] in conversions
+        is_closing = row["voucher_type"] == _CLOSING_VOUCHER_TYPE
+        if not row["voucher_type"] or not row["voucher_id"]:
+            err("Every included ledger leg needs a voucher type and ID")
+        group = (tags[fund_key], row["voucher_type"], row["voucher_id"])
+        voucher_balances[group] = voucher_balances.get(group, zero) + movement
+        closing[role] += signed
+        if not period:
+            opening[role] += signed
+        activity = class_activity[tags[class_key]]
+        if role in ("net_position", "revenues", "expenses"):
+            net = -movement
+            activity["closing_net_position"] += net
+            if not period:
+                activity["opening_net_position"] += net
+            elif not is_closing:
+                field = {"net_position": "other_changes", "revenues": "revenues",
+                         "expenses": "expenses"}[role]
+                activity[field] += signed
+        current_resource = (movement if role in (
+            "current_assets", "current_liabilities", "deferred_inflows") else zero)
+        if conversion:
+            conversion_current_close += current_resource
+            if not period:
+                conversion_current_open += current_resource
+            continue
+        fund = funds[tags[fund_key]]
+        fund["closing_fund_balance"] += current_resource
+        if not period:
+            fund["opening_fund_balance"] += current_resource
+        elif not is_closing:
+            if role == "revenues":
+                fund["revenues"] += signed
+            elif role in ("expenses", "capital_assets", "deferred_outflows"):
+                fund["expenditures"] += movement
+            elif role in ("net_position", "long_term_liabilities"):
+                fund["other_financing_sources_and_uses"] += signed
+    if any(balance != 0 for balance in voucher_balances.values()):
+        err("Each included voucher must balance within its declared fund")
+    for fund in funds.values():
+        fund["change_in_fund_balance"] = (fund["revenues"] - fund["expenditures"] +
+                                           fund["other_financing_sources_and_uses"])
+        if fund["opening_fund_balance"] + fund["change_in_fund_balance"] != fund["closing_fund_balance"]:
+            err("Fund opening balances and classified period activity do not reconcile")
+    for activity in class_activity.values():
+        activity["change_in_net_position"] = (activity["revenues"] - activity["expenses"] +
+                                               activity["other_changes"])
+        if activity["opening_net_position"] + activity["change_in_net_position"] != activity["closing_net_position"]:
+            err("Net-position classes and period activity do not reconcile")
+    net_position = (closing["current_assets"] + closing["capital_assets"] +
+                    closing["deferred_outflows"] - closing["current_liabilities"] -
+                    closing["long_term_liabilities"] - closing["deferred_inflows"])
+    if net_position != sum((a["closing_net_position"] for a in class_activity.values()), zero):
+        err("Government-wide financial position does not balance")
+    position_bridge = {
+        "fund_balances": sum((f["closing_fund_balance"] for f in funds.values()), zero),
+        "capital_assets": closing["capital_assets"],
+        "deferred_outflows": closing["deferred_outflows"],
+        "long_term_liabilities": -closing["long_term_liabilities"],
+        "conversion_current_resources": conversion_current_close}
+    activity_bridge = {
+        "fund_balance_change": sum((f["change_in_fund_balance"] for f in funds.values()), zero),
+        "capital_asset_change": closing["capital_assets"] - opening["capital_assets"],
+        "deferred_outflow_change": closing["deferred_outflows"] - opening["deferred_outflows"],
+        "long_term_liability_change": opening["long_term_liabilities"] - closing["long_term_liabilities"],
+        "conversion_current_resource_change": conversion_current_close - conversion_current_open}
+    net_change = sum((a["change_in_net_position"] for a in class_activity.values()), zero)
+    if sum(position_bridge.values(), zero) != net_position or sum(activity_bridge.values(), zero) != net_change:
+        err("Fund and government-wide reconciliations do not agree")
+    ok({"company_id": company, "from_date": start, "to_date": end,
+        "basis": "company base currency, explicitly classified posted books",
+        "scope": "Governmental fund current-resource projection and full-accrual statement reconciliation; no automatic recognition, budget, lease, notes or account-root schema conversion",
+        "fund_statements": {name: {k: _s(v) if isinstance(v, Decimal) else v
+                                    for k, v in fund.items()} for name, fund in funds.items()},
+        "statement_of_net_position": {
+            **{k: _s(closing[k]) for k in roles if k not in ("net_position", "revenues", "expenses")},
+            "net_position": _s(net_position),
+            "classes": {name: _s(a["closing_net_position"]) for name, a in class_activity.items()}},
+        "statement_of_activities": {name: {k: _s(v) for k, v in a.items()}
+                                    for name, a in class_activity.items()},
+        "reconciliation": {"position": {**{k: _s(v) for k, v in position_bridge.items()},
+                                         "government_wide_net_position": _s(net_position)},
+                           "activity": {**{k: _s(v) for k, v in activity_bridge.items()},
+                                         "government_wide_change": _s(net_change)}}})
+
+
 ACTIONS = {
     "trial-balance": trial_balance,
     "profit-and-loss": profit_and_loss,
@@ -2778,6 +3101,8 @@ ACTIONS = {
     "multi-dim-trial-balance": multi_dim_trial_balance,
     "dimension-balance-report": dimension_balance_report,
     "nonprofit-statement-set": nonprofit_statement_set,
+    "sefa-readiness-report": sefa_readiness_report,
+    "governmental-statement-set": governmental_statement_set,
     "ar-aging": ar_aging,
     "ap-aging": ap_aging,
     "budget-vs-actual": budget_vs_actual,
@@ -2829,7 +3154,13 @@ def main():
     parser.add_argument("--values", dest="values")
     parser.add_argument("--net-asset-dimension")
     parser.add_argument("--cash-flow-account-map")
+    parser.add_argument("--federal-awards")
     parser.add_argument("--release-voucher-types")
+    parser.add_argument("--fund-dimension")
+    parser.add_argument("--net-position-dimension")
+    parser.add_argument("--fund-basis-map")
+    parser.add_argument("--government-account-map")
+    parser.add_argument("--conversion-voucher-types")
 
     # Aging
     parser.add_argument("--customer-id")

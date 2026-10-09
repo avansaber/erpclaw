@@ -2290,6 +2290,11 @@
    "doc_ref": "prov:architecture",
    "class": "direct"
   },
+  "item_barcode": {
+   "parent_concept": "item",
+   "class": "derived",
+   "note": "Inventory-owned, company-scoped barcode mappings used to resolve reviewed stock drafts"
+  },
   "item_alternative": {
    "doc_ref": "prov:internal:736c3aca",
    "class": "direct"
@@ -3142,6 +3147,11 @@
    "doc_ref": "prov:module-spec:erpclaw",
    "class": "module_spec",
    "note": "anchored to the owning module's spec (concept-level furniture; finer doc_ref welcome at any refresh)"
+  },
+  "rfq_supplier_request": {
+   "parent_concept": "request_for_quotation",
+   "class": "derived",
+   "note": "Buying-owned, company-scoped unsent supplier message preparations; audit stores only an opaque reference and hash"
   },
   "risk_assessment": {
    "doc_ref": "prov:internal:11819eef",

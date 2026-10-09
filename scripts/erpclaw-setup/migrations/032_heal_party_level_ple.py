@@ -70,7 +70,7 @@ arithmetic writes nothing when delta is zero, a re-run on a healed install
 appends no PLE row and no audit row: the trail is idempotent for exactly the
 reason the heal is. Read it back with
 
-    get-audit-log --audit-action "migration:032_heal_party_level_ple"
+    get-system-audit-log --audit-action "migration:032_heal_party_level_ple"
 
 """
 import argparse
@@ -265,7 +265,7 @@ def _print_summary(writes, skips, report_only):
         print(f"    payment {s['payment_entry_id']}: {s['reason']}")
     if writes and not report_only:
         print(f"  audit trail: {len(writes)} audit_log row(s), committed with the "
-              f"heal. Read them back with:  get-audit-log --audit-action "
+              f"heal. Read them back with:  get-system-audit-log --audit-action "
               f'"{migration_action(MIGRATION_ID)}"')
     elif writes:
         print(f"  report-only: no audit_log row is written — a trail for a change "

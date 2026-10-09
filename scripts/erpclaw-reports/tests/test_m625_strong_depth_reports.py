@@ -102,12 +102,13 @@ def _seed_company(conn, name, abbr):
     return cid
 
 
-def _seed_account(conn, company_id, name, root_type="asset"):
+def _seed_account(conn, company_id, name, root_type="asset", account_type=None):
     aid = _uuid()
     direction = "debit_normal" if root_type in ("asset", "expense") else "credit_normal"
     _insert(conn, "account", id=aid, name="%s %s" % (name, aid[:6]),
             account_number="ACC-%s" % aid[:6], root_type=root_type,
-            account_type="cash" if root_type == "asset" else "expense",
+            account_type=account_type or (
+                "cash" if root_type == "asset" else "expense"),
             balance_direction=direction, company_id=company_id, depth=0)
     return aid
 
@@ -122,6 +123,13 @@ def _seed_supplier(conn, company_id, name):
     sid = _uuid()
     _insert(conn, "supplier", id=sid, name=name, company_id=company_id)
     return sid
+
+
+def _seed_employee(conn, company_id, name):
+    eid = _uuid()
+    _insert(conn, "employee", id=eid, first_name=name, full_name=name,
+            date_of_joining="2026-01-01", company_id=company_id)
+    return eid
 
 
 def _seed_gl(conn, account_id, party_type, party_id, posting_date,
@@ -157,25 +165,88 @@ def _stored_gl(db_path, party_type, party_id):
 class TestPartyLedgerStrong:
     def _seed_book(self, conn):
         cid = _seed_company(conn, "Harbor", "HB")
-        cash = _seed_account(conn, cid, "Cash")
+        receivable = _seed_account(
+            conn, cid, "Accounts Receivable", "asset", "receivable")
+        payable = _seed_account(
+            conn, cid, "Accounts Payable", "liability", "payable")
         acme = _seed_customer(conn, cid, "Acme Corp")
         beta = _seed_customer(conn, cid, "Beta LLC")
         supp = _seed_supplier(conn, cid, "Supply Inc")
-        _seed_gl(conn, cash, "customer", acme, "2026-02-10", "700.00", "0.00", "V-0210")
-        _seed_gl(conn, cash, "customer", acme, "2026-03-05", "0.00", "200.00", "V-0305")
-        _seed_gl(conn, cash, "customer", acme, "2026-04-01", "50.00", "0.00", "V-0401")
+        _seed_gl(conn, receivable, "customer", acme, "2026-02-10", "700.00", "0.00", "V-0210")
+        _seed_gl(conn, receivable, "customer", acme, "2026-03-05", "0.00", "200.00", "V-0305")
+        _seed_gl(conn, receivable, "customer", acme, "2026-04-01", "50.00", "0.00", "V-0401")
         # Decoys, each differing in exactly one filtered dimension:
         # same id under the other party type; another party of the same
         # type; a cancelled row; a row past the window end.
-        _seed_gl(conn, cash, "supplier", acme, "2026-03-10", "111.00", "0.00", "V-S111")
-        _seed_gl(conn, cash, "customer", beta, "2026-03-12", "222.00", "0.00", "V-B222")
-        _seed_gl(conn, cash, "customer", acme, "2026-03-15", "9999.00", "0.00",
+        _seed_gl(conn, payable, "supplier", acme, "2026-03-10", "111.00", "0.00", "V-S111")
+        _seed_gl(conn, receivable, "customer", beta, "2026-03-12", "222.00", "0.00", "V-B222")
+        _seed_gl(conn, receivable, "customer", acme, "2026-03-15", "9999.00", "0.00",
                  "V-CXL", cancelled=1)
-        _seed_gl(conn, cash, "customer", acme, "2026-05-01", "33.00", "0.00", "V-0501")
+        _seed_gl(conn, receivable, "customer", acme, "2026-05-01", "33.00", "0.00", "V-0501")
         # Supplier-side book for the supplier-branch test.
-        _seed_gl(conn, cash, "supplier", supp, "2026-01-20", "0.00", "400.00", "P-0120")
-        _seed_gl(conn, cash, "supplier", supp, "2026-03-20", "150.00", "0.00", "P-0320")
+        _seed_gl(conn, payable, "supplier", supp, "2026-01-20", "0.00", "400.00", "P-0120")
+        _seed_gl(conn, payable, "supplier", supp, "2026-03-20", "150.00", "0.00", "P-0320")
         return acme, beta, supp
+
+    def test_payment_bank_leg_is_excluded_from_control_account_balance(
+            self, conn, db_path):
+        cid = _seed_company(conn, "Parity", "PY")
+        receivable = _seed_account(
+            conn, cid, "Accounts Receivable", "asset", "receivable")
+        bank = _seed_account(conn, cid, "Bank", "asset", "bank")
+        customer = _seed_customer(conn, cid, "Parity Customer")
+        _seed_gl(conn, receivable, "customer", customer, "2026-06-01",
+                 "500.00", "0.00", "INV-500")
+        _seed_gl(conn, receivable, "customer", customer, "2026-06-10",
+                 "0.00", "200.00", "PAY-200")
+        # The balancing bank leg intentionally carries the same party. It
+        # must not offset the receivable credit in the party ledger.
+        _seed_gl(conn, bank, "customer", customer, "2026-06-10",
+                 "200.00", "0.00", "PAY-200")
+        before = _snapshot(conn)
+
+        r = call_action(REP.party_ledger, conn, ns(
+            party_type="customer", party_id=customer,
+            from_date=None, to_date=None))
+        assert is_ok(r), r
+        assert r["party_name"] == "Parity Customer"
+        assert [(e["voucher_id"], e["debit"], e["credit"], e["balance"])
+                for e in r["entries"]] == [
+            ("INV-500", "500.00", "0.00", "500.00"),
+            ("PAY-200", "0.00", "200.00", "300.00")]
+        assert r["closing_balance"] == "300.00"
+        assert _snapshot(conn) == before, "a read must write nothing"
+
+    def test_employee_includes_payable_and_payroll_payable(
+            self, conn, db_path):
+        cid = _seed_company(conn, "Payroll", "PR")
+        payable = _seed_account(
+            conn, cid, "Employee Payable", "liability", "payable")
+        payroll_payable = _seed_account(
+            conn, cid, "Payroll Payable", "liability", "payroll_payable")
+        bank = _seed_account(conn, cid, "Bank", "asset", "bank")
+        employee = _seed_employee(conn, cid, "Alex Worker")
+        _seed_gl(conn, payroll_payable, "employee", employee, "2026-01-31",
+                 "0.00", "1000.00", "PAYROLL-1000")
+        _seed_gl(conn, payable, "employee", employee, "2026-02-10",
+                 "0.00", "80.00", "EXPENSE-80")
+        # A balancing bank leg may carry the employee but is not part of the
+        # employee control-account ledger.
+        _seed_gl(conn, bank, "employee", employee, "2026-02-10",
+                 "1080.00", "0.00", "BANK-1080")
+        before = _snapshot(conn)
+
+        r = call_action(REP.party_ledger, conn, ns(
+            party_type="employee", party_id=employee,
+            from_date=None, to_date=None))
+        assert is_ok(r), r
+        assert r["party_name"] == "Alex Worker"
+        assert [(e["voucher_id"], e["debit"], e["credit"], e["balance"])
+                for e in r["entries"]] == [
+            ("PAYROLL-1000", "0.00", "1000.00", "-1000.00"),
+            ("EXPENSE-80", "0.00", "80.00", "-1080.00")]
+        assert r["closing_balance"] == "-1080.00"
+        assert _snapshot(conn) == before, "a read must write nothing"
 
     def test_windowed_ledger_carries_hand_computed_balances(
             self, conn, db_path):

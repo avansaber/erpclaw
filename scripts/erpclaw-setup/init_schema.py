@@ -4796,6 +4796,12 @@ def _init_db_postgres(db_path: str) -> None:
         from erpclaw_lib.gl_chain_schema import METADATA as _GL_CHAIN_METADATA
         _seam.provision(_GL_CHAIN_METADATA, db_path)
 
+        from erpclaw_lib.item_barcode_schema import METADATA as _BARCODE_METADATA
+        _seam.provision(_BARCODE_METADATA, db_path)
+
+        from erpclaw_lib.rfq_supplier_request_schema import METADATA as _RFQ_REQUEST_METADATA
+        _seam.provision(_RFQ_REQUEST_METADATA, db_path)
+
         _seed_defaults(conn)
         conn.commit()
 
@@ -4882,6 +4888,12 @@ def init_db(db_path: str = None) -> None:
         from erpclaw_lib import seam as _seam
         from erpclaw_lib.gl_chain_schema import METADATA as _GL_CHAIN_METADATA
         _seam.provision(_GL_CHAIN_METADATA, db_path)
+
+        from erpclaw_lib.item_barcode_schema import METADATA as _BARCODE_METADATA
+        _seam.provision(_BARCODE_METADATA, db_path)
+
+        from erpclaw_lib.rfq_supplier_request_schema import METADATA as _RFQ_REQUEST_METADATA
+        _seam.provision(_RFQ_REQUEST_METADATA, db_path)
 
         _seed_defaults(conn)
         conn.commit()

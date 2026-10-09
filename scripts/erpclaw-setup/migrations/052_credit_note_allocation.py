@@ -50,7 +50,7 @@ from erpclaw_lib.paths import db_default  # noqa: E402
 DEFAULT_DB_PATH = db_default()
 
 # Derived, never typed: the runner ledgers this file under its stem, and
-# `get-audit-log --audit-action migration:<stem>` has to match that exact string.
+# `get-system-audit-log --audit-action migration:<stem>` has to match that exact string.
 MIGRATION_ID = os.path.splitext(os.path.basename(__file__))[0]
 
 # This APPENDS ledger rows whose amounts come from this install's own rows.

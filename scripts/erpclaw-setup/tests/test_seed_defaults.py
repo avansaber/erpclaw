@@ -8,6 +8,7 @@ Actions tested:
 """
 import pytest
 from setup_helpers import call_action, ns, seed_company, is_error, is_ok, load_db_query
+from erpclaw_lib.audit import audit
 
 mod = load_db_query()
 
@@ -36,20 +37,22 @@ class TestSeedDefaults:
 
 class TestGetAuditLog:
     def test_empty_log(self, conn):
+        company_id = seed_company(conn)
         result = call_action(mod.get_audit_log, conn, ns(
+            company_id=company_id,
             entity_type=None, entity_id=None, audit_action=None,
             from_date=None, to_date=None, limit=None, offset=None,
         ))
-        assert "entries" in result
+        assert result["entries"] == []
 
     def test_filter_by_entity_type(self, conn):
-        # Create a company to generate audit entries
-        call_action(mod.setup_company, conn, ns(
-            name="Audit Log Test Co",
-            abbr=None, currency=None, country=None,
-            fiscal_year_start_month=None,
-        ))
+        company_id = seed_company(conn)
+        audit(conn, "erpclaw-setup", "update", "company", company_id,
+              new_values={"name": "Audit Log Test Co"},
+              scope_company_ids=[company_id], scope_status="in_scope")
+        conn.commit()
         result = call_action(mod.get_audit_log, conn, ns(
+            company_id=company_id,
             entity_type="company", entity_id=None, audit_action=None,
             from_date=None, to_date=None, limit=None, offset=None,
         ))

@@ -86,9 +86,10 @@ ACTIVE, `issue-authorization`, `revoke-authorization` and `get-authorization` an
 supplies an issuer.
 
 The routers that call the shared authority gate in this tree are the `erpclaw-selling`, `erpclaw-buying`,
-`erpclaw-journals` and `erpclaw-payments` routers, and every action on them, reads included, passes through the
-gate. No call on those routers runs at ACTIVE in this release. The routers first check their own arguments in
-either phase: a flag the router does not know answers "Unknown flags", and a malformed or second
+`erpclaw-journals`, `erpclaw-payments` and `erpclaw-setup` routers. The setup router gates the company-scoped
+`get-audit-log` and `get-system-audit-log` reads; every action on the other four routers, reads included, passes
+through the gate. No call on those routers runs at ACTIVE in this release. The routers first check their own
+arguments in either phase: a flag the router does not know answers "Unknown flags", and a malformed or second
 `--authorization-id` answers `AUTHORIZATION_INPUT_INVALID`. A call that passes them and carries no
 `--authorization-id` answers `AUTHORITY_NOT_READY`: the readiness check runs first, before the impact declaration
 and before any authorization demand. A call that passes `--authorization-id` is first checked against its own
@@ -96,7 +97,7 @@ options and its action's declaration: an option repeated where only one is allow
 spelling, or an argument value that begins with `-` answers `AUTHORIZATION_INPUT_INVALID`; an action with no
 declared impact answers `IMPACT_UNDECLARED`; an action declared without an authorization answers
 `AUTHORIZATION_REFUSED`; every other call reaches the readiness check and answers `AUTHORITY_NOT_READY` before
-envelope verification. These four routers are the only gated ones; the gate does not cover every cross-module
+envelope verification. These five routers are the only gated ones; the gate does not cover every cross-module
 write surface. Behind a ready core, which this release never has, later branches would answer `IMPACT_UNDECLARED`
 for an action with no declared impact, `AUTHORIZATION_REQUIRED` for a call with no authorization,
 `COMPANY_SCOPE_REFUSED` or `COMPANY_SCOPE_AMBIGUOUS` for company failures, and `AUTHORIZATION_REFUSED` for an

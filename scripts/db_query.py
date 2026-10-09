@@ -84,11 +84,11 @@ def _log_action_call(action_name, routed_to, route_tier):
     except Exception:
         pass  # Never break normal operation
 
-# Action → domain mapping (365 core entries + aliases + 10 module mgmt)
+# Action → domain mapping (366 core entries + aliases + 10 module mgmt)
 # Collisions resolved: status→setup, recurring-template→journals,
 # update-invoice-outstanding→selling. Aliases added for alternate domains.
 ACTION_MAP = {
-    # === Setup (42 actions) ===
+    # === Setup (43 actions) ===
     "initialize-database": "erpclaw-setup",
     "setup-company": "erpclaw-setup",
     "update-company": "erpclaw-setup",
@@ -106,6 +106,7 @@ ACTION_MAP = {
     "add-uom-conversion": "erpclaw-setup",
     "seed-defaults": "erpclaw-setup",
     "get-audit-log": "erpclaw-setup",
+    "get-system-audit-log": "erpclaw-setup",
     "get-audit-checkpoint": "erpclaw-setup",
     "get-schema-version": "erpclaw-setup",
     "update-regional-settings": "erpclaw-setup",
@@ -184,8 +185,10 @@ ACTION_MAP = {
     "import-opening-balances": "erpclaw-gl",
     "gl-status": "erpclaw-gl",
 
-    # === Journal Entries (17 actions) ===
+    # === Journal Entries (21 actions) ===
     "add-journal-entry": "erpclaw-journals",
+    "create-expense-allocation": "erpclaw-journals",
+    "add-interfund-transfer": "erpclaw-journals",
     "update-journal-entry": "erpclaw-journals",
     "get-journal-entry": "erpclaw-journals",
     "list-journal-entries": "erpclaw-journals",
@@ -196,15 +199,20 @@ ACTION_MAP = {
     "duplicate-journal-entry": "erpclaw-journals",
     "create-intercompany-je": "erpclaw-journals",
     "add-recurring-template": "erpclaw-journals",
+    "add-expense-schedule": "erpclaw-journals",
     "update-recurring-template": "erpclaw-journals",
     "list-recurring-templates": "erpclaw-journals",
     "get-recurring-template": "erpclaw-journals",
     "process-recurring": "erpclaw-journals",
     "delete-recurring-template": "erpclaw-journals",
+    "journal-month-end-close-preview": "erpclaw-journals",
+    "journal-run-month-end-close": "erpclaw-journals",
     "journals-status": "erpclaw-journals",
 
-    # === Payments (15 actions) ===
+    # === Payments (17 actions) ===
     "add-payment": "erpclaw-payments",
+    "preview-cash-application": "erpclaw-payments",
+    "create-cash-application-payment": "erpclaw-payments",
     "update-payment": "erpclaw-payments",
     "get-payment": "erpclaw-payments",
     "list-payments": "erpclaw-payments",
@@ -277,6 +285,7 @@ ACTION_MAP = {
     "submit-quotation": "erpclaw-selling",
     "convert-quotation-to-so": "erpclaw-selling",
     "add-sales-order": "erpclaw-selling",
+    "add-inbox-order": "erpclaw-selling",
     "update-sales-order": "erpclaw-selling",
     "get-sales-order": "erpclaw-selling",
     "list-sales-orders": "erpclaw-selling",
@@ -323,7 +332,9 @@ ACTION_MAP = {
     "get-packing-slip": "erpclaw-selling",
     "list-packing-slips": "erpclaw-selling",
 
-    # === Buying / Procure-to-Pay (36 actions) ===
+    # === Buying / Procure-to-Pay (62 actions) ===
+    "add-commitment-worksheet": "erpclaw-buying",
+    "get-commitment-worksheet": "erpclaw-buying",
     "add-supplier": "erpclaw-buying",
     "update-supplier": "erpclaw-buying",
     "get-supplier": "erpclaw-buying",
@@ -334,6 +345,8 @@ ACTION_MAP = {
     "get-material-request": "erpclaw-buying",
     "create-po-from-material-request": "erpclaw-buying",
     "add-rfq": "erpclaw-buying",
+    "create-rfq-supplier-request": "erpclaw-buying",
+    "list-rfq-supplier-requests": "erpclaw-buying",
     "submit-rfq": "erpclaw-buying",
     "list-rfqs": "erpclaw-buying",
     "add-supplier-quotation": "erpclaw-buying",
@@ -352,6 +365,8 @@ ACTION_MAP = {
     "cancel-purchase-receipt": "erpclaw-buying",
     "create-purchase-invoice": "erpclaw-buying",
     "add-vendor-bill-intake": "erpclaw-buying",
+    "capture-vendor-bill": "erpclaw-buying",
+    "add-captured-vendor-bill": "erpclaw-buying",
     "update-purchase-invoice": "erpclaw-buying",
     "get-purchase-invoice": "erpclaw-buying",
     "list-purchase-invoices": "erpclaw-buying",
@@ -390,9 +405,14 @@ ACTION_MAP = {
     "add-item-group": "erpclaw-inventory",
     "list-item-groups": "erpclaw-inventory",
     "add-warehouse": "erpclaw-inventory",
+    "add-bin-location": "erpclaw-inventory",
     "update-warehouse": "erpclaw-inventory",
     "list-warehouses": "erpclaw-inventory",
     "add-stock-entry": "erpclaw-inventory",
+    "add-location-resupply": "erpclaw-inventory",
+    "add-item-barcode": "erpclaw-inventory",
+    "add-scanned-stock-entry": "erpclaw-inventory",
+    "add-scanned-stock-count": "erpclaw-inventory",
     "add-repack-stock-entry": "erpclaw-inventory",
     "add-material-consumption": "erpclaw-inventory",
     "get-stock-entry": "erpclaw-inventory",
@@ -440,6 +460,7 @@ ACTION_MAP = {
     "update-putaway-rule": "erpclaw-inventory",
     "delete-putaway-rule": "erpclaw-inventory",
     "apply-putaway-on-receipt": "erpclaw-inventory",
+    "create-putaway-transfer": "erpclaw-inventory",
     "create-pick-list": "erpclaw-inventory",
     "add-pick-list-item": "erpclaw-inventory",
     "submit-pick-list": "erpclaw-inventory",
@@ -485,7 +506,7 @@ ACTION_MAP = {
     "resume-billing-run": "erpclaw-billing",
     "billing-status": "erpclaw-billing",
 
-    # === Advanced Accounting — Revenue Recognition / ASC 606 (17 actions) ===
+    # === Advanced Accounting — Revenue Recognition / ASC 606 (18 actions) ===
     "add-revenue-contract": "erpclaw-accounting-adv",
     "update-revenue-contract": "erpclaw-accounting-adv",
     "get-revenue-contract": "erpclaw-accounting-adv",
@@ -498,10 +519,12 @@ ACTION_MAP = {
     "list-variable-considerations": "erpclaw-accounting-adv",
     "modify-contract": "erpclaw-accounting-adv",
     "calculate-revenue-schedule": "erpclaw-accounting-adv",
+    "calculate-revenue-progress": "erpclaw-accounting-adv",
     "generate-revenue-entries": "erpclaw-accounting-adv",
     "update-schedule-amounts": "erpclaw-accounting-adv",
     "recognize-schedule-entry": "erpclaw-accounting-adv",
     "revenue-waterfall-report": "erpclaw-accounting-adv",
+    "contract-balance-report": "erpclaw-accounting-adv",
     "revenue-recognition-summary": "erpclaw-accounting-adv",
 
     # === Advanced Accounting — Lease Accounting / ASC 842 (12 actions) ===
@@ -530,7 +553,7 @@ ACTION_MAP = {
     "ic-reconciliation-report": "erpclaw-accounting-adv",
     "ic-elimination-report": "erpclaw-accounting-adv",
 
-    # === Advanced Accounting — Multi-Entity Consolidation (8 actions) ===
+    # === Advanced Accounting — Multi-Entity Consolidation (11 actions) ===
     "add-consolidation-group": "erpclaw-accounting-adv",
     "list-consolidation-groups": "erpclaw-accounting-adv",
     "add-group-entity": "erpclaw-accounting-adv",
@@ -538,13 +561,15 @@ ACTION_MAP = {
     "generate-elimination-entries": "erpclaw-accounting-adv",
     "add-currency-translation": "erpclaw-accounting-adv",
     "consolidation-trial-balance-report": "erpclaw-accounting-adv",
+    "consolidation-translation-report": "erpclaw-accounting-adv",
     "consolidation-summary": "erpclaw-accounting-adv",
     # M114: surface + correct the pre-M95 elimination-duplication surplus.
     "list-elimination-surplus": "erpclaw-accounting-adv",
     "remove-elimination-surplus": "erpclaw-accounting-adv",
 
-    # === Advanced Accounting — Reports (1 action) ===
+    # === Advanced Accounting — Reports (2 actions) ===
     "standards-compliance-dashboard": "erpclaw-accounting-adv",
+    "calculate-benefit-liability": "erpclaw-accounting-adv",
 
     # === HR — Employee Management (28 actions) ===
     "add-employee": "erpclaw-hr",
@@ -713,6 +738,8 @@ ACTION_MAP = {
     "multi-dim-trial-balance": "erpclaw-reports",
     "dimension-balance-report": "erpclaw-reports",
     "nonprofit-statement-set": "erpclaw-reports",
+    "sefa-readiness-report": "erpclaw-reports",
+    "governmental-statement-set": "erpclaw-reports",
 }
 
 # Aliases: actions that need to be forwarded with a different --action name
@@ -1378,6 +1405,9 @@ _READONLY_CARVE_OUT = frozenset({
 # storage the router runs no other foundation action, so the router CLI and
 # the MCP door hold the same list. An L0 test keeps the two sets equal.
 _READONLY_PINNED_READS = frozenset({
+    "calculate-revenue-progress",
+    "check-reorder",
+    "sefa-readiness-report",
     "evaluate-rule",
     "generate-form941-data",
     "generate-form940-data",
@@ -1450,6 +1480,7 @@ _READONLY_PINNED_READS = frozenset({
     "hr-status",
     "inventory-demand-forecast",
     "inventory-status",
+    "journal-month-end-close-preview",
     "journals-status",
     "list-account-types",
     "list-accounts",
@@ -1515,6 +1546,9 @@ _READONLY_PINNED_READS = frozenset({
     "list-recurring-templates",
     "list-reservations",
     "list-revenue-contracts",
+    "consolidation-translation-report",
+    "calculate-benefit-liability",
+    "contract-balance-report",
     "list-rfqs",
     "list-roles",
     "list-salary-assignments",

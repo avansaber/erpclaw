@@ -16,6 +16,12 @@ import sys
 import uuid
 import calendar
 import re
+import hashlib
+import shutil
+import stat
+import struct
+import subprocess
+import tempfile
 from datetime import datetime, timezone, timedelta, date as date_type
 from decimal import Decimal, InvalidOperation
 
@@ -52,7 +58,7 @@ try:
     from erpclaw_lib.dependencies import check_required_tables
     from erpclaw_lib.query_helpers import get_default_cost_center, get_fiscal_year, resolve_company_id, resolve_scope_company
     from erpclaw_lib.query import Q, P, Table, Field, fn, Case, Order, Criterion, Not, NULL, DecimalSum, DecimalAbs, dynamic_update, line_order, scalar_max, now
-    from erpclaw_lib import authority_gate
+    from erpclaw_lib import authority_gate, company_scope
     from erpclaw_lib.authorization_consumption import INPUT_INVALID
     from erpclaw_lib.args import SafeArgumentParser, check_unknown_args
     from erpclaw_lib.vendor.pypika.terms import LiteralValue, ValueWrapper
@@ -829,6 +835,176 @@ def add_rfq(conn, args):
 # ---------------------------------------------------------------------------
 # 9. submit-rfq
 # ---------------------------------------------------------------------------
+
+RFQ_REQUEST_MAX_SUPPLIERS = 100
+RFQ_REQUEST_MAX_LINES = 100
+RFQ_REQUEST_MAX_FIELD = 200
+RFQ_REQUEST_MAX_BODY_BYTES = 32768
+RFQ_REQUEST_MAX_SNAPSHOT_BYTES = 1048576
+
+
+def _reviewed_rfq(conn, args):
+    rfq_id = getattr(args, "rfq_id", None)
+    company_id = getattr(args, "company_id", None)
+    if not rfq_id or not company_id:
+        err("--rfq-id and --company-id are required")
+    if any(not isinstance(value, str) or len(value) > RFQ_REQUEST_MAX_FIELD
+           for value in (rfq_id, company_id)):
+        err("RFQ and company identifiers must be bounded text")
+    rfq_t = Table("request_for_quotation")
+    query = (Q.from_(rfq_t).select(rfq_t.star).where(rfq_t.id == P())
+             .where(rfq_t.company_id == P()))
+    row = conn.execute(query.get_sql(), (rfq_id, company_id)).fetchone()
+    if row is None:
+        err("RFQ not found in the selected company")
+    return row
+
+
+def create_rfq_supplier_request(conn, args):
+    """Prepare and retain unsent supplier requests for explicit human review."""
+    rfq = _reviewed_rfq(conn, args)
+    if rfq["status"] not in ("draft", "submitted", "quotation_received"):
+        err("Cannot prepare communications for a cancelled RFQ")
+    kind = getattr(args, "communication_kind", None) or "request"
+    if kind not in ("request", "reminder"):
+        err("--communication-kind must be request or reminder")
+    rs, supplier = Table("rfq_supplier"), Table("supplier")
+    query = (Q.from_(rs).join(Table("request_for_quotation"))
+             .on(rs.rfq_id == Table("request_for_quotation").id)
+             .left_join(supplier).on((rs.supplier_id == supplier.id)
+                                    & (supplier.company_id == P()))
+             .select(rs.supplier_id, rs.response_date, rs.supplier_quotation_id,
+                     supplier.id.as_("matched_supplier_id"), supplier.name,
+                     supplier.email, supplier.status, supplier.company_id)
+             .where(rs.rfq_id == P())
+             .where(Table("request_for_quotation").company_id == P())
+             .orderby(rs.supplier_id).limit(RFQ_REQUEST_MAX_SUPPLIERS + 1))
+    suppliers = conn.execute(query.get_sql(), (
+        rfq["company_id"], rfq["id"], rfq["company_id"])).fetchall()
+    if not suppliers or len(suppliers) > RFQ_REQUEST_MAX_SUPPLIERS:
+        err("RFQ must have between 1 and 100 assigned suppliers")
+    for row in suppliers:
+        if row["matched_supplier_id"] is None or row["status"] != "active":
+            err("Assigned suppliers must exist, be active and belong to the RFQ company")
+    selected = getattr(args, "supplier_id", None)
+    if selected:
+        suppliers = [row for row in suppliers if row["supplier_id"] == selected]
+    if not suppliers:
+        err("The selected supplier must be assigned to the RFQ")
+    ri, item = Table("rfq_item"), Table("item")
+    parent = Table("request_for_quotation")
+    query = (Q.from_(ri).join(parent).on(ri.rfq_id == parent.id)
+             .left_join(item).on(ri.item_id == item.id)
+             .select(ri.item_id, ri.quantity, ri.uom, ri.required_date,
+                     item.item_name, item.stock_uom, item.status)
+             .where(ri.rfq_id == P()).where(parent.company_id == P())
+             .orderby(ri.id).limit(RFQ_REQUEST_MAX_LINES + 1))
+    item_rows = conn.execute(query.get_sql(), (rfq["id"], rfq["company_id"])).fetchall()
+    if not item_rows or len(item_rows) > RFQ_REQUEST_MAX_LINES:
+        err("RFQ must have between 1 and 100 item lines")
+
+    def reviewed_text(value, name):
+        if (not isinstance(value, str) or not value.strip()
+                or len(value) > RFQ_REQUEST_MAX_FIELD
+                or any(ord(char) < 32 or ord(char) == 127 for char in value)):
+            err(f"{name} must be reviewed single-line text of at most 200 characters")
+        return value
+
+    lines = []
+    for row in item_rows:
+        if row["item_name"] is None or row["status"] == "disabled":
+            err("RFQ item must identify an active item")
+        qty = row["quantity"]
+        if (not isinstance(qty, str)
+                or re.fullmatch(r"[0-9]{1,12}(?:\.[0-9]{1,2})?", qty) is None
+                or Decimal(qty) <= 0):
+            err("RFQ quantities must be positive Decimal text with at most two decimal places")
+        required_date = row["required_date"]
+        if required_date is not None:
+            try:
+                if date_type.fromisoformat(required_date).isoformat() != required_date:
+                    raise ValueError()
+            except (TypeError, ValueError):
+                err("RFQ required dates must be ISO dates")
+        lines.append({"item_id": reviewed_text(row["item_id"], "Item identifier"),
+                      "item_name": reviewed_text(row["item_name"], "Item name"),
+                      "qty": str(round_currency(Decimal(qty))),
+                      "uom": reviewed_text(row["uom"] or row["stock_uom"], "Item UOM"),
+                      "required_date": required_date})
+    label = reviewed_text(rfq["naming_series"] or rfq["id"], "RFQ reference")
+    drafts, skipped = [], []
+    for row in suppliers:
+        supplier_id = reviewed_text(row["supplier_id"], "Supplier identifier")
+        if kind == "reminder" and (row["response_date"] or row["supplier_quotation_id"]):
+            skipped.append(supplier_id)
+            continue
+        recipient = reviewed_text(row["email"], "Supplier email")
+        if re.fullmatch(r"[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+", recipient) is None:
+            err("Assigned supplier needs a reviewed email address")
+        supplier_name = reviewed_text(row["name"], "Supplier name")
+        subject = ("Quotation request " if kind == "request" else "Quotation reminder ") + label
+        body_lines = [f"Hello {supplier_name},", f"Please quote for RFQ {label}:"]
+        for line in lines:
+            due = f"; required {line['required_date']}" if line["required_date"] else ""
+            body_lines.append(f"{line['item_name']}: {line['qty']} {line['uom']}{due}")
+        body_lines.append("Please provide unit prices, availability and delivery dates for review.")
+        body = "\n".join(body_lines)
+        if len(body.encode("utf-8")) > RFQ_REQUEST_MAX_BODY_BYTES:
+            err("Prepared supplier message exceeds the 32768-byte limit")
+        drafts.append({"supplier_id": supplier_id, "to": recipient,
+                       "subject": subject, "body": body,
+                       "state": "prepared-not-sent"})
+    if not drafts:
+        err("No suppliers are awaiting a quotation response")
+    prepared = {"rfq_id": rfq["id"], "company_id": rfq["company_id"],
+                "communication_kind": kind, "items": lines, "drafts": drafts,
+                "responded_suppliers_skipped": skipped, "state": "prepared-not-sent"}
+    snapshot = json.dumps(prepared, ensure_ascii=True, sort_keys=True,
+                          separators=(",", ":"))
+    if len(snapshot.encode("utf-8")) > RFQ_REQUEST_MAX_SNAPSHOT_BYTES:
+        err("Prepared supplier snapshot exceeds the 1048576-byte limit")
+    draft_id = str(uuid.uuid4())
+    digest = hashlib.sha256(snapshot.encode("utf-8")).hexdigest()
+    prepared_at = datetime.now(timezone.utc).isoformat()
+    table = Table("rfq_supplier_request")
+    query = Q.into(table).columns(
+        "id", "company_id", "rfq_id", "prepared_at", "snapshot", "content_sha256"
+    ).insert(P(), P(), P(), P(), P(), P())
+    scope_note = company_scope.bound_note(conn)
+    scope_status = (scope_note.status if scope_note is not None
+                    else company_scope.NO_PRINCIPAL)
+    try:
+        conn.execute("BEGIN")
+        conn.execute(query.get_sql(), (draft_id, rfq["company_id"], rfq["id"],
+                                      prepared_at, snapshot, digest))
+        audit(conn, "erpclaw-buying", "create-rfq-supplier-request",
+              "request_for_quotation", rfq["id"],
+              new_values={"draft_id": draft_id, "content_sha256": digest,
+                          "state": "prepared-not-sent"},
+              scope_company_ids=[rfq["company_id"]],
+              scope_status=scope_status,
+              description="Prepared supplier communications; nothing sent")
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    ok(prepared)
+
+
+def list_rfq_supplier_requests(conn, args):
+    """Read company-scoped unsent preparations without changing any state."""
+    rfq = _reviewed_rfq(conn, args)
+    table = Table("rfq_supplier_request")
+    query = (Q.from_(table).select(table.id, table.prepared_at, table.snapshot)
+             .where(table.company_id == P()).where(table.rfq_id == P())
+             .orderby(table.prepared_at, order=Order.desc)
+             .orderby(table.id, order=Order.desc).limit(20))
+    rows = conn.execute(query.get_sql(), (rfq["company_id"], rfq["id"])).fetchall()
+    snapshots = [{"draft_id": row["id"], "prepared_at": row["prepared_at"],
+                  "preparation": json.loads(row["snapshot"])} for row in rows]
+    ok({"rfq_id": rfq["id"], "company_id": rfq["company_id"],
+        "preparations": snapshots, "count": len(snapshots)})
+
 
 def submit_rfq(conn, args):
     """Submit an RFQ."""
@@ -2333,6 +2509,111 @@ def _document_currency(conn, supplier_row, company_id):
 # 25. create-purchase-invoice
 # ---------------------------------------------------------------------------
 
+def _capture_bytes(args):
+    """Read one immutable bounded local capture, without following a symlink."""
+    path = getattr(args, "capture_file", None)
+    if not isinstance(path, str) or not path or len(path) > 1000:
+        err("--capture-file must name a local regular file")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "rb") as source:
+            metadata = os.fstat(source.fileno())
+            if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= 10 * 1024 * 1024:
+                err("Capture must be a nonempty regular file of at most 10 MiB")
+            content = source.read(10 * 1024 * 1024 + 1)
+    except OSError:
+        err("Capture file cannot be read as a local regular file")
+    if not content or len(content) > 10 * 1024 * 1024:
+        err("Capture must contain at most 10 MiB")
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        if len(content) < 33 or content[12:16] != b"IHDR":
+            err("Capture PNG header is invalid")
+        width, height = struct.unpack(">II", content[16:24])
+        if not 0 < width <= 10000 or not 0 < height <= 10000 or width * height > 20000000:
+            err("Capture PNG must contain at most 20 million pixels")
+        kind = "png"
+    elif content.startswith(b"%PDF-"):
+        kind = "pdf"
+    else:
+        err("Capture supports PNG images and text-layer PDF files only")
+    return content, kind, hashlib.sha256(content).hexdigest()
+
+
+def _capture_company(conn, args):
+    company_id = getattr(args, "company_id", None)
+    company = Table("company")
+    query = Q.from_(company).select(company.id).where(company.id == P())
+    if not company_id or conn.execute(query.get_sql(), (company_id,)).fetchone() is None:
+        err("--company-id must identify an existing company")
+
+
+def capture_vendor_bill(conn, args):
+    """Return local untrusted extraction for review, without database writes."""
+    _capture_company(conn, args)
+    content, kind, digest = _capture_bytes(args)
+    tool = "tesseract" if kind == "png" else "pdftotext"
+    executable = shutil.which(tool, path="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+    if executable is None:
+        err(f"Local capture requires {tool}; no extraction or draft was created")
+    with tempfile.TemporaryDirectory(prefix="erpclaw-bill-") as folder:
+        source_path = os.path.join(folder, "input." + kind)
+        with open(source_path, "xb") as target:
+            target.write(content)
+        output_base = os.path.join(folder, "extracted")
+        output_path = output_base + ".txt"
+        command = ([executable, source_path, output_base, "-l", "eng", "--psm", "6"]
+                   if kind == "png" else
+                   [executable, "-layout", "-enc", "UTF-8", source_path, output_path])
+        try:
+            result = subprocess.run(
+                command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, timeout=30, check=False,
+                env={"PATH": "/usr/bin:/bin", "LANG": "C", "OMP_THREAD_LIMIT": "1",
+                     "TMPDIR": folder})
+            if result.returncode != 0:
+                err("Local extraction failed; no draft was created")
+            with open(output_path, "rb") as output:
+                extracted = output.read(65537)
+            if len(extracted) > 65536:
+                err("Extracted text exceeds 64 KiB; split the capture before retrying")
+            text = extracted.decode("utf-8")
+        except subprocess.TimeoutExpired:
+            err("Local extraction exceeded 30 seconds; no draft was created")
+        except (OSError, UnicodeError):
+            err("Local extraction did not produce readable UTF-8 text")
+    if not text.strip():
+        err("No text extracted; PDF capture requires a text layer")
+    ok({"company_id": args.company_id, "capture_sha256": digest,
+        "capture_bytes": len(content), "format": kind, "tool": tool,
+        "text": text, "untrusted": True, "review_required": True,
+        "draft_created": False})
+
+
+def add_captured_vendor_bill(conn, args):
+    """Save separately reviewed fields against the exact local capture bytes."""
+    _capture_company(conn, args)
+    _, _, digest = _capture_bytes(args)
+    expected = getattr(args, "capture_sha256", None)
+    if not isinstance(expected, str) or re.fullmatch(r"[0-9a-f]{64}", expected) is None:
+        err("--capture-sha256 must be the reviewed capture's lowercase SHA-256")
+    if expected != digest:
+        err("Capture changed since review; extract and review the current file again")
+    raw = getattr(args, "bill_json", None)
+    if not isinstance(raw, str) or not raw or len(raw) > 5000:
+        err("--bill-json must contain separately reviewed fields of at most 5000 characters")
+    try:
+        bill = json.loads(raw)
+    except ValueError:
+        err("Invalid JSON for --bill-json")
+    if not isinstance(bill, dict) or "source_message_id" in bill:
+        err("Captured bill fields must be an object without source_message_id")
+    bill["source_message_id"] = "capture:" + digest
+    reviewed = argparse.Namespace(
+        bill_json=json.dumps(bill), company_id=args.company_id,
+        _intake_source_kind="local-capture", _intake_capture_sha256=digest)
+    add_vendor_bill_intake(conn, reviewed)
+
+
 def add_vendor_bill_intake(conn, args):
     """Turn reviewed, structured email fields into a draft, never a posting."""
     raw = getattr(args, "bill_json", None)
@@ -2400,6 +2681,8 @@ def add_vendor_bill_intake(conn, args):
         items=json.dumps(normalized), purchase_order_id=None,
         purchase_receipt_id=None, tax_template_id=None,
         _intake_source_message_id=bill["source_message_id"],
+        _intake_source_kind=getattr(args, "_intake_source_kind", "email"),
+        _intake_capture_sha256=getattr(args, "_intake_capture_sha256", None),
     )
     create_purchase_invoice(conn, draft_args)
 
@@ -2670,8 +2953,11 @@ def create_purchase_invoice(conn, args):
                     "line_discounts": _bill_line_discounts}
     intake_source = getattr(args, "_intake_source_message_id", None)
     if intake_source is not None:
-        audit_values["intake_source"] = "email"
+        audit_values["intake_source"] = getattr(args, "_intake_source_kind", "email")
         audit_values["source_message_id"] = intake_source
+        capture_digest = getattr(args, "_intake_capture_sha256", None)
+        if capture_digest is not None:
+            audit_values["capture_sha256"] = capture_digest
     audit(conn, "erpclaw-buying", "create-purchase-invoice", "purchase_invoice", pi_id,
           new_values=audit_values)
     conn.commit()
@@ -6204,6 +6490,230 @@ def set_item_purchase_uom(conn, args):
 # Action dispatch
 # ---------------------------------------------------------------------------
 
+def _worksheet_object(value, required, optional=()):
+    if not isinstance(value, dict) or not required <= value.keys():
+        err("Commitment worksheet object is missing required fields")
+    if value.keys() - required - set(optional):
+        err("Commitment worksheet contains unsupported fields")
+    return value
+
+
+def _worksheet_money(value, label):
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9]{1,15}(?:\.[0-9]{1,2})?", value):
+        err(f"{label} must be a nonnegative Decimal string with at most two decimal places")
+    return Decimal(value)
+
+
+def _worksheet_quantity(value):
+    try:
+        amount = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        err("Stored commitment quantity is invalid")
+    if not amount.is_finite() or amount < 0:
+        err("Stored commitment quantity must be finite and nonnegative")
+    return amount
+
+
+def _worksheet_text(value, label):
+    if not isinstance(value, str) or not value.strip() or len(value) > 120 or any(ord(c) < 32 for c in value):
+        err(f"{label} must be nonempty text of at most 120 characters")
+    return value
+
+
+def _worksheet_row(conn, table_name, row_id, company_id):
+    table = Table(table_name)
+    row = conn.execute(Q.from_(table).select(table.star).where(table.id == P()).get_sql(), (row_id,)).fetchone()
+    if not row or (row["id"] if table_name == "company" else row["company_id"]) != company_id:
+        err(f"{table_name} not found in the selected company")
+    return dict(row)
+
+
+def _worksheet_relief(conn, po, line, kind):
+    item = Table("item")
+    item_row = conn.execute(Q.from_(item).select(item.stock_uom).where(item.id == P()).get_sql(), (line["item_id"],)).fetchone()
+    if not item_row:
+        err("Commitment order item no longer exists")
+    order_uom = line["uom"] or item_row["stock_uom"]
+    parent = Table("purchase_" + kind)
+    child = Table("purchase_" + kind + "_item")
+    statuses = ("submitted",) if kind == "receipt" else ("submitted", "partially_paid", "paid", "overdue")
+    q = (Q.from_(child).join(parent).on(child["purchase_" + kind + "_id"] == parent.id)
+         .select(child.quantity, child.uom, parent.company_id, parent.purchase_order_id, child.item_id)
+         .where(child.purchase_order_item_id == P()).where(parent.status.isin(statuses)))
+    if kind == "invoice":
+        q = q.where(parent.is_return == 0)
+    total = Decimal("0")
+    for row in conn.execute(q.get_sql(), (line["id"],)).fetchall():
+        if (row["company_id"] != po["company_id"] or row["item_id"] != line["item_id"]
+                or row["purchase_order_id"] not in (None, po["id"])):
+            err("Commitment relief document has a different company or item")
+        if (row["uom"] or item_row["stock_uom"]) != order_uom:
+            err("Commitment relief and purchase order must use the same UOM")
+        total += _worksheet_quantity(row["quantity"])
+    return total
+
+
+def add_commitment_worksheet(conn, args):
+    """Save an unenforced buying commitment calculation, never a reservation."""
+    company_id = getattr(args, "company_id", None)
+    if not company_id:
+        err("--company-id is required")
+    company = _worksheet_row(conn, "company", company_id, company_id)
+    try:
+        def pairs(items):
+            result = {}
+            for key, value in items:
+                if key in result:
+                    raise ValueError("Duplicate commitment worksheet field")
+                result[key] = value
+            return result
+        data = json.loads(getattr(args, "worksheet_json", None), object_pairs_hook=pairs)
+    except (TypeError, ValueError):
+        err("--worksheet-json must be valid JSON without duplicate fields")
+    _worksheet_object(data, {"fund_reference", "award_reference", "fiscal_year_id", "budget_amount", "actual_amount", "requisitions", "purchase_orders"})
+    for key in ("fund_reference", "award_reference", "fiscal_year_id"):
+        _worksheet_text(data[key], key)
+    year = _worksheet_row(conn, "fiscal_year", data["fiscal_year_id"], company_id)
+    budget = _worksheet_money(data["budget_amount"], "budget_amount")
+    actual = _worksheet_money(data["actual_amount"], "actual_amount")
+    if not all(isinstance(data[k], list) and len(data[k]) <= 100 for k in ("requisitions", "purchase_orders")):
+        err("requisitions and purchase_orders must be arrays of at most 100 documents")
+    if not data["requisitions"] and not data["purchase_orders"]:
+        err("Select at least one requisition or purchase order")
+    requests, seen_requests = {}, set()
+    for selection in data["requisitions"]:
+        _worksheet_object(selection, {"material_request_id", "rates"})
+        rid = _worksheet_text(selection["material_request_id"], "material_request_id")
+        if rid in seen_requests:
+            err("Repeated requisition")
+        seen_requests.add(rid)
+        mr = _worksheet_row(conn, "material_request", rid, company_id)
+        if mr["request_type"] != "purchase" or mr["status"] not in ("submitted", "partially_ordered", "ordered"):
+            err("Select only submitted purchase requisitions")
+        if not year["start_date"] <= mr["created_at"][:10] <= year["end_date"]:
+            err("Requisition is outside the selected fiscal year")
+        table = Table("material_request_item")
+        lines = {r["id"]: dict(r) for r in conn.execute(Q.from_(table).select(table.star).where(table.material_request_id == P()).get_sql(), (rid,)).fetchall()}
+        if not isinstance(selection["rates"], list) or not selection["rates"]:
+            err("Each requisition requires reviewed rates for every line")
+        priced = set()
+        for rate in selection["rates"]:
+            _worksheet_object(rate, {"material_request_item_id", "unit_rate"})
+            lid = _worksheet_text(rate["material_request_item_id"], "material_request_item_id")
+            if lid not in lines or lid in priced:
+                err("Requisition rate names a missing or repeated line")
+            priced.add(lid)
+            requests[lid] = {**lines[lid], "unit_rate": _worksheet_money(rate["unit_rate"], "unit_rate"), "linked_quantity": Decimal("0")}
+        if priced != lines.keys():
+            err("Each requisition requires reviewed rates for every line")
+    orders, seen_orders, encumbrance = [], set(), Decimal("0")
+    for selection in data["purchase_orders"]:
+        _worksheet_object(selection, {"purchase_order_id", "requisition_links"})
+        pid = _worksheet_text(selection["purchase_order_id"], "purchase_order_id")
+        if pid in seen_orders:
+            err("Repeated purchase order")
+        seen_orders.add(pid)
+        po = _worksheet_row(conn, "purchase_order", pid, company_id)
+        if po["status"] == "draft":
+            err("Draft purchase orders are not commitments")
+        if not year["start_date"] <= po["order_date"] <= year["end_date"]:
+            err("Purchase order is outside the selected fiscal year")
+        if po["currency"] != company["default_currency"] or Decimal(po["exchange_rate"]) != 1:
+            err("Commitment worksheet supports company-currency purchase orders only")
+        try:
+            dims = json.loads(po["dimensions_json"])
+        except (ValueError, TypeError):
+            err("Purchase order dimensions are invalid")
+        if not isinstance(dims, dict):
+            err("Purchase order dimensions are invalid")
+        for key in ("fund", "award"):
+            if dims.get(key) and dims[key] != data[key + "_reference"]:
+                err("Purchase order fund or award differs from worksheet references")
+        table = Table("purchase_order_item")
+        lines = [dict(r) for r in conn.execute(Q.from_(table).select(table.star).where(table.purchase_order_id == P()).orderby(table.id).get_sql(), (pid,)).fetchall()]
+        line_map = {r["id"]: r for r in lines}
+        if not lines or not isinstance(selection["requisition_links"], list):
+            err("Purchase order requires lines and an explicit requisition_links array")
+        linked = set()
+        for link in selection["requisition_links"]:
+            _worksheet_object(link, {"purchase_order_item_id", "material_request_item_id"})
+            lid, rid = link["purchase_order_item_id"], link["material_request_item_id"]
+            if not isinstance(lid, str) or not isinstance(rid, str) or lid not in line_map or rid not in requests or lid in linked:
+                err("Requisition link names a missing or repeated line")
+            linked.add(lid)
+            item = Table("item")
+            item_row = conn.execute(Q.from_(item).select(item.stock_uom).where(item.id == P()).get_sql(), (requests[rid]["item_id"],)).fetchone()
+            if not item_row:
+                err("Linked requisition item no longer exists")
+            if line_map[lid]["item_id"] != requests[rid]["item_id"] or (line_map[lid]["uom"] or item_row["stock_uom"]) != (requests[rid]["uom"] or item_row["stock_uom"]):
+                err("Linked requisition and order must have the same item and UOM")
+            requests[rid]["linked_quantity"] += _worksheet_quantity(line_map[lid]["quantity"])
+        net = sum((_worksheet_money(r["net_amount"], "stored net_amount") for r in lines), Decimal("0"))
+        tax = _worksheet_money(po["tax_amount"], "stored tax_amount")
+        grand = _worksheet_money(po["grand_total"], "stored grand_total")
+        if net != _worksheet_money(po["total_amount"], "stored total_amount") or grand != net + tax or (net == 0 and tax != 0):
+            err("Purchase order totals do not agree with its net lines")
+        remainder, order_amount = tax, Decimal("0")
+        for index, line in enumerate(lines):
+            quantity = _worksheet_quantity(line["quantity"])
+            if quantity <= 0:
+                err("Purchase order line must have a positive quantity")
+            line_net = Decimal(line["net_amount"])
+            share = remainder if index == len(lines) - 1 else (min(remainder, round_currency(tax * line_net / net)) if net else Decimal("0"))
+            remainder -= share
+            if po["status"] in ("cancelled", "closed"):
+                remaining = Decimal("0")
+            else:
+                received = _worksheet_relief(conn, po, line, "receipt")
+                invoiced = _worksheet_relief(conn, po, line, "invoice")
+                remaining = max(Decimal("0"), quantity - max(received, invoiced))
+            amount = round_currency((line_net + share) * remaining / quantity)
+            order_amount += amount
+        encumbrance += order_amount
+        orders.append({"purchase_order_id": pid, "status": po["status"], "remaining_commitment": str(round_currency(order_amount))})
+    pre_encumbrance, requisitions = Decimal("0"), []
+    for lid, line in sorted(requests.items()):
+        quantity, ordered = _worksheet_quantity(line["quantity"]), _worksheet_quantity(line["ordered_qty"])
+        if line["linked_quantity"] != ordered or ordered > quantity:
+            err("Requisition ordered quantity must match explicitly linked purchase orders")
+        amount = round_currency((quantity - ordered) * line["unit_rate"])
+        pre_encumbrance += amount
+        requisitions.append({"material_request_item_id": lid, "remaining_quantity": str(quantity - ordered), "pre_encumbrance": str(amount)})
+    available = round_currency(budget - actual - encumbrance - pre_encumbrance)
+    worksheet_id = str(uuid.uuid4())
+    result = {"worksheet_id": worksheet_id, "company_id": company_id, "currency": company["default_currency"],
+              "fund_reference": data["fund_reference"], "award_reference": data["award_reference"], "fiscal_year_id": data["fiscal_year_id"],
+              "calculated_at": datetime.now(timezone.utc).isoformat(), "budget_amount": str(round_currency(budget)), "actual_amount": str(round_currency(actual)),
+              "pre_encumbrance": str(round_currency(pre_encumbrance)), "encumbrance": str(round_currency(encumbrance)), "available_balance": str(available),
+              "budget_exceeded": available < 0, "enforced": False, "input_basis": "Operator-reviewed budget, actuals, references and requisition links; current selected documents only",
+              "requisitions": requisitions, "purchase_orders": orders, "reviewed_input": data}
+    try:
+        audit(conn, "erpclaw-buying", "add-commitment-worksheet", "commitment_worksheet", worksheet_id, new_values=result)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    ok(result)
+
+
+def get_commitment_worksheet(conn, args):
+    """Read a saved calculation without recalculating or reserving money."""
+    company_id = getattr(args, "company_id", None)
+    if not company_id or not getattr(args, "worksheet_id", None):
+        err("--company-id and --worksheet-id are required")
+    _worksheet_row(conn, "company", company_id, company_id)
+    table = Table("audit_log")
+    q = (Q.from_(table).select(table.new_values).where(table.skill == P()).where(table.action == P())
+         .where(table.entity_type == P()).where(table.entity_id == P()))
+    rows = conn.execute(q.get_sql(), ("erpclaw-buying", "add-commitment-worksheet", "commitment_worksheet", args.worksheet_id)).fetchall()
+    if len(rows) != 1:
+        err("Commitment worksheet not found")
+    result = json.loads(rows[0]["new_values"])
+    if result["company_id"] != company_id:
+        err("Commitment worksheet not found in the selected company")
+    ok(result)
+
+
 def _resolve_company_flag(conn, args):
     """Resolve --company (name or id) into args.company_id."""
     if getattr(args, "company_name", None) and not getattr(args, "company_id", None):
@@ -6216,6 +6726,8 @@ def _resolve_company_flag(conn, args):
 
 
 ACTIONS = {
+    "add-commitment-worksheet": add_commitment_worksheet,
+    "get-commitment-worksheet": get_commitment_worksheet,
     "add-supplier": add_supplier,
     "update-supplier": update_supplier,
     "get-supplier": get_supplier,
@@ -6226,6 +6738,8 @@ ACTIONS = {
     "get-material-request": get_material_request,
     "create-po-from-material-request": create_po_from_material_request,
     "add-rfq": add_rfq,
+    "create-rfq-supplier-request": create_rfq_supplier_request,
+    "list-rfq-supplier-requests": list_rfq_supplier_requests,
     "submit-rfq": submit_rfq,
     "list-rfqs": list_rfqs,
     "add-supplier-quotation": add_supplier_quotation,
@@ -6245,6 +6759,8 @@ ACTIONS = {
     "cancel-purchase-receipt": cancel_purchase_receipt,
     "create-purchase-invoice": create_purchase_invoice,
     "add-vendor-bill-intake": add_vendor_bill_intake,
+    "capture-vendor-bill": capture_vendor_bill,
+    "add-captured-vendor-bill": add_captured_vendor_bill,
     "update-purchase-invoice": update_purchase_invoice,
     "get-purchase-invoice": get_purchase_invoice,
     "list-purchase-invoices": list_purchase_invoices,
@@ -6306,6 +6822,7 @@ def main():
 
     # RFQ
     parser.add_argument("--rfq-id")
+    parser.add_argument("--communication-kind")
     parser.add_argument("--suppliers")  # JSON
     parser.add_argument("--rfq-status", dest="rfq_status")
 
@@ -6328,6 +6845,10 @@ def main():
 
     # Purchase invoice
     parser.add_argument("--bill-json")
+    parser.add_argument("--capture-file")
+    parser.add_argument("--capture-sha256")
+    parser.add_argument("--worksheet-json")
+    parser.add_argument("--worksheet-id")
     parser.add_argument("--purchase-invoice-id")
     parser.add_argument("--due-date")
     parser.add_argument("--pi-status", dest="pi_status")

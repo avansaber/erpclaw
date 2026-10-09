@@ -40,7 +40,7 @@ AUDIT TRAIL (M102). Every claim this run backfills gets ONE ``audit_log`` row
 naming the appended row's id, account, amount and currency, at the claim's own grain,
 on the SAME connection inside the SAME transaction as the insert, so a
 report run or a crashed run leaves no trail and a committed backfill always
-has one. Read it back with ``get-audit-log`` for the action
+has one. Read it back with ``get-system-audit-log`` for the action
 ``migration:051_backfill_expense_claim_ple``.
 """
 import argparse
@@ -65,7 +65,7 @@ from erpclaw_lib.paths import db_default  # noqa: E402
 DEFAULT_DB_PATH = db_default()
 
 # Derived, never typed: the runner ledgers this file under its stem, and
-# `get-audit-log --audit-action migration:<stem>` has to match that exact string.
+# `get-system-audit-log --audit-action migration:<stem>` has to match that exact string.
 MIGRATION_ID = os.path.splitext(os.path.basename(__file__))[0]
 
 # M102: this appends one row per proven claim whose amount comes from this
@@ -232,7 +232,7 @@ def _print_summary(writes, already_present, skips, report_only):
               "operator repairs the approval ledger.")
     if writes and not report_only:
         print("  audit trail: %d audit_log row(s), committed with the "
-              "backfill. Read them back with:  get-audit-log --audit-action "
+              "backfill. Read them back with:  get-system-audit-log --audit-action "
               "\"migration:051_backfill_expense_claim_ple\"" % len(writes))
     elif writes:
         print("  report-only: no audit_log row is written -- a trail for a change "

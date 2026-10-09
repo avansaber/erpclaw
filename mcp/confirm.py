@@ -168,6 +168,10 @@ class ReadonlyModeInvalid(Exception):
 # ``get-*``/``list-*`` foundation read. Pinned verbatim by the m261b product
 # rule; extend only by changing this set and its tests together.
 READ_REPORTS = frozenset({
+    "calculate-benefit-liability",
+    "calculate-revenue-progress",
+    "check-reorder",
+    "sefa-readiness-report",
     "evaluate-rule",
     "trial-balance",
     "general-ledger",
@@ -181,6 +185,8 @@ READ_REPORTS = frozenset({
     "payment-summary",
     "tax-summary",
     "comparative-pl",
+    "consolidation-translation-report",
+    "contract-balance-report",
     "budget-vs-actual",
     "budget-variance",
     "continuous-close-readiness",
@@ -189,6 +195,7 @@ READ_REPORTS = frozenset({
     "generate-form940-data",
     "generate-form941-data",
     "inventory-demand-forecast",
+    "journal-month-end-close-preview",
     "multi-dim-trial-balance",
     "standard-cost-variance-report",
     "run-follow-up-cycle",
@@ -210,6 +217,9 @@ READ_REPORTS = frozenset({
 # Extend only by re-running the sweep and pasting its pass set here; an L0
 # test holds this set equal to the sweep's result.
 PINNED_READS = frozenset({
+    "calculate-revenue-progress",
+    "check-reorder",
+    "sefa-readiness-report",
     "evaluate-rule",
     "generate-form941-data",
     "generate-form940-data",
@@ -283,6 +293,7 @@ PINNED_READS = frozenset({
     "hr-status",
     "inventory-demand-forecast",
     "inventory-status",
+    "journal-month-end-close-preview",
     "journals-status",
     "list-account-types",
     "list-accounts",
@@ -348,6 +359,9 @@ PINNED_READS = frozenset({
     "list-recurring-templates",
     "list-reservations",
     "list-revenue-contracts",
+    "consolidation-translation-report",
+    "calculate-benefit-liability",
+    "contract-balance-report",
     "list-rfqs",
     "list-roles",
     "list-salary-assignments",
