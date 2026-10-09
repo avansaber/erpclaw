@@ -16,4 +16,5 @@ build/
 conftest.py
 pytest.ini
 scripts/signing_log.txt
+docs/assets/erpclaw-readme/
 .clawhubignore

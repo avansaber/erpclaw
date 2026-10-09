@@ -1,5 +1,5 @@
 {
-  "generated": "2026-10-08",
+  "generated": "2026-10-09",
   "github_repository_manifests": {
     "avansaber/agricultureclaw": {
       "files": {
@@ -1345,7 +1345,7 @@
       "files": {
         ".clawhubignore": {
           "executable": false,
-          "sha256": "690d43100cee40b2038a6c69afd29f5b73da342d15bba93497289cd6efb364cd"
+          "sha256": "9b1d047206afb755e86dadc2467625770dafd1810db4fdd900d9f51c867d0aee"
         },
         ".github/workflows/test.yml": {
           "executable": false,
@@ -1361,7 +1361,7 @@
         },
         "README.md": {
           "executable": false,
-          "sha256": "975b59059bfec0a722dab017bc1bb6ec42ca9123d8f7f62f1f026ecedcc559c1"
+          "sha256": "8454ad5ab7e901411778e25ad5767b557a44038fd54210423252064e5819e8a6"
         },
         "SKILL.md": {
           "executable": false,
@@ -1382,6 +1382,26 @@
         "bin/erpclaw": {
           "executable": true,
           "sha256": "a12d6e49943854124a3d233e191039b592856e9150ebb6c284d99b85992c6baa"
+        },
+        "docs/assets/erpclaw-readme/books-say-no.gif": {
+          "executable": false,
+          "sha256": "5cf62eacc56d99263b8b7cbcaeae83cd31c684a34687ccea1a2a2f0f49a62162"
+        },
+        "docs/assets/erpclaw-readme/books-say-no.svg": {
+          "executable": false,
+          "sha256": "4f27e1fe1b061c0d8ce392ec5f7c13f8b50da9df5496dbba97a6eebf87570a59"
+        },
+        "docs/assets/erpclaw-readme/hero-dark.svg": {
+          "executable": false,
+          "sha256": "9164246d01580a640e9cd87be844d842f1a2c3e60cb2283c816c441fdcb88102"
+        },
+        "docs/assets/erpclaw-readme/hero-light.svg": {
+          "executable": false,
+          "sha256": "24635ccedfcb30f8e9a480158193090376e6ce0c103a63643b92422334dd11a2"
+        },
+        "docs/assets/erpclaw-readme/talk-to-your-books.svg": {
+          "executable": false,
+          "sha256": "da455768c842580c555223ca04726f27f06804316b971203a512cf367b4100aa"
         },
         "mcp/__init__.py": {
           "executable": false,
@@ -7493,7 +7513,7 @@
         },
         "skills/erpclaw/README.md": {
           "executable": false,
-          "sha256": "975b59059bfec0a722dab017bc1bb6ec42ca9123d8f7f62f1f026ecedcc559c1"
+          "sha256": "8454ad5ab7e901411778e25ad5767b557a44038fd54210423252064e5819e8a6"
         },
         "skills/erpclaw/SKILL.md": {
           "executable": false,
@@ -10246,7 +10266,7 @@
       "files_sha256": {
         "CHANGELOG.md": "91c2bacb98eb6a85eb8579e412f34164ccfb1acdee5147d1031a658d4e1f851a",
         "LICENSE.txt": "7bb0c0eb1db8b40884cd154315e459fadacd2bff10190df3516639282608ed0c",
-        "README.md": "975b59059bfec0a722dab017bc1bb6ec42ca9123d8f7f62f1f026ecedcc559c1",
+        "README.md": "8454ad5ab7e901411778e25ad5767b557a44038fd54210423252064e5819e8a6",
         "SKILL.md": "72d29833621fc3a46819bcf3912c9960198170faa7c2f656aa8f6dd665f34a19",
         "UI.yaml": "a4f66acc8a1d157228730776c1b4247062abab57b1db88c307837794b7e0ce4d",
         "assets/demo.svg": "a54a4d95a3bc98d4408c9f952899f1f37dd22b7a5d18b4b5a8b17a79acaa784f",
@@ -12038,8 +12058,8 @@
       "version": "1.1.0"
     }
   },
-  "registry_version": 101,
-  "signed_at": "2026-10-08T13:33:57Z",
+  "registry_version": 103,
+  "signed_at": "2026-10-09T10:55:34Z",
   "total_actions": 3234,
   "version": "4.15.5"
 }
