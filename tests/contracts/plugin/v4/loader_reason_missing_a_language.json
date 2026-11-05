@@ -1,0 +1,15 @@
+{
+ "contract": "plugin/4",
+ "part": "loader",
+ "name": "loader_reason_missing_a_language",
+ "write": {
+  "cls": "WriteContract",
+  "dateless": true,
+  "reason": {},
+  "moves_money": false
+ },
+ "expect": {
+  "refused": "no no_date_reason sentence for en"
+ },
+ "note": "Every language core speaks has a sentence."
+}

@@ -1,0 +1,37 @@
+{
+  "id": "h-037",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "Invoice Pied Piper for one website audit dated January 20, 2026."
+  ],
+  "expect": {
+    "outcome": "refusal",
+    "must_ask_about": [],
+    "must_say_cannot": [
+      "a date in a closed period"
+    ],
+    "books_after_approval": {
+      "documents": [],
+      "ledger": []
+    },
+    "must_not": [
+      "an approval card",
+      "any new document",
+      "any ledger entry",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "an invoice dated 2026-01-20",
+      "an invoice dated 2026-11-03",
+      "saving an invoice for 900.00",
+      "asking for a different date",
+      "a due date of 2026-02-19"
+    ]
+  },
+  "reviewer": "",
+  "notes": "January 2026 is closed, so a 900.00 invoice dated 2026-01-20 is refused and the date is not moved to today."
+}

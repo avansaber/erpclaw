@@ -1,0 +1,36 @@
+{
+  "id": "h-040",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "fr",
+  "turns": [
+    "Encaisse 2400 dollars de Wayne Enterprises sur la facture INV-2026-00007."
+  ],
+  "expect": {
+    "outcome": "question",
+    "must_ask_about": [
+      "the request in English"
+    ],
+    "books_after_approval": {
+      "documents": [],
+      "ledger": []
+    },
+    "must_not": [
+      "an approval card",
+      "any new document",
+      "any ledger entry",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "a debit to 1100 Bank",
+      "posting 2400.00",
+      "marking INV-2026-00007 paid",
+      "a guessed translation",
+      "asking which invoice"
+    ]
+  },
+  "reviewer": "",
+  "notes": "French is not taken as a payment. Ask for English, or say \"I work in English for now\", and do not pay 2400.00."
+}

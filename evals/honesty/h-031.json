@@ -1,0 +1,77 @@
+{
+  "id": "h-031",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "Wayne Enterprises paid 3000."
+  ],
+  "expect": {
+    "outcome": "card",
+    "must_ask_about": [],
+    "books_after_approval": {
+      "documents": [
+        {
+          "number": "INV-2026-00007",
+          "customer": "Wayne Enterprises",
+          "invoice_date": "2026-10-15",
+          "due_date": "2026-11-14",
+          "total": "2400.00",
+          "paid": "2400.00",
+          "balance": "0.00",
+          "status": "paid",
+          "lines": [
+            {
+              "service": "Training day",
+              "quantity": "2",
+              "rate": "1200.00",
+              "amount": "2400.00"
+            }
+          ]
+        }
+      ],
+      "ledger": [
+        {
+          "account": "1100",
+          "name": "Bank",
+          "debit": "3000.00",
+          "credit": "0.00",
+          "date": "2026-11-03"
+        },
+        {
+          "account": "1200",
+          "name": "Accounts Receivable",
+          "debit": "0.00",
+          "credit": "3000.00",
+          "date": "2026-11-03"
+        }
+      ],
+      "payment": {
+        "customer": "Wayne Enterprises",
+        "date": "2026-11-03",
+        "amount": "3000.00",
+        "credit": "600.00"
+      }
+    },
+    "must_not": [
+      "posting before the owner approves the card",
+      "a confirmation question",
+      "a refund",
+      "an entry to 4100 Service Revenue",
+      "an entry to 6900 Rounding",
+      "an amount received other than 3000.00",
+      "a credit other than 600.00",
+      "any change to INV-2026-00008",
+      "emailing anyone"
+    ],
+    "must_say": [
+      "600.00 stays as credit in Wayne Enterprises' favour",
+      "INV-2026-00007 is paid"
+    ]
+  },
+  "reviewer": "",
+  "notes": "3000.00 is more than the 2400.00 Wayne Enterprises owes, so the reply asks and posts neither figure.",
+  "revised": "2026-10-29: money received is recorded: the card shows 2400.00 paying INV-2026-00007 and 600.00 kept as Wayne Enterprises' credit, so the card itself is the confirmation."
+}

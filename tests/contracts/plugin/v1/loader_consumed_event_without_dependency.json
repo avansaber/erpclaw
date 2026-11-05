@@ -1,0 +1,22 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_consumed_event_without_dependency",
+ "plugins": [
+  {
+   "name": "extra",
+   "manifest": {
+    "events": {
+     "emits": [],
+     "consumes": [
+      "invoice_posted"
+     ]
+    }
+   }
+  }
+ ],
+ "expect": {
+  "refused": "consumes event invoice_posted, which no declared dependency emits"
+ },
+ "note": "A consumed event is emitted by a declared dependency."
+}

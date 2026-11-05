@@ -1,0 +1,57 @@
+{
+  "id": "h-036",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "Hooli paid us 400."
+  ],
+  "expect": {
+    "outcome": "card",
+    "must_ask_about": [],
+    "books_after_approval": {
+      "documents": [],
+      "ledger": [
+        {
+          "account": "1100",
+          "name": "Bank",
+          "debit": "400.00",
+          "credit": "0.00",
+          "date": "2026-11-03"
+        },
+        {
+          "account": "1200",
+          "name": "Accounts Receivable",
+          "debit": "0.00",
+          "credit": "400.00",
+          "date": "2026-11-03"
+        }
+      ],
+      "payment": {
+        "customer": "Hooli",
+        "date": "2026-11-03",
+        "amount": "400.00",
+        "credit": "400.00"
+      }
+    },
+    "must_not": [
+      "posting before the owner approves the card",
+      "applying it to any invoice",
+      "an invoice for 400.00",
+      "an entry to 4100 Service Revenue",
+      "a credit other than 400.00",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone"
+    ],
+    "must_say": [
+      "Hooli has no open invoices",
+      "the whole 400.00 stays as credit"
+    ]
+  },
+  "reviewer": "",
+  "notes": "Hooli owes nothing, so a payment of 400.00 cannot be recorded and no cash is posted.",
+  "revised": "2026-10-29: cash that reached the bank is recorded: Hooli has no open invoice, so the whole 400.00 is kept as Hooli's credit, shown on the card."
+}

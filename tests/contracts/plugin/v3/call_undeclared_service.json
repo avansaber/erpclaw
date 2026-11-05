@@ -1,0 +1,11 @@
+{
+ "contract": "plugin/3",
+ "part": "call",
+ "name": "call_undeclared_service",
+ "provider": true,
+ "uses": [],
+ "expect": {
+  "code": "undeclared_service"
+ },
+ "note": "A service declared neither way is refused, named without any ?."
+}

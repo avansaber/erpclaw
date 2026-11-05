@@ -1,0 +1,14 @@
+{
+ "contract": "plugin/2",
+ "part": "send",
+ "name": "send_exception_after_mark_is_unknown",
+ "connector": {
+  "mark": true,
+  "raise": true
+ },
+ "expect": {
+  "status": "unknown",
+  "owner_text_starts": "We don't know whether this was sent."
+ },
+ "note": "An exception after the mark counts as no answer: at most once."
+}

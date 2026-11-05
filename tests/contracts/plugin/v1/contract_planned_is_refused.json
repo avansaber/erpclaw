@@ -1,0 +1,16 @@
+{
+ "contract": "plugin/1",
+ "part": "contract",
+ "name": "contract_planned_is_refused",
+ "operation": "svc_post",
+ "planned": "Core",
+ "args": {
+  "amount": "1"
+ },
+ "expect": {
+  "refusal": {
+   "code": "planned"
+  }
+ },
+ "note": "A contract planned for a later release is refused as planned."
+}

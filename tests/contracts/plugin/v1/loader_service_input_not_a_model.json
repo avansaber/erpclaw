@@ -1,0 +1,21 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_service_input_not_a_model",
+ "plugins": [
+  {
+   "name": "extra",
+   "services": [
+    {
+     "name": "quote",
+     "effect": "read",
+     "input": "not_a_model"
+    }
+   ]
+  }
+ ],
+ "expect": {
+  "refused": "service quote has no Pydantic input model"
+ },
+ "note": "A service's input is a Pydantic model."
+}

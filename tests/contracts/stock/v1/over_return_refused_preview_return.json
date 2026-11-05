@@ -1,0 +1,59 @@
+{
+ "contract": "stock/1",
+ "service": "preview_return",
+ "name": "over_return_refused_preview_return",
+ "books": {
+  "currency": "USD",
+  "warehouses": {
+   "@wh:main": {
+    "name": "Main Warehouse",
+    "account": "@acct:inv"
+   }
+  },
+  "items": {
+   "@item:copper_wire": {
+    "method": "moving_average"
+   }
+  }
+ },
+ "before": [
+  {
+   "op": "receive",
+   "as": "r0",
+   "item": "@item:copper_wire",
+   "warehouse": "@wh:main",
+   "qty": "10",
+   "rate": "28.00",
+   "date": "2026-09-10",
+   "voucher": "@v:r0"
+  },
+  {
+   "op": "issue",
+   "as": "i",
+   "item": "@item:copper_wire",
+   "warehouse": "@wh:main",
+   "qty": "4",
+   "date": "2026-09-11",
+   "voucher": "@v:inv"
+  }
+ ],
+ "input": {
+  "voucher_type": "sales_credit_note",
+  "voucher": "@v:cn",
+  "posting_date": "2026-09-12",
+  "original": {
+   "voucher": "@v:inv",
+   "line": 1
+  },
+  "qty": "5"
+ },
+ "refusal": {
+  "code": "return_exceeds_issue",
+  "issued": "4",
+  "returned": "0"
+ },
+ "after": {
+  "unchanged": true
+ },
+ "note": "4 issued, none returned yet: 5 cannot come back"
+}

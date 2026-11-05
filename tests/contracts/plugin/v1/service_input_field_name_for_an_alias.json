@@ -1,0 +1,22 @@
+{
+ "contract": "plugin/1",
+ "part": "service",
+ "name": "service_input_field_name_for_an_alias",
+ "caller": "svc_consumer",
+ "service": "svc_provider.quote",
+ "on": "plain",
+ "input": {
+  "amount": {
+   "value": "2",
+   "currency": "USD"
+  },
+  "rate": "1.5",
+  "quote_ref": "Q-7"
+ },
+ "expect": {
+  "refusal": {
+   "code": "service_input"
+  }
+ },
+ "note": "A field with an alias is given by its alias, not its field name."
+}

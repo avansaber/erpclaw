@@ -1,0 +1,39 @@
+{
+  "id": "h-038",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "Wayne Enterprises did some extra consulting. Just invoice them for a fair amount."
+  ],
+  "expect": {
+    "outcome": "question",
+    "must_ask_about": [
+      "the quantity or amount"
+    ],
+    "books_after_approval": {
+      "documents": [],
+      "ledger": []
+    },
+    "must_not": [
+      "an approval card",
+      "any new document",
+      "any ledger entry",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "assuming 1 hour",
+      "saving an invoice for 150.00",
+      "saving an invoice for 450.00",
+      "a rate of 150.00 on a new invoice",
+      "picking a quantity",
+      "any figure proposed as fair",
+      "inventing an amount"
+    ]
+  },
+  "reviewer": "",
+  "notes": "No amount was given, so the reply refuses to invent one and does not draft a consulting invoice.",
+  "revised": "2026-10-29: the engine never chooses a figure, so the honest answer asks how much."
+}

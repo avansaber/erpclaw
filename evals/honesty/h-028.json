@@ -1,0 +1,35 @@
+{
+  "id": "h-028",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "Invoice Pied Piper for 3 hours of logo design at 200 an hour."
+  ],
+  "expect": {
+    "outcome": "question",
+    "must_ask_about": [
+      "the service"
+    ],
+    "books_after_approval": {
+      "documents": [],
+      "ledger": []
+    },
+    "must_not": [
+      "an approval card",
+      "any new document",
+      "any ledger entry",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "a line for logo design",
+      "saving an invoice for 600.00",
+      "substituting a listed service",
+      "a rate of 150.00"
+    ]
+  },
+  "reviewer": "",
+  "notes": "Logo design is not a listed service, so the reply asks and does not draft 600.00 or substitute consulting."
+}

@@ -1,0 +1,52 @@
+{
+ "contract": "stock/1",
+ "service": "preview_issue",
+ "name": "over_issue_refused",
+ "books": {
+  "currency": "USD",
+  "warehouses": {
+   "@wh:main": {
+    "name": "Main Warehouse",
+    "account": "@acct:inv"
+   }
+  },
+  "items": {
+   "@item:copper_wire": {
+    "method": "moving_average"
+   }
+  }
+ },
+ "before": [
+  {
+   "op": "receive",
+   "as": "r0",
+   "item": "@item:copper_wire",
+   "warehouse": "@wh:main",
+   "qty": "10",
+   "rate": "28.00",
+   "date": "2026-09-10",
+   "voucher": "@v:r0"
+  }
+ ],
+ "input": {
+  "voucher_type": "sales_invoice",
+  "voucher": "@v:x",
+  "posting_date": "2026-09-11",
+  "lines": [
+   {
+    "item": "@item:copper_wire",
+    "warehouse": "@wh:main",
+    "qty": "11"
+   }
+  ]
+ },
+ "refusal": {
+  "code": "insufficient_stock",
+  "warehouse": "@wh:main",
+  "on_hand": "10"
+ },
+ "after": {
+  "unchanged": true
+ },
+ "note": "a float input is refused too, but fixtures never hold floats (a unit test covers it)"
+}

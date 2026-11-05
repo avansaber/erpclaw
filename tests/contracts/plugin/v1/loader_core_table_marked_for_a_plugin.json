@@ -1,0 +1,26 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_core_table_marked_for_a_plugin",
+ "plugins": [
+  {
+   "name": "extra",
+   "manifest": {
+    "owned_tables": [
+     "posting"
+    ]
+   },
+   "tables": [
+    {
+     "name": "posting",
+     "owner": "extra",
+     "existing": true
+    }
+   ]
+  }
+ ],
+ "expect": {
+  "refused": "core table posting is marked for plugin extra"
+ },
+ "note": "A core table's mark is core."
+}

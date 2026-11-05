@@ -1,0 +1,29 @@
+{
+  "contract": "stock/2",
+  "service": "create_warehouse",
+  "name": "create_warehouse_same_name_refused",
+  "books": {
+    "currency": "USD",
+    "warehouses": {
+      "@wh:main": {
+        "name": "Main Warehouse",
+        "account": "@acct:inv"
+      }
+    },
+    "items": {}
+  },
+  "before": [],
+  "input": {
+    "name": "MAIN WAREHOUSE.",
+    "account": "@acct:inv"
+  },
+  "after": {
+    "unchanged": true
+  },
+  "note": "Original M4_STOCK_CORE_SETUP r1a section 2.11; setup only, no stock movement.",
+  "refusal": {
+    "code": "warehouse_exists",
+    "warehouse": "@wh:main",
+    "name": "Main Warehouse"
+  }
+}

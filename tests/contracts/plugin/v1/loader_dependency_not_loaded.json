@@ -1,0 +1,19 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_dependency_not_loaded",
+ "plugins": [
+  {
+   "name": "extra",
+   "manifest": {
+    "depends": {
+     "missing": ">=1"
+    }
+   }
+  }
+ ],
+ "expect": {
+  "refused": "depends on missing, which is not loaded"
+ },
+ "note": "A dependency is loaded."
+}

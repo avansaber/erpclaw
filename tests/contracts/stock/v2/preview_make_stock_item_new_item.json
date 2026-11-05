@@ -1,0 +1,32 @@
+{
+  "contract": "stock/2",
+  "service": "preview_make_stock_item",
+  "name": "preview_make_stock_item_new_item",
+  "books": {
+    "currency": "USD",
+    "warehouses": {
+      "@wh:main": {
+        "name": "Main Warehouse",
+        "account": "@acct:inv"
+      }
+    },
+    "items": {}
+  },
+  "before": [],
+  "input": {
+    "method": "fifo",
+    "default_warehouse": "@wh:main"
+  },
+  "after": {
+    "unchanged": true
+  },
+  "note": "Original M4_STOCK_CORE_SETUP r1a section 2.11; setup only, no stock movement.",
+  "output": {
+    "method": "fifo",
+    "default_warehouse": {
+      "warehouse": "@wh:main",
+      "name": "Main Warehouse"
+    },
+    "read_set": []
+  }
+}

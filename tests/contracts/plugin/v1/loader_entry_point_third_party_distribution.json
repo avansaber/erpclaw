@@ -1,0 +1,18 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_entry_point_third_party_distribution",
+ "entry_point": {
+  "dist": "evil-plugin",
+  "object": "plugin"
+ },
+ "plugins": [
+  {
+   "name": "evil"
+  }
+ ],
+ "expect": {
+  "refused": "not a first-party distribution"
+ },
+ "note": "Only first-party distributions load."
+}

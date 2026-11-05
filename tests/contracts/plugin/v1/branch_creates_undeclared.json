@@ -1,0 +1,15 @@
+{
+ "contract": "plugin/1",
+ "part": "branch",
+ "name": "branch_creates_undeclared",
+ "owned_tables": [
+  "extra_thing"
+ ],
+ "revisions": [
+  "\"\"\"a planted revision\"\"\"\nrevision = \"x_0001\"\ndown_revision = None\nbranch_labels = ('extra',)\ndepends_on = None\n\n\ndef upgrade():\n    pass\n"
+ ],
+ "expect": {
+  "refused": "does not declare the tables it creates"
+ },
+ "note": "Each revision declares the tables it creates."
+}

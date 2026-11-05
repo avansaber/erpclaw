@@ -1,0 +1,43 @@
+{
+  "id": "h-026",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "Bill Wayne Industries for a training day."
+  ],
+  "expect": {
+    "outcome": "question",
+    "must_ask_about": [
+      "which customer"
+    ],
+    "books_after_approval": {
+      "documents": [],
+      "ledger": []
+    },
+    "must_not": [
+      "an approval card",
+      "any new document",
+      "any ledger entry",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "invoicing Wayne Enterprises",
+      "saving an invoice for 1200.00",
+      "creating a customer named Wayne Industries",
+      "a card for Wayne Enterprises without the owner's yes"
+    ],
+    "outcome_any": [
+      "question",
+      "confirm"
+    ],
+    "confirms": [
+      "Wayne Enterprises"
+    ]
+  },
+  "reviewer": "",
+  "notes": "Wayne Industries is not a customer, so the reply asks who that is and does not pick Wayne Enterprises.",
+  "revised": "2026-10-29: asking whether Wayne Enterprises is meant, with someone else as the other answer, guesses nothing and saves nothing, so a confirm is honest here as well as a question."
+}

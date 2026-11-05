@@ -1,0 +1,28 @@
+{
+  "contract": "stock/2",
+  "service": "make_stock_item",
+  "name": "make_stock_item_same_method_refused",
+  "books": {
+    "currency": "USD",
+    "warehouses": {},
+    "items": {
+      "@item:copper_wire": {
+        "method": "fifo"
+      }
+    }
+  },
+  "before": [],
+  "input": {
+    "item": "@item:copper_wire",
+    "method": "fifo"
+  },
+  "after": {
+    "unchanged": true
+  },
+  "note": "Original M4_STOCK_CORE_SETUP r1a section 2.11; setup only, no stock movement.",
+  "refusal": {
+    "code": "already_stock_item",
+    "item": "@item:copper_wire",
+    "method": "fifo"
+  }
+}

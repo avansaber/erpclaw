@@ -1,0 +1,26 @@
+{
+ "contract": "plugin/1",
+ "part": "service",
+ "name": "service_alias_crosses",
+ "caller": "svc_consumer",
+ "service": "svc_provider.quote",
+ "on": "plain",
+ "input": {
+  "amount": {
+   "value": "2",
+   "currency": "USD"
+  },
+  "rate": "1.5",
+  "quoteRef": "Q-7"
+ },
+ "expect": {
+  "output": {
+   "total": {
+    "value": "3.00",
+    "currency": "USD"
+   },
+   "quoteRef": "Q-7"
+  }
+ },
+ "note": "A field with an alias crosses under its alias, in the input and in the output (the service returns a dict keyed by the alias)."
+}

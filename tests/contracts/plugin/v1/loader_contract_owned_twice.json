@@ -1,0 +1,23 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_contract_owned_twice",
+ "plugins": [
+  {
+   "name": "extra",
+   "contracts": [
+    {
+     "name": "create_invoice",
+     "effect": "read",
+     "hooks": [
+      "run"
+     ]
+    }
+   ]
+  }
+ ],
+ "expect": {
+  "refused": "contract create_invoice is already declared by sales"
+ },
+ "note": "A contract has one owner."
+}

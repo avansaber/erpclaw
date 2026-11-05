@@ -1,0 +1,31 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_uses_undeclared_service",
+ "plugins": [
+  {
+   "name": "provider",
+   "services": [
+    {
+     "name": "quote",
+     "effect": "read"
+    }
+   ]
+  },
+  {
+   "name": "consumer",
+   "manifest": {
+    "depends": {
+     "provider": ">=1"
+    },
+    "uses": [
+     "provider.record"
+    ]
+   }
+  }
+ ],
+ "expect": {
+  "refused": "uses provider.record, which provider does not declare"
+ },
+ "note": "A plugin may use only a service its dependency declares."
+}

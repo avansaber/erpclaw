@@ -1,0 +1,15 @@
+{
+ "contract": "plugin/4",
+ "part": "loader",
+ "name": "loader_no_date_without_reason",
+ "write": {
+  "cls": "WriteContract",
+  "dateless": true,
+  "reason": null,
+  "moves_money": false
+ },
+ "expect": {
+  "refused": "takes no date but declares no no_date_reason"
+ },
+ "note": "A write whose input can take no date says why, on its contract."
+}

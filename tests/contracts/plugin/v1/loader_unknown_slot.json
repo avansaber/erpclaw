@@ -1,0 +1,17 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_unknown_slot",
+ "plugins": [
+  {
+   "name": "extra",
+   "slots": [
+    "teleport"
+   ]
+  }
+ ],
+ "expect": {
+  "refused": "fills unknown slot teleport"
+ },
+ "note": "A plugin fills only core's slots."
+}

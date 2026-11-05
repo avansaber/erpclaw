@@ -1,0 +1,26 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_unclassified_effect",
+ "plugins": [
+  {
+   "name": "extra",
+   "contracts": [
+    {
+     "name": "op",
+     "effect": "mutate",
+     "hooks": [
+      "run"
+     ]
+    }
+   ],
+   "manifest": {
+    "contracts": {}
+   }
+  }
+ ],
+ "expect": {
+  "refused": "has effect 'mutate'"
+ },
+ "note": "Every contract has one of the four effects."
+}

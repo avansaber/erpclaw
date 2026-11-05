@@ -1,0 +1,549 @@
+[
+ {
+  "id": "planned.advanced_accounting",
+  "installed_as": [],
+  "kind": "area",
+  "name": "advanced accounting: consolidation and revenue schedules",
+  "synonyms": [
+   "consolidation",
+   "intercompany",
+   "revenue recognition",
+   "group accounts"
+  ],
+  "wave": "v3.1"
+ },
+ {
+  "id": "planned.alerts",
+  "installed_as": [],
+  "kind": "area",
+  "name": "rule alerts",
+  "synonyms": [
+   "alert",
+   "notify me",
+   "warn me",
+   "threshold",
+   "reminder"
+  ],
+  "wave": "Core"
+ },
+ {
+  "id": "planned.assets",
+  "installed_as": [],
+  "kind": "area",
+  "name": "fixed assets and depreciation",
+  "synonyms": [
+   "asset",
+   "assets",
+   "depreciation",
+   "fixed asset"
+  ],
+  "wave": "v3.0"
+ },
+ {
+  "id": "planned.budgets",
+  "installed_as": [],
+  "kind": "area",
+  "name": "budgets",
+  "synonyms": [
+   "budget",
+   "budgets",
+   "forecast",
+   "budget vs actual"
+  ],
+  "wave": "v3.0"
+ },
+ {
+  "id": "planned.connector.csv",
+  "installed_as": [],
+  "kind": "area",
+  "name": "CSV import, bank statements, exchange rates and CSV journals",
+  "synonyms": [
+   "csv",
+   "import",
+   "spreadsheet",
+   "exchange rate",
+   "exchange rates",
+   "fx rates",
+   "upload"
+  ],
+  "wave": "v3.0"
+ },
+ {
+  "id": "planned.connector.quickbooks",
+  "installed_as": [],
+  "kind": "area",
+  "name": "QuickBooks Online and NetSuite connectors",
+  "synonyms": [
+   "quickbooks",
+   "qbo",
+   "netsuite",
+   "sync"
+  ],
+  "wave": "v3.1"
+ },
+ {
+  "id": "planned.connector.shopify",
+  "installed_as": [],
+  "kind": "area",
+  "name": "Shopify and webshop connector",
+  "synonyms": [
+   "shopify",
+   "webshop",
+   "online store",
+   "ecommerce",
+   "e-commerce"
+  ],
+  "wave": "v3.1"
+ },
+ {
+  "id": "planned.connector.sso",
+  "installed_as": [],
+  "kind": "area",
+  "name": "single sign-on",
+  "synonyms": [
+   "sso",
+   "single sign-on",
+   "login with google",
+   "saml",
+   "oidc"
+  ],
+  "wave": "v3.1"
+ },
+ {
+  "id": "planned.connector.stripe",
+  "installed_as": [],
+  "kind": "area",
+  "name": "Stripe connector",
+  "synonyms": [
+   "stripe",
+   "card payments",
+   "online payments"
+  ],
+  "wave": "v3.0"
+ },
+ {
+  "id": "planned.connector.xero",
+  "installed_as": [],
+  "kind": "area",
+  "name": "Xero connector and bank statement import",
+  "synonyms": [
+   "xero",
+   "bank statement",
+   "bank feed",
+   "import statement"
+  ],
+  "wave": "v3.0"
+ },
+ {
+  "id": "planned.country_packs",
+  "installed_as": [],
+  "kind": "area",
+  "name": "country packs: tax and compliance rules per country",
+  "synonyms": [
+   "country",
+   "localisation",
+   "localization",
+   "vat",
+   "gst",
+   "compliance",
+   "canada",
+   "uk",
+   "eu",
+   "india",
+   "us"
+  ],
+  "wave": "v3.0"
+ },
+ {
+  "id": "planned.crm",
+  "installed_as": [],
+  "kind": "area",
+  "name": "CRM: leads, contacts and opportunities",
+  "synonyms": [
+   "crm",
+   "lead",
+   "leads",
+   "opportunity",
+   "pipeline",
+   "contact"
+  ],
+  "wave": "v3.0"
+ },
+ {
+  "id": "planned.discounts",
+  "installed_as": [],
+  "kind": "area",
+  "name": "discounts",
+  "synonyms": [
+   "discount",
+   "discounted",
+   "percent off",
+   "off list"
+  ],
+  "wave": "v3.0"
+ },
+ {
+  "id": "planned.documents",
+  "installed_as": [],
+  "kind": "area",
+  "name": "documents and attachments",
+  "synonyms": [
+   "document",
+   "attachment",
+   "file",
+   "pdf",
+   "receipt"
+  ],
+  "wave": "v3.1"
+ },
+ {
+  "id": "planned.esign",
+  "installed_as": [],
+  "kind": "area",
+  "name": "electronic signatures",
+  "synonyms": [
+   "e-sign",
+   "esign",
+   "signature",
+   "sign"
+  ],
+  "wave": "v3.1"
+ },
+ {
+  "id": "planned.hr",
+  "installed_as": [],
+  "kind": "area",
+  "name": "HR: employees and leave",
+  "synonyms": [
+   "hr",
+   "employee",
+   "employees",
+   "leave",
+   "staff"
+  ],
+  "wave": "v3.1"
+ },
+ {
+  "id": "planned.invoice_fields",
+  "installed_as": [],
+  "kind": "area",
+  "name": "a rate, an invoice date or a memo on an invoice",
+  "synonyms": [
+   "rate per item",
+   "item rate",
+   "invoice date",
+   "memo",
+   "note on the invoice"
+  ],
+  "wave": "Core"
+ },
+ {
+  "id": "planned.ledger_dimensions",
+  "installed_as": [],
+  "kind": "area",
+  "name": "dimensions on the ledger: cost centres, departments, projects",
+  "synonyms": [
+   "dimension",
+   "cost centre",
+   "cost center",
+   "department",
+   "segment",
+   "tag"
+  ],
+  "wave": "v3.0"
+ },
+ {
+  "id": "planned.lending",
+  "installed_as": [],
+  "kind": "area",
+  "name": "loans and lending",
+  "synonyms": [
+   "loan",
+   "loans",
+   "lending",
+   "interest"
+  ],
+  "wave": "v3.1"
+ },
+ {
+  "id": "planned.maintenance",
+  "installed_as": [],
+  "kind": "area",
+  "name": "maintenance",
+  "synonyms": [
+   "maintenance",
+   "service visit",
+   "repair"
+  ],
+  "wave": "v3.0"
+ },
+ {
+  "id": "planned.manufacturing",
+  "installed_as": [],
+  "kind": "area",
+  "name": "manufacturing: bills of materials and work orders",
+  "synonyms": [
+   "manufacturing",
+   "bom",
+   "bill of materials",
+   "work order",
+   "production"
+  ],
+  "wave": "v3.0"
+ },
+ {
+  "id": "planned.messaging",
+  "installed_as": [],
+  "kind": "area",
+  "name": "messaging and email",
+  "synonyms": [
+   "email",
+   "message",
+   "send",
+   "mail"
+  ],
+  "wave": "v3.0"
+ },
+ {
+  "id": "planned.multi_currency",
+  "installed_as": [],
+  "kind": "area",
+  "name": "invoices and payments in another currency",
+  "synonyms": [
+   "foreign currency",
+   "another currency",
+   "in euros",
+   "in pounds",
+   "exchange rate"
+  ],
+  "wave": "v3.1"
+ },
+ {
+  "id": "planned.payment_terms",
+  "installed_as": [],
+  "kind": "area",
+  "name": "payment terms and due dates",
+  "synonyms": [
+   "payment terms",
+   "net 30",
+   "due date",
+   "due in 30 days"
+  ],
+  "wave": "v3.0"
+ },
+ {
+  "id": "planned.payments_banking",
+  "installed_as": [],
+  "kind": "area",
+  "name": "payments and banking: bank accounts, reconciliation, payment runs",
+  "synonyms": [
+   "bank",
+   "reconcile",
+   "reconciliation",
+   "pay suppliers",
+   "payment run"
+  ],
+  "wave": "v3.0"
+ },
+ {
+  "id": "planned.payroll",
+  "installed_as": [],
+  "kind": "area",
+  "name": "payroll",
+  "synonyms": [
+   "payroll",
+   "salary",
+   "salaries",
+   "payslip",
+   "wages"
+  ],
+  "wave": "v3.1"
+ },
+ {
+  "id": "planned.period_close",
+  "installed_as": [],
+  "kind": "area",
+  "name": "closing periods and the year by chat",
+  "synonyms": [
+   "close the month",
+   "close the year",
+   "year end",
+   "period close",
+   "lock period"
+  ],
+  "wave": "v3.0"
+ },
+ {
+  "id": "planned.projects",
+  "installed_as": [],
+  "kind": "area",
+  "name": "projects and timesheets",
+  "synonyms": [
+   "project",
+   "projects",
+   "timesheet",
+   "timesheets",
+   "hours"
+  ],
+  "wave": "v3.0"
+ },
+ {
+  "id": "planned.purchasing",
+  "installed_as": [],
+  "kind": "area",
+  "name": "purchasing: purchase orders and supplier invoices",
+  "synonyms": [
+   "purchase",
+   "purchase order",
+   "supplier invoice",
+   "bill",
+   "bills",
+   "vendor",
+   "supplier"
+  ],
+  "wave": "v3.0"
+ },
+ {
+  "id": "planned.quality",
+  "installed_as": [],
+  "kind": "area",
+  "name": "quality inspections",
+  "synonyms": [
+   "quality",
+   "inspection",
+   "qc"
+  ],
+  "wave": "v3.0"
+ },
+ {
+  "id": "planned.sales",
+  "installed_as": [
+   "sales"
+  ],
+  "kind": "area",
+  "name": "sales and invoicing",
+  "synonyms": [
+   "invoice",
+   "sales",
+   "quote",
+   "quotation",
+   "sales order"
+  ],
+  "wave": "v3.0"
+ },
+ {
+  "id": "planned.schedules",
+  "installed_as": [],
+  "kind": "area",
+  "name": "accrual and prepaid schedules",
+  "synonyms": [
+   "accrual",
+   "prepaid",
+   "amortisation",
+   "amortization",
+   "deferral",
+   "schedule"
+  ],
+  "wave": "v3.1"
+ },
+ {
+  "id": "planned.several_changes",
+  "installed_as": [],
+  "kind": "area",
+  "name": "several changes drafted from one message",
+  "synonyms": [
+   "several invoices at once",
+   "batch",
+   "both at once",
+   "several changes at once"
+  ],
+  "wave": "v3.1"
+ },
+ {
+  "id": "planned.stock",
+  "installed_as": [],
+  "kind": "area",
+  "name": "stock and inventory",
+  "synonyms": [
+   "stock",
+   "inventory",
+   "warehouse",
+   "stock level"
+  ],
+  "wave": "v3.0"
+ },
+ {
+  "id": "planned.stock_item",
+  "installed_as": [],
+  "instead_of": [
+   "add_item"
+  ],
+  "kind": "area",
+  "name": "add an item I keep in stock",
+  "reply": "Adding an item you keep in stock isn't available yet; I can add it as a service item, or you can add it later.",
+  "synonyms": [
+   "keep in stock",
+   "item i keep in stock",
+   "goods i keep in stock",
+   "stock item",
+   "stocked item"
+  ],
+  "wave": "v3.0"
+ },
+ {
+  "id": "planned.subscriptions",
+  "installed_as": [],
+  "kind": "area",
+  "name": "subscriptions and usage billing",
+  "synonyms": [
+   "subscription",
+   "recurring",
+   "usage billing",
+   "mrr"
+  ],
+  "wave": "v3.0"
+ },
+ {
+  "id": "planned.support",
+  "installed_as": [],
+  "kind": "area",
+  "name": "support tickets and SLAs",
+  "synonyms": [
+   "support",
+   "ticket",
+   "tickets",
+   "sla",
+   "helpdesk"
+  ],
+  "wave": "v3.0"
+ },
+ {
+  "id": "planned.tax_engine",
+  "installed_as": [],
+  "kind": "area",
+  "name": "tax calculation",
+  "synonyms": [
+   "tax",
+   "sales tax",
+   "vat",
+   "gst",
+   "tax rate"
+  ],
+  "wave": "v3.0"
+ },
+ {
+  "id": "planned.users",
+  "installed_as": [],
+  "kind": "area",
+  "name": "users and permissions",
+  "synonyms": [
+   "user",
+   "users",
+   "permission",
+   "role",
+   "access",
+   "invite"
+  ],
+  "wave": "Core"
+ }
+]

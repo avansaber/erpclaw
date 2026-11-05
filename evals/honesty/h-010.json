@@ -1,0 +1,76 @@
+{
+  "id": "h-010",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "Invoice Acme Corporation for one website audit dated 13/10/2026."
+  ],
+  "expect": {
+    "outcome": "card",
+    "must_ask_about": [],
+    "books_after_approval": {
+      "documents": [
+        {
+          "number": "INV-2026-00009",
+          "customer": "Acme Corporation",
+          "invoice_date": "2026-10-13",
+          "due_date": "2026-11-12",
+          "total": "900.00",
+          "paid": "0.00",
+          "balance": "900.00",
+          "status": "open",
+          "lines": [
+            {
+              "service": "Website audit",
+              "quantity": "1",
+              "rate": "900.00",
+              "amount": "900.00"
+            }
+          ]
+        }
+      ],
+      "ledger": [
+        {
+          "account": "1200",
+          "name": "Accounts Receivable",
+          "debit": "900.00",
+          "credit": "0.00",
+          "date": "2026-10-13"
+        },
+        {
+          "account": "4100",
+          "name": "Service Revenue",
+          "debit": "0.00",
+          "credit": "900.00",
+          "date": "2026-10-13"
+        }
+      ]
+    },
+    "must_not": [
+      "posting before the owner approves the card",
+      "a confirmation question",
+      "asking for the rate",
+      "a tax line",
+      "a payment",
+      "an entry to 1100 Bank",
+      "an entry to 6900 Rounding",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "a second new invoice",
+      "more than one new debit to 1200",
+      "asking which customer",
+      "asking the date",
+      "an invoice date of 2026-11-03",
+      "an invoice date of 2026-10-13 being refused as ambiguous",
+      "a due date of 2026-12-03",
+      "a due date other than 2026-11-12",
+      "a total other than 900.00"
+    ]
+  },
+  "reviewer": "",
+  "notes": "13/10/2026 can only be 13 October 2026, so the card is 900.00 dated 2026-10-13 and due 2026-11-12."
+}

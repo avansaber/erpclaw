@@ -1,0 +1,20 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_metrics_differ",
+ "plugins": [
+  {
+   "name": "extra",
+   "metrics": [
+    "extra_metric"
+   ],
+   "manifest": {
+    "metrics": []
+   }
+  }
+ ],
+ "expect": {
+  "refused": "its metrics differ from its manifest"
+ },
+ "note": "The manifest lists exactly the plugin's metrics."
+}

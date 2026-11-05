@@ -1,0 +1,70 @@
+{
+ "contract": "stock/1",
+ "service": "issue",
+ "name": "zero_value_issue",
+ "books": {
+  "currency": "USD",
+  "warehouses": {
+   "@wh:main": {
+    "name": "Main Warehouse",
+    "account": "@acct:inv"
+   }
+  },
+  "items": {
+   "@item:wire": {
+    "method": "moving_average"
+   }
+  }
+ },
+ "before": [
+  {
+   "op": "receive",
+   "as": "r0",
+   "item": "@item:wire",
+   "warehouse": "@wh:main",
+   "qty": "1",
+   "rate": "0.01",
+   "date": "2026-07-01",
+   "voucher": "@v:r0"
+  }
+ ],
+ "input": {
+  "voucher_type": "sales_delivery",
+  "voucher": "@v:dz",
+  "posting_date": "2026-07-02",
+  "lines": [
+   {
+    "item": "@item:wire",
+    "warehouse": "@wh:main",
+    "qty": "0.125"
+   }
+  ]
+ },
+ "output": {
+  "lines": [
+   {
+    "cost": "0.00",
+    "card_note": "less than 0.01 USD"
+   }
+  ],
+  "ledger_lines": [],
+  "entry_ids": [
+   "@entry:zero_value_issue#1"
+  ]
+ },
+ "after": {
+  "entries": [
+   {
+    "item": "@item:wire",
+    "warehouse": "@wh:main",
+    "direction": "out",
+    "qty": "0.125",
+    "value": "0.00",
+    "qty_after": "0.875",
+    "value_after": "0.01",
+    "id": "@entry:zero_value_issue#1"
+   }
+  ]
+ },
+ "note": "no ledger lines; a voucher with no lines makes no posting"
+}

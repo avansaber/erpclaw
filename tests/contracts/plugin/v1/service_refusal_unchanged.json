@@ -1,0 +1,43 @@
+{
+ "contract": "plugin/1",
+ "part": "service",
+ "name": "service_refusal_unchanged",
+ "caller": "svc_consumer",
+ "service": "svc_provider.record",
+ "on": "commit",
+ "input": {
+  "voucher": "v1",
+  "amount": {
+   "value": "1",
+   "currency": "USD"
+  },
+  "ask": true
+ },
+ "expect": {
+  "refusal": {
+   "code": "warehouse_ambiguous",
+   "message": "Which warehouse should the copper wire come from?",
+   "options": [
+    "Main Warehouse",
+    "Back Store"
+   ],
+   "data": {
+    "field": "warehouse",
+    "question_id": "q1",
+    "choices": [
+     {
+      "code": "q1-1",
+      "label": "Main Warehouse",
+      "ref": "Main Warehouse"
+     },
+     {
+      "code": "q1-2",
+      "label": "Back Store",
+      "ref": "Back Store"
+     }
+    ]
+   }
+  }
+ },
+ "note": "A refusal the service raises reaches the caller unchanged: code, message, options, data."
+}

@@ -1,0 +1,20 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_table_without_owner_mark",
+ "plugins": [
+  {
+   "name": "extra",
+   "tables": [
+    {
+     "name": "extra_thing",
+     "owner": null
+    }
+   ]
+  }
+ ],
+ "expect": {
+  "refused": "table extra_thing has no owner mark"
+ },
+ "note": "Every table on the metadata carries its owner."
+}

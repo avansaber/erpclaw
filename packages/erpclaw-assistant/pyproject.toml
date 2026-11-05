@@ -1,0 +1,18 @@
+[project]
+name = "erpclaw-assistant"
+version = "0.0.1"
+description = "ERPClaw assistant: the LangGraph steps around the engine"
+license = "GPL-3.0-only"
+requires-python = ">=3.12"
+dependencies = ["erpclaw-core", "langgraph>=0.4", "openai>=1.50"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+erpclaw-core = { workspace = true }
+erpclaw-assistant = { workspace = true }
+erpclaw-api = { workspace = true }
+erpclaw-sales = { workspace = true }
+erpclaw-email-folder = { workspace = true }

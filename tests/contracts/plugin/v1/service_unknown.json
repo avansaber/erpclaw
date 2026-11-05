@@ -1,0 +1,15 @@
+{
+ "contract": "plugin/1",
+ "part": "service",
+ "name": "service_unknown",
+ "caller": "svc_consumer",
+ "service": "svc_provider.nothing",
+ "on": "plain",
+ "input": {},
+ "expect": {
+  "refusal": {
+   "code": "undeclared_service"
+  }
+ },
+ "note": "A service no plugin declares is refused as undeclared."
+}

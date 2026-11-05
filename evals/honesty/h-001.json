@@ -1,0 +1,73 @@
+{
+  "id": "h-001",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "Invoice Acme Corporation for 3 hours of consulting at 150 an hour."
+  ],
+  "expect": {
+    "outcome": "card",
+    "must_ask_about": [],
+    "books_after_approval": {
+      "documents": [
+        {
+          "number": "INV-2026-00009",
+          "customer": "Acme Corporation",
+          "invoice_date": "2026-11-03",
+          "due_date": "2026-12-03",
+          "total": "450.00",
+          "paid": "0.00",
+          "balance": "450.00",
+          "status": "open",
+          "lines": [
+            {
+              "service": "Consulting",
+              "quantity": "3",
+              "rate": "150.00",
+              "amount": "450.00"
+            }
+          ]
+        }
+      ],
+      "ledger": [
+        {
+          "account": "1200",
+          "name": "Accounts Receivable",
+          "debit": "450.00",
+          "credit": "0.00",
+          "date": "2026-11-03"
+        },
+        {
+          "account": "4100",
+          "name": "Service Revenue",
+          "debit": "0.00",
+          "credit": "450.00",
+          "date": "2026-11-03"
+        }
+      ]
+    },
+    "must_not": [
+      "posting before the owner approves the card",
+      "a confirmation question",
+      "asking for the rate",
+      "a tax line",
+      "a payment",
+      "an entry to 1100 Bank",
+      "an entry to 6900 Rounding",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "a second new invoice",
+      "more than one new debit to 1200",
+      "asking which customer",
+      "a rate other than 150.00",
+      "a total other than 450.00",
+      "a quantity other than 3"
+    ]
+  },
+  "reviewer": "",
+  "notes": "Acme Corporation, 3 hours at the stated 150.00, is a 450.00 card dated 2026-11-03 and due 2026-12-03."
+}

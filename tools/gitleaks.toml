@@ -1,0 +1,48 @@
+# Secrets rules for tools/push_scan.py: gitleaks's default rules and allowlist,
+# plus shapes the defaults may not cover. Pinned gitleaks: GITLEAKS_VERSION in
+# push_scan.py.
+title = "ERPClaw push scan"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "cursor-api-key"
+description = "Cursor API key"
+regex = '''\bkey_[0-9a-f]{64}\b'''
+keywords = ["key_"]
+
+[[rules]]
+id = "cloudflare-api-token-cfat"
+description = "Cloudflare API token with the cfat_ prefix"
+regex = '''\bcfat_[A-Za-z0-9]{40,}'''
+keywords = ["cfat_"]
+
+[[rules]]
+id = "meta-llama-api-key"
+description = "Meta Llama API key (LLM_, a numeric id and the secret, separated by underscores)"
+regex = '''\bLLM_[0-9]{6,}_[A-Za-z0-9_-]{20,}'''
+keywords = ["llm_"]
+
+[[rules]]
+id = "credential-assignment"
+description = "A credential-named variable assigned a long literal value"
+regex = '''(?i)\b[A-Z0-9_]*(?:API_KEY|SECRET_KEY|ACCESS_TOKEN|AUTH_TOKEN|PASSWORD)\s*[=:]\s*['"]?[A-Za-z0-9_\-./+]{20,}'''
+keywords = ["api_key", "secret_key", "access_token", "auth_token", "password"]
+
+[[rules]]
+id = "url-password"
+description = "A password inside a URL (scheme://user:password@host); gitleaks's defaults have no such rule"
+regex = '''(?i)\b[a-z][a-z0-9+.-]*://[^\s:/@]+:([^\s:/@<>]{8,})@[^\s/]+'''
+secretGroup = 1
+keywords = ["://"]
+
+[[rules.allowlists]]
+description = "a whole braced variable, a shell function call, or the word itself, is not a password (an upper-case $NAME passes by gitleaks's default allowlist; a mixed-case one blocks)"
+regexes = [
+    '''^\$\{[A-Za-z_][A-Za-z0-9_]*\}$''',       # ${NAME}
+    '''^\$\([A-Za-z_][A-Za-z0-9_]*\)$''',       # $(name): a shell function call
+    '''^\{[A-Za-z_][A-Za-z0-9_]*\}$''',         # {name}: a format field
+    '''^%\([A-Za-z_][A-Za-z0-9_]*\)s$''',       # %(name)s
+    '''^(?i)password$''',
+]

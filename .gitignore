@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.sqlite
+.env
+*.db
+*.sqlite3
+
+# an empty Swift Package Manager cache something on this machine recreates (seen 28 Oct)
+.build/
+var/

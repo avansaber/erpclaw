@@ -1,0 +1,18 @@
+{
+ "contract": "plugin/4",
+ "part": "card",
+ "name": "card_older_write_generic_sentence",
+ "write": {
+  "cls": "Contract",
+  "dateless": true,
+  "reason": null,
+  "moves_money": null
+ },
+ "expect": {
+  "line": [
+   "Date source",
+   "No date applies: this change posts nothing to the books."
+  ]
+ },
+ "note": "An older no-date write gets one generic sentence, never another write's."
+}

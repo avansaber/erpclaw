@@ -1,0 +1,34 @@
+{
+  "contract": "stock/2",
+  "service": "preview_create_warehouse",
+  "name": "preview_create_warehouse_one_account",
+  "books": {
+    "currency": "USD",
+    "warehouses": {},
+    "items": {}
+  },
+  "before": [],
+  "input": {
+    "name": "Main Warehouse",
+    "company_default": true
+  },
+  "after": {
+    "unchanged": true
+  },
+  "note": "Original M4_STOCK_CORE_SETUP r1a section 2.11; setup only, no stock movement.",
+  "output": {
+    "name": "Main Warehouse",
+    "account": {
+      "account": "@acct:inv",
+      "number": "1300",
+      "name": "Inventory"
+    },
+    "company_default": true,
+    "read_set": [
+      [
+        "account",
+        "@acct:inv"
+      ]
+    ]
+  }
+}

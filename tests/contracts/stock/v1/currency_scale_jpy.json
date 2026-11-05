@@ -1,0 +1,90 @@
+{
+ "contract": "stock/1",
+ "service": "issue",
+ "name": "currency_scale_jpy",
+ "books": {
+  "currency": "JPY",
+  "warehouses": {
+   "@wh:main": {
+    "name": "Main Warehouse",
+    "account": "@acct:inv"
+   }
+  },
+  "items": {
+   "@item:part": {
+    "method": "moving_average"
+   }
+  }
+ },
+ "before": [
+  {
+   "op": "receive",
+   "as": "r0",
+   "item": "@item:part",
+   "warehouse": "@wh:main",
+   "qty": "1",
+   "rate": "34",
+   "date": "2026-06-01",
+   "voucher": "@v:r0"
+  },
+  {
+   "op": "receive",
+   "as": "r1",
+   "item": "@item:part",
+   "warehouse": "@wh:main",
+   "qty": "2",
+   "rate": "33",
+   "date": "2026-06-01",
+   "voucher": "@v:r1"
+  }
+ ],
+ "input": {
+  "voucher_type": "sales_invoice",
+  "voucher": "@v:i1",
+  "posting_date": "2026-06-02",
+  "lines": [
+   {
+    "item": "@item:part",
+    "warehouse": "@wh:main",
+    "qty": "1"
+   }
+  ]
+ },
+ "output": {
+  "lines": [
+   {
+    "cost": "33"
+   }
+  ],
+  "ledger_lines": [
+   {
+    "account": "@acct:cogs",
+    "debit": "33",
+    "credit": "0"
+   },
+   {
+    "account": "@acct:inv",
+    "debit": "0",
+    "credit": "33"
+   }
+  ],
+  "entry_ids": [
+   "@entry:currency_scale_jpy#1"
+  ]
+ },
+ "after": {
+  "entries": [
+   {
+    "item": "@item:part",
+    "warehouse": "@wh:main",
+    "direction": "out",
+    "qty": "1",
+    "value": "33",
+    "qty_after": "2",
+    "value_after": "67",
+    "id": "@entry:currency_scale_jpy#1"
+   }
+  ]
+ },
+ "note": "3 units worth 100 JPY; rounding at the currency's own scale"
+}

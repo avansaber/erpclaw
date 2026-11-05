@@ -1,0 +1,16 @@
+{
+ "contract": "plugin/4",
+ "part": "loader",
+ "name": "loader_older_plain_write_loads",
+ "write": {
+  "cls": "Contract",
+  "dateless": true,
+  "reason": null,
+  "moves_money": null
+ },
+ "expect": {
+  "loads": true,
+  "moves_money": true
+ },
+ "note": "A write built as a plain Contract (plugin/1 to plugin/3) still loads and counts as moving money."
+}

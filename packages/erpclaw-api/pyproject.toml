@@ -1,0 +1,18 @@
+[project]
+name = "erpclaw-api"
+version = "0.0.1"
+description = "ERPClaw engine API (FastAPI)"
+license = "GPL-3.0-only"
+requires-python = ">=3.12"
+dependencies = ["erpclaw-core", "erpclaw-assistant", "fastapi>=0.115", "uvicorn>=0.30"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+erpclaw-core = { workspace = true }
+erpclaw-assistant = { workspace = true }
+erpclaw-api = { workspace = true }
+erpclaw-sales = { workspace = true }
+erpclaw-email-folder = { workspace = true }

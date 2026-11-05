@@ -1,0 +1,17 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_engine_version",
+ "plugins": [
+  {
+   "name": "extra",
+   "manifest": {
+    "engine": ">=99"
+   }
+  }
+ ],
+ "expect": {
+  "refused": "needs engine >=99"
+ },
+ "note": "The plugin needs an engine this is not."
+}

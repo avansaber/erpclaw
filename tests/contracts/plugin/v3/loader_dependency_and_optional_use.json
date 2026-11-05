@@ -1,0 +1,14 @@
+{
+ "contract": "plugin/3",
+ "part": "loader",
+ "name": "loader_dependency_and_optional_use",
+ "provider": true,
+ "uses": [
+  "quote?"
+ ],
+ "depends": true,
+ "expect": {
+  "refused": "svc_provider is both a dependency and an optional use"
+ },
+ "note": "One way to declare a plugin, not two."
+}

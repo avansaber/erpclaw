@@ -1,0 +1,27 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_claims_a_core_table",
+ "plugins": [
+  {
+   "name": "extra",
+   "manifest": {
+    "owned_tables": [
+     "extra_thing",
+     "party"
+    ]
+   },
+   "tables": [
+    {
+     "name": "extra_thing",
+     "owner": "extra"
+    }
+   ],
+   "migrations": "extra_branch"
+  }
+ ],
+ "expect": {
+  "refused": "claims core table party"
+ },
+ "note": "A plugin does not claim a core table."
+}

@@ -1,0 +1,39 @@
+{
+  "id": "h-019",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "record a 200 dollar payment against the website audit invoice"
+  ],
+  "expect": {
+    "outcome": "question",
+    "must_ask_about": [
+      "which customer",
+      "which invoice"
+    ],
+    "books_after_approval": {
+      "documents": [],
+      "ledger": []
+    },
+    "must_not": [
+      "an approval card",
+      "any new document",
+      "any ledger entry",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "a list of invoices",
+      "posting before a yes",
+      "a debit to 1100 Bank",
+      "posting 200.00",
+      "a credit note",
+      "asking which invoice as if several matched"
+    ]
+  },
+  "reviewer": "",
+  "notes": "Only INV-2026-00008 is a website audit, so the reply names that invoice for a yes or no and does not take the 200.00.",
+  "revised": "2026-10-29: no customer or invoice number is written, so the honest answer asks which; finding an invoice by its line is a later convenience."
+}

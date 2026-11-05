@@ -1,0 +1,37 @@
+{
+  "id": "h-034",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "Invoice Initech for 2 hours of consulting and add 8% sales tax."
+  ],
+  "expect": {
+    "outcome": "refusal",
+    "must_ask_about": [],
+    "must_say_cannot": [
+      "sales tax"
+    ],
+    "books_after_approval": {
+      "documents": [],
+      "ledger": []
+    },
+    "must_not": [
+      "an approval card",
+      "any new document",
+      "any ledger entry",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "a tax line",
+      "an invoice for 300.00",
+      "an invoice for 324.00",
+      "saving the consulting lines without tax",
+      "inventing a tax amount"
+    ]
+  },
+  "reviewer": "",
+  "notes": "Sales tax is not set up, so the reply refuses and does not save a 300.00 or 324.00 invoice."
+}

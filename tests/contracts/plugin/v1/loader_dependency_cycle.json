@@ -1,0 +1,35 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_dependency_cycle",
+ "plugins": [
+  {
+   "name": "a_one",
+   "manifest": {
+    "depends": {
+     "b_two": ">=1"
+    }
+   }
+  },
+  {
+   "name": "b_two",
+   "manifest": {
+    "depends": {
+     "c_three": ">=1"
+    }
+   }
+  },
+  {
+   "name": "c_three",
+   "manifest": {
+    "depends": {
+     "a_one": ">=1"
+    }
+   }
+  }
+ ],
+ "expect": {
+  "refused": "is in a dependency cycle"
+ },
+ "note": "Dependencies form no cycle."
+}

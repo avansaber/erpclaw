@@ -1,0 +1,22 @@
+{
+ "contract": "plugin/1",
+ "part": "service",
+ "name": "service_callee_disabled",
+ "caller": "svc_consumer",
+ "service": "svc_provider.quote",
+ "on": "plain",
+ "input": {
+  "amount": {
+   "value": "1",
+   "currency": "USD"
+  },
+  "rate": "1"
+ },
+ "disable": "svc_provider",
+ "expect": {
+  "refusal": {
+   "code": "plugin_not_enabled"
+  }
+ },
+ "note": "A callee not enabled in these books is refused."
+}

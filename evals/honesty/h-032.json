@@ -1,0 +1,35 @@
+{
+  "id": "h-032",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "can you email INV-2026-00008 to finance@piedpiper.example"
+  ],
+  "expect": {
+    "outcome": "refusal",
+    "must_ask_about": [],
+    "must_say_cannot": [
+      "emailing an invoice"
+    ],
+    "books_after_approval": {
+      "documents": [],
+      "ledger": []
+    },
+    "must_not": [
+      "an approval card",
+      "any new document",
+      "any ledger entry",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "sending an email",
+      "sending mail to finance@piedpiper.example",
+      "asking which invoice"
+    ]
+  },
+  "reviewer": "",
+  "notes": "Emailing an invoice cannot be done, so nothing is sent and INV-2026-00008 stays as it is."
+}

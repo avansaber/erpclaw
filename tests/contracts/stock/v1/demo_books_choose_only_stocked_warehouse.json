@@ -1,0 +1,99 @@
+{
+ "contract": "stock/1",
+ "service": "choose_warehouse",
+ "name": "demo_books_choose_only_stocked_warehouse",
+ "books": {
+  "currency": "USD",
+  "default_warehouse": "@wh:main",
+  "warehouses": {
+   "@wh:main": {
+    "name": "Stark Manufacturing Inc. - Main Warehouse",
+    "account": "@acct:inv_raw"
+   },
+   "@wh:raw": {
+    "name": "Raw Materials Store",
+    "account": "@acct:inv_raw"
+   },
+   "@wh:fg": {
+    "name": "Finished Goods Store",
+    "account": "@acct:inv_fg"
+   }
+  },
+  "items": {
+   "@item:copper_wire": {
+    "method": "moving_average"
+   },
+   "@item:circuit_board": {
+    "method": "moving_average"
+   },
+   "@item:motor_housing": {
+    "method": "moving_average"
+   }
+  }
+ },
+ "before": [
+  {
+   "op": "receive",
+   "as": "cw0",
+   "item": "@item:copper_wire",
+   "warehouse": "@wh:raw",
+   "qty": "200",
+   "rate": "28.00",
+   "date": "2026-01-01",
+   "voucher": "@v:opening_cw"
+  },
+  {
+   "op": "receive",
+   "as": "cb0",
+   "item": "@item:circuit_board",
+   "warehouse": "@wh:raw",
+   "qty": "200",
+   "rate": "15.00",
+   "date": "2026-01-01",
+   "voucher": "@v:opening_cb"
+  },
+  {
+   "op": "receive",
+   "as": "cb1",
+   "item": "@item:circuit_board",
+   "warehouse": "@wh:raw",
+   "qty": "100",
+   "rate": "15.00",
+   "date": "2026-01-12",
+   "voucher": "@v:pr_cb"
+  },
+  {
+   "op": "receive",
+   "as": "mh0",
+   "item": "@item:motor_housing",
+   "warehouse": "@wh:fg",
+   "qty": "15",
+   "rate": "210.00",
+   "date": "2026-01-01",
+   "voucher": "@v:opening_mh"
+  },
+  {
+   "op": "issue",
+   "as": "mh_inv5",
+   "item": "@item:motor_housing",
+   "warehouse": "@wh:fg",
+   "qty": "8",
+   "date": "2026-01-20",
+   "voucher": "@v:INV-2026-00005"
+  }
+ ],
+ "input": {
+  "item": "@item:copper_wire",
+  "qty": "5"
+ },
+ "output": {
+  "chosen": {
+   "warehouse": "@wh:raw",
+   "qty": "200"
+  }
+ },
+ "after": {
+  "unchanged": true
+ },
+ "note": "invoice_stock_from_stocked_warehouse.md: the only warehouse holding enough is chosen"
+}

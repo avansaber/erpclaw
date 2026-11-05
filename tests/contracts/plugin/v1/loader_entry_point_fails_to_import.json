@@ -1,0 +1,14 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_entry_point_fails_to_import",
+ "entry_point": {
+  "dist": "erpclaw-sales",
+  "object": "raises"
+ },
+ "plugins": [],
+ "expect": {
+  "refused": "failed to load: ImportError"
+ },
+ "note": "A plugin that cannot import is refused, never skipped."
+}

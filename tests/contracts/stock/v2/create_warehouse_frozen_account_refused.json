@@ -1,0 +1,28 @@
+{
+  "contract": "stock/2",
+  "service": "create_warehouse",
+  "name": "create_warehouse_frozen_account_refused",
+  "books": {
+    "currency": "USD",
+    "warehouses": {},
+    "items": {},
+    "accounts": [
+      "@acct:inv_raw"
+    ],
+    "frozen": [
+      "@acct:inv_raw"
+    ]
+  },
+  "before": [],
+  "input": {
+    "name": "Raw Store",
+    "account": "@acct:inv_raw"
+  },
+  "after": {
+    "unchanged": true
+  },
+  "note": "Original M4_STOCK_CORE_SETUP r1a section 2.11; setup only, no stock movement.",
+  "refusal": {
+    "code": "frozen_account"
+  }
+}

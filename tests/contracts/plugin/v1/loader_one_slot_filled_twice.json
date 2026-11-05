@@ -1,0 +1,17 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_one_slot_filled_twice",
+ "plugins": [
+  {
+   "name": "extra",
+   "slots": [
+    "deliver_message"
+   ]
+  }
+ ],
+ "expect": {
+  "refused": "fills slot deliver_message, already filled by email_folder"
+ },
+ "note": "A slot of cardinality one has one filler among the loaded plugins."
+}

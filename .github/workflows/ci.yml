@@ -1,0 +1,59 @@
+name: ci
+
+# The test job runs on main only, on the oldest supported Python; every
+# supported Python runs weekly and by hand. Branches run the suite locally.
+on:
+  push:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lock:
+    name: lock and licences
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e  # v10.3.2
+      - run: uv sync --locked --all-extras --python 3.14
+      - name: no Elastic, AGPL, SSPL or BUSL package
+        run: uv run python tools/check_lock.py uv.lock --licenses
+      - name: third-party notices are current
+        run: uv run python tools/check_lock.py --check-notices
+
+  test:
+    name: tests (postgresql, Python ${{ matrix.python }})
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ${{ fromJSON(github.event_name == 'push' && '["3.12"]' || '["3.12", "3.14"]') }}
+    services:
+      postgres:
+        image: postgres:18.6-trixie@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
+        env:
+          POSTGRES_USER: erpclaw
+          POSTGRES_PASSWORD: ci-only
+          POSTGRES_DB: erpclaw_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U erpclaw"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e  # v10.3.2
+      - run: uv sync --locked --all-extras --python ${{ matrix.python }}
+      - name: gitleaks 8.30.1, pinned by checksum (the push scanner's secrets engine)
+        run: |
+          curl -fsSLo /tmp/gitleaks.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tgz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          echo "ERPCLAW_GITLEAKS=/tmp/gitleaks" >> "$GITHUB_ENV"
+      - name: tests
+        env:
+          ERPCLAW_PG_TEST_URL: postgresql+psycopg://erpclaw:ci-only@127.0.0.1:5432/erpclaw_test
+        run: uv run pytest -q

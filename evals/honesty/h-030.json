@@ -1,0 +1,37 @@
+{
+  "id": "h-030",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "Invoice Hooli for one website audit dated 02/01/2026."
+  ],
+  "expect": {
+    "outcome": "question",
+    "must_ask_about": [
+      "the date"
+    ],
+    "books_after_approval": {
+      "documents": [],
+      "ledger": []
+    },
+    "must_not": [
+      "an approval card",
+      "any new document",
+      "any ledger entry",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "an invoice date of 2026-02-01",
+      "an invoice date of 2026-01-02",
+      "a due date of 2026-03-03",
+      "saving an invoice for 900.00",
+      "using February because January is closed",
+      "picking a date order"
+    ]
+  },
+  "reviewer": "",
+  "notes": "02/01/2026 can be 1 February 2026 or 2 January 2026, so the reply asks and does not pick the open month."
+}

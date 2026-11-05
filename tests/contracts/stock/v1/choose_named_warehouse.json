@@ -1,0 +1,64 @@
+{
+ "contract": "stock/1",
+ "service": "choose_warehouse",
+ "name": "choose_named_warehouse",
+ "books": {
+  "currency": "USD",
+  "default_warehouse": "@wh:a",
+  "warehouses": {
+   "@wh:a": {
+    "name": "North Store",
+    "account": "@acct:inv"
+   },
+   "@wh:b": {
+    "name": "South Store",
+    "account": "@acct:inv"
+   },
+   "@wh:c": {
+    "name": "East Store",
+    "account": "@acct:inv"
+   }
+  },
+  "items": {
+   "@item:widget": {
+    "method": "moving_average"
+   }
+  }
+ },
+ "before": [
+  {
+   "op": "receive",
+   "as": "b1",
+   "item": "@item:widget",
+   "warehouse": "@wh:b",
+   "qty": "40",
+   "rate": "5.00",
+   "date": "2026-02-01",
+   "voucher": "@v:r1"
+  },
+  {
+   "op": "receive",
+   "as": "c1",
+   "item": "@item:widget",
+   "warehouse": "@wh:c",
+   "qty": "25",
+   "rate": "5.00",
+   "date": "2026-02-01",
+   "voucher": "@v:r2"
+  }
+ ],
+ "input": {
+  "item": "@item:widget",
+  "qty": "10",
+  "warehouse": "@wh:c"
+ },
+ "output": {
+  "chosen": {
+   "warehouse": "@wh:c",
+   "qty": "25"
+  }
+ },
+ "after": {
+  "unchanged": true
+ }
+}

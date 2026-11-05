@@ -1,0 +1,19 @@
+{
+ "contract": "plugin/2",
+ "part": "send",
+ "name": "send_accepted_without_mark",
+ "connector": {
+  "mark": false,
+  "outcome": {
+   "stage": "after_data",
+   "kind": "accepted",
+   "code": 250,
+   "text": "ok"
+  }
+ },
+ "expect": {
+  "status": "failed",
+  "owner_text_starts": "Not sent: the connector reported a send it did not mark"
+ },
+ "note": "Core accepts an accepted outcome only with a committed mark it issued."
+}

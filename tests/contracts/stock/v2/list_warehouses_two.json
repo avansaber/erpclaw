@@ -1,0 +1,45 @@
+{
+  "contract": "stock/2",
+  "service": "list_warehouses",
+  "name": "list_warehouses_two",
+  "books": {
+    "currency": "USD",
+    "warehouses": {
+      "@wh:main": {
+        "name": "Main Warehouse",
+        "account": "@acct:inv",
+        "company_default": true
+      },
+      "@wh:raw": {
+        "name": "Raw Materials Store",
+        "account": "@acct:inv_raw"
+      }
+    },
+    "items": {},
+    "accounts": [
+      "@acct:inv_raw"
+    ]
+  },
+  "before": [],
+  "input": {},
+  "after": {
+    "unchanged": true
+  },
+  "note": "Original M4_STOCK_CORE_SETUP r1a section 2.11; setup only, no stock movement.",
+  "output": {
+    "warehouses": [
+      {
+        "warehouse": "@wh:main",
+        "name": "Main Warehouse",
+        "account": "@acct:inv",
+        "company_default": true
+      },
+      {
+        "warehouse": "@wh:raw",
+        "name": "Raw Materials Store",
+        "account": "@acct:inv_raw",
+        "company_default": false
+      }
+    ]
+  }
+}

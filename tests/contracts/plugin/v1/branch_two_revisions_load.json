@@ -1,0 +1,17 @@
+{
+ "contract": "plugin/1",
+ "part": "branch",
+ "name": "branch_two_revisions_load",
+ "owned_tables": [
+  "extra_thing",
+  "extra_more"
+ ],
+ "revisions": [
+  "\"\"\"a planted revision\"\"\"\nrevision = \"x_0001\"\ndown_revision = None\nbranch_labels = ('extra',)\ndepends_on = None\ncreates = ('extra_thing',)\n\n\ndef upgrade():\n    pass\n",
+  "\"\"\"a planted revision\"\"\"\nrevision = \"x_0002\"\ndown_revision = 'x_0001'\nbranch_labels = None\ndepends_on = None\ncreates = ('extra_more',)\n\n\ndef upgrade():\n    pass\n"
+ ],
+ "expect": {
+  "loads": true
+ },
+ "note": "A branch of two revisions, each creating its own table."
+}

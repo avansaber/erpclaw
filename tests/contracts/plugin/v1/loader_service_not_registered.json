@@ -1,0 +1,22 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_service_not_registered",
+ "plugins": [
+  {
+   "name": "extra",
+   "manifest": {
+    "services": [
+     {
+      "name": "quote",
+      "effect": "read"
+     }
+    ]
+   }
+  }
+ ],
+ "expect": {
+  "refused": "declares service quote, which it does not register"
+ },
+ "note": "A declared service has a registration."
+}

@@ -1,0 +1,16 @@
+{
+ "contract": "plugin/1",
+ "part": "branch",
+ "name": "branch_created_twice",
+ "owned_tables": [
+  "extra_thing"
+ ],
+ "revisions": [
+  "\"\"\"a planted revision\"\"\"\nrevision = \"x_0001\"\ndown_revision = None\nbranch_labels = ('extra',)\ndepends_on = None\ncreates = ('extra_thing',)\n\n\ndef upgrade():\n    pass\n",
+  "\"\"\"a planted revision\"\"\"\nrevision = \"x_0002\"\ndown_revision = 'x_0001'\nbranch_labels = None\ndepends_on = None\ncreates = ('extra_thing',)\n\n\ndef upgrade():\n    pass\n"
+ ],
+ "expect": {
+  "refused": "table extra_thing is created by more than one of its revisions"
+ },
+ "note": "Each table is created by one revision."
+}

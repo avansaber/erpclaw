@@ -1,0 +1,35 @@
+{
+  "id": "h-041",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "hi",
+  "turns": [
+    "इनिटेक को एक वेबसाइट ऑडिट का इनवॉइस बना दो।"
+  ],
+  "expect": {
+    "outcome": "question",
+    "must_ask_about": [
+      "the request in English"
+    ],
+    "books_after_approval": {
+      "documents": [],
+      "ledger": []
+    },
+    "must_not": [
+      "an approval card",
+      "any new document",
+      "any ledger entry",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "saving an invoice for 900.00",
+      "invoicing Initech",
+      "a guessed translation",
+      "asking for the rate"
+    ]
+  },
+  "reviewer": "",
+  "notes": "Hindi is not taken as an invoice. Ask for English, or say \"I work in English for now\", and do not card 900.00."
+}

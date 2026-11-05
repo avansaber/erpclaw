@@ -1,0 +1,91 @@
+{
+ "contract": "stock/1",
+ "service": "return_in",
+ "name": "partial_return_after_cost_change_return_in",
+ "books": {
+  "currency": "USD",
+  "warehouses": {
+   "@wh:main": {
+    "name": "Main Warehouse",
+    "account": "@acct:inv"
+   }
+  },
+  "items": {
+   "@item:circuit_board": {
+    "method": "moving_average"
+   }
+  }
+ },
+ "before": [
+  {
+   "op": "receive",
+   "as": "r0",
+   "item": "@item:circuit_board",
+   "warehouse": "@wh:main",
+   "qty": "40",
+   "rate": "15.00",
+   "date": "2026-03-31",
+   "voucher": "@v:pr0"
+  },
+  {
+   "op": "issue",
+   "as": "ia",
+   "item": "@item:circuit_board",
+   "warehouse": "@wh:main",
+   "qty": "12",
+   "date": "2026-04-01",
+   "voucher": "@v:INV-A"
+  },
+  {
+   "op": "receive",
+   "as": "r1",
+   "item": "@item:circuit_board",
+   "warehouse": "@wh:main",
+   "qty": "20",
+   "rate": "18.30",
+   "date": "2026-04-06",
+   "voucher": "@v:pr1"
+  }
+ ],
+ "input": {
+  "voucher_type": "sales_credit_note",
+  "voucher": "@v:cn",
+  "posting_date": "2026-04-08",
+  "original": {
+   "voucher": "@v:INV-A",
+   "line": 1
+  },
+  "qty": "5"
+ },
+ "output": {
+  "cost": "75.00",
+  "ledger_lines": [
+   {
+    "account": "@acct:cogs",
+    "debit": "0.00",
+    "credit": "75.00"
+   },
+   {
+    "account": "@acct:inv",
+    "debit": "75.00",
+    "credit": "0.00"
+   }
+  ],
+  "entry_id": "@entry:partial_return_after_cost_change_return_in#1"
+ },
+ "after": {
+  "entries": [
+   {
+    "item": "@item:circuit_board",
+    "warehouse": "@wh:main",
+    "direction": "in",
+    "qty": "5",
+    "value": "75.00",
+    "qty_after": "53",
+    "value_after": "861.00",
+    "id": "@entry:partial_return_after_cost_change_return_in#1"
+   }
+  ]
+ },
+ "note": "credit_note_partial_return_after_cost_change.md"
+}

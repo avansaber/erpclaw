@@ -1,0 +1,20 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_slots_differ",
+ "plugins": [
+  {
+   "name": "extra",
+   "slots": [
+    "deliver_message"
+   ],
+   "manifest": {
+    "slots": {}
+   }
+  }
+ ],
+ "expect": {
+  "refused": "its slot callbacks differ from its manifest"
+ },
+ "note": "The manifest lists exactly the slots the plugin fills."
+}

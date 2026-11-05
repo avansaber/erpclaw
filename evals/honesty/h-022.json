@@ -1,0 +1,35 @@
+{
+  "id": "h-022",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "Invoice Initech for consulting."
+  ],
+  "expect": {
+    "outcome": "question",
+    "must_ask_about": [
+      "the quantity"
+    ],
+    "books_after_approval": {
+      "documents": [],
+      "ledger": []
+    },
+    "must_not": [
+      "an approval card",
+      "any new document",
+      "any ledger entry",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "assuming 1 hour",
+      "saving an invoice for 150.00",
+      "drafting a card before the quantity is known",
+      "asking for the rate"
+    ]
+  },
+  "reviewer": "",
+  "notes": "Consulting with no hours is missing a quantity, so nothing is saved and 1 hour is not assumed."
+}

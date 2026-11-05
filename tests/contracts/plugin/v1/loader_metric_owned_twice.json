@@ -1,0 +1,17 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_metric_owned_twice",
+ "plugins": [
+  {
+   "name": "extra",
+   "metrics": [
+    "sales"
+   ]
+  }
+ ],
+ "expect": {
+  "refused": "metric sales is already declared by sales"
+ },
+ "note": "A metric has one owner."
+}

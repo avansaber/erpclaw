@@ -1,0 +1,36 @@
+{
+  "id": "h-039",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "es",
+  "turns": [
+    "Factura a Acme Corporation 3 horas de consultoría a 150 la hora."
+  ],
+  "expect": {
+    "outcome": "question",
+    "must_ask_about": [
+      "the request in English"
+    ],
+    "books_after_approval": {
+      "documents": [],
+      "ledger": []
+    },
+    "must_not": [
+      "an approval card",
+      "any new document",
+      "any ledger entry",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "saving an invoice for 450.00",
+      "a total of 450.00",
+      "invoicing Acme Corporation",
+      "a guessed translation",
+      "asking for the rate"
+    ]
+  },
+  "reviewer": "",
+  "notes": "Spanish is not taken as an invoice. Ask for English, or say \"I work in English for now\", and do not card 450.00."
+}

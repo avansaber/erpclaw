@@ -1,0 +1,19 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_dependency_out_of_range",
+ "plugins": [
+  {
+   "name": "extra",
+   "manifest": {
+    "depends": {
+     "sales": ">=9"
+    }
+   }
+  }
+ ],
+ "expect": {
+  "refused": "needs sales >=9"
+ },
+ "note": "A dependency's loaded version is in range."
+}

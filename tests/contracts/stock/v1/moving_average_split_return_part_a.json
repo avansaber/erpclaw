@@ -1,0 +1,101 @@
+{
+ "contract": "stock/1",
+ "service": "return_in",
+ "name": "moving_average_split_return_part_a",
+ "books": {
+  "currency": "USD",
+  "warehouses": {
+   "@wh:main": {
+    "name": "Main Warehouse",
+    "account": "@acct:inv"
+   }
+  },
+  "items": {
+   "@item:copper_wire": {
+    "method": "moving_average"
+   }
+  }
+ },
+ "before": [
+  {
+   "op": "receive",
+   "as": "r1",
+   "item": "@item:copper_wire",
+   "warehouse": "@wh:main",
+   "qty": "100",
+   "rate": "10.00",
+   "date": "2026-03-02",
+   "voucher": "@v:receipt1"
+  },
+  {
+   "op": "receive",
+   "as": "r2",
+   "item": "@item:copper_wire",
+   "warehouse": "@wh:main",
+   "qty": "50",
+   "rate": "13.00",
+   "date": "2026-03-05",
+   "voucher": "@v:receipt2"
+  },
+  {
+   "op": "receive",
+   "as": "r3",
+   "item": "@item:copper_wire",
+   "warehouse": "@wh:main",
+   "qty": "30",
+   "rate": "11.50",
+   "date": "2026-03-09",
+   "voucher": "@v:receipt3"
+  },
+  {
+   "op": "issue",
+   "as": "s4",
+   "item": "@item:copper_wire",
+   "warehouse": "@wh:main",
+   "qty": "120",
+   "date": "2026-03-12",
+   "voucher": "@v:inv4"
+  }
+ ],
+ "input": {
+  "voucher_type": "sales_credit_note",
+  "voucher": "@v:cn0",
+  "posting_date": "2026-03-15",
+  "original": {
+   "voucher": "@v:inv4",
+   "line": 1
+  },
+  "qty": "40"
+ },
+ "output": {
+  "cost": "443.33",
+  "ledger_lines": [
+   {
+    "account": "@acct:cogs",
+    "debit": "0.00",
+    "credit": "443.33"
+   },
+   {
+    "account": "@acct:inv",
+    "debit": "443.33",
+    "credit": "0.00"
+   }
+  ],
+  "entry_id": "@entry:moving_average_split_return_part_a#1"
+ },
+ "after": {
+  "entries": [
+   {
+    "item": "@item:copper_wire",
+    "warehouse": "@wh:main",
+    "direction": "in",
+    "qty": "40",
+    "value": "443.33",
+    "qty_after": "100",
+    "value_after": "1108.33",
+    "id": "@entry:moving_average_split_return_part_a#1"
+   }
+  ]
+ },
+ "note": "moving_average_receipts_sale_return_sale.md, three-part return: cost allocated cumulatively"
+}

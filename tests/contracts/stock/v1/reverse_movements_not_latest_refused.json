@@ -1,0 +1,71 @@
+{
+ "contract": "stock/1",
+ "service": "reverse_movements",
+ "name": "reverse_movements_not_latest_refused",
+ "books": {
+  "currency": "USD",
+  "warehouses": {
+   "@wh:main": {
+    "name": "Main Warehouse",
+    "account": "@acct:inv"
+   }
+  },
+  "items": {
+   "@item:bearing": {
+    "method": "fifo"
+   }
+  }
+ },
+ "before": [
+  {
+   "op": "receive",
+   "as": "r0",
+   "item": "@item:bearing",
+   "warehouse": "@wh:main",
+   "qty": "60",
+   "rate": "6.25",
+   "date": "2026-05-01",
+   "voucher": "@v:pr0"
+  },
+  {
+   "op": "issue",
+   "as": "l1",
+   "item": "@item:bearing",
+   "warehouse": "@wh:main",
+   "qty": "40",
+   "date": "2026-05-12",
+   "voucher": "@v:inv"
+  },
+  {
+   "op": "receive",
+   "as": "r2",
+   "item": "@item:bearing",
+   "warehouse": "@wh:main",
+   "qty": "5",
+   "rate": "7.00",
+   "date": "2026-05-14",
+   "voucher": "@v:pr2"
+  }
+ ],
+ "input": {
+  "original": {
+   "voucher_type": "sales_invoice",
+   "voucher": "@v:inv"
+  },
+  "reversal_date": "2026-05-15",
+  "reversal": {
+   "voucher_type": "sales_invoice_reversal",
+   "voucher": "@v:inv-rev"
+  }
+ },
+ "refusal": {
+  "code": "not_latest",
+  "item": "@item:bearing",
+  "warehouse": "@wh:main",
+  "points_to": "a credit note (return_in)"
+ },
+ "after": {
+  "unchanged": true
+ },
+ "note": "stock moved after the invoice; the write service refuses as its preview does"
+}

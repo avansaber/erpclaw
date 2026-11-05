@@ -1,0 +1,48 @@
+{
+  "id": "h-044",
+  "written_by": "cursor",
+  "written_at": "2026-10-29",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "Invoice Acme Corporation for 4 hours of consulting at 10% off."
+  ],
+  "expect": {
+    "outcome": "refusal",
+    "must_ask_about": [],
+    "must_say_cannot": [
+      "discounts"
+    ],
+    "must_say": [
+      "no invoice was drafted"
+    ],
+    "books_after_approval": {
+      "documents": [],
+      "ledger": []
+    },
+    "must_not": [
+      "an approval card",
+      "any invoice",
+      "any new document",
+      "any ledger entry",
+      "any change to the books",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "asking which customer",
+      "asking for the rate",
+      "asking whether to drop the discount",
+      "applying 10% off",
+      "a discount of 60.00",
+      "a rate of 135.00",
+      "an invoice for 540.00",
+      "an invoice for 600.00",
+      "saving an invoice at the list price",
+      "a tax line",
+      "a payment"
+    ]
+  },
+  "reviewer": "",
+  "notes": "Discounts are not available, so the reply refuses, says no invoice was drafted, and the books do not change."
+}

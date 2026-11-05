@@ -1,0 +1,327 @@
+{
+ "cancel_invoice": {
+  "card": {
+   "books": [
+    "Accounts Receivable (Acme Corporation) -224.73",
+    "Sales (4100 Sales) +224.73",
+    "The original entries stay; reversing entries are added on 15 Oct 2026."
+   ],
+   "footer": "Valid 10 minutes. Rechecked before saving.",
+   "lines": [
+    [
+     "Company",
+     "Stark Manufacturing"
+    ],
+    [
+     "Invoice",
+     "INV-2026-00009"
+    ],
+    [
+     "Customer",
+     "Acme Corporation"
+    ],
+    [
+     "Total",
+     "224.73 USD"
+    ],
+    [
+     "Dated",
+     "15 Oct 2026"
+    ],
+    [
+     "Status now",
+     "submitted"
+    ],
+    [
+     "Reversal date",
+     "15 Oct 2026"
+    ]
+   ],
+   "title": "Cancel a sales invoice",
+   "warnings": []
+  },
+  "figures": [
+   "224.73 USD"
+  ],
+  "read_back": "Cancelled INV-2026-00009 (224.73 USD), reversed on 15 Oct 2026; the original entries are kept.",
+  "text": "Cancelled INV-2026-00009 (224.73 USD), reversed on 15 Oct 2026; the original entries are kept."
+ },
+ "create_invoice": {
+  "card": {
+   "books": [
+    "Accounts Receivable (Acme Corporation) +224.73",
+    "Sales +224.73"
+   ],
+   "footer": "Valid 10 minutes. Rechecked before saving.",
+   "lines": [
+    [
+     "Company",
+     "Stark Manufacturing"
+    ],
+    [
+     "Customer",
+     "Acme Corporation"
+    ],
+    [
+     "Item",
+     "1000.5 x Copper Wire @ 0.1234 = 123.46"
+    ],
+    [
+     "Item",
+     "2.25 x Circuit Board @ 45.0075 = 101.27"
+    ],
+    [
+     "Total",
+     "224.73 USD"
+    ],
+    [
+     "Date",
+     "15 Oct 2026"
+    ],
+    [
+     "Due",
+     "14 Nov 2026"
+    ],
+    [
+     "Tax",
+     "No tax calculated: no tax template is set. That is not a statement that no tax is owed."
+    ]
+   ],
+   "title": "Create and submit a sales invoice",
+   "warnings": []
+  },
+  "figures": [
+   "224.73 USD"
+  ],
+  "read_back": "Saved and submitted invoice INV-2026-00009 for Acme Corporation: 224.73 USD, due 14 Nov 2026.",
+  "text": "Saved and submitted invoice INV-2026-00009 for Acme Corporation: 224.73 USD, due 14 Nov 2026."
+ },
+ "draft_invoice": {
+  "card": {
+   "books": [
+    "Nothing posts to the books until the draft is submitted."
+   ],
+   "footer": "Valid 10 minutes. Rechecked before saving.",
+   "lines": [
+    [
+     "Company",
+     "Stark Manufacturing"
+    ],
+    [
+     "Customer",
+     "Acme Corporation"
+    ],
+    [
+     "Item",
+     "1000.5 x Copper Wire @ 0.1234 = 123.46"
+    ],
+    [
+     "Item",
+     "2.25 x Circuit Board @ 45.0075 = 101.27"
+    ],
+    [
+     "Total",
+     "224.73 USD"
+    ],
+    [
+     "Date",
+     "15 Oct 2026"
+    ],
+    [
+     "Due",
+     "14 Nov 2026"
+    ],
+    [
+     "Tax",
+     "No tax calculated: no tax template is set. That is not a statement that no tax is owed."
+    ]
+   ],
+   "title": "Save a draft sales invoice",
+   "warnings": []
+  },
+  "figures": [
+   "224.73 USD"
+  ],
+  "read_back": "Saved draft invoice INV-2026-00009 for Acme Corporation: 224.73 USD, due 14 Nov 2026.",
+  "text": "Saved draft invoice INV-2026-00009 for Acme Corporation: 224.73 USD, due 14 Nov 2026."
+ },
+ "get_metric": {
+  "figures": [
+   "8,224.73 USD",
+   "3,170.00 USD",
+   "2,354.73 USD",
+   "2,340.00 USD",
+   "360.00 USD"
+  ],
+  "text": "Top customers by sales, 01 Jan 2026 to 15 Oct 2026: 8,224.73 USD\nBasis: submitted invoices dated in the period, before tax; drafts and cancelled invoices excluded.\nMethod: invoice totals per customer, highest first; headline is the total.\n  Pied Piper         3,170.00 USD\n  Acme Corporation   2,354.73 USD\n  Wayne Enterprises  2,340.00 USD\n  Initech            360.00 USD"
+ },
+ "list_invoices": {
+  "figures": [
+   "16,324.73 USD",
+   "5,094.73 USD"
+  ],
+  "text": "All invoices: 14. Submitted invoices total 16,324.73 USD, still to collect 5,094.73 USD (3 draft or cancelled invoices not counted).\n  INV-2025-00001  10 Feb 2025  Acme Corporation        2,800.00  outstanding       0.00  paid\n  INV-2025-00002  20 May 2025  Wayne Enterprises       2,100.00  outstanding       0.00  paid\n  INV-2025-00003  05 Aug 2025  Hooli                   1,800.00  outstanding       0.00  paid\n  INV-2025-00004  12 Nov 2025  Initech                 1,400.00  outstanding       0.00  paid\n  INV-2026-00001  03 Mar 2026  Acme Corporation        2,130.00  outstanding       0.00  paid\n  INV-2026-00002  14 Apr 2026  Wayne Enterprises       1,800.00  outstanding     800.00  partly_paid\n  INV-2026-00003  09 Jun 2026  Pied Piper              2,050.00  outstanding   2,050.00  submitted\n  INV-2026-00004  21 Jul 2026  Wayne Enterprises         540.00  outstanding     540.00  submitted\n  INV-2026-00005  30 Aug 2026  Initech                   360.00  outstanding     360.00  submitted\n  INV-2026-00006  15 Sep 2026  Pied Piper              1,120.00  outstanding   1,120.00  submitted\n  INV-2026-00007  22 Sep 2026  Hooli                     140.00  outstanding       0.00  cancelled\n  INV-2026-00008  02 Oct 2026  Initech                    56.00  outstanding       0.00  draft\n  INV-2026-00009  15 Oct 2026  Acme Corporation          224.73  outstanding     224.73  submitted\n  INV-2026-00010  15 Oct 2026  Acme Corporation          224.73  outstanding       0.00  draft"
+ },
+ "record_payment": {
+  "card": {
+   "books": [
+    "Bank (1100 Bank) +300.25",
+    "Accounts Receivable (Acme Corporation) -300.25"
+   ],
+   "footer": "Valid 10 minutes. Rechecked before saving.",
+   "lines": [
+    [
+     "Company",
+     "Stark Manufacturing"
+    ],
+    [
+     "Customer",
+     "Acme Corporation"
+    ],
+    [
+     "Amount received",
+     "300.25 USD"
+    ],
+    [
+     "Date",
+     "Received 15 Oct 2026"
+    ],
+    [
+     "Account",
+     "1100 Bank"
+    ],
+    [
+     "Method",
+     "check"
+    ],
+    [
+     "Applied to",
+     "INV-2026-00009 (224.73 of 224.73 outstanding), now paid"
+    ],
+    [
+     "Credit left",
+     "75.52 USD"
+    ],
+    [
+     "Tax",
+     "A payment carries no tax of its own."
+    ]
+   ],
+   "title": "Record a customer payment",
+   "warnings": [
+    "300.25 USD is more than Acme Corporation owes on open invoices; 75.52 USD stays as credit in Acme Corporation's favour.",
+    "Acme Corporation already has a 300.25 USD payment on 13 Oct 2026 (PAY-2026-00003). Is this a second payment?"
+   ]
+  },
+  "figures": [
+   "300.25 USD",
+   "224.73 USD",
+   "75.52 USD"
+  ],
+  "read_back": "Recorded PAY-2026-00004: 300.25 USD from Acme Corporation, received 15 Oct 2026 by check. Applied to INV-2026-00009 224.73 USD (now paid). 75.52 USD stays as credit in Acme Corporation's favour.",
+  "text": "Recorded PAY-2026-00004: 300.25 USD from Acme Corporation, received 15 Oct 2026 by check. Applied to INV-2026-00009 224.73 USD (now paid). 75.52 USD stays as credit in Acme Corporation's favour."
+ },
+ "reverse_payment": {
+  "card": {
+   "books": [
+    "Bank (1100 Bank) -50.25",
+    "Accounts Receivable (Acme Corporation) +50.25"
+   ],
+   "footer": "Valid 10 minutes. Rechecked before saving.",
+   "lines": [
+    [
+     "Company",
+     "Stark Manufacturing"
+    ],
+    [
+     "Payment",
+     "PAY-2026-00003"
+    ],
+    [
+     "Customer",
+     "Acme Corporation"
+    ],
+    [
+     "Amount received",
+     "50.25 USD"
+    ],
+    [
+     "Dated",
+     "15 Oct 2026"
+    ],
+    [
+     "Reversal date",
+     "15 Oct 2026"
+    ],
+    [
+     "Owes again",
+     "INV-2026-00009 (50.25 of 224.73 outstanding)"
+    ]
+   ],
+   "title": "Reverse a customer payment",
+   "warnings": [
+    "Use this when the money did not arrive or was recorded by mistake: it takes the money out of the bank account in the books."
+   ]
+  },
+  "figures": [
+   "50.25 USD",
+   "50.25 USD"
+  ],
+  "read_back": "Reversed PAY-2026-00003 (50.25 USD) on 15 Oct 2026: INV-2026-00009 owes 50.25 USD again.",
+  "text": "Reversed PAY-2026-00003 (50.25 USD) on 15 Oct 2026: INV-2026-00009 owes 50.25 USD again."
+ },
+ "submit_invoice": {
+  "card": {
+   "books": [
+    "Accounts Receivable (Acme Corporation) +224.73",
+    "Sales +224.73"
+   ],
+   "footer": "Valid 10 minutes. Rechecked before saving.",
+   "lines": [
+    [
+     "Company",
+     "Stark Manufacturing"
+    ],
+    [
+     "Invoice",
+     "INV-2026-00009"
+    ],
+    [
+     "Customer",
+     "Acme Corporation"
+    ],
+    [
+     "Item",
+     "1000.5 x Copper Wire @ 0.1234 = 123.46"
+    ],
+    [
+     "Item",
+     "2.25 x Circuit Board @ 45.0075 = 101.27"
+    ],
+    [
+     "Total",
+     "224.73 USD"
+    ],
+    [
+     "Date",
+     "15 Oct 2026"
+    ],
+    [
+     "Due",
+     "14 Nov 2026"
+    ],
+    [
+     "Tax",
+     "No tax calculated: no tax template is set. That is not a statement that no tax is owed."
+    ]
+   ],
+   "title": "Submit a draft sales invoice",
+   "warnings": []
+  },
+  "figures": [
+   "224.73 USD"
+  ],
+  "read_back": "Submitted invoice INV-2026-00009 for Acme Corporation: 224.73 USD, due 14 Nov 2026.",
+  "text": "Submitted invoice INV-2026-00009 for Acme Corporation: 224.73 USD, due 14 Nov 2026."
+ }
+}

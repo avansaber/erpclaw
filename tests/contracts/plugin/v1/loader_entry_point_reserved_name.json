@@ -1,0 +1,21 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_entry_point_reserved_name",
+ "entry_point": {
+  "dist": "erpclaw-sales",
+  "object": "plugin"
+ },
+ "plugins": [
+  {
+   "name": "core",
+   "manifest": {
+    "distribution": "erpclaw-sales"
+   }
+  }
+ ],
+ "expect": {
+  "refused": "uses the reserved name core"
+ },
+ "note": "No plugin is called core."
+}

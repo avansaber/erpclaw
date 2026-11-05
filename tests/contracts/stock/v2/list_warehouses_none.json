@@ -1,0 +1,19 @@
+{
+  "contract": "stock/2",
+  "service": "list_warehouses",
+  "name": "list_warehouses_none",
+  "books": {
+    "currency": "USD",
+    "warehouses": {},
+    "items": {}
+  },
+  "before": [],
+  "input": {},
+  "after": {
+    "unchanged": true
+  },
+  "note": "Original M4_STOCK_CORE_SETUP r1a section 2.11; setup only, no stock movement.",
+  "output": {
+    "warehouses": []
+  }
+}

@@ -1,0 +1,17 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_core_revision",
+ "plugins": [
+  {
+   "name": "extra",
+   "manifest": {
+    "after_core_revision": "9999"
+   }
+  }
+ ],
+ "expect": {
+  "refused": "needs core revision 9999"
+ },
+ "note": "The plugin needs a core revision this engine does not have."
+}

@@ -1,0 +1,17 @@
+{
+ "contract": "plugin/4",
+ "part": "loader",
+ "name": "loader_reason_holds_a_digit",
+ "write": {
+  "cls": "WriteContract",
+  "dateless": true,
+  "reason": {
+   "en": "these settings changed 3 times."
+  },
+  "moves_money": false
+ },
+ "expect": {
+  "refused": "holds a digit"
+ },
+ "note": "A reason never reads as a figure."
+}

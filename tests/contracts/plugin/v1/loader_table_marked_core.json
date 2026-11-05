@@ -1,0 +1,20 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_table_marked_core",
+ "plugins": [
+  {
+   "name": "extra",
+   "tables": [
+    {
+     "name": "extra_thing",
+     "owner": "core"
+    }
+   ]
+  }
+ ],
+ "expect": {
+  "refused": "is not one of core's tables"
+ },
+ "note": "Only core's own tables are marked core."
+}

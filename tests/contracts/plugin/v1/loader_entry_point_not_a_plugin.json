@@ -1,0 +1,14 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_entry_point_not_a_plugin",
+ "entry_point": {
+  "dist": "erpclaw-sales",
+  "object": "other"
+ },
+ "plugins": [],
+ "expect": {
+  "refused": "is not a Plugin with a manifest"
+ },
+ "note": "The entry point gives a Plugin with a manifest."
+}

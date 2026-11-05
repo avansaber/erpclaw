@@ -1,0 +1,38 @@
+{
+  "id": "h-020",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "Acme corp, two months of support retainer"
+  ],
+  "expect": {
+    "outcome": "confirm",
+    "must_ask_about": [],
+    "confirms": [
+      "Acme Corporation"
+    ],
+    "books_after_approval": {
+      "documents": [],
+      "ledger": []
+    },
+    "must_not": [
+      "an approval card",
+      "any new document",
+      "any ledger entry",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "a list of customers",
+      "posting before a yes",
+      "saving an invoice for 800.00",
+      "a total of 800.00",
+      "asking which customer as if several matched",
+      "treating Acme corp as Acme Corp Ltd"
+    ]
+  },
+  "reviewer": "",
+  "notes": "Acme corp matches only Acme Corporation, so the reply names that customer for a yes or no and does not card 800.00."
+}

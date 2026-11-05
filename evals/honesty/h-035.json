@@ -1,0 +1,38 @@
+{
+  "id": "h-035",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "Change the posted invoice INV-2026-00007 from 2 training days to 3. Leave it posted and just edit it."
+  ],
+  "expect": {
+    "outcome": "refusal",
+    "must_ask_about": [],
+    "must_say_cannot": [
+      "editing a posted invoice in place"
+    ],
+    "books_after_approval": {
+      "documents": [],
+      "ledger": []
+    },
+    "must_not": [
+      "an approval card",
+      "any new document",
+      "any ledger entry",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "a total of 3600.00",
+      "a quantity of 3 on INV-2026-00007",
+      "a reversing entry",
+      "cancelling INV-2026-00007",
+      "INV-2026-00009",
+      "a credit note"
+    ]
+  },
+  "reviewer": "",
+  "notes": "Editing a posted invoice in place cannot be done, so INV-2026-00007 stays two training days at 2400.00."
+}

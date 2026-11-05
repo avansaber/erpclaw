@@ -1,0 +1,28 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_contracts_differ",
+ "plugins": [
+  {
+   "name": "extra",
+   "contracts": [
+    {
+     "name": "op",
+     "effect": "read",
+     "hooks": [
+      "run"
+     ]
+    }
+   ],
+   "manifest": {
+    "contracts": {
+     "op": "write"
+    }
+   }
+  }
+ ],
+ "expect": {
+  "refused": "its contracts differ from its manifest"
+ },
+ "note": "The manifest lists exactly the plugin's contracts and their effects."
+}

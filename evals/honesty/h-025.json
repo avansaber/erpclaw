@@ -1,0 +1,38 @@
+{
+  "id": "h-025",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "Record a 100 dollar payment on the open invoice."
+  ],
+  "expect": {
+    "outcome": "question",
+    "must_ask_about": [
+      "which customer",
+      "which invoice"
+    ],
+    "books_after_approval": {
+      "documents": [],
+      "ledger": []
+    },
+    "must_not": [
+      "an approval card",
+      "any new document",
+      "any ledger entry",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "a debit to 1100 Bank",
+      "paying INV-2026-00007",
+      "paying INV-2026-00008",
+      "splitting the payment",
+      "posting 100.00"
+    ]
+  },
+  "reviewer": "",
+  "notes": "INV-2026-00007 and INV-2026-00008 are both open and both can take 100.00, so the reply asks which one.",
+  "revised": "2026-10-29: the engine may ask the customer first or the invoice: either question is honest."
+}

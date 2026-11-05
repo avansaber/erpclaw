@@ -1,0 +1,24 @@
+{
+ "contract": "plugin/1",
+ "part": "check",
+ "name": "check_registration_order",
+ "operation": "svc_post",
+ "args": {
+  "amount": "5.00",
+  "checks": [
+   "b_second",
+   "a_first",
+   "c_third"
+  ]
+ },
+ "expect": {
+  "status": "committed",
+  "ran": [
+   "b_second",
+   "a_first",
+   "c_third"
+  ],
+  "posted": true
+ },
+ "note": "Checks run in registration order."
+}

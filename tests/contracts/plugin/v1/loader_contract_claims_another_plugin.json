@@ -1,0 +1,24 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_contract_claims_another_plugin",
+ "plugins": [
+  {
+   "name": "extra",
+   "contracts": [
+    {
+     "name": "op",
+     "effect": "read",
+     "hooks": [
+      "run"
+     ],
+     "plugin": "sales"
+    }
+   ]
+  }
+ ],
+ "expect": {
+  "refused": "contract op claims plugin sales"
+ },
+ "note": "A contract names its own plugin."
+}

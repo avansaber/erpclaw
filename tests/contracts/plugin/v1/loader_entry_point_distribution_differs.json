@@ -1,0 +1,18 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_entry_point_distribution_differs",
+ "entry_point": {
+  "dist": "erpclaw-sales",
+  "object": "plugin"
+ },
+ "plugins": [
+  {
+   "name": "extra"
+  }
+ ],
+ "expect": {
+  "refused": "manifest names distribution erpclaw-extra"
+ },
+ "note": "The manifest names the distribution it comes from."
+}

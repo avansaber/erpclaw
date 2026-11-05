@@ -1,0 +1,21 @@
+{
+ "contract": "plugin/1",
+ "part": "check",
+ "name": "check_one_per_key",
+ "operation": "svc_post",
+ "args": {
+  "amount": "5.00",
+  "checks": [
+   "compare",
+   "compare"
+  ]
+ },
+ "expect": {
+  "status": "committed",
+  "ran": [
+   "compare"
+  ],
+  "posted": true
+ },
+ "note": "A second registration under a key already registered is a no-op."
+}

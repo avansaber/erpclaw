@@ -1,0 +1,21 @@
+[project]
+name = "erpclaw-sales"
+version = "0.0.1"
+description = "ERPClaw sales plugin: customers, invoices, payments"
+license = "GPL-3.0-only"
+requires-python = ">=3.12"
+dependencies = ["erpclaw-core"]
+
+[project.entry-points."erpclaw.plugins"]
+sales = "erpclaw_sales:PLUGIN"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+erpclaw-core = { workspace = true }
+erpclaw-assistant = { workspace = true }
+erpclaw-api = { workspace = true }
+erpclaw-sales = { workspace = true }
+erpclaw-email-folder = { workspace = true }

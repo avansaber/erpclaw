@@ -1,0 +1,21 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_service_without_function",
+ "plugins": [
+  {
+   "name": "extra",
+   "services": [
+    {
+     "name": "quote",
+     "effect": "read",
+     "fn": false
+    }
+   ]
+  }
+ ],
+ "expect": {
+  "refused": "service quote has no function"
+ },
+ "note": "A registered service has a function."
+}

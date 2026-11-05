@@ -1,0 +1,21 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_read_contract_run",
+ "plugins": [
+  {
+   "name": "extra",
+   "contracts": [
+    {
+     "name": "op",
+     "effect": "read",
+     "hooks": []
+    }
+   ]
+  }
+ ],
+ "expect": {
+  "refused": "read contract op needs run"
+ },
+ "note": "A read contract has run."
+}

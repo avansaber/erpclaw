@@ -1,0 +1,23 @@
+{
+ "contract": "plugin/2",
+ "part": "loader",
+ "name": "loader_send_message_twice",
+ "plugins": [
+  {
+   "name": "mailer",
+   "slots": [
+    "send_message"
+   ]
+  },
+  {
+   "name": "mailer2",
+   "slots": [
+    "send_message"
+   ]
+  }
+ ],
+ "expect": {
+  "refused": "fills slot send_message, already filled by mailer"
+ },
+ "note": "send_message has one filler among the loaded plugins."
+}

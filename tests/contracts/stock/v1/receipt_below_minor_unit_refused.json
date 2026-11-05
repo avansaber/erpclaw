@@ -1,0 +1,34 @@
+{
+ "contract": "stock/1",
+ "service": "receive_stock",
+ "name": "receipt_below_minor_unit_refused",
+ "books": {
+  "currency": "USD",
+  "warehouses": {
+   "@wh:main": {
+    "name": "Main Warehouse",
+    "account": "@acct:inv"
+   }
+  },
+  "items": {
+   "@item:wire": {
+    "method": "moving_average"
+   }
+  }
+ },
+ "before": [],
+ "input": {
+  "item": "@item:wire",
+  "warehouse": "@wh:main",
+  "qty": "0.0001",
+  "rate": "0.01",
+  "posting_date": "2026-07-01"
+ },
+ "refusal": {
+  "code": "receipt_below_minor_unit",
+  "unit": "0.01 USD"
+ },
+ "after": {
+  "unchanged": true
+ }
+}

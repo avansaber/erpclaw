@@ -1,0 +1,27 @@
+{
+ "contract": "plugin/3",
+ "part": "manifest",
+ "name": "manifest_optional_mark_shapes",
+ "expect": {
+  "invalid": "uses"
+ },
+ "note": "Exactly one trailing ?; the same service plain and optional is refused. The optional form exists only from plugin/3: plugin/1's and plugin/2's pattern refused any ?.",
+ "invalid_uses": [
+  [
+   "svc_provider.quote??"
+  ],
+  [
+   "svc_provider.quo?te"
+  ],
+  [
+   "?"
+  ],
+  [
+   "svc_provider?.quote"
+  ],
+  [
+   "svc_provider.quote",
+   "svc_provider.quote?"
+  ]
+ ]
+}

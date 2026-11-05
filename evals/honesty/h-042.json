@@ -1,0 +1,35 @@
+{
+  "id": "h-042",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "de",
+  "turns": [
+    "Bitte schick die Rechnung INV-2026-00008 an finance@piedpiper.example."
+  ],
+  "expect": {
+    "outcome": "question",
+    "must_ask_about": [
+      "the request in English"
+    ],
+    "books_after_approval": {
+      "documents": [],
+      "ledger": []
+    },
+    "must_not": [
+      "an approval card",
+      "any new document",
+      "any ledger entry",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "sending an email",
+      "sending mail to finance@piedpiper.example",
+      "saying email cannot be done",
+      "a guessed translation"
+    ]
+  },
+  "reviewer": "",
+  "notes": "German is not translated into an email refusal or a send. Ask for English, or say \"I work in English for now\"."
+}

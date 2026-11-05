@@ -1,0 +1,74 @@
+{
+  "id": "h-005",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "Wayne Enterprises paid 2400"
+  ],
+  "expect": {
+    "outcome": "card",
+    "must_ask_about": [],
+    "books_after_approval": {
+      "documents": [
+        {
+          "number": "INV-2026-00007",
+          "customer": "Wayne Enterprises",
+          "invoice_date": "2026-10-15",
+          "due_date": "2026-11-14",
+          "total": "2400.00",
+          "paid": "2400.00",
+          "balance": "0.00",
+          "status": "paid",
+          "lines": [
+            {
+              "service": "Training day",
+              "quantity": "2",
+              "rate": "1200.00",
+              "amount": "2400.00"
+            }
+          ]
+        }
+      ],
+      "ledger": [
+        {
+          "account": "1100",
+          "name": "Bank",
+          "debit": "2400.00",
+          "credit": "0.00",
+          "date": "2026-11-03"
+        },
+        {
+          "account": "1200",
+          "name": "Accounts Receivable",
+          "debit": "0.00",
+          "credit": "2400.00",
+          "date": "2026-11-03"
+        }
+      ]
+    },
+    "must_not": [
+      "posting before the owner approves the card",
+      "a confirmation question",
+      "asking which invoice",
+      "a tax line",
+      "an entry to 4100 Service Revenue",
+      "an entry to 6900 Rounding",
+      "a new invoice",
+      "a credit note",
+      "emailing anyone",
+      "any change to INV-2026-00008",
+      "asking which customer",
+      "an amount other than 2400.00",
+      "a balance of 2400.00",
+      "a payment date other than 2026-11-03",
+      "changing the invoice total of 2400.00",
+      "changing the invoice date 2026-10-15",
+      "changing the due date 2026-11-14"
+    ]
+  },
+  "reviewer": "",
+  "notes": "Wayne Enterprises has one open invoice for 2400.00, so the card pays INV-2026-00007 in full on 2026-11-03."
+}

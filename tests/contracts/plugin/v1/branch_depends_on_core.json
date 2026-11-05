@@ -1,0 +1,15 @@
+{
+ "contract": "plugin/1",
+ "part": "branch",
+ "name": "branch_depends_on_core",
+ "owned_tables": [
+  "extra_thing"
+ ],
+ "revisions": [
+  "\"\"\"a planted revision\"\"\"\nrevision = \"x_0001\"\ndown_revision = None\nbranch_labels = ('extra',)\ndepends_on = '0004'\ncreates = ('extra_thing',)\n\n\ndef upgrade():\n    pass\n"
+ ],
+ "expect": {
+  "refused": "reach"
+ },
+ "note": "A revision has no depends_on."
+}

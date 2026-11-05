@@ -1,0 +1,126 @@
+{
+ "contract": "stock/1",
+ "service": "return_in",
+ "name": "demo_books_full_return_motor_housing",
+ "books": {
+  "currency": "USD",
+  "default_warehouse": "@wh:main",
+  "warehouses": {
+   "@wh:main": {
+    "name": "Stark Manufacturing Inc. - Main Warehouse",
+    "account": "@acct:inv_raw"
+   },
+   "@wh:raw": {
+    "name": "Raw Materials Store",
+    "account": "@acct:inv_raw"
+   },
+   "@wh:fg": {
+    "name": "Finished Goods Store",
+    "account": "@acct:inv_fg"
+   }
+  },
+  "items": {
+   "@item:copper_wire": {
+    "method": "moving_average"
+   },
+   "@item:circuit_board": {
+    "method": "moving_average"
+   },
+   "@item:motor_housing": {
+    "method": "moving_average"
+   }
+  }
+ },
+ "before": [
+  {
+   "op": "receive",
+   "as": "cw0",
+   "item": "@item:copper_wire",
+   "warehouse": "@wh:raw",
+   "qty": "200",
+   "rate": "28.00",
+   "date": "2026-01-01",
+   "voucher": "@v:opening_cw"
+  },
+  {
+   "op": "receive",
+   "as": "cb0",
+   "item": "@item:circuit_board",
+   "warehouse": "@wh:raw",
+   "qty": "200",
+   "rate": "15.00",
+   "date": "2026-01-01",
+   "voucher": "@v:opening_cb"
+  },
+  {
+   "op": "receive",
+   "as": "cb1",
+   "item": "@item:circuit_board",
+   "warehouse": "@wh:raw",
+   "qty": "100",
+   "rate": "15.00",
+   "date": "2026-01-12",
+   "voucher": "@v:pr_cb"
+  },
+  {
+   "op": "receive",
+   "as": "mh0",
+   "item": "@item:motor_housing",
+   "warehouse": "@wh:fg",
+   "qty": "15",
+   "rate": "210.00",
+   "date": "2026-01-01",
+   "voucher": "@v:opening_mh"
+  },
+  {
+   "op": "issue",
+   "as": "mh_inv5",
+   "item": "@item:motor_housing",
+   "warehouse": "@wh:fg",
+   "qty": "8",
+   "date": "2026-01-20",
+   "voucher": "@v:INV-2026-00005"
+  }
+ ],
+ "input": {
+  "voucher_type": "sales_credit_note",
+  "voucher": "@v:credit_note",
+  "posting_date": "2026-10-26",
+  "original": {
+   "voucher": "@v:INV-2026-00005",
+   "line": 1
+  },
+  "qty": "8"
+ },
+ "output": {
+  "cost": "1680.00",
+  "ledger_lines": [
+   {
+    "account": "@acct:cogs",
+    "debit": "0.00",
+    "credit": "1680.00"
+   },
+   {
+    "account": "@acct:inv_fg",
+    "debit": "1680.00",
+    "credit": "0.00"
+   }
+  ],
+  "entry_id": "@entry:demo_books_full_return_motor_housing#1"
+ },
+ "after": {
+  "entries": [
+   {
+    "item": "@item:motor_housing",
+    "warehouse": "@wh:fg",
+    "direction": "in",
+    "qty": "8",
+    "value": "1680.00",
+    "qty_after": "15",
+    "value_after": "3150.00",
+    "id": "@entry:demo_books_full_return_motor_housing#1"
+   }
+  ]
+ },
+ "note": "credit_note_full_return.md: back at the cost it left at (210.00), never the selling rate (349.00)"
+}

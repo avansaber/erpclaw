@@ -1,0 +1,19 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_conflict_loaded",
+ "plugins": [
+  {
+   "name": "extra",
+   "manifest": {
+    "conflicts": [
+     "sales"
+    ]
+   }
+  }
+ ],
+ "expect": {
+  "refused": "conflicts with sales, which is loaded"
+ },
+ "note": "A plugin it conflicts with is not loaded."
+}

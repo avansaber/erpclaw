@@ -1,0 +1,24 @@
+{
+ "contract": "plugin/1",
+ "part": "check",
+ "name": "check_first_refusal_ends",
+ "operation": "svc_post",
+ "args": {
+  "amount": "5.00",
+  "checks": [
+   "a_first",
+   "refuse_b",
+   "c_third"
+  ]
+ },
+ "expect": {
+  "status": "refused",
+  "code": "provider_mismatch",
+  "ran": [
+   "a_first",
+   "refuse_b"
+  ],
+  "posted": false
+ },
+ "note": "The first refusing check ends the run: the checks after it do not run."
+}

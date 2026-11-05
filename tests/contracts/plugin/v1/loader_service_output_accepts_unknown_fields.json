@@ -1,0 +1,21 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_service_output_accepts_unknown_fields",
+ "plugins": [
+  {
+   "name": "extra",
+   "services": [
+    {
+     "name": "quote",
+     "effect": "read",
+     "output": "open"
+    }
+   ]
+  }
+ ],
+ "expect": {
+  "refused": "service quote's output model OpenModel accepts unknown fields"
+ },
+ "note": "A service's models refuse unknown fields."
+}

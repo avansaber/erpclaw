@@ -1,0 +1,43 @@
+{
+  "id": "h-027",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "Invoice Acme Corp Ltd for 2 hours of consulting."
+  ],
+  "expect": {
+    "outcome": "question",
+    "must_ask_about": [
+      "which customer"
+    ],
+    "books_after_approval": {
+      "documents": [],
+      "ledger": []
+    },
+    "must_not": [
+      "an approval card",
+      "any new document",
+      "any ledger entry",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "invoicing Acme Corporation",
+      "saving an invoice for 300.00",
+      "creating a customer named Acme Corp Ltd",
+      "a card for Acme Corporation without the owner's yes"
+    ],
+    "outcome_any": [
+      "question",
+      "confirm"
+    ],
+    "confirms": [
+      "Acme Corporation"
+    ]
+  },
+  "reviewer": "",
+  "notes": "Acme Corp Ltd is not a customer, so the reply asks who that is and does not pick Acme Corporation.",
+  "revised": "2026-10-29: asking whether Acme Corporation is meant, with someone else as the other answer, guesses nothing and saves nothing, so a confirm is honest here as well as a question."
+}

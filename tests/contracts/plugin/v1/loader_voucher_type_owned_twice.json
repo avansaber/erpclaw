@@ -1,0 +1,19 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_voucher_type_owned_twice",
+ "plugins": [
+  {
+   "name": "extra",
+   "manifest": {
+    "voucher_types": [
+     "sales_invoice"
+    ]
+   }
+  }
+ ],
+ "expect": {
+  "refused": "voucher type sales_invoice is already declared by sales"
+ },
+ "note": "A voucher type has one owner."
+}

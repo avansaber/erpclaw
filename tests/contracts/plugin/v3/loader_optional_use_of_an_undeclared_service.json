@@ -1,0 +1,13 @@
+{
+ "contract": "plugin/3",
+ "part": "loader",
+ "name": "loader_optional_use_of_an_undeclared_service",
+ "provider": true,
+ "uses": [
+  "nosuch?"
+ ],
+ "expect": {
+  "refused": "optionally uses svc_provider.nosuch, which svc_provider does not declare"
+ },
+ "note": "When the plugin is loaded, an optional use must name a service it declares."
+}

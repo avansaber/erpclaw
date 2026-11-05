@@ -1,0 +1,59 @@
+{
+ "contract": "stock/1",
+ "service": "receive_stock",
+ "name": "receive_stock_accepted",
+ "books": {
+  "currency": "USD",
+  "warehouses": {
+   "@wh:main": {
+    "name": "Main Warehouse",
+    "account": "@acct:inv"
+   }
+  },
+  "items": {
+   "@item:copper_wire": {
+    "method": "fifo"
+   }
+  }
+ },
+ "before": [],
+ "input": {
+  "item": "@item:copper_wire",
+  "warehouse": "@wh:main",
+  "qty": "100",
+  "rate": "10.00",
+  "posting_date": "2026-08-01",
+  "voucher": "@v:pr0"
+ },
+ "output": {
+  "value": "1000.00",
+  "ledger_lines": [
+   {
+    "account": "@acct:inv",
+    "debit": "1000.00",
+    "credit": "0.00"
+   },
+   {
+    "account": "@acct:srnb",
+    "debit": "0.00",
+    "credit": "1000.00"
+   }
+  ],
+  "entry_id": "@entry:receive_stock_accepted#1"
+ },
+ "after": {
+  "entries": [
+   {
+    "item": "@item:copper_wire",
+    "warehouse": "@wh:main",
+    "direction": "in",
+    "qty": "100",
+    "value": "1000.00",
+    "qty_after": "100",
+    "value_after": "1000.00",
+    "id": "@entry:receive_stock_accepted#1"
+   }
+  ]
+ },
+ "note": "a receipt: inventory debit, stock received not billed credit, voucher type stock_receipt"
+}

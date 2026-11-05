@@ -1,0 +1,38 @@
+{
+ "contract": "plugin/1",
+ "part": "question",
+ "name": "question_in_a_write_service",
+ "where": "effect",
+ "operation": "svc_post",
+ "args": {
+  "amount": "5.00",
+  "ask": true
+ },
+ "expect": {
+  "event": {
+   "type": "ask",
+   "code": "warehouse_ambiguous",
+   "options": [
+    "Main Warehouse",
+    "Back Store"
+   ],
+   "data": {
+    "field": "warehouse",
+    "question_id": "q1",
+    "choices": [
+     {
+      "code": "q1-1",
+      "label": "Main Warehouse"
+     },
+     {
+      "code": "q1-2",
+      "label": "Back Store"
+     }
+    ]
+   },
+   "status": "refused"
+  },
+  "posted": false
+ },
+ "note": "A write service raises a question after the caller's writes: the effect rolls back, the refused outcome keeps the question with its refs, and the approval reaches the API as an ask event with its options and data, each choice by code and label only."
+}

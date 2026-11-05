@@ -1,0 +1,35 @@
+{
+  "contract": "stock/2",
+  "service": "preview_create_warehouse",
+  "name": "preview_create_warehouse_asks_account",
+  "books": {
+    "currency": "USD",
+    "warehouses": {},
+    "items": {},
+    "accounts": [
+      "@acct:inv_raw"
+    ]
+  },
+  "before": [],
+  "input": {
+    "name": "Main Warehouse"
+  },
+  "after": {
+    "unchanged": true
+  },
+  "note": "Original M4_STOCK_CORE_SETUP r1a section 2.11; setup only, no stock movement.",
+  "refusal": {
+    "code": "account_ambiguous",
+    "field": "account",
+    "choices": [
+      {
+        "label": "1131 Raw Materials",
+        "ref": "1131"
+      },
+      {
+        "label": "1300 Inventory",
+        "ref": "1300"
+      }
+    ]
+  }
+}

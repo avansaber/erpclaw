@@ -1,0 +1,17 @@
+[project]
+name = "erpclaw-email"
+version = "0.0.1"
+description = "ERPClaw email connector: sends messages over SMTP with verified TLS"
+license = "GPL-3.0-only"
+requires-python = ">=3.12"
+dependencies = ["erpclaw-core"]
+
+[project.entry-points."erpclaw.plugins"]
+email = "erpclaw_email:PLUGIN"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+erpclaw-core = { workspace = true }

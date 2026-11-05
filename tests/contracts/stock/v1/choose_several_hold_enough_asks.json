@@ -1,0 +1,72 @@
+{
+ "contract": "stock/1",
+ "service": "choose_warehouse",
+ "name": "choose_several_hold_enough_asks",
+ "books": {
+  "currency": "USD",
+  "default_warehouse": "@wh:a",
+  "warehouses": {
+   "@wh:a": {
+    "name": "North Store",
+    "account": "@acct:inv"
+   },
+   "@wh:b": {
+    "name": "South Store",
+    "account": "@acct:inv"
+   },
+   "@wh:c": {
+    "name": "East Store",
+    "account": "@acct:inv"
+   }
+  },
+  "items": {
+   "@item:widget": {
+    "method": "moving_average"
+   }
+  }
+ },
+ "before": [
+  {
+   "op": "receive",
+   "as": "b1",
+   "item": "@item:widget",
+   "warehouse": "@wh:b",
+   "qty": "40",
+   "rate": "5.00",
+   "date": "2026-02-01",
+   "voucher": "@v:r1"
+  },
+  {
+   "op": "receive",
+   "as": "c1",
+   "item": "@item:widget",
+   "warehouse": "@wh:c",
+   "qty": "25",
+   "rate": "5.00",
+   "date": "2026-02-01",
+   "voucher": "@v:r2"
+  }
+ ],
+ "input": {
+  "item": "@item:widget",
+  "qty": "20"
+ },
+ "refusal": {
+  "code": "warehouse_ambiguous",
+  "field": "warehouse",
+  "options": [
+   {
+    "label": "South Store (40 on hand)",
+    "ref": "South Store"
+   },
+   {
+    "label": "East Store (25 on hand)",
+    "ref": "East Store"
+   }
+  ]
+ },
+ "after": {
+  "unchanged": true
+ },
+ "note": "several warehouses hold enough: the engine asks; options by name, never ids; the question id is set at run time"
+}

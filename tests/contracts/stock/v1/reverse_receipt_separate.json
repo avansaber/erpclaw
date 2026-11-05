@@ -1,0 +1,82 @@
+{
+ "contract": "stock/1",
+ "service": "reverse_movements",
+ "name": "reverse_receipt_separate",
+ "books": {
+  "currency": "USD",
+  "warehouses": {
+   "@wh:main": {
+    "name": "Main Warehouse",
+    "account": "@acct:inv"
+   }
+  },
+  "items": {
+   "@item:copper_wire": {
+    "method": "fifo"
+   }
+  }
+ },
+ "before": [
+  {
+   "op": "receive",
+   "as": "r0",
+   "item": "@item:copper_wire",
+   "warehouse": "@wh:main",
+   "qty": "100",
+   "rate": "10.00",
+   "date": "2026-08-01",
+   "voucher": "@v:pr0"
+  },
+  {
+   "op": "receive",
+   "as": "r1",
+   "item": "@item:copper_wire",
+   "warehouse": "@wh:main",
+   "qty": "30",
+   "rate": "11.50",
+   "date": "2026-08-02",
+   "voucher": "@v:pr1"
+  }
+ ],
+ "input": {
+  "original": {
+   "voucher_type": "stock_receipt",
+   "voucher": "@v:pr1"
+  },
+  "reversal_date": "2026-08-03",
+  "reversal": {
+   "voucher_type": "stock_receipt_reversal",
+   "voucher": "@v:pr1-rev"
+  }
+ },
+ "output": {
+  "contribution": [
+   {
+    "account": "@acct:inv",
+    "net": "-345.00"
+   }
+  ],
+  "entry_ids": [
+   "@entry:reverse_receipt_separate#1"
+  ]
+ },
+ "after": {
+  "entries": [
+   {
+    "item": "@item:copper_wire",
+    "warehouse": "@wh:main",
+    "direction": "out",
+    "qty": "30",
+    "value": "345.00",
+    "qty_after": "100",
+    "value_after": "1000.00",
+    "id": "@entry:reverse_receipt_separate#1"
+   }
+  ],
+  "head": {
+   "qty": "100",
+   "value": "1000.00"
+  }
+ },
+ "note": "a reversed receipt subtracts its own layer; adding it back instead would give 160 / 1690.00"
+}

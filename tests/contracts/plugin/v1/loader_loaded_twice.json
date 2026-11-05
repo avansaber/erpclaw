@@ -1,0 +1,17 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_loaded_twice",
+ "plugins": [
+  {
+   "name": "extra"
+  },
+  {
+   "name": "extra"
+  }
+ ],
+ "expect": {
+  "refused": "plugin extra: is loaded twice"
+ },
+ "note": "A plugin is loaded once."
+}

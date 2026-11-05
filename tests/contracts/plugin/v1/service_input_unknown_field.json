@@ -1,0 +1,22 @@
+{
+ "contract": "plugin/1",
+ "part": "service",
+ "name": "service_input_unknown_field",
+ "caller": "svc_consumer",
+ "service": "svc_provider.quote",
+ "on": "plain",
+ "input": {
+  "amount": {
+   "value": "1",
+   "currency": "USD"
+  },
+  "rate": "1",
+  "discount": "0"
+ },
+ "expect": {
+  "refusal": {
+   "code": "service_input"
+  }
+ },
+ "note": "A field the input model does not have is refused."
+}

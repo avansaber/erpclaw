@@ -1,0 +1,33 @@
+{
+ "contract": "plugin/1",
+ "part": "service",
+ "name": "service_output_decimals",
+ "caller": "svc_consumer",
+ "service": "svc_provider.probe",
+ "on": "plain",
+ "input": {
+  "give": "decimals"
+ },
+ "expect": {
+  "output": {
+   "total": "0.30",
+   "note": null,
+   "count": 0,
+   "parts": [
+    {
+     "amount": "0.10"
+    },
+    {
+     "amount": "0.20"
+    }
+   ],
+   "amounts": [
+    "0.30"
+   ],
+   "by_name": {
+    "copper": "0.30"
+   }
+  }
+ },
+ "note": "Exact Decimal values, in a dict and in a validated model, cross as canonical strings."
+}

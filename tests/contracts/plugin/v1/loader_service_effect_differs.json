@@ -1,0 +1,28 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_service_effect_differs",
+ "plugins": [
+  {
+   "name": "extra",
+   "services": [
+    {
+     "name": "quote",
+     "effect": "write"
+    }
+   ],
+   "manifest": {
+    "services": [
+     {
+      "name": "quote",
+      "effect": "read"
+     }
+    ]
+   }
+  }
+ ],
+ "expect": {
+  "refused": "service quote is registered as 'write', its manifest declares 'read'"
+ },
+ "note": "A registration's effect is the declared one."
+}

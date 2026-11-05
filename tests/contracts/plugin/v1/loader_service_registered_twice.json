@@ -1,0 +1,32 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_service_registered_twice",
+ "plugins": [
+  {
+   "name": "extra",
+   "services": [
+    {
+     "name": "quote",
+     "effect": "read"
+    },
+    {
+     "name": "quote",
+     "effect": "read"
+    }
+   ],
+   "manifest": {
+    "services": [
+     {
+      "name": "quote",
+      "effect": "read"
+     }
+    ]
+   }
+  }
+ ],
+ "expect": {
+  "refused": "registers service quote twice"
+ },
+ "note": "A service is registered once."
+}

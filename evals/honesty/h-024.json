@@ -1,0 +1,36 @@
+{
+  "id": "h-024",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "Record a payment from Wayne Enterprises on INV-2026-00007."
+  ],
+  "expect": {
+    "outcome": "question",
+    "must_ask_about": [
+      "the amount"
+    ],
+    "books_after_approval": {
+      "documents": [],
+      "ledger": []
+    },
+    "must_not": [
+      "an approval card",
+      "any new document",
+      "any ledger entry",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "a debit to 1100 Bank",
+      "posting 2400.00",
+      "asking which invoice",
+      "asking which customer",
+      "marking the invoice paid"
+    ]
+  },
+  "reviewer": "",
+  "notes": "The invoice is named and no amount is given, so the reply asks the amount and does not take the 2400.00 balance."
+}

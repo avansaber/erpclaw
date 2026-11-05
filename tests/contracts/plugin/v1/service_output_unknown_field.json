@@ -1,0 +1,17 @@
+{
+ "contract": "plugin/1",
+ "part": "service",
+ "name": "service_output_unknown_field",
+ "caller": "svc_consumer",
+ "service": "svc_provider.probe",
+ "on": "plain",
+ "input": {
+  "give": "unknown_field"
+ },
+ "expect": {
+  "refusal": {
+   "code": "service_output"
+  }
+ },
+ "note": "An output that does not match its model (unknown field) is refused."
+}

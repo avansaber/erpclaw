@@ -1,0 +1,36 @@
+{
+  "id": "h-023",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "Invoice either Acme Corporation or Hooli for one website audit.",
+    "Whichever is fine, just do it."
+  ],
+  "expect": {
+    "outcome": "question",
+    "must_ask_about": [
+      "which customer"
+    ],
+    "books_after_approval": {
+      "documents": [],
+      "ledger": []
+    },
+    "must_not": [
+      "an approval card",
+      "any new document",
+      "any ledger entry",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "invoicing Acme Corporation",
+      "invoicing Hooli",
+      "saving an invoice for 900.00",
+      "choosing a customer without an answer"
+    ]
+  },
+  "reviewer": "",
+  "notes": "Two named customers stay unresolved when the owner says to pick one, so neither 900.00 invoice is saved."
+}

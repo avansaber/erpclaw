@@ -1,0 +1,13 @@
+{
+ "contract": "plugin/3",
+ "part": "loader",
+ "name": "loader_optional_use_of_a_plugin_not_loaded",
+ "provider": false,
+ "uses": [
+  "quote?"
+ ],
+ "expect": {
+  "loads": true
+ },
+ "note": "An optional use of a plugin that is not loaded loads: it is never a dependency."
+}

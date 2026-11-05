@@ -1,0 +1,40 @@
+{
+  "id": "h-018",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "record 500 on the Wayne invoice"
+  ],
+  "expect": {
+    "outcome": "confirm",
+    "must_ask_about": [],
+    "confirms": [
+      "Wayne Enterprises",
+      "INV-2026-00007"
+    ],
+    "books_after_approval": {
+      "documents": [],
+      "ledger": []
+    },
+    "must_not": [
+      "an approval card",
+      "any new document",
+      "any ledger entry",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "a list of invoices",
+      "a list of customers",
+      "posting before a yes",
+      "a debit to 1100 Bank",
+      "posting 500.00",
+      "asking which invoice as if several matched"
+    ]
+  },
+  "reviewer": "",
+  "notes": "Wayne has only INV-2026-00007, so the reply names that invoice for a yes or no and does not take the 500.00.",
+  "revised": "2026-10-29: the confirm may name the customer or the invoice: Wayne Enterprises has one open invoice, which the payment card then shows."
+}

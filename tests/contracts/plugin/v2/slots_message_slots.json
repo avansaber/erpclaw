@@ -1,0 +1,11 @@
+{
+ "contract": "plugin/2",
+ "part": "slots",
+ "name": "slots_message_slots",
+ "expect": {
+  "send_message": "one",
+  "message_sender": "one",
+  "deliver_message": "one"
+ },
+ "note": "plugin/2 adds two core slots of cardinality one; deliver_message is unchanged from plugin/1."
+}

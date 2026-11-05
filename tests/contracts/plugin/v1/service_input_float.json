@@ -1,0 +1,21 @@
+{
+ "contract": "plugin/1",
+ "part": "service",
+ "name": "service_input_float",
+ "caller": "svc_consumer",
+ "service": "svc_provider.quote",
+ "on": "plain",
+ "input": {
+  "amount": {
+   "value": 1.5,
+   "currency": "USD"
+  },
+  "rate": "1"
+ },
+ "expect": {
+  "refusal": {
+   "code": "service_input"
+  }
+ },
+ "note": "A float anywhere in the input is refused, a Money's value included: decimals cross as text."
+}

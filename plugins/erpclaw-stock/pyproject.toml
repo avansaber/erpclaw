@@ -1,0 +1,17 @@
+[project]
+name = "erpclaw-stock"
+version = "0.0.1"
+description = "ERPClaw stock plugin: warehouses, the stock ledger and its valuation"
+license = "GPL-3.0-only"
+requires-python = ">=3.12"
+dependencies = ["erpclaw-core"]
+
+[project.entry-points."erpclaw.plugins"]
+stock = "erpclaw_stock:PLUGIN"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+erpclaw-core = { workspace = true }

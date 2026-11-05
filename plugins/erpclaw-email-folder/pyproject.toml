@@ -1,0 +1,21 @@
+[project]
+name = "erpclaw-email-folder"
+version = "0.0.1"
+description = "ERPClaw folder email connector: writes .eml files instead of sending"
+license = "GPL-3.0-only"
+requires-python = ">=3.12"
+dependencies = ["erpclaw-core"]
+
+[project.entry-points."erpclaw.plugins"]
+email_folder = "erpclaw_email_folder:PLUGIN"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+erpclaw-core = { workspace = true }
+erpclaw-assistant = { workspace = true }
+erpclaw-api = { workspace = true }
+erpclaw-sales = { workspace = true }
+erpclaw-email-folder = { workspace = true }

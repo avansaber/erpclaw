@@ -1,0 +1,56 @@
+{
+ "contract": "plugin/1",
+ "part": "manifest",
+ "name": "manifest_sales_before_services",
+ "manifest": {
+  "after_core_revision": "0004",
+  "calls": [],
+  "capabilities": {
+   "files": [],
+   "network": []
+  },
+  "conflicts": [],
+  "contracts": {
+   "cancel_invoice": "write",
+   "create_invoice": "write",
+   "list_invoices": "read",
+   "record_payment": "write",
+   "submit_invoice": "write"
+  },
+  "depends": {},
+  "distribution": "erpclaw-sales",
+  "engine": ">=0.0.1",
+  "events": {
+   "consumes": [],
+   "emits": []
+  },
+  "licence": "GPL-3.0-only",
+  "metrics": [
+   "sales",
+   "top_customers",
+   "invoice_count"
+  ],
+  "name": "sales",
+  "owned_tables": [
+   "sales_invoice",
+   "sales_invoice_line",
+   "sales_payment",
+   "sales_payment_allocation"
+  ],
+  "publisher": "AvanSaber Inc",
+  "slots": {},
+  "source": {
+   "commit": "workspace",
+   "repository": "workspace"
+  },
+  "version": "0.0.1",
+  "voucher_types": [
+   "sales_invoice",
+   "sales_payment"
+  ]
+ },
+ "expect": {
+  "digest": "019f53159bb15859713eb6fb8fe53c99fcbed6cc9f5e926a3db370210c9344bc"
+ },
+ "note": "The sales plugin's manifest as written before services existed, and its digest then (as above)."
+}

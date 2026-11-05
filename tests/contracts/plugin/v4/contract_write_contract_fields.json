@@ -1,0 +1,15 @@
+{
+ "contract": "plugin/4",
+ "part": "contract",
+ "name": "contract_write_contract_fields",
+ "expect": {
+  "contract_fields_unchanged": true,
+  "write_contract_adds": [
+   "moves_money",
+   "no_date_reason"
+  ],
+  "keyword_only": true,
+  "moves_money_required": true
+ },
+ "note": "A write that declares plugin/4 is a WriteContract: Contract's fields stay exactly as plugin/1 froze them, and the two declarations are keyword-only, moves_money with no default."
+}

@@ -1,0 +1,90 @@
+{
+ "contract": "stock/1",
+ "service": "issue",
+ "name": "two_part_delivery_first",
+ "books": {
+  "currency": "USD",
+  "warehouses": {
+   "@wh:main": {
+    "name": "Main Warehouse",
+    "account": "@acct:inv"
+   }
+  },
+  "items": {
+   "@item:bearing": {
+    "method": "fifo"
+   }
+  }
+ },
+ "before": [
+  {
+   "op": "receive",
+   "as": "r0",
+   "item": "@item:bearing",
+   "warehouse": "@wh:main",
+   "qty": "60",
+   "rate": "6.25",
+   "date": "2026-05-01",
+   "voucher": "@v:pr0"
+  },
+  {
+   "op": "receive",
+   "as": "r1",
+   "item": "@item:bearing",
+   "warehouse": "@wh:main",
+   "qty": "50",
+   "rate": "6.70",
+   "date": "2026-05-04",
+   "voucher": "@v:pr1"
+  }
+ ],
+ "input": {
+  "voucher_type": "sales_delivery",
+  "voucher": "@v:dn1",
+  "posting_date": "2026-05-12",
+  "lines": [
+   {
+    "item": "@item:bearing",
+    "warehouse": "@wh:main",
+    "qty": "50"
+   }
+  ]
+ },
+ "output": {
+  "lines": [
+   {
+    "cost": "312.50"
+   }
+  ],
+  "ledger_lines": [
+   {
+    "account": "@acct:cogs",
+    "debit": "312.50",
+    "credit": "0.00"
+   },
+   {
+    "account": "@acct:inv",
+    "debit": "0.00",
+    "credit": "312.50"
+   }
+  ],
+  "entry_ids": [
+   "@entry:two_part_delivery_first#1"
+  ]
+ },
+ "after": {
+  "entries": [
+   {
+    "item": "@item:bearing",
+    "warehouse": "@wh:main",
+    "direction": "out",
+    "qty": "50",
+    "value": "312.50",
+    "qty_after": "60",
+    "value_after": "397.50",
+    "id": "@entry:two_part_delivery_first#1"
+   }
+  ]
+ },
+ "note": "sales_order_delivered_in_two_parts.md step 1"
+}

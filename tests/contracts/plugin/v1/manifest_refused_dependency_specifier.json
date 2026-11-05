@@ -1,0 +1,47 @@
+{
+ "contract": "plugin/1",
+ "part": "manifest",
+ "name": "manifest_refused_dependency_specifier",
+ "manifest": {
+  "after_core_revision": "0001",
+  "calls": [],
+  "capabilities": {
+   "files": [
+    "mail"
+   ],
+   "network": []
+  },
+  "conflicts": [],
+  "contracts": {},
+  "depends": {
+   "sales": "not a spec"
+  },
+  "distribution": "erpclaw-email-folder",
+  "engine": ">=0.0.1",
+  "events": {
+   "consumes": [],
+   "emits": []
+  },
+  "licence": "GPL-3.0-only",
+  "metrics": [],
+  "name": "email_folder",
+  "owned_tables": [],
+  "publisher": "AvanSaber Inc",
+  "slots": {
+   "deliver_message": {
+    "cardinality": "one",
+    "selection": "the only message connector in the books"
+   }
+  },
+  "source": {
+   "commit": "workspace",
+   "repository": "workspace"
+  },
+  "version": "0.0.1",
+  "voucher_types": []
+ },
+ "expect": {
+  "invalid": "depends"
+ },
+ "note": "Each dependency's range is a version specifier."
+}

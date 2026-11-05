@@ -1,0 +1,15 @@
+{
+ "contract": "plugin/1",
+ "part": "branch",
+ "name": "branch_unlabelled_base",
+ "owned_tables": [
+  "extra_thing"
+ ],
+ "revisions": [
+  "\"\"\"a planted revision\"\"\"\nrevision = \"x_0001\"\ndown_revision = None\nbranch_labels = None\ndepends_on = None\ncreates = ('extra_thing',)\n\n\ndef upgrade():\n    pass\n"
+ ],
+ "expect": {
+  "refused": "exactly one base, labelled"
+ },
+ "note": "Its base is labelled with the plugin's name."
+}

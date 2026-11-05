@@ -1,0 +1,20 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_table_of_an_unloaded_plugin",
+ "plugins": [
+  {
+   "name": "extra",
+   "tables": [
+    {
+     "name": "extra_thing",
+     "owner": "nobody"
+    }
+   ]
+  }
+ ],
+ "expect": {
+  "refused": "belongs to plugin nobody, which is not loaded"
+ },
+ "note": "A table's owner is loaded."
+}

@@ -1,0 +1,18 @@
+{
+ "contract": "plugin/2",
+ "part": "loader",
+ "name": "loader_send_message_beside_folder",
+ "plugins": [
+  {
+   "name": "mailer",
+   "slots": [
+    "send_message",
+    "message_sender"
+   ]
+  }
+ ],
+ "expect": {
+  "loads": true
+ },
+ "note": "One filler of each new slot loads beside the folder connector's deliver_message."
+}

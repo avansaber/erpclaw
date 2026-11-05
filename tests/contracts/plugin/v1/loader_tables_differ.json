@@ -1,0 +1,20 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_tables_differ",
+ "plugins": [
+  {
+   "name": "extra",
+   "tables": [
+    {
+     "name": "extra_thing",
+     "owner": "extra"
+    }
+   ]
+  }
+ ],
+ "expect": {
+  "refused": "declares tables [] but defines ['extra_thing']"
+ },
+ "note": "A plugin's declared tables are exactly the tables marked for it."
+}

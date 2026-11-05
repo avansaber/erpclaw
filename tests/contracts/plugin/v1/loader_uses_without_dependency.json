@@ -1,0 +1,28 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_uses_without_dependency",
+ "plugins": [
+  {
+   "name": "provider",
+   "services": [
+    {
+     "name": "quote",
+     "effect": "read"
+    }
+   ]
+  },
+  {
+   "name": "consumer",
+   "manifest": {
+    "uses": [
+     "provider.quote"
+    ]
+   }
+  }
+ ],
+ "expect": {
+  "refused": "uses provider.quote but does not depend on provider"
+ },
+ "note": "A plugin may use another plugin's service only if it depends on that plugin."
+}

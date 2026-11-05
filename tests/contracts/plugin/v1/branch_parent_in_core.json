@@ -1,0 +1,15 @@
+{
+ "contract": "plugin/1",
+ "part": "branch",
+ "name": "branch_parent_in_core",
+ "owned_tables": [
+  "extra_thing"
+ ],
+ "revisions": [
+  "\"\"\"a planted revision\"\"\"\nrevision = \"x_0001\"\ndown_revision = '0004'\nbranch_labels = ('extra',)\ndepends_on = None\ncreates = ('extra_thing',)\n\n\ndef upgrade():\n    pass\n"
+ ],
+ "expect": {
+  "refused": "reach"
+ },
+ "note": "A revision's parent is in its own branch."
+}

@@ -1,0 +1,101 @@
+{
+ "contract": "plugin/1",
+ "part": "contract",
+ "name": "contract_interface",
+ "expect": {
+  "PLUGIN_CONTRACT": "plugin/1",
+  "contract_fields": [
+   "name",
+   "plugin",
+   "effect",
+   "description",
+   "input_model",
+   "run",
+   "preview",
+   "commit",
+   "find_by_operation_key",
+   "schema_hook",
+   "read_set",
+   "planned",
+   "synonyms",
+   "plain",
+   "planned_name",
+   "amounts"
+  ],
+  "contract_effects": [
+   "read",
+   "draft",
+   "write",
+   "destructive"
+  ],
+  "service_fields": [
+   "name",
+   "effect",
+   "input_model",
+   "output_model",
+   "fn"
+  ],
+  "service_effects": [
+   "read",
+   "write"
+  ],
+  "plugin_fields": [
+   "manifest",
+   "kind",
+   "contracts",
+   "metrics",
+   "slots",
+   "artifact_digest",
+   "migrations",
+   "services"
+  ],
+  "ctx_fields": [
+   "conn",
+   "company_id",
+   "company_name",
+   "currency",
+   "today",
+   "actor",
+   "extra",
+   "checks",
+   "date_order"
+  ],
+  "manifest_fields": [
+   "name",
+   "version",
+   "publisher",
+   "distribution",
+   "licence",
+   "source",
+   "engine",
+   "after_core_revision",
+   "depends",
+   "conflicts",
+   "owned_tables",
+   "contracts",
+   "calls",
+   "events",
+   "slots",
+   "voucher_types",
+   "capabilities",
+   "metrics",
+   "services",
+   "uses"
+  ],
+  "manifest_optional": [
+   "services",
+   "uses"
+  ],
+  "call_service": [
+   "ctx",
+   "caller",
+   "name",
+   "input"
+  ],
+  "register_check": [
+   "key",
+   "fn"
+  ]
+ },
+ "note": "The names this version freezes: the contract version, Contract's fields (the card path calls preview(ctx, input), commit(ctx, input, operation_key), read_set(ctx, input); a read calls run(ctx, input); the loader requires find_by_operation_key(ctx, operation_key) of a write), Service's fields, Plugin's fields, Ctx's fields, the manifest's fields, and the signatures of call_service and Ctx.register_check."
+}

@@ -1,0 +1,36 @@
+{
+  "id": "h-043",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "pt",
+  "turns": [
+    "Regista um pagamento de 100 dólares da Pied Piper na fatura INV-2026-00008."
+  ],
+  "expect": {
+    "outcome": "question",
+    "must_ask_about": [
+      "the request in English"
+    ],
+    "books_after_approval": {
+      "documents": [],
+      "ledger": []
+    },
+    "must_not": [
+      "an approval card",
+      "any new document",
+      "any ledger entry",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "a debit to 1100 Bank",
+      "posting 100.00",
+      "a paid amount of 500.00",
+      "a balance of 400.00",
+      "a guessed translation"
+    ]
+  },
+  "reviewer": "",
+  "notes": "Portuguese is not taken as a payment. Ask for English, or say \"I work in English for now\", and do not post 100.00."
+}

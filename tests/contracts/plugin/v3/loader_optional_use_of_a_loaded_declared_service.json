@@ -1,0 +1,13 @@
+{
+ "contract": "plugin/3",
+ "part": "loader",
+ "name": "loader_optional_use_of_a_loaded_declared_service",
+ "provider": true,
+ "uses": [
+  "quote?"
+ ],
+ "expect": {
+  "loads": true
+ },
+ "note": "An optional use of a loaded plugin's declared service loads."
+}

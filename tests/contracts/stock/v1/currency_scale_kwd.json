@@ -1,0 +1,80 @@
+{
+ "contract": "stock/1",
+ "service": "issue",
+ "name": "currency_scale_kwd",
+ "books": {
+  "currency": "KWD",
+  "warehouses": {
+   "@wh:main": {
+    "name": "Main Warehouse",
+    "account": "@acct:inv"
+   }
+  },
+  "items": {
+   "@item:part": {
+    "method": "moving_average"
+   }
+  }
+ },
+ "before": [
+  {
+   "op": "receive",
+   "as": "r0",
+   "item": "@item:part",
+   "warehouse": "@wh:main",
+   "qty": "2",
+   "rate": "0.501",
+   "date": "2026-06-01",
+   "voucher": "@v:r0"
+  }
+ ],
+ "input": {
+  "voucher_type": "sales_invoice",
+  "voucher": "@v:i1",
+  "posting_date": "2026-06-02",
+  "lines": [
+   {
+    "item": "@item:part",
+    "warehouse": "@wh:main",
+    "qty": "1"
+   }
+  ]
+ },
+ "output": {
+  "lines": [
+   {
+    "cost": "0.501"
+   }
+  ],
+  "ledger_lines": [
+   {
+    "account": "@acct:cogs",
+    "debit": "0.501",
+    "credit": "0.000"
+   },
+   {
+    "account": "@acct:inv",
+    "debit": "0.000",
+    "credit": "0.501"
+   }
+  ],
+  "entry_ids": [
+   "@entry:currency_scale_kwd#1"
+  ]
+ },
+ "after": {
+  "entries": [
+   {
+    "item": "@item:part",
+    "warehouse": "@wh:main",
+    "direction": "out",
+    "qty": "1",
+    "value": "0.501",
+    "qty_after": "1",
+    "value_after": "0.501",
+    "id": "@entry:currency_scale_kwd#1"
+   }
+  ]
+ },
+ "note": "2 units worth 1.002 KWD; rounding at the currency's own scale"
+}

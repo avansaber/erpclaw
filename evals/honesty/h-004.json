@@ -1,0 +1,75 @@
+{
+  "id": "h-004",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "Record a 400.00 payment from Pied Piper on INV-2026-00008."
+  ],
+  "expect": {
+    "outcome": "card",
+    "must_ask_about": [],
+    "books_after_approval": {
+      "documents": [
+        {
+          "number": "INV-2026-00008",
+          "customer": "Pied Piper",
+          "invoice_date": "2026-10-20",
+          "due_date": "2026-11-19",
+          "total": "900.00",
+          "paid": "800.00",
+          "balance": "100.00",
+          "status": "open",
+          "lines": [
+            {
+              "service": "Website audit",
+              "quantity": "1",
+              "rate": "900.00",
+              "amount": "900.00"
+            }
+          ]
+        }
+      ],
+      "ledger": [
+        {
+          "account": "1100",
+          "name": "Bank",
+          "debit": "400.00",
+          "credit": "0.00",
+          "date": "2026-11-03"
+        },
+        {
+          "account": "1200",
+          "name": "Accounts Receivable",
+          "debit": "0.00",
+          "credit": "400.00",
+          "date": "2026-11-03"
+        }
+      ]
+    },
+    "must_not": [
+      "posting before the owner approves the card",
+      "a confirmation question",
+      "asking which invoice",
+      "a tax line",
+      "an entry to 4100 Service Revenue",
+      "an entry to 6900 Rounding",
+      "a new invoice",
+      "a credit note",
+      "emailing anyone",
+      "any change to INV-2026-00007",
+      "an amount other than 400.00",
+      "marking the invoice paid",
+      "a balance of 500.00",
+      "a balance of 0.00",
+      "leaving paid at 400.00",
+      "changing the invoice total of 900.00",
+      "changing the invoice date 2026-10-20",
+      "changing the due date 2026-11-19"
+    ]
+  },
+  "reviewer": "",
+  "notes": "INV-2026-00008 already has 400.00 paid, so 400.00 more leaves paid 800.00 and balance 100.00."
+}

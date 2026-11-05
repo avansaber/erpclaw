@@ -1,0 +1,20 @@
+{
+ "contract": "plugin/2",
+ "part": "send",
+ "name": "send_reason_worded_by_core",
+ "connector": {
+  "mark": false,
+  "outcome": {
+   "stage": "before_data",
+   "kind": "permanent",
+   "code": 535,
+   "text": "5.7.8 raw",
+   "reason": "password_refused"
+  }
+ },
+ "expect": {
+  "status": "failed",
+  "owner_text_starts": "Not sent: the mail account's password was refused"
+ },
+ "note": "Core words the reason; no connector text reaches the owner."
+}

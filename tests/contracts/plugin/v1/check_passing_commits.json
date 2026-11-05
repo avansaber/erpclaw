@@ -1,0 +1,20 @@
+{
+ "contract": "plugin/1",
+ "part": "check",
+ "name": "check_passing_commits",
+ "operation": "svc_post",
+ "args": {
+  "amount": "5.00",
+  "checks": [
+   "compare"
+  ]
+ },
+ "expect": {
+  "status": "committed",
+  "ran": [
+   "compare"
+  ],
+  "posted": true
+ },
+ "note": "A passing check: the commit ends, the posting stays."
+}

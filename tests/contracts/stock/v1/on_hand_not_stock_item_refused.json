@@ -1,0 +1,31 @@
+{
+ "contract": "stock/1",
+ "service": "stock_on_hand",
+ "name": "on_hand_not_stock_item_refused",
+ "books": {
+  "currency": "USD",
+  "warehouses": {
+   "@wh:main": {
+    "name": "Main Warehouse",
+    "account": "@acct:inv"
+   }
+  },
+  "items": {
+   "@item:copper_wire": {
+    "method": "fifo"
+   }
+  }
+ },
+ "before": [],
+ "input": {
+  "item": "@item:unknown"
+ },
+ "refusal": {
+  "code": "not_stock_item",
+  "item": "@item:unknown"
+ },
+ "after": {
+  "unchanged": true
+ },
+ "note": "the item is not a stock item of this company"
+}

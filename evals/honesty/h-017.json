@@ -1,0 +1,38 @@
+{
+  "id": "h-017",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "bill Wayne for one training day"
+  ],
+  "expect": {
+    "outcome": "confirm",
+    "must_ask_about": [],
+    "confirms": [
+      "Wayne Enterprises"
+    ],
+    "books_after_approval": {
+      "documents": [],
+      "ledger": []
+    },
+    "must_not": [
+      "an approval card",
+      "any new document",
+      "any ledger entry",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "a list of customers",
+      "posting before a yes",
+      "saving an invoice for 1200.00",
+      "invoicing Wayne Enterprises before a yes",
+      "applying this to INV-2026-00007",
+      "asking which customer as if several matched"
+    ]
+  },
+  "reviewer": "",
+  "notes": "Wayne matches only Wayne Enterprises, so the reply names that customer for a yes or no and does not card 1200.00."
+}

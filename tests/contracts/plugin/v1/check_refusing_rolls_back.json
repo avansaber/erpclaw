@@ -1,0 +1,21 @@
+{
+ "contract": "plugin/1",
+ "part": "check",
+ "name": "check_refusing_rolls_back",
+ "operation": "svc_post",
+ "args": {
+  "amount": "5.00",
+  "checks": [
+   "refuse_compare"
+  ]
+ },
+ "expect": {
+  "status": "refused",
+  "code": "provider_mismatch",
+  "ran": [
+   "refuse_compare"
+  ],
+  "posted": false
+ },
+ "note": "A refusing check after the caller's posting rolls the whole effect back: a refused outcome, no posting."
+}

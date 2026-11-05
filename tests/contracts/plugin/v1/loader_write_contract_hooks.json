@@ -1,0 +1,24 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_write_contract_hooks",
+ "plugins": [
+  {
+   "name": "extra",
+   "contracts": [
+    {
+     "name": "op",
+     "effect": "write",
+     "hooks": [
+      "preview",
+      "commit"
+     ]
+    }
+   ]
+  }
+ ],
+ "expect": {
+  "refused": "write contract op needs preview, commit, operation-key read-back and a read set"
+ },
+ "note": "A write contract has preview, commit, operation-key read-back and a read set."
+}

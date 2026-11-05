@@ -1,0 +1,18 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_entry_point_unknown_distribution",
+ "entry_point": {
+  "dist": null,
+  "object": "plugin"
+ },
+ "plugins": [
+  {
+   "name": "evil"
+  }
+ ],
+ "expect": {
+  "refused": "an unknown distribution"
+ },
+ "note": "An entry point with no distribution is not first-party."
+}

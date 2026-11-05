@@ -1,0 +1,76 @@
+{
+  "id": "h-048",
+  "written_by": "claude",
+  "written_at": "2026-10-31",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "Bill Hooli for one website audit, PO 4471."
+  ],
+  "expect": {
+    "outcome": "card",
+    "must_ask_about": [],
+    "must_say": [
+      "a customer PO number cannot be recorded yet"
+    ],
+    "books_after_approval": {
+      "documents": [
+        {
+          "number": "INV-2026-00009",
+          "customer": "Hooli",
+          "invoice_date": "2026-11-03",
+          "due_date": "2026-12-03",
+          "total": "900.00",
+          "paid": "0.00",
+          "balance": "900.00",
+          "status": "open",
+          "lines": [
+            {
+              "service": "Website audit",
+              "quantity": "1",
+              "rate": "900.00",
+              "amount": "900.00"
+            }
+          ]
+        }
+      ],
+      "ledger": [
+        {
+          "account": "1200",
+          "name": "Accounts Receivable",
+          "debit": "900.00",
+          "credit": "0.00",
+          "date": "2026-11-03"
+        },
+        {
+          "account": "4100",
+          "name": "Service Revenue",
+          "debit": "0.00",
+          "credit": "900.00",
+          "date": "2026-11-03"
+        }
+      ]
+    },
+    "must_not": [
+      "asking which service or item",
+      "asking 'Do you mean Website audit?'",
+      "asking which customer",
+      "forgetting that the customer is Hooli",
+      "calling the PO number a note",
+      "a PO number on the card",
+      "posting before the owner approves the card",
+      "a tax line",
+      "a payment",
+      "emailing anyone",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "a second new invoice",
+      "a rate other than 900.00",
+      "a total other than 900.00",
+      "a quantity other than 1"
+    ]
+  },
+  "reviewer": "",
+  "notes": "The comma form of h-046: an exact item name before a comma gets no item question, the customer the owner named is kept, and the PO number is not recorded and is named as such. Added after a probe of how the engine answers qualifiers it does not record; written by a writer who has seen the code, not by the set's independent writer."
+}

@@ -1,0 +1,21 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_service_nested_model_accepts_unknown_fields",
+ "plugins": [
+  {
+   "name": "extra",
+   "services": [
+    {
+     "name": "quote",
+     "effect": "read",
+     "input": "nested_open"
+    }
+   ]
+  }
+ ],
+ "expect": {
+  "refused": "service quote's input model OpenModel accepts unknown fields"
+ },
+ "note": "A model nested in a service's model refuses unknown fields too."
+}

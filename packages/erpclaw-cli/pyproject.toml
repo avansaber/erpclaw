@@ -1,0 +1,21 @@
+[project]
+name = "erpclaw-cli"
+version = "0.0.1"
+description = "ERPClaw command line: chat, serve, init, eval"
+license = "GPL-3.0-only"
+requires-python = ">=3.12"
+dependencies = ["erpclaw-core", "erpclaw-assistant", "erpclaw-api", "erpclaw-sales", "erpclaw-email-folder", "typer>=0.12", "rich>=13.7", "httpx>=0.27"]
+
+[project.scripts]
+erpclaw = "erpclaw_cli.main:run"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+erpclaw-core = { workspace = true }
+erpclaw-assistant = { workspace = true }
+erpclaw-api = { workspace = true }
+erpclaw-sales = { workspace = true }
+erpclaw-email-folder = { workspace = true }

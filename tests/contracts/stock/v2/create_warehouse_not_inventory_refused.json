@@ -1,0 +1,23 @@
+{
+  "contract": "stock/2",
+  "service": "create_warehouse",
+  "name": "create_warehouse_not_inventory_refused",
+  "books": {
+    "currency": "USD",
+    "warehouses": {},
+    "items": {}
+  },
+  "before": [],
+  "input": {
+    "name": "Odd Store",
+    "account": "@acct:bank"
+  },
+  "after": {
+    "unchanged": true
+  },
+  "note": "Original M4_STOCK_CORE_SETUP r1a section 2.11; setup only, no stock movement.",
+  "refusal": {
+    "code": "not_inventory_account",
+    "account": "@acct:bank"
+  }
+}

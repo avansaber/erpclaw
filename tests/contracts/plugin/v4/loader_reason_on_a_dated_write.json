@@ -1,0 +1,17 @@
+{
+ "contract": "plugin/4",
+ "part": "loader",
+ "name": "loader_reason_on_a_dated_write",
+ "write": {
+  "cls": "WriteContract",
+  "dateless": false,
+  "reason": {
+   "en": "nothing here is dated."
+  },
+  "moves_money": true
+ },
+ "expect": {
+  "refused": "declares a no_date_reason, but its input always takes a date"
+ },
+ "note": "A reason no card can show is refused, not kept."
+}

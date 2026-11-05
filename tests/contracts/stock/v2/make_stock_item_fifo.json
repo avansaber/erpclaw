@@ -1,0 +1,54 @@
+{
+  "contract": "stock/2",
+  "service": "make_stock_item",
+  "name": "make_stock_item_fifo",
+  "books": {
+    "currency": "USD",
+    "warehouses": {
+      "@wh:main": {
+        "name": "Main Warehouse",
+        "account": "@acct:inv"
+      }
+    },
+    "items": {},
+    "service_items": [
+      "@item:copper_wire"
+    ]
+  },
+  "before": [],
+  "input": {
+    "item": "@item:copper_wire",
+    "method": "fifo",
+    "default_warehouse": "@wh:main"
+  },
+  "after": {
+    "stock_items": {
+      "@item:copper_wire": {
+        "method": "fifo",
+        "default_warehouse": "@wh:main"
+      }
+    },
+    "kind": {
+      "@item:copper_wire": "stock"
+    },
+    "on_hand": {
+      "@item:copper_wire": {
+        "warehouses": [
+          {
+            "warehouse": "@wh:main",
+            "name": "Main Warehouse",
+            "qty": "0",
+            "value": "0.00"
+          }
+        ]
+      }
+    }
+  },
+  "note": "Original M4_STOCK_CORE_SETUP r1a section 2.11; setup only, no stock movement.",
+  "output": {
+    "item": "@item:copper_wire",
+    "method": "fifo",
+    "default_warehouse": "@wh:main",
+    "kind": "stock"
+  }
+}

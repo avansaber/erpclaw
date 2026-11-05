@@ -1,0 +1,17 @@
+{
+ "contract": "plugin/1",
+ "part": "service",
+ "name": "service_output_int_enum",
+ "caller": "svc_consumer",
+ "service": "svc_provider.probe",
+ "on": "plain",
+ "input": {
+  "give": "int_enum"
+ },
+ "expect": {
+  "refusal": {
+   "code": "service_output"
+  }
+ },
+ "note": "An output that does not match its model (int enum) is refused."
+}

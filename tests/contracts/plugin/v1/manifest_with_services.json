@@ -1,0 +1,56 @@
+{
+ "contract": "plugin/1",
+ "part": "manifest",
+ "name": "manifest_with_services",
+ "manifest": {
+  "after_core_revision": "0001",
+  "calls": [],
+  "capabilities": {
+   "files": [
+    "mail"
+   ],
+   "network": []
+  },
+  "conflicts": [],
+  "contracts": {},
+  "depends": {},
+  "distribution": "erpclaw-email-folder",
+  "engine": ">=0.0.1",
+  "events": {
+   "consumes": [],
+   "emits": []
+  },
+  "licence": "GPL-3.0-only",
+  "metrics": [],
+  "name": "email_folder",
+  "owned_tables": [],
+  "publisher": "AvanSaber Inc",
+  "slots": {
+   "deliver_message": {
+    "cardinality": "one",
+    "selection": "the only message connector in the books"
+   }
+  },
+  "source": {
+   "commit": "workspace",
+   "repository": "workspace"
+  },
+  "version": "0.0.1",
+  "voucher_types": [],
+  "services": [
+   {
+    "name": "deliver",
+    "effect": "write"
+   },
+   {
+    "name": "status",
+    "effect": "read"
+   }
+  ]
+ },
+ "expect": {
+  "digest": "2f48df4616c985278f63a00e1e5f3317bde780c1ff1004f1ecbafb3c2b61a29d",
+  "differs_from": "manifest_email_folder_before_services"
+ },
+ "note": "A manifest that declares services has a different digest from the same manifest without them."
+}

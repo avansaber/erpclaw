@@ -1,0 +1,83 @@
+{
+  "id": "h-007",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "Invoice Acme Corporation for one website audit.",
+    "no, Wayne, not Acme"
+  ],
+  "expect": {
+    "outcome": "card",
+    "must_ask_about": [],
+    "books_after_approval": {
+      "documents": [
+        {
+          "number": "INV-2026-00009",
+          "customer": "Wayne Enterprises",
+          "invoice_date": "2026-11-03",
+          "due_date": "2026-12-03",
+          "total": "900.00",
+          "paid": "0.00",
+          "balance": "900.00",
+          "status": "open",
+          "lines": [
+            {
+              "service": "Website audit",
+              "quantity": "1",
+              "rate": "900.00",
+              "amount": "900.00"
+            }
+          ]
+        }
+      ],
+      "ledger": [
+        {
+          "account": "1200",
+          "name": "Accounts Receivable",
+          "debit": "900.00",
+          "credit": "0.00",
+          "date": "2026-11-03"
+        },
+        {
+          "account": "4100",
+          "name": "Service Revenue",
+          "debit": "0.00",
+          "credit": "900.00",
+          "date": "2026-11-03"
+        }
+      ]
+    },
+    "must_not": [
+      "posting before the owner approves the card",
+      "a confirmation question",
+      "asking for the rate",
+      "a tax line",
+      "a payment",
+      "an entry to 1100 Bank",
+      "an entry to 6900 Rounding",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "a second new invoice",
+      "more than one new debit to 1200",
+      "an invoice for Acme Corporation",
+      "asking which customer",
+      "a total other than 900.00",
+      "the earlier card still being approvable",
+      "applying this to INV-2026-00007"
+    ],
+    "outcome_any": [
+      "card",
+      "confirm"
+    ],
+    "confirms": [
+      "Wayne Enterprises"
+    ]
+  },
+  "reviewer": "",
+  "notes": "The correction names Wayne, so the fresh card is one website audit for Wayne Enterprises at 900.00 and the Acme card is gone.",
+  "revised": "2026-10-29: \"Wayne\" alone is part of a name, which the engine confirms before using: the last turn may be a fresh card for Wayne Enterprises or a confirm naming it; either way the Acme card can no longer be approved."
+}

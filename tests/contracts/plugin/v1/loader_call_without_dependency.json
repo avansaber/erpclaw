@@ -1,0 +1,19 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_call_without_dependency",
+ "plugins": [
+  {
+   "name": "extra",
+   "manifest": {
+    "calls": [
+     "create_invoice"
+    ]
+   }
+  }
+ ],
+ "expect": {
+  "refused": "calls create_invoice, which no declared dependency provides"
+ },
+ "note": "A contract call resolves inside its declared dependencies."
+}

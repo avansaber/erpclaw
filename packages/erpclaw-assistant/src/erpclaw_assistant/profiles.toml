@@ -1,0 +1,39 @@
+# The models the engine can talk to, one table each. A new model is a new table here, not a code change.
+# profiles.py reads this file and refuses a field it does not know, so a misspelled pin is never dropped silently.
+
+[qwen3_5_9b_lmstudio]            # the local route, on this machine
+backend = "lmstudio"
+model = "qwen3.5-9b-mlx"
+base_url = "http://127.0.0.1:1234/v1"
+max_tokens = 2048
+max_parallel = 1                 # one request at a time on this machine
+timeout_s = 180
+temperature = 0
+reasoning = { enabled = false }  # LM Studio's thinking flag; this model has been seen reasoning with it off
+
+[qwen3_5_9b_openrouter_primeintellect]
+backend = "openrouter"
+model = "qwen/qwen3.5-9b"
+base_url = "https://openrouter.ai/api/v1"
+key_item = "erpclaw-v3-openrouter"
+key_env = "ERPCLAW_OPENROUTER_API_KEY"
+max_tokens = 4096                # the hard cap: reasoning and answer together
+max_parallel = 8
+timeout_s = 120
+temperature = 0
+reasoning = { effort = "low" }   # set explicitly: this model reasons by default on OpenRouter
+# require_parameters: only an endpoint that honours every parameter sent (tools, reasoning) may serve it
+provider = { order = ["primeintellect"], allow_fallbacks = false, data_collection = "deny", zdr = true, quantizations = ["bf16"], require_parameters = true }
+
+[qwen3_5_9b_openrouter_deepinfra]  # an alternative, the same pins on another provider
+backend = "openrouter"
+model = "qwen/qwen3.5-9b"
+base_url = "https://openrouter.ai/api/v1"
+key_item = "erpclaw-v3-openrouter"
+key_env = "ERPCLAW_OPENROUTER_API_KEY"
+max_tokens = 4096
+max_parallel = 8
+timeout_s = 120
+temperature = 0
+reasoning = { effort = "low" }
+provider = { order = ["deepinfra"], allow_fallbacks = false, data_collection = "deny", zdr = true, quantizations = ["bf16"], require_parameters = true }

@@ -1,0 +1,88 @@
+{
+ "contract": "plugin/1",
+ "part": "manifest",
+ "name": "manifest_with_uses",
+ "manifest": {
+  "after_core_revision": "0001",
+  "calls": [],
+  "capabilities": {
+   "files": [
+    "mail"
+   ],
+   "network": []
+  },
+  "conflicts": [],
+  "contracts": {},
+  "depends": {
+   "sales": ">=0.0.1"
+  },
+  "distribution": "erpclaw-email-folder",
+  "engine": ">=0.0.1",
+  "events": {
+   "consumes": [],
+   "emits": []
+  },
+  "licence": "GPL-3.0-only",
+  "metrics": [],
+  "name": "email_folder",
+  "owned_tables": [],
+  "publisher": "AvanSaber Inc",
+  "slots": {
+   "deliver_message": {
+    "cardinality": "one",
+    "selection": "the only message connector in the books"
+   }
+  },
+  "source": {
+   "commit": "workspace",
+   "repository": "workspace"
+  },
+  "version": "0.0.1",
+  "voucher_types": [],
+  "uses": [
+   "sales.quote"
+  ]
+ },
+ "expect": {
+  "digest": "6cb93f02ad5119ff80d44c15e9b16e21e1c0dd8cdde710ff62961700cff3fbfe",
+  "differs_from_manifest": {
+   "after_core_revision": "0001",
+   "calls": [],
+   "capabilities": {
+    "files": [
+     "mail"
+    ],
+    "network": []
+   },
+   "conflicts": [],
+   "contracts": {},
+   "depends": {
+    "sales": ">=0.0.1"
+   },
+   "distribution": "erpclaw-email-folder",
+   "engine": ">=0.0.1",
+   "events": {
+    "consumes": [],
+    "emits": []
+   },
+   "licence": "GPL-3.0-only",
+   "metrics": [],
+   "name": "email_folder",
+   "owned_tables": [],
+   "publisher": "AvanSaber Inc",
+   "slots": {
+    "deliver_message": {
+     "cardinality": "one",
+     "selection": "the only message connector in the books"
+    }
+   },
+   "source": {
+    "commit": "workspace",
+    "repository": "workspace"
+   },
+   "version": "0.0.1",
+   "voucher_types": []
+  }
+ },
+ "note": "A manifest that lists uses has a different digest from the same manifest without them."
+}

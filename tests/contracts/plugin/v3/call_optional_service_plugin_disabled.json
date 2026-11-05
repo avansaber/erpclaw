@@ -1,0 +1,15 @@
+{
+ "contract": "plugin/3",
+ "part": "call",
+ "name": "call_optional_service_plugin_disabled",
+ "provider": true,
+ "disabled": true,
+ "uses": [
+  "quote?"
+ ],
+ "expect": {
+  "code": "plugin_not_enabled",
+  "text": "The svc_provider plugin is not enabled in these books."
+ },
+ "note": "A disabled optional plugin is the typed refusal; disabling it was not refused."
+}

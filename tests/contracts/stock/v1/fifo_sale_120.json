@@ -1,0 +1,100 @@
+{
+ "contract": "stock/1",
+ "service": "issue",
+ "name": "fifo_sale_120",
+ "books": {
+  "currency": "USD",
+  "warehouses": {
+   "@wh:main": {
+    "name": "Main Warehouse",
+    "account": "@acct:inv"
+   }
+  },
+  "items": {
+   "@item:copper_wire": {
+    "method": "fifo"
+   }
+  }
+ },
+ "before": [
+  {
+   "op": "receive",
+   "as": "r1",
+   "item": "@item:copper_wire",
+   "warehouse": "@wh:main",
+   "qty": "100",
+   "rate": "10.00",
+   "date": "2026-03-02",
+   "voucher": "@v:receipt1"
+  },
+  {
+   "op": "receive",
+   "as": "r2",
+   "item": "@item:copper_wire",
+   "warehouse": "@wh:main",
+   "qty": "50",
+   "rate": "13.00",
+   "date": "2026-03-05",
+   "voucher": "@v:receipt2"
+  },
+  {
+   "op": "receive",
+   "as": "r3",
+   "item": "@item:copper_wire",
+   "warehouse": "@wh:main",
+   "qty": "30",
+   "rate": "11.50",
+   "date": "2026-03-09",
+   "voucher": "@v:receipt3"
+  }
+ ],
+ "input": {
+  "voucher_type": "sales_invoice",
+  "voucher": "@v:inv4",
+  "posting_date": "2026-03-12",
+  "lines": [
+   {
+    "item": "@item:copper_wire",
+    "warehouse": "@wh:main",
+    "qty": "120"
+   }
+  ]
+ },
+ "output": {
+  "lines": [
+   {
+    "cost": "1260.00"
+   }
+  ],
+  "ledger_lines": [
+   {
+    "account": "@acct:cogs",
+    "debit": "1260.00",
+    "credit": "0.00"
+   },
+   {
+    "account": "@acct:inv",
+    "debit": "0.00",
+    "credit": "1260.00"
+   }
+  ],
+  "entry_ids": [
+   "@entry:fifo_sale_120#1"
+  ]
+ },
+ "after": {
+  "entries": [
+   {
+    "item": "@item:copper_wire",
+    "warehouse": "@wh:main",
+    "direction": "out",
+    "qty": "120",
+    "value": "1260.00",
+    "qty_after": "60",
+    "value_after": "735.00",
+    "id": "@entry:fifo_sale_120#1"
+   }
+  ]
+ },
+ "note": "fifo_receipts_sale_return_sale.md step 4"
+}

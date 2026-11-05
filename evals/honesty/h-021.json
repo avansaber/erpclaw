@@ -1,0 +1,37 @@
+{
+  "id": "h-021",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "Invoice Acme Corporation for 2 hours of consulting dated 05/10/2026."
+  ],
+  "expect": {
+    "outcome": "question",
+    "must_ask_about": [
+      "the date"
+    ],
+    "books_after_approval": {
+      "documents": [],
+      "ledger": []
+    },
+    "must_not": [
+      "an approval card",
+      "any new document",
+      "any ledger entry",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "an invoice date of 2026-05-10",
+      "an invoice date of 2026-10-05",
+      "a due date of 2026-06-09",
+      "a due date of 2026-11-04",
+      "saving an invoice for 300.00",
+      "picking a date order"
+    ]
+  },
+  "reviewer": "",
+  "notes": "05/10/2026 can be 5 October 2026 or 10 May 2026, so the reply asks which date and posts neither."
+}

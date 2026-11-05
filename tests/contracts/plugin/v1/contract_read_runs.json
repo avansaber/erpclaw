@@ -1,0 +1,16 @@
+{
+ "contract": "plugin/1",
+ "part": "contract",
+ "name": "contract_read_runs",
+ "operation": "svc_read",
+ "args": {
+  "amount": "3"
+ },
+ "expect": {
+  "text": "The total is 3.00.",
+  "data": {
+   "total": "3.00"
+  }
+ },
+ "note": "A minimal read contract loads and runs, calling a read service."
+}

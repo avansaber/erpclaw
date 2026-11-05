@@ -1,0 +1,13 @@
+{
+ "contract": "plugin/3",
+ "part": "call",
+ "name": "call_optional_service_plugin_enabled",
+ "provider": true,
+ "uses": [
+  "quote?"
+ ],
+ "expect": {
+  "runs": true
+ },
+ "note": "An enabled optional plugin's service runs."
+}

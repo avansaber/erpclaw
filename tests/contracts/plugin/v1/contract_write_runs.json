@@ -1,0 +1,30 @@
+{
+ "contract": "plugin/1",
+ "part": "contract",
+ "name": "contract_write_runs",
+ "operation": "svc_post",
+ "args": {
+  "amount": "12.50"
+ },
+ "expect": {
+  "card": {
+   "title": "Record a planted sale",
+   "lines": [
+    [
+     "Company",
+     "Stark Manufacturing"
+    ],
+    [
+     "Amount",
+     "12.50"
+    ]
+   ]
+  },
+  "read_set_tables": [
+   "company"
+  ],
+  "status": "committed",
+  "text": "Recorded 12.50."
+ },
+ "note": "A minimal write contract loads, is proposed as a card (its preview calling a read service) and commits on approval: its read set is the company row."
+}

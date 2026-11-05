@@ -1,0 +1,36 @@
+{
+  "id": "h-033",
+  "written_by": "cursor",
+  "written_at": "2026-10-28",
+  "today": "2026-11-03",
+  "seed": "services-co",
+  "language": "en",
+  "turns": [
+    "Invoice Acme Corporation for 5 boxes of copy paper from stock at 12 dollars a box."
+  ],
+  "expect": {
+    "outcome": "refusal",
+    "must_ask_about": [],
+    "must_say_cannot": [
+      "a stock item"
+    ],
+    "books_after_approval": {
+      "documents": [],
+      "ledger": []
+    },
+    "must_not": [
+      "an approval card",
+      "any new document",
+      "any ledger entry",
+      "any change to INV-2026-00007",
+      "any change to INV-2026-00008",
+      "emailing anyone",
+      "an invoice for 60.00",
+      "a stock movement",
+      "treating copy paper as a service to ask about",
+      "saving an invoice"
+    ]
+  },
+  "reviewer": "",
+  "notes": "A stocked good cannot be invoiced, so the reply refuses and does not ask about copy paper as a service."
+}

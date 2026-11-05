@@ -1,0 +1,23 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_destructive_contract_hooks",
+ "plugins": [
+  {
+   "name": "extra",
+   "contracts": [
+    {
+     "name": "op",
+     "effect": "destructive",
+     "hooks": [
+      "preview"
+     ]
+    }
+   ]
+  }
+ ],
+ "expect": {
+  "refused": "destructive contract op needs preview, commit"
+ },
+ "note": "A destructive contract has the same hooks as a write."
+}

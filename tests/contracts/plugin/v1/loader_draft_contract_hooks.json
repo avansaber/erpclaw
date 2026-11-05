@@ -1,0 +1,23 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_draft_contract_hooks",
+ "plugins": [
+  {
+   "name": "extra",
+   "contracts": [
+    {
+     "name": "op",
+     "effect": "draft",
+     "hooks": [
+      "preview"
+     ]
+    }
+   ]
+  }
+ ],
+ "expect": {
+  "refused": "draft contract op needs preview and commit"
+ },
+ "note": "A draft contract has preview and commit."
+}

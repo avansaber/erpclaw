@@ -1,0 +1,17 @@
+[project]
+name = "erpclaw-core"
+version = "0.0.1"
+description = "ERPClaw core: ledger, money, periods, approvals, operation keys, outbox, plugin loader"
+license = "GPL-3.0-only"
+requires-python = ">=3.12"
+dependencies = [
+    "sqlalchemy>=2.0",
+    "pydantic>=2.7",
+    "alembic>=1.13",
+    "packaging>=24.0",
+    "psycopg[binary]>=3.2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

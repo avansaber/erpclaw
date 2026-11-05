@@ -1,0 +1,33 @@
+{
+  "contract": "stock/2",
+  "service": "create_warehouse",
+  "name": "create_warehouse_first_default",
+  "books": {
+    "currency": "USD",
+    "warehouses": {},
+    "items": {}
+  },
+  "before": [],
+  "input": {
+    "name": "Main Warehouse",
+    "account": "@acct:inv",
+    "company_default": true
+  },
+  "after": {
+    "warehouses": [
+      {
+        "warehouse": "@wh:new#1",
+        "name": "Main Warehouse",
+        "account": "@acct:inv",
+        "company_default": true
+      }
+    ]
+  },
+  "note": "Original M4_STOCK_CORE_SETUP r1a section 2.11; setup only, no stock movement.",
+  "output": {
+    "warehouse": "@wh:new#1",
+    "name": "Main Warehouse",
+    "account": "@acct:inv",
+    "company_default": true
+  }
+}

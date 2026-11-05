@@ -1,0 +1,54 @@
+{
+  "contract": "stock/2",
+  "service": "make_stock_item",
+  "name": "make_stock_item_kwd",
+  "books": {
+    "currency": "KWD",
+    "warehouses": {
+      "@wh:kuwait": {
+        "name": "Kuwait Store",
+        "account": "@acct:inv"
+      }
+    },
+    "items": {},
+    "service_items": [
+      "@item:part"
+    ]
+  },
+  "before": [],
+  "input": {
+    "item": "@item:part",
+    "method": "fifo",
+    "default_warehouse": "@wh:kuwait"
+  },
+  "after": {
+    "stock_items": {
+      "@item:part": {
+        "method": "fifo",
+        "default_warehouse": "@wh:kuwait"
+      }
+    },
+    "kind": {
+      "@item:part": "stock"
+    },
+    "on_hand": {
+      "@item:part": {
+        "warehouses": [
+          {
+            "warehouse": "@wh:kuwait",
+            "name": "Kuwait Store",
+            "qty": "0",
+            "value": "0.000"
+          }
+        ]
+      }
+    }
+  },
+  "note": "Original M4_STOCK_CORE_SETUP r1a section 2.11; setup only, no stock movement.",
+  "output": {
+    "item": "@item:part",
+    "method": "fifo",
+    "default_warehouse": "@wh:kuwait",
+    "kind": "stock"
+  }
+}

@@ -1,0 +1,19 @@
+{
+ "contract": "plugin/2",
+ "part": "send",
+ "name": "send_marked_then_accepted",
+ "connector": {
+  "mark": true,
+  "outcome": {
+   "stage": "after_data",
+   "kind": "accepted",
+   "code": 250,
+   "text": "ok"
+  }
+ },
+ "expect": {
+  "status": "accepted",
+  "owner_text_starts": "Handed to the mail server at "
+ },
+ "note": "A connector that marks, then sends, is accepted."
+}

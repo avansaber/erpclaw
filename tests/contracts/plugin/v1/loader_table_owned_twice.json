@@ -1,0 +1,19 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_table_owned_twice",
+ "plugins": [
+  {
+   "name": "extra",
+   "manifest": {
+    "owned_tables": [
+     "sales_invoice"
+    ]
+   }
+  }
+ ],
+ "expect": {
+  "refused": "table sales_invoice is already declared by sales"
+ },
+ "note": "A table has one owner."
+}

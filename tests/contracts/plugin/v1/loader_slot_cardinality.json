@@ -1,0 +1,25 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_slot_cardinality",
+ "plugins": [
+  {
+   "name": "extra",
+   "slots": [
+    "post_journal"
+   ],
+   "manifest": {
+    "slots": {
+     "post_journal": {
+      "cardinality": "many",
+      "selection": "any"
+     }
+    }
+   }
+  }
+ ],
+ "expect": {
+  "refused": "core defines it as 'one'"
+ },
+ "note": "A slot's cardinality is core's."
+}

@@ -1,0 +1,20 @@
+{
+ "contract": "plugin/4",
+ "part": "card",
+ "name": "card_own_sentence",
+ "write": {
+  "cls": "WriteContract",
+  "dateless": true,
+  "reason": {
+   "en": "these are the company's own settings, not books."
+  },
+  "moves_money": false
+ },
+ "expect": {
+  "line": [
+   "Date source",
+   "No date applies: these are the company's own settings, not books."
+  ]
+ },
+ "note": "The card reads the contract's sentence, never text from the input."
+}

@@ -1,0 +1,36 @@
+{
+ "contract": "plugin/1",
+ "part": "loader",
+ "name": "loader_loads_a_plugin_with_services",
+ "plugins": [
+  {
+   "name": "provider",
+   "services": [
+    {
+     "name": "quote",
+     "effect": "read"
+    },
+    {
+     "name": "record",
+     "effect": "write"
+    }
+   ]
+  },
+  {
+   "name": "consumer",
+   "manifest": {
+    "depends": {
+     "provider": ">=1"
+    },
+    "uses": [
+     "provider.quote",
+     "provider.record"
+    ]
+   }
+  }
+ ],
+ "expect": {
+  "loads": true
+ },
+ "note": "A plugin whose services match its manifest, and a dependent that uses them, load."
+}
