@@ -170,7 +170,78 @@ take = Table(  # FIFO only: what an issue took from a group, or what a reversal 
     *_value("stock_layer_take", "value"),
 )
 
-TABLES = (warehouse, stock_item, head, entry, layer, take)
+# Stock-owned vouchers. Count-only columns are a
+# nullable storage foundation; only opening has a producer in this release slice.
+voucher = Table(
+    "stock_voucher", metadata,
+    Column("id", String(36), primary_key=True),
+    Column("company_id", String(36), ForeignKey("company.id"), nullable=False),
+    Column("kind", String(20), nullable=False),
+    Column("number", String(40), nullable=False),
+    Column("posting_date", Date, nullable=False),
+    Column("reason", String(140), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    UniqueConstraint("company_id", "id", name="uq_stock_voucher_company_id"),
+    UniqueConstraint("company_id", "number", name="uq_stock_voucher_number"),
+    CheckConstraint("kind in ('opening','count','write_off','goods_received')", name="ck_stock_voucher_kind"),
+)
+
+voucher_line = Table(
+    "stock_voucher_line", metadata,
+    Column("id", String(36), primary_key=True),
+    Column("company_id", String(36), nullable=False),
+    Column("voucher_id", String(36), nullable=False),
+    Column("line_no", Integer, nullable=False),
+    Column("item_id", String(36), nullable=False),
+    Column("warehouse_id", String(36), nullable=False),
+    Column("currency", String(3), ForeignKey("currency.code"), nullable=False),
+    Column("qty_moved", Qty, nullable=False),
+    Column("counted_qty", Qty, nullable=True),
+    Column("books_qty", Qty, nullable=True),
+    Column("rate", Qty, nullable=True),
+    Column("direction", String(3), nullable=False),
+    Column("value", MoneyText, nullable=False),
+    ForeignKeyConstraint(["company_id", "voucher_id"], ["stock_voucher.company_id", "stock_voucher.id"],
+                         name="fk_stock_voucher_line_voucher"),
+    ForeignKeyConstraint(["company_id", "item_id"], ["item.company_id", "item.id"],
+                         name="fk_stock_voucher_line_item"),
+    ForeignKeyConstraint(["company_id", "warehouse_id"], ["stock_warehouse.company_id", "stock_warehouse.id"],
+                         name="fk_stock_voucher_line_warehouse"),
+    UniqueConstraint("company_id", "id", name="uq_stock_voucher_line_company_id"),
+    UniqueConstraint("voucher_id", "line_no", name="uq_stock_voucher_line_number"),
+    UniqueConstraint("voucher_id", "item_id", "warehouse_id", name="uq_stock_voucher_line_pair"),
+    CheckConstraint("line_no > 0", name="ck_stock_voucher_line_number"),
+    CheckConstraint("direction in ('in','out')", name="ck_stock_voucher_line_direction"),
+    CheckConstraint(qty_check("qty_moved"), name="ck_stock_voucher_line_qty"),
+    CheckConstraint(qty_check("counted_qty"), name="ck_stock_voucher_line_counted_qty"),
+    CheckConstraint(qty_check("books_qty"), name="ck_stock_voucher_line_books_qty"),
+    *_qty("stock_voucher_line", "rate"),
+    *_value("stock_voucher_line", "value"),
+)
+
+# Goods-received header; its ordered lines are stock ledger entries.
+goods_received = Table(
+    "stock_goods_received", metadata,
+    Column("id", String(36), primary_key=True),
+    Column("company_id", String(36), nullable=False),
+    Column("voucher_id", String(36), nullable=False),
+    Column("supplier_id", String(36), nullable=False),
+    Column("settlement", String(12), nullable=False),
+    Column("account_id", String(36), nullable=False),
+    Column("number", String(40), nullable=False),
+    ForeignKeyConstraint(["company_id", "voucher_id"], ["stock_voucher.company_id", "stock_voucher.id"],
+                         name="fk_stock_goods_received_voucher"),
+    ForeignKeyConstraint(["company_id", "supplier_id"], ["party.company_id", "party.id"],
+                         name="fk_stock_goods_received_supplier"),
+    ForeignKeyConstraint(["company_id", "account_id"], ["account.company_id", "account.id"],
+                         name="fk_stock_goods_received_account"),
+    UniqueConstraint("company_id", "id", name="uq_stock_goods_received_company_id"),
+    UniqueConstraint("company_id", "voucher_id", name="uq_stock_goods_received_voucher"),
+    UniqueConstraint("company_id", "number", name="uq_stock_goods_received_number"),
+    CheckConstraint("settlement in ('paid_now','still_owed')", name="ck_stock_goods_received_settlement"),
+)
+
+TABLES = (warehouse, stock_item, head, entry, layer, take, voucher, voucher_line, goods_received)
 for _table in TABLES:
     _table.info["owner"] = "stock"
     _table.info["runtime"] = APPEND  # the PostgreSQL runtime role's privileges

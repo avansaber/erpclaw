@@ -471,7 +471,7 @@ requires-dist = [
 
 [[package]]
 name = "erpclaw-core"
-version = "0.0.1"
+version = "0.0.2"
 source = { editable = "packages/erpclaw-core" }
 dependencies = [
     { name = "alembic" },
@@ -514,7 +514,7 @@ requires-dist = [{ name = "erpclaw-core", editable = "packages/erpclaw-core" }]
 
 [[package]]
 name = "erpclaw-sales"
-version = "0.0.1"
+version = "0.0.2"
 source = { editable = "plugins/erpclaw-sales" }
 dependencies = [
     { name = "erpclaw-core" },
@@ -525,7 +525,7 @@ requires-dist = [{ name = "erpclaw-core", editable = "packages/erpclaw-core" }]
 
 [[package]]
 name = "erpclaw-stock"
-version = "0.0.1"
+version = "0.1.1"
 source = { editable = "plugins/erpclaw-stock" }
 dependencies = [
     { name = "erpclaw-core" },

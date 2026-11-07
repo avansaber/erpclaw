@@ -13,6 +13,7 @@ model, listed in the catalogue or reached from the API.
 from __future__ import annotations
 
 import copy
+import json
 import re
 from dataclasses import KW_ONLY, asdict, dataclass, field
 from decimal import Decimal
@@ -24,7 +25,7 @@ from typing_extensions import Annotated
 from .common import Ctx
 from .money import MINOR_UNITS, fmt, fmt_rate, quantize, to_decimal
 
-Effect = Literal["read", "draft", "write", "destructive"]  # Unclassified effects fail closed
+Effect = Literal["read", "draft", "write", "destructive"]  # unclassified fails closed
 
 
 class Input(BaseModel):
@@ -76,8 +77,14 @@ class Money(ServiceModel):
 
 # Every name a result's or an answer's amount may carry; a contract declares the ones it returns.
 AMOUNT_WHAT = ("total", "amount", "applied", "credit", "outstanding", "invoice_total", "invoice_outstanding", "value",
-               "row", "reopened", "credit_removed")
+               "row", "reopened", "credit_removed", "rate")
 CARD_STRINGS = ("title", "lines", "books", "warnings", "footer")
+CARD_TITLE_MAX = 200
+CARD_LINES_MAX, CARD_LABEL_MAX, CARD_VALUE_MAX = 100, 120, 500
+CARD_BOOKS_MAX, CARD_BOOK_MAX = 50, 300
+CARD_WARNINGS_MAX, CARD_WARNING_MAX = 50, 300
+CARD_FOOTER_MAX = 500
+CARD_BYTES_MAX = 65_536
 
 
 @dataclass(frozen=True)
@@ -98,6 +105,7 @@ class Amount:
     of: str | None
     value: str
     currency: str
+    kind: str = "amount"  # the same kinds as CardAmount
 
 
 class Shown:
@@ -124,11 +132,14 @@ class Shown:
             self._pending.append(("amount", format(quantize(value, self.currency), "f")))
         return fmt(value, self.currency)
 
-    def unit_price(self, value) -> str:
+    def unit_price(self, value, what: str | None = None, of: str | None = None) -> str:
         """An item's price per unit, as stored (up to four places): every place it has, and at least the currency's,
-        as the card reads it."""
+        as the card reads it; with `what`, a named figure of a result's text."""
         shown = fmt_rate(value, self.currency)
-        self._pending.append(("unit_price", shown.replace(",", "")))
+        if what is not None:
+            self.amounts.append(Amount(what, of, shown.replace(",", ""), self.currency, kind="unit_price"))
+        else:
+            self._pending.append(("unit_price", shown.replace(",", "")))
         return shown
 
     def _attach(self, where: str, index: int, label: str = "") -> None:
@@ -211,11 +222,27 @@ def _in_order(text: str, figures: list[str]) -> bool:
     return True
 
 
-def check_card_amounts(card: dict) -> None:
-    """Every amount points at an existing string of the card, and its value, as its kind reads, appears in that
-    string in order of appearance. It checks the amounts that are there; that none is missing is the recorder's."""
+def check_card_bounds(card: dict) -> None:
+    """Bound the complete card as stored: Unicode characters per string and compact UTF-8 JSON bytes overall."""
     from .common import Refusal
 
+    lines, books, warnings = card["lines"], card["books"], card["warnings"]
+    if (len(card["title"]) > CARD_TITLE_MAX or len(card["footer"]) > CARD_FOOTER_MAX
+            or len(lines) > CARD_LINES_MAX
+            or any(len(k) > CARD_LABEL_MAX or len(v) > CARD_VALUE_MAX for k, v in lines)
+            or len(books) > CARD_BOOKS_MAX or any(len(b) > CARD_BOOK_MAX for b in books)
+            or len(warnings) > CARD_WARNINGS_MAX or any(len(w) > CARD_WARNING_MAX for w in warnings)
+            or len(json.dumps(card, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > CARD_BYTES_MAX):
+        raise Refusal("That card is too large to show for approval; nothing was proposed.", "card_too_large")
+
+
+def check_card_amounts(card: dict) -> None:
+    """Every amount points at an existing string of the card, and its value, as its kind reads, appears in that
+    string in order of appearance. Bounds apply here after the engine adds its own strings, before any card is
+    stored or shown. It checks the amounts that are there; that none is missing is the recorder's."""
+    from .common import Refusal
+
+    check_card_bounds(card)
     wrong = Refusal("That card's amounts do not match its lines; nothing was proposed.", "card_amounts")
     strings: dict[tuple[str, int], tuple[str, str]] = {("title", 0): ("", card["title"]),
                                                        ("footer", 0): ("", card["footer"])}
@@ -246,14 +273,15 @@ def check_answer(contract: "Contract", result: Result) -> list[dict]:
     from .common import Refusal
 
     check_amount_names(contract, result.amounts)
-    shown = [_shown("amount", a.value, a.currency) for a in result.amounts]
+    shown = [_shown(a.kind, a.value, a.currency) for a in result.amounts]
     if None in shown or not _in_order(result.text, shown):
         raise Refusal("That answer's amounts do not match its text; nothing was shown.", "answer_amounts")
     return amount_dicts(result.amounts)
 
 
 def amount_dicts(amounts: list[Amount]) -> list[dict]:
-    return [asdict(a) for a in amounts]
+    """Keep the original amount shape; only a non-default kind needs to cross."""
+    return [{k: v for k, v in asdict(a).items() if k != "kind" or v != "amount"} for a in amounts]
 
 
 @dataclass

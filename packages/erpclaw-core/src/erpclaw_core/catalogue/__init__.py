@@ -86,6 +86,13 @@ def _on(contract, enabled: set[str]) -> bool:
     return REGISTRY.contract_plugin[contract.name] in enabled and not contract.planned
 
 
+def stock_item_creation_on(enabled: set[str]) -> bool:
+    """The item kind question and catalogue share the registered stock setup's availability."""
+    contract = REGISTRY.contracts.get("add_item")
+    return (contract is not None and _on(contract, enabled) and "stock" in enabled
+            and "stock.make_stock_item" in REGISTRY.services)
+
+
 def switched_on_names(conn: Connection) -> list[str]:
     """The plain names of the operations switched on in these books, in registry order, each once."""
     load_plugins()
@@ -129,12 +136,16 @@ def catalogue(conn: Connection) -> list[Entry]:
     """Every entry for these books, sorted by id."""
     load_plugins()
     enabled = enabled_plugins(conn)
+    stock_on = stock_item_creation_on(enabled)
+    planned = _planned()
+    stock_synonyms = tuple(s for a in planned if a["id"] == "planned.stock_item" for s in a["synonyms"])
     out: list[Entry] = []
     for c in REGISTRY.contracts.values():
         if c.name == "get_metric":  # metrics are entries of their own; get_metric is how they run
             continue
         plugin = REGISTRY.contract_plugin[c.name]
-        out.append(Entry(f"op.{c.name}", "operation", c.name.replace("_", " "), c.description, tuple(c.synonyms),
+        synonyms = tuple(c.synonyms) + (stock_synonyms if c.name == "add_item" and stock_on else ())
+        out.append(Entry(f"op.{c.name}", "operation", c.name.replace("_", " "), c.description, synonyms,
                          "planned" if c.planned else "installed" if plugin in enabled else "available", plugin,
                          wave=c.planned, target=c.name))
     for mt in REGISTRY.metrics.values():
@@ -142,7 +153,9 @@ def catalogue(conn: Connection) -> list[Entry]:
         out.append(Entry(f"metric.{mt.name}", "metric", mt.title, mt.definition, tuple(mt.synonyms),
                          "planned" if mt.planned else "installed" if plugin in enabled else "available", plugin,
                          wave=mt.planned, target=mt.name))
-    for a in _planned():
+    for a in planned:
+        if a["id"] == "planned.stock_item" and stock_on:
+            continue  # these requests now go through add_item
         if a["installed_as"] and all(p in enabled for p in a["installed_as"]):
             continue  # delivered by plugins installed in these books
         out.append(Entry(a["id"], "area", a["name"], a["name"], tuple(a["synonyms"]), "planned", wave=a["wave"],
@@ -184,7 +197,7 @@ def named_by_synonym(conn: Connection, said: str) -> list[tuple[Entry, int]]:
 
 def planned_instead(conn: Connection, operation: str, said: str) -> Decision | None:
     """The planned answer for a request whose own words name, by one of its synonyms, a planned area declared in place
-    of this operation (an item kept in stock, for add_item): the operation never runs for it. None otherwise."""
+    of this operation while it is off: the operation never runs for it. None otherwise."""
     if not any(operation in a.get("instead_of", ()) for a in _planned()):
         return None  # nothing is planned in its place: the catalogue is not read
     for e, _ in named_by_synonym(conn, said):

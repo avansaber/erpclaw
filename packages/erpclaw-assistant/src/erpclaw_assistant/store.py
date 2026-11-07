@@ -20,7 +20,7 @@ from pathlib import Path
 
 from erpclaw_core.db import data_root
 
-VERSION = 2
+VERSION = 3
 LEASE = timedelta(seconds=300)  # a turn's claim on its conversation, renewed before every model call and `propose`
 # Longer than a healthy turn ever goes between two renewals: a holder silent for longer has stopped partway. Set above
 # the longest gap measured on the slowest model's calls, so a live turn is never told it stopped.
@@ -51,6 +51,18 @@ _V2 = [
     # a card's outcome from the books, applied to a request at most once
     "CREATE TABLE IF NOT EXISTS applied_outcome (approval_id TEXT NOT NULL, status TEXT NOT NULL, request_id TEXT, "
     "applied TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (approval_id, status))",
+]
+
+
+_V3 = [
+    "CREATE TABLE IF NOT EXISTS message_resolution (message_id INTEGER PRIMARY KEY REFERENCES request_message(id), "
+    "completed INTEGER NOT NULL DEFAULT 0, question_id TEXT, field TEXT, choice_label TEXT)",
+    "CREATE TABLE IF NOT EXISTS message_name_span (id TEXT PRIMARY KEY, message_id INTEGER NOT NULL "
+    "REFERENCES request_message(id), start INTEGER NOT NULL, end INTEGER NOT NULL, kind TEXT NOT NULL, "
+    "record_id TEXT NOT NULL, name TEXT NOT NULL, area TEXT)",
+    "CREATE INDEX IF NOT EXISTS ix_message_name_span ON message_name_span(message_id, start, end)",
+    "CREATE TABLE IF NOT EXISTS span_confirmation (span_id TEXT PRIMARY KEY REFERENCES message_name_span(id), "
+    "question TEXT, classification TEXT CHECK (classification IN ('name', 'instruction')))",
 ]
 
 
@@ -88,10 +100,12 @@ def _open() -> sqlite3.Connection:
     try:
         conn.execute("CREATE TABLE IF NOT EXISTS store_version (version INTEGER NOT NULL)")
         row = conn.execute("SELECT version FROM store_version").fetchone()
-        for ddl in _V1 + _V2:  # version 1 is migrated by adding version 2's tables
+        for ddl in _V1 + _V2 + _V3:
             conn.execute(ddl)
         if "renewed_at" not in {r["name"] for r in conn.execute("PRAGMA table_info(conversation)")}:
             conn.execute("ALTER TABLE conversation ADD COLUMN renewed_at TEXT")  # a version 2 store made before it
+        if "choice_label" not in {r["name"] for r in conn.execute("PRAGMA table_info(message_resolution)")}:
+            conn.execute("ALTER TABLE message_resolution ADD COLUMN choice_label TEXT")
         if row is None:
             conn.execute("INSERT INTO store_version VALUES (?)", (VERSION,))
         elif row["version"] < VERSION:
@@ -491,6 +505,79 @@ def ended_summaries(conversation_id: str, limit: int = SUMMARY_CHARS) -> list[st
 
 
 # ---------- finalise ----------
+
+def message_resolution(message_id: int) -> dict:
+    """The immutable message's completed name consumption, including explicit empty results."""
+    with _tx() as conn:
+        row = conn.execute("SELECT * FROM message_resolution WHERE message_id = ?", (message_id,)).fetchone()
+        if row and not row["completed"]:
+            row = None
+        spans = [dict(r) for r in conn.execute(
+            "SELECT s.*, c.question, c.classification FROM message_name_span s LEFT JOIN span_confirmation c "
+            "ON c.span_id = s.id WHERE s.message_id = ? ORDER BY s.start, s.end, s.id", (message_id,))] \
+            if row and row["completed"] else []
+        for span in spans:
+            span["question"] = json.loads(span["question"]) if span["question"] else None
+        return {"completed": bool(row and row["completed"]), "question_id": row["question_id"] if row else None,
+                "field": row["field"] if row else None, "choice_label": row["choice_label"] if row else None,
+                "spans": spans}
+
+
+def save_resolution(c: Claim, request_id: str, resolution: dict) -> bool:
+    """Checkpoint name consumption and the resolution state together, before any proposal."""
+    with _tx() as conn:
+        row = conn.execute("SELECT version FROM conversation WHERE id = ?", (c.conversation_id,)).fetchone()
+        if not _holds(conn, c) or row["version"] != c.version:
+            return False
+        for msg in resolution.get("owner_messages", []):
+            owned = conn.execute("SELECT id FROM request_message WHERE id = ? AND request_id = ?",
+                                 (msg["id"], request_id)).fetchone()
+            if not owned:
+                return False
+        for msg in resolution.get("owner_messages", []):
+            saved = conn.execute("SELECT completed FROM message_resolution WHERE message_id = ?",
+                                 (msg["id"],)).fetchone()
+            if saved and saved["completed"]:
+                continue
+            conn.execute("DELETE FROM span_confirmation WHERE span_id IN "
+                         "(SELECT id FROM message_name_span WHERE message_id = ?)", (msg["id"],))
+            conn.execute("DELETE FROM message_name_span WHERE message_id = ?", (msg["id"],))
+            for span in msg.get("spans", []):
+                conn.execute("INSERT INTO message_name_span (id, message_id, start, end, kind, record_id, name, area) "
+                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                             (span["id"], msg["id"], span["start"], span["end"], span["kind"],
+                              span["record_id"], span["name"], span.get("area")))
+                if span.get("area"):
+                    conn.execute("INSERT INTO span_confirmation (span_id, question, classification) VALUES (?, ?, ?)",
+                                 (span["id"], json.dumps(span.get("question")) if span.get("question") else None,
+                                  span.get("classification")))
+            if msg.get("answer"):
+                conn.execute("UPDATE request_message SET answer = 1 WHERE id = ?", (msg["id"],))
+            conn.execute("INSERT INTO message_resolution "
+                         "(message_id, completed, question_id, field, choice_label) VALUES (?, 1, ?, ?, ?) "
+                         "ON CONFLICT(message_id) DO UPDATE SET completed = 1, question_id = excluded.question_id, "
+                         "field = excluded.field, choice_label = excluded.choice_label",
+                         (msg["id"], msg.get("question_id"), msg.get("field"), msg.get("choice_label")))
+        for msg in resolution.get("owner_messages", []):
+            for span in msg.get("spans", []):
+                if span.get("area"):
+                    conn.execute("UPDATE span_confirmation SET question = COALESCE(question, ?), "
+                                 "classification = COALESCE(classification, ?) WHERE span_id = ? AND "
+                                 "((question IS NULL AND ? IS NOT NULL) OR (classification IS NULL AND ? IS NOT NULL))",
+                                 (json.dumps(span.get("question")) if span.get("question") else None,
+                                  span.get("classification"), span["id"],
+                                  json.dumps(span.get("question")) if span.get("question") else None,
+                                  span.get("classification")))
+        pending = resolution.get("pending")
+        conn.execute("UPDATE request SET pending_question = ? WHERE id = ?",
+                     (json.dumps(pending) if pending else None, request_id))
+        conn.execute("DELETE FROM request_binding WHERE request_id = ?", (request_id,))
+        conn.executemany("INSERT INTO request_binding (request_id, path, value) VALUES (?, ?, ?)",
+                         [(request_id, p, json.dumps(v)) for p, v in resolution.get("bindings", {}).items()])
+        conn.execute("UPDATE conversation SET serial = max(serial, ?) WHERE id = ?",
+                     (resolution.get("serial", 0), c.conversation_id))
+        return True
+
 
 def finalise(c: Claim, request_id: str, turn_events: list[dict], *, pending_question: dict | None,
              pending_card: str | None, state: str, why: str | None, serial_now: int, bindings_now: dict,

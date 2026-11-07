@@ -1,6 +1,6 @@
 [project]
 name = "erpclaw-stock"
-version = "0.0.1"
+version = "0.1.1"
 description = "ERPClaw stock plugin: warehouses, the stock ledger and its valuation"
 license = "GPL-3.0-only"
 requires-python = ">=3.12"

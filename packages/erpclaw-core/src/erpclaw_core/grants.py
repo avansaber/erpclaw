@@ -129,7 +129,7 @@ def authority_beyond_policy(conn: Connection, role: str) -> list[str]:
     which pg_auth_members does not list), CREATE on the database, and the role
     attributes that administer roles or replicate."""
     out = []
-    owned = conn.exec_driver_sql(  # every object it owns, of any kind: the role owns nothing (round 2)
+    owned = conn.exec_driver_sql(  # every object it owns, of any kind: the role owns nothing
         "SELECT count(*) FROM pg_shdepend WHERE refclassid = 'pg_authid'::regclass AND deptype = 'o' "
         "AND refobjid = (SELECT oid FROM pg_roles WHERE rolname = %(r)s) "
         "AND dbid IN (0, (SELECT oid FROM pg_database WHERE datname = current_database()))", {"r": role}).scalar()

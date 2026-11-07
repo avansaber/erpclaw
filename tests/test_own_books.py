@@ -8,6 +8,10 @@ gets only the planned not-yet answer."""
 from __future__ import annotations
 
 import json
+import os
+import re
+import subprocess
+import sys
 import threading
 from datetime import date, timedelta
 from decimal import Decimal
@@ -65,7 +69,7 @@ CARD_CHART = (f"Your chart of accounts: {len(setup.CHART)} accounts for a small 
               "the rest); more are added when you need them.")
 NOTHING_POSTED = "Nothing is posted."
 
-# The four fields set_up_company writes and the status: the runtime role's new grants on company (2.2)
+# The four fields set_up_company writes and the status: the runtime role's new grants on company
 SETUP_COLUMNS = ("name", "functional_currency", "fiscal_year_start_month", "date_order", "status")
 # set_up_company's input as the engine stores it (the chat binds the owner's words to these)
 SETUP = {"name": "Lakeside Bakery", "currency": "USD", "fiscal_year_start_month": 1, "date_order": "DMY"}
@@ -153,6 +157,15 @@ def role_of(url: str) -> str:
     return make_url(url).username
 
 
+def plain_init_help() -> str:
+    """Typer reads terminal overrides at import time, so help needs a fresh process even after other CLI tests."""
+    env = {**os.environ, "_TYPER_FORCE_DISABLE_TERMINAL": "1", "COLUMNS": "120", "TERMINAL_WIDTH": "120"}
+    result = subprocess.run([sys.executable, "-m", "erpclaw_cli.main", "init", "--help"],
+                            env=env, capture_output=True, text=True, check=True)
+    # Strip any remaining terminal styling as a backstop for different Rich versions.
+    return " ".join(re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", result.stdout).split())
+
+
 def runtime_may_update(engine, role: str, column: str) -> bool:
     with engine.connect() as conn:
         return conn.execute(text("SELECT has_column_privilege(:r, 'company', :c, 'UPDATE')"),
@@ -209,7 +222,7 @@ def setup_words(words: str) -> Reply:
 
 
 def first_run(words: str) -> Reply:
-    """The model of the first conversation (2.6), from the owner's words of the current request."""
+    """The model of the first conversation, from the owner's words of the current request."""
     if "add a customer" in words.lower():
         return Reply("", [tool("add_customer", name="Acme Corp", email="accounts@acme.example")])
     if "add an item" in words.lower():
@@ -229,7 +242,7 @@ def chat_setup(c, cid) -> tuple[list[list[dict]], dict]:
     return turns, only_card(turns[-1])
 
 
-# ---------- the bootstrap (2.1) ----------
+# ---------- the bootstrap ----------
 
 def test_init_own_books_leaves_one_pending_company_with_the_base_chart_its_owner_and_no_business_choice(
         engine, runtime_login, monkeypatch):
@@ -303,7 +316,7 @@ def test_plain_init_still_makes_the_demo_books_ready_and_says_so_in_its_help(eng
     with engine.connect() as conn:
         assert DEMO_MARK in set(conn.execute(select(books_marks.c.mark)).scalars())
     assert count(engine, t.invoice) > 0
-    helped = " ".join(CliRunner().invoke(app, ["init", "--help"]).output.split())
+    helped = plain_init_help()
     assert "--own-books" in helped and "demo" in helped.lower()
 
 
@@ -337,7 +350,7 @@ def test_a_bootstrap_that_stops_after_its_schema_leaves_nothing_and_the_next_run
     assert count(engine, m.account, m.account.c.company_id == co["id"]) == len(setup.CHART)
 
 
-# ---------- the pending gate (2.1) ----------
+# ---------- the pending gate ----------
 
 @pytest.mark.parametrize("words, reply", [
     ("hi", Reply("Hello! How can I help?")),
@@ -381,7 +394,7 @@ def test_while_pending_propose_refuses_every_operation_but_set_up_company_and_wr
     assert_changes(before, snapshot(engine), {})
 
 
-# ---------- set_up_company (2.2) ----------
+# ---------- set_up_company ----------
 
 def test_each_missing_setup_field_is_asked_in_turn_and_nothing_is_written_before_the_card(engine):
     cid_company = own_books(engine)
@@ -672,7 +685,7 @@ def test_a_read_while_the_setup_card_waits_is_answered_as_not_set_up_and_the_car
     assert approve_event(c, cid, card)[0]["status"] == "committed"
 
 
-# ---------- add_customer (2.3) ----------
+# ---------- add_customer ----------
 
 def test_an_exact_duplicate_customer_is_refused(engine):
     before = snapshot(engine)
@@ -697,7 +710,16 @@ def _near_question(engine):
     before = snapshot(engine)
     ask = last_ask(say(c, cid, "Add a customer called Acme Corp"))
     assert ask["text"] == CUSTOMER_NEAR.format(name="Acme Corporation", city="Pune", said="Acme Corp"), ask
-    assert len(ask["choices"]) == 2, ask
+    assert len(ask["choices"]) == 4, ask
+    qid = ask["question_id"]
+    assert [ch for ch in ask["choices"] if ch["control"] is False] == [
+        {"code": f"{qid}-1", "label": "Acme Corporation (Pune), already a customer", "control": False},
+        {"code": f"{qid}-2", "label": "Acme Corp, a new customer", "control": False},
+    ], ask
+    assert [ch for ch in ask["choices"] if ch["control"] is True] == [
+        {"code": f"{qid}-someone_else", "label": "Someone else", "control": True},
+        {"code": f"{qid}-cancel", "label": "Cancel", "control": True},
+    ], ask
     assert_changes(before, snapshot(engine), {})  # nothing written before the answer
     return c, cid, ask
 
@@ -708,7 +730,7 @@ def test_a_near_customer_name_asks_with_choices_and_writes_nothing(engine):
 
 def test_choosing_the_existing_customer_adds_no_customer_and_no_card(engine):
     c, cid, ask = _near_question(engine)
-    existing = next(ch for ch in ask["choices"] if "new" not in ch["label"].lower())
+    existing = next(ch for ch in ask["choices"] if ch["control"] is False and "new" not in ch["label"].lower())
     parties = count(engine, m.party)
     events = say(c, cid, "", existing)
     assert not [e for e in events if e["type"] == "card"], events
@@ -770,7 +792,7 @@ def test_a_customer_name_holding_an_instruction_is_stored_as_typed_and_approves_
     assert count(engine, m.posting) == postings
 
 
-# ---------- add_item (2.4), service items only ----------
+# ---------- add_item, service items only ----------
 
 def item_words(words: str) -> Reply:
     """The model of add_item: only what the owner said, never a price of its own."""
@@ -790,6 +812,12 @@ def test_a_missing_unit_or_price_is_asked_never_defaulted(engine, words, questio
     c, cid, _ = client(engine, item_words)
     before = snapshot(engine)
     events = say(c, cid, words)
+    if question == ITEM_UNIT_MISSING:
+        ask = last_ask(events)
+        assert ask["code"] == "item_kind_missing", events
+        assert not [e for e in events if e["type"] == "card"], events
+        assert_changes(before, snapshot(engine), {})
+        events = say(c, cid, "", pick(ask, "service"))
     assert said(events) == last_ask(events)["text"] == question.format(name="Consulting"), events
     assert_changes(before, snapshot(engine), {})
 
@@ -804,13 +832,14 @@ def test_the_price_is_never_taken_from_the_model(engine):
 
 
 def test_a_rate_phrase_that_is_not_the_price_is_still_asked_about_never_claimed(engine):
-    """The owner's "at 80" is the price's own only when it is the price: a model's 75 beside it claims nothing, so the
-    figure the owner wrote is asked about and no card is made (resolve.account's figure branch)."""
+    """A model's 75 beside the owner's "at 80" claims nothing: price validation asks the owner for the price before
+    unused-figure accounting runs, and no card is made."""
     c, cid, _ = client(engine, lambda _: Reply("", [tool("add_item", name="Consulting", unit="hour", price="75")]))
     before = snapshot(engine)
     events = say(c, cid, "Add an item called Consulting, sold by the hour at 80")
     assert not [e for e in events if e["type"] == "card"], events
-    assert "What is the at 80 for? I couldn't place it in this request." in said(events), events
+    assert last_ask(events)["code"] == "amount_missing", events
+    assert said(events) == last_ask(events)["text"] == ITEM_PRICE_MISSING.format(name="Consulting"), events
     assert_changes(before, snapshot(engine), {})
 
 
@@ -825,14 +854,16 @@ def test_core_s_copy_of_the_owner_text_is_the_language_table_s_exactly():
 
 def test_the_item_card_shows_every_field_and_the_commit_stores_the_owner_s_price(engine):
     postings = count(engine, m.posting)
-    card = propose(engine, "add_item", {"name": "Consulting", "unit": "hour", "price": "80.00"})
+    card = propose(engine, "add_item", {"name": "Consulting", "unit": "hour", "price": "80.00", "kind": "service"})
     shown = card_text(card.card)
     assert card.card["title"] == "Add an item"
+    assert ["Kind", "a service, not kept in stock"] in card.card["lines"]
     assert all(v in shown for v in ("Consulting", "hour", "80.00", NOTHING_POSTED)), shown
     approved(engine, card)
     with engine.connect() as conn:
         row = conn.execute(select(m.item).where(m.item.c.name == "Consulting")).mappings().one()
     assert (row["unit"], Decimal(str(row["standard_rate"]))) == ("hour", Decimal("80.00"))
+    assert row["kind"] == "service"
     assert count(engine, m.posting) == postings
 
 
@@ -854,9 +885,9 @@ def test_a_near_item_name_asks_and_writes_nothing(engine):
     assert_changes(before, snapshot(engine), {})
 
 
-def test_an_item_kept_in_stock_gets_the_planned_not_yet_answer_and_no_card(engine, monkeypatch):
-    """Until stock items come: the planned catalogue entry recognises the request; add_item is never proposed."""
-    said_ = "Add an item I keep in stock called Copper Pipe"
+def test_an_item_kept_in_stock_reaches_the_kind_question_and_no_card(engine, monkeypatch):
+    """The catalogue routes stocked items to add_item's kind question, before any card or book change."""
+    said_ = "Add an item I keep in stock called Bronze Pipe, sold by the meter at 12"
     proposed, real = [], approvals.propose
 
     def recorded(eng, co, *args, **kw):  # every proposal the turn makes, by its contract
@@ -865,26 +896,28 @@ def test_an_item_kept_in_stock_gets_the_planned_not_yet_answer_and_no_card(engin
 
     monkeypatch.setattr(approvals, "propose", recorded)
     with engine.connect() as conn:
-        [entry] = [e for e in cat.catalogue(conn) if e.name == STOCK_ENTRY]
+        [entry] = [e for e in cat.catalogue(conn) if e.id == "op.add_item"]
         found = [e.id for e in cat.find_capability(conn, said_)]
-    assert entry.state == "planned" and entry.id in found, (entry, found)
+    assert entry.state == "installed" and entry.id in found, (entry, found)
     model = ScriptedModel([Reply("", [tool("find_capability", request=said_)]),
-                           Reply("", [tool("choose_capability", pick=entry.id)])])
+                           Reply("", [tool("choose_capability", pick=entry.id)]),
+                           Reply("", [tool("add_item", name="Bronze Pipe", unit="meter", price="12")])])
     c = TestClient(create_app(engine, model, embedded_owner=True))
     cid = c.post("/v1/conversations").json()["id"]
     before = snapshot(engine)
     events = say(c, cid, said_)
     assert len(events) == 1, events
-    assert (events[0].get("outcome"), events[0].get("capability"), events[0]["text"]) == \
-        ("c", entry.id, ITEM_STOCK_NOT_YET), events
+    ask = last_ask(events)
+    assert ask["code"] == "item_kind_missing", events
+    assert [ch["label"] for ch in ask["choices"] if not ch["control"]] == [
+        "A service I sell", "Goods I keep in stock"]
     assert_changes(before, snapshot(engine), {})  # no card, nothing written
     assert proposed == [] and model.replies == []  # nothing proposed; the answer came by the catalogue's path
 
 
-def test_a_stock_item_request_gets_the_planned_answer_when_the_model_calls_add_item_itself(engine, monkeypatch):
-    """The owner's words name the planned entry by its own synonyms, so add_item never runs for them, whatever the
-    model calls: the planned answer, no card, nothing proposed, nothing written."""
-    said_ = "add an item I keep in stock called Copper Coil"
+def test_a_stock_item_request_reaches_the_kind_question_when_the_model_calls_add_item_itself(engine, monkeypatch):
+    """A direct add_item call also reaches the kind question, with no card or book change."""
+    said_ = "add an item I keep in stock called Bronze Coil, sold by the meter at 12"
     proposed, real = [], approvals.propose
 
     def recorded(eng, co, *args, **kw):
@@ -892,15 +925,15 @@ def test_a_stock_item_request_gets_the_planned_answer_when_the_model_calls_add_i
         return real(eng, co, *args, **kw)
 
     monkeypatch.setattr(approvals, "propose", recorded)
-    with engine.connect() as conn:
-        [entry] = [e for e in cat.catalogue(conn) if e.name == STOCK_ENTRY]
-    c, cid, model = client(engine, lambda _: Reply("", [tool("add_item", name="Copper Coil", unit="meter",
+    c, cid, model = client(engine, lambda _: Reply("", [tool("add_item", name="Bronze Coil", unit="meter",
                                                              price="12")]))
     before = snapshot(engine)
     events = say(c, cid, said_)
     assert len(events) == 1, events
-    assert (events[0]["type"], events[0].get("outcome"), events[0].get("capability"), events[0]["text"]) == \
-        ("answer", "c", entry.id, ITEM_STOCK_NOT_YET), events
+    ask = last_ask(events)
+    assert ask["code"] == "item_kind_missing", events
+    assert [ch["label"] for ch in ask["choices"] if not ch["control"]] == [
+        "A service I sell", "Goods I keep in stock"]
     assert_changes(before, snapshot(engine), {})
     assert proposed == [] and len(model.tools_seen) == 1  # the model's add_item was never proposed
 
@@ -914,12 +947,19 @@ def test_an_ordinary_service_item_still_makes_its_card(engine, monkeypatch):
 
     monkeypatch.setattr(approvals, "propose", recorded)
     c, cid, _ = client(engine, lambda _: Reply("", [tool("add_item", name="Consulting", unit="hour", price="80")]))
-    card = only_card(say(c, cid, "Add an item called Consulting, sold by the hour at 80"))
+    before = snapshot(engine)
+    events = say(c, cid, "Add an item called Consulting, sold by the hour at 80")
+    ask = last_ask(events)
+    assert ask["code"] == "item_kind_missing", events
+    assert not [e for e in events if e["type"] == "card"], events
+    assert_changes(before, snapshot(engine), {})
+    assert proposed == []
+    card = only_card(say(c, cid, "", pick(ask, "service")))
     assert card["card"]["title"] == "Add an item" and "80.00" in card_text(card), card
     assert proposed == ["add_item"]
 
 
-# ---------- end to end (2.6) ----------
+# ---------- end to end ----------
 
 def test_the_first_conversation_sets_up_the_books_adds_a_customer_and_an_item_and_invoices_them(
         engine, monkeypatch):
@@ -936,7 +976,13 @@ def test_the_first_conversation_sets_up_the_books_adds_a_customer_and_an_item_an
 
     customer = only_card(say(c, cid, "add a customer called Acme Corp, accounts@acme.example"))
     assert approve_event(c, cid, customer)[0]["status"] == "committed"
-    item = only_card(say(c, cid, "add an item called Consulting, sold by the hour at 80"))
+    before_item = snapshot(engine)
+    events = say(c, cid, "add an item called Consulting, sold by the hour at 80")
+    ask = last_ask(events)
+    assert ask["code"] == "item_kind_missing", events
+    assert not [e for e in events if e["type"] == "card"], events
+    assert_changes(before_item, snapshot(engine), {})
+    item = only_card(say(c, cid, "", pick(ask, "service")))
     assert approve_event(c, cid, item)[0]["status"] == "committed"
 
     invoice = only_card(say(c, cid, "Invoice Acme Corp for 3 hours of Consulting"))
@@ -950,11 +996,12 @@ def test_the_first_conversation_sets_up_the_books_adds_a_customer_and_an_item_an
             .mappings().one()
         customer_name = conn.execute(select(m.party.c.name).where(m.party.c.id == inv["customer_id"])).scalar_one()
         posted = conn.execute(select(m.posting.c.posting_date).where(m.posting.c.voucher_id == inv["id"])).all()
-    assert (customer_name, inv["total"], inv["currency"]) == ("Acme Corp", "240.00", "USD")
+    assert (customer_name, inv["total"], inv["currency"]) == ("Acme Corp", Decimal("240.00"), "USD")
+    assert inv["total"].as_tuple() == Decimal("240.00").as_tuple()
     assert inv["status"] != "draft" and [p.posting_date for p in posted] == [date(2026, 10, 26)]
 
 
-# the runtime role
+# ---------- the runtime role ----------
 
 def test_the_runtime_policy_grants_update_on_the_four_setup_columns_and_status_and_the_code_writes_them():
     from test_runtime_role import engine_writes

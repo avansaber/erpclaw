@@ -200,7 +200,7 @@ def test_every_table_declares_a_runtime_policy():
 
 
 def test_the_policy_grants_exactly_what_the_code_updates_deletes_and_locks():
-    """My first two policies each missed a column, so the list is checked by code."""
+    """The declared column privileges cover every runtime write found by the source scanner."""
     found, unknown = engine_writes()
     assert unknown == []
     # Anti-vacuity: the scanner sees the writes found by review.
@@ -217,7 +217,10 @@ def test_the_policy_grants_exactly_what_the_code_updates_deletes_and_locks():
     for name, t in metadata.tables.items():  # and nothing more than the code needs
         p = t.info["runtime"]
         written = {x[2] for x in found if x[0] == "update" and x[1] == name}
-        assert written == set(p.update), name
+        # The session schema precedes the browser caller. Its two activity columns are reserved explicitly;
+        # test_principal_session_tables exercises their exact grants through a password-backed runtime login.
+        reserved = {"last_seen_at", "idle_expires_at"} if name == "principal_session" else set()
+        assert written | reserved == set(p.update), name
         assert not written & set(p.lock), f"{name}: a lock column is only for locking; the code writes it"
         assert not p.lock or ("lock", name) in found, f"{name}: a lock column with no lock in the code"
         assert p.delete == (("delete", name) in found), name

@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 
 from erpclaw_api.app import create_app
 from erpclaw_assistant.graph import Assistant
-from erpclaw_assistant.model import Reply, ScriptedModel, call
+from erpclaw_assistant.model import Reply, ScriptedModel, ToolCall, call
 from erpclaw_core import approvals
 from erpclaw_core import models as m
 from erpclaw_core.common import Refusal
@@ -26,8 +26,15 @@ def kinds(events) -> list[str]:
     return [e["type"] for e in events]
 
 
-def card_of(engine, said: str, *calls) -> dict:
-    ev = Assistant(engine, ScriptedModel([Reply("", list(calls))])).turn(uuid.uuid4().hex, said)  # its own request
+def card_of(engine, said: str, *calls, answers=()) -> dict:
+    assistant = Assistant(engine, ScriptedModel([Reply("", list(calls)) for _ in range(len(answers) + 1)]))
+    conversation = uuid.uuid4().hex
+    ev = assistant.turn(conversation, said)  # its own request
+    for label in answers:
+        assert not any(e["type"] == "card" for e in ev), ev
+        [question] = [e for e in ev if e["type"] == "ask"]
+        [choice] = [c for c in question["choices"] if c["label"] == label]
+        ev = assistant.turn(conversation, label, choice=choice["code"])
     cards = [e for e in ev if e["type"] == "card"]
     assert len(cards) == 1, ev
     return cards[0]
@@ -94,6 +101,10 @@ def test_every_switched_on_write_drafted_by_the_assistant_states_its_date_source
         r = s.record_payment(ctx, s.plan_payment(ctx, cust, Decimal("100"), ctx.today, oldest_first=True))
         number = conn.execute(select(t.payment.c.number).where(t.payment.c.id == r["id"])).scalar_one()
     drafted = {
+        "add_customer": ("add a customer called Lakeside Cafe",
+                         ToolCall("customer", "add_customer", {"name": "Lakeside Cafe"})),
+        "add_item": ("add an item called Bookkeeping, sold by the hour at 80",
+                     ToolCall("item", "add_item", {"name": "Bookkeeping", "unit": "hour", "price": "80"})),
         "create_invoice": ("invoice Hooli for 5 copper wire",
                            call("create_invoice", customer="Hooli", items=[{"item": "copper wire", "quantity": 5}])),
         "submit_invoice": ("submit INV-2026-00008", call("submit_invoice", invoice="INV-2026-00008")),
@@ -101,16 +112,40 @@ def test_every_switched_on_write_drafted_by_the_assistant_states_its_date_source
         "cancel_invoice": ("cancel INV-2026-00003", call("cancel_invoice", invoice="INV-2026-00003")),
         "reverse_payment": (f"reverse {number}", call("reverse_payment", payment=number)),
     }
-    # The sales order, delivery and credit note ship switched off; the step that switches them on adds them to
+    # These sales and stock writes ship switched off; the step that switches them on adds them to
     # `drafted`, drafted by the assistant, rather than pinning them here.
-    for name in ("create_sales_order", "deliver_order", "create_credit_note"):
+    for name in ("create_sales_order", "deliver_order", "create_credit_note", "record_opening_stock",
+                 "write_off_stock", "record_stock_count", "cancel_stock_movement"):
         monkeypatch.setattr(REGISTRY.contracts[name], "planned", "Core")
     writes = {n for n, c in REGISTRY.contracts.items() if c.effect != "read" and not c.planned}
-    assert writes <= set(drafted), writes - set(drafted)  # a new write must be added here, never left out
-    for name in sorted(writes):
+    # Setup refuses these ready demo books; its date source is checked on pending books in
+    # test_company_setup_drafted_on_pending_books_states_that_no_date_applies below.
+    assert writes <= set(drafted) | {"set_up_company"}, writes - set(drafted) - {"set_up_company"}
+    for name in sorted(writes - {"set_up_company"}):
         said, model_call = drafted[name]
-        c = card_of(engine, said, model_call)
+        c = card_of(engine, said, model_call, answers=("A service I sell",) if name == "add_item" else ())
         assert c["card"].get("date_source") and c["card"]["lines"][-1][0] == "Date source", (name, c["card"])
+        if name in {"add_customer", "add_item"}:
+            reason = "adding a customer" if name == "add_customer" else "adding an item"
+            assert c["card"]["date_source"] == {"not_applicable": True}
+            assert c["card"]["lines"][-1] == ["Date source", f"No date applies: {reason} posts nothing."]
+
+
+def test_company_setup_drafted_on_pending_books_states_that_no_date_applies(engine):
+    from conftest import drop_everything
+    from erpclaw_core import setup
+
+    drop_everything(engine)
+    company = setup.create_own_books(engine)
+    c = card_of(engine, "Set up my books as Lakeside Bakery in US dollars",
+                ToolCall("setup", "set_up_company", {"name": "Lakeside Bakery", "currency": "US dollars"}),
+                answers=("January", "03/04 is 3 April (day first)"))
+    assert c["card"]["title"] == "Set up your books"
+    assert c["card"]["date_source"] == {"not_applicable": True}
+    assert c["card"]["lines"][-1] == ["Date source", "No date applies: setting up your books posts nothing."]
+    with engine.connect() as conn:
+        assert conn.execute(select(m.company.c.status).where(m.company.c.id == company)).scalar_one() == "pending"
+        assert conn.execute(select(func.count()).select_from(m.ledger_entry)).scalar_one() == 0
 
 
 def test_a_card_proposed_without_the_assistant_has_no_date_source(engine):

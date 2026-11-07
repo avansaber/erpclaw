@@ -143,7 +143,8 @@ def test_trailers_are_ordinary_message_text(setup):
 def test_unlisted_repo_is_public_and_never_authorizes(setup):
     make, policy = setup
     repo = make("other-repo")
-    commit(repo, {"a.py": "x = 1\n"}, "A\n\nPlan: M0-T1")
+    # Public success now requires a message without a plan id.
+    commit(repo, {"a.py": "x = 1\n"}, "A")
     code, out = scan(repo, policy)
     assert "Mode: public" in out and code == 0
     assert "never authorizes a push on its own" in out
@@ -152,9 +153,11 @@ def test_unlisted_repo_is_public_and_never_authorizes(setup):
 def test_no_policy_means_public(setup):
     make, _policy = setup
     repo = make("notes-repo")
-    commit(repo, {"a.md": f"{HOME_PATH}\n"}, "A\n\nPlan: M0-T1")
+    # Keep the content violation as the blocking reason under the public rules.
+    commit(repo, {"a.md": f"{HOME_PATH}\n"}, "A")
     code, out = scan(repo, None)
     assert "Mode: public" in out and code == 1
+    assert "absolute home path" in out
 
 
 def test_only_unpushed_commits_are_scanned(setup):
@@ -460,7 +463,7 @@ def test_a_known_safe_finding_is_marked_and_anything_else_stays_new(setup):
     {"id": "x", "label": "unfamiliar email", "path": ".*", "value": ".*"},  # no reason
     {"id": "x", "label": "unfamiliar email", "path": ".*", "value": ".*", "reason": " "},
     {"id": "x", "label": "unfamiliar email", "path": "(", "value": ".*", "reason": "bad regex"},
-    {"id": "x", "label": "unfamiliar email", "path": ".*", "value": ".*", "reason": None},  # review round 1
+    {"id": "x", "label": "unfamiliar email", "path": ".*", "value": ".*", "reason": None},  # a null reason is invalid
 ])
 def test_a_known_safe_entry_without_a_reason_or_valid_patterns_invalidates_the_scan(setup, entry):
     make, policy = setup
@@ -472,8 +475,8 @@ def test_a_known_safe_entry_without_a_reason_or_valid_patterns_invalidates_the_s
 
 
 def test_every_kind_of_warning_is_listed_once_and_counted(setup):
-    """Review round 1: opaque payloads and large files went around the grouping, so the summary could say no new
-    warning while one was there."""
+    """Opaque payloads and large files are grouped and counted, so the summary includes every new
+    warning."""
     import gzip
     make, policy = setup
     repo = make("notes-repo")

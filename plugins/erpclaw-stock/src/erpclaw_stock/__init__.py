@@ -18,6 +18,10 @@ from erpclaw_core.plugins import Plugin
 
 from . import service
 from .tables import TABLES
+from .opening_stock import CONTRACT as OPENING_STOCK
+from .write_off import CONTRACT as WRITE_OFF
+from .count_stock import CONTRACT as STOCK_COUNT
+from .cancellation import CONTRACT as CANCEL_STOCK
 
 # ---------------------------------------------------------------- the contract's models (stock/1)
 # Every figure crosses as a canonical decimal string; item and warehouse are ids (the consumer resolves names).
@@ -340,12 +344,13 @@ SERVICES = [
 ]
 
 MANIFEST = Manifest(
-    name="stock", version="0.0.1", publisher=PUBLISHER, distribution="erpclaw-stock", licence="GPL-3.0-only",
-    source=Source(repository="workspace", commit="workspace"), engine=">=0.0.1", after_core_revision="0013",
-    depends={}, conflicts=[], owned_tables=[tbl.name for tbl in TABLES], contracts={}, calls=[],
-    events=Events(emits=[], consumes=[]), slots={}, voucher_types=["stock_receipt"],
+    name="stock", version="0.1.1", publisher=PUBLISHER, distribution="erpclaw-stock", licence="GPL-3.0-only",
+    source=Source(repository="workspace", commit="workspace"), engine=">=0.0.2", after_core_revision="0015",
+    depends={}, conflicts=[], owned_tables=[tbl.name for tbl in TABLES], contracts={OPENING_STOCK.name: OPENING_STOCK.effect, WRITE_OFF.name: WRITE_OFF.effect,
+        STOCK_COUNT.name: STOCK_COUNT.effect, CANCEL_STOCK.name: CANCEL_STOCK.effect}, calls=[],
+    events=Events(emits=[], consumes=[]), slots={}, voucher_types=["stock_receipt", "stock_opening", "stock_write_off", "stock_count", "stock_goods_received"],
     capabilities=Capabilities(network=[], files=[]), metrics=[],
     services=[ServiceDecl(name=s.name, effect=s.effect) for s in SERVICES],
 )
 
-PLUGIN = Plugin(manifest=MANIFEST, kind="business-module", contracts=[], metrics=[], services=SERVICES)
+PLUGIN = Plugin(manifest=MANIFEST, kind="business-module", contracts=[OPENING_STOCK, WRITE_OFF, STOCK_COUNT, CANCEL_STOCK], metrics=[], services=SERVICES)

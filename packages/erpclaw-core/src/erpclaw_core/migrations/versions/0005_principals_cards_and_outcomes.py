@@ -5,7 +5,7 @@ Revises: 0004
 Create Date: 2026-10-28
 Data class: schema and backfill
 
-Principals, approval cards and durable operation outcomes:
+Principal authority, approval validation and recorded outcomes:
 - `principal` and `principal_grant`: who may view, draft, approve and post,
   per company. Only a SHA-256 of a principal's API token is stored. Older
   books get the owner principal, with every permission on every company.

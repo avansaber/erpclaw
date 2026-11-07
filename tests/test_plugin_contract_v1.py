@@ -171,10 +171,14 @@ def run_branch(fx: dict, env) -> None:
     assert fx["expect"]["refused"] in str(e.value), str(e.value)
 
 
-def _installed(env, uses: list[str] | None = None):
+def _installed(env, uses: list[str] | None = None, commit=None):
     engine = env.request.getfixturevalue("engine")
     sp.RAN.clear()
-    sp.install(env.monkeypatch, engine, sp.provider(), sp.consumer(uses))
+    consumer = sp.consumer(uses)
+    if commit is not None:
+        consumer.contracts = [dataclasses.replace(c, commit=commit) if c.name == "svc_post" else c
+                              for c in consumer.contracts]
+    sp.install(env.monkeypatch, engine, sp.provider(), consumer)
     return engine
 
 
@@ -230,30 +234,48 @@ def _symbols(value, ctx: Ctx):
 
 def run_service(fx: dict, env) -> None:
     exp = fx["expect"]
-    engine = _installed(env, fx.get("uses"))
+
+    def invoke(ctx):
+        if "refusal" in exp:
+            with pytest.raises(Refusal) as e:
+                call_service(ctx, fx["caller"], fx["service"], fx["input"])
+            r = exp["refusal"]
+            assert e.value.code == r["code"], e.value.message
+            for key in ("message", "options", "data"):
+                if key in r:
+                    assert getattr(e.value, key) == r[key]
+            return e.value
+        out = call_service(ctx, fx["caller"], fx["service"], fx["input"])
+        assert type(out) is dict and out == _symbols(exp["output"], ctx)
+        return out
+
+    called = []
+    def approved_commit(ctx, inp, key):
+        # The frozen fixture specifies an approved context, not a forged flag.
+        value = invoke(ctx)
+        called.append(value)
+        if isinstance(value, Refusal):
+            raise value  # preserve the real approve rollback/decision path
+        return Result("Checked the service response.")
+
+    in_commit = fx["on"] == "commit"
+    engine = _installed(env, fx.get("uses"), approved_commit if in_commit else None)
     if fx.get("disable"):
         with engine.begin() as conn:
             conn.execute(m.plugin_install.update().where(m.plugin_install.c.name == fx["disable"])
                          .values(status="disabled"))
-    with engine.connect() as conn:
-        tx = conn.begin()
-        try:
-            ctx = company_ctx(conn)
-            if fx["on"] == "commit":
-                ctx.extra["commit"] = "fixture"  # what approvals.approve sets for an approved card's commit
-            if "refusal" in exp:
-                with pytest.raises(Refusal) as e:
-                    call_service(ctx, fx["caller"], fx["service"], fx["input"])
-                r = exp["refusal"]
-                assert e.value.code == r["code"], e.value.message
-                for key in ("message", "options", "data"):
-                    if key in r:
-                        assert getattr(e.value, key) == r[key]
-                return
-            out = call_service(ctx, fx["caller"], fx["service"], fx["input"])
-            assert type(out) is dict and out == _symbols(exp["output"], ctx)
-        finally:
-            tx.rollback()
+    if in_commit:
+        card = approvals.propose(engine, REGISTRY.contracts["svc_post"], {"amount": "1"})
+        outcome = approvals.approve(engine, card.approval_id, card.digest)
+        assert len(called) == 1
+        assert outcome.status == ("refused" if "refusal" in exp else "committed"), outcome.text
+    else:
+        with engine.connect() as conn:
+            tx = conn.begin()
+            try:
+                invoke(company_ctx(conn))
+            finally:
+                tx.rollback()
 
 
 def _posted(engine) -> int:

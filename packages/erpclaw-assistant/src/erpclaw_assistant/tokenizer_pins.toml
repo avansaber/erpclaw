@@ -1,0 +1,128 @@
+# Pins for token admission (row 0 of the token-admission spec). Read by nothing in the engine until the admission rows
+# teach the loader these fields; profiles.toml and the profile loader are untouched by this file.
+# vocab_* name the vocabulary artifact the count loads as data (tokenizer.json); the other files are pinned so a changed
+# template, vocabulary or merges list is noticed. chat_template.jinja is not part of the counted representation.
+# The SHA-256 of tokenizer.json equals the LFS object id the model repository reports for it at this revision.
+#
+# Admission is BOUNDED, not exact (ruling of dispatcher 1, 7 Nov): the count (ERPCLAW-COUNT-v1) is an upper estimate of
+# what the model receives when  count * factor + constant  is used, with factor and constant measured per serving route
+# (method envelope-v1): factor = 1.1 x the largest received/counted ratio among the fixture cases with at least 10 tools
+# (rounded up to two places); constant = the largest residual (received - factor x counted) over ALL cases, plus 10
+# percent, rounded up. The check re-derives both from the stored received counts and refuses on any difference.
+# A profile whose margin_route is "unmeasured" is not admitted for exact-sized requests: it falls back to the
+# conservative bound, as Muse does.
+
+# The counting package is pinned as strictly as the vocabulary files, but NOT locked in uv.lock (a decision of the
+# dispatcher: six more packages, one a native binary, for a tool a dispatcher with network runs rarely). It is installed
+# ONLY with pip's hash enforcement (the verifier prints the exact lines for this platform), and the verifier refuses
+# unless the installed version equals tool.version. Each platform's wheel has its own hash below; the wheel mode of the
+# verifier (verify_tokenizer_pin.py wheel --file W) checks a downloaded wheel against them before it is installed.
+[tool]
+package = "tokenizers"
+version = "0.22.1"
+
+[[tool.wheel]]
+platform = "linux_x86_64"
+name = "tokenizers-0.22.1-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+sha256 = "e2ef6063d7a84994129732b47e7915e8710f27f99f3a3260b8a38fc7ccd083f4"
+
+[[tool.wheel]]
+platform = "win_amd64"
+name = "tokenizers-0.22.1-cp39-abi3-win_amd64.whl"
+sha256 = "65fd6e3fb11ca1e78a6a93602490f134d1fdeb13bcef99389d5102ea318ed138"
+
+[[tool.wheel]]
+platform = "macos_arm64"
+name = "tokenizers-0.22.1-cp39-abi3-macosx_11_0_arm64.whl"
+sha256 = "8d4e484f7b0827021ac5f9f71d4794aaef62b979ab7608593da22b1d2e3c4edc"
+
+[qwen3_5_9b_lmstudio]  # the local route (LM Studio): not measured. The only local server measured is Ollama, which has its own template
+admission = "bounded"
+vocab_repo = "Qwen/Qwen3.5-9B"
+vocab_revision = "c202236235762e1c871ad0ccb60c8ee5ba337b9a"
+margin_route = "unmeasured"
+[[qwen3_5_9b_lmstudio.file]]
+name = "chat_template.jinja"
+sha256 = "a4aee8afcf2e0711942cf848899be66016f8d14a889ff9ede07bca099c28f715"
+[[qwen3_5_9b_lmstudio.file]]
+name = "merges.txt"
+sha256 = "a9d356d7bdf1ef4949e3e748e95b8e10ad9d4e2e838eddc38a0a7b6b94d1db8d"
+[[qwen3_5_9b_lmstudio.file]]
+name = "tokenizer.json"
+sha256 = "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42"
+[[qwen3_5_9b_lmstudio.file]]
+name = "tokenizer_config.json"
+sha256 = "316230d6a809701f4db5ea8f8fc862bc3a6f3229c937c174e674ff3ca0a64ac8"
+[[qwen3_5_9b_lmstudio.file]]
+name = "vocab.json"
+sha256 = "ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003"
+
+[qwen3_5_9b_openrouter_primeintellect]  # same model, same vocabulary artifact
+admission = "bounded"
+vocab_repo = "Qwen/Qwen3.5-9B"
+vocab_revision = "c202236235762e1c871ad0ccb60c8ee5ba337b9a"
+margin_route = "openrouter_primeintellect"
+[[qwen3_5_9b_openrouter_primeintellect.file]]
+name = "chat_template.jinja"
+sha256 = "a4aee8afcf2e0711942cf848899be66016f8d14a889ff9ede07bca099c28f715"
+[[qwen3_5_9b_openrouter_primeintellect.file]]
+name = "merges.txt"
+sha256 = "a9d356d7bdf1ef4949e3e748e95b8e10ad9d4e2e838eddc38a0a7b6b94d1db8d"
+[[qwen3_5_9b_openrouter_primeintellect.file]]
+name = "tokenizer.json"
+sha256 = "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42"
+[[qwen3_5_9b_openrouter_primeintellect.file]]
+name = "tokenizer_config.json"
+sha256 = "316230d6a809701f4db5ea8f8fc862bc3a6f3229c937c174e674ff3ca0a64ac8"
+[[qwen3_5_9b_openrouter_primeintellect.file]]
+name = "vocab.json"
+sha256 = "ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003"
+
+[qwen3_5_9b_openrouter_deepinfra]  # same model, same vocabulary artifact
+admission = "bounded"
+vocab_repo = "Qwen/Qwen3.5-9B"
+vocab_revision = "c202236235762e1c871ad0ccb60c8ee5ba337b9a"
+margin_route = "openrouter_deepinfra"
+[[qwen3_5_9b_openrouter_deepinfra.file]]
+name = "chat_template.jinja"
+sha256 = "a4aee8afcf2e0711942cf848899be66016f8d14a889ff9ede07bca099c28f715"
+[[qwen3_5_9b_openrouter_deepinfra.file]]
+name = "merges.txt"
+sha256 = "a9d356d7bdf1ef4949e3e748e95b8e10ad9d4e2e838eddc38a0a7b6b94d1db8d"
+[[qwen3_5_9b_openrouter_deepinfra.file]]
+name = "tokenizer.json"
+sha256 = "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42"
+[[qwen3_5_9b_openrouter_deepinfra.file]]
+name = "tokenizer_config.json"
+sha256 = "316230d6a809701f4db5ea8f8fc862bc3a6f3229c937c174e674ff3ca0a64ac8"
+[[qwen3_5_9b_openrouter_deepinfra.file]]
+name = "vocab.json"
+sha256 = "ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003"
+
+[muse]  # the hosted Muse route has no public tokenizer: a conservative bound, not a count
+admission = "conservative_bound"
+
+[route.openrouter_primeintellect]  # usage.prompt_tokens, synthetic fixture text, each case once
+server = "OpenRouter, provider primeintellect, qwen/qwen3.5-9b"
+method = "envelope-v1"
+factor = 1.47
+constant = 155
+measured_on = "2026-11-07"
+fixture_cases = 11
+
+[route.openrouter_deepinfra]  # usage.prompt_tokens, synthetic fixture text, each case once
+server = "OpenRouter, provider deepinfra, qwen/qwen3.5-9b"
+method = "envelope-v1"
+factor = 1.44
+constant = 155
+measured_on = "2026-11-07"
+fixture_cases = 11
+
+[route.ollama_gateway_q8_0]  # reference only: no shipped profile uses this server
+server = "Ollama on the gateway, qwen3.5:9b-q8_0, /api/chat, thinking off"
+method = "envelope-v1"
+factor = 1.46
+constant = 156
+measured_on = "2026-11-07"
+fixture_cases = 11
+

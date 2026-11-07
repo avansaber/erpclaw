@@ -221,7 +221,7 @@ CONTROLS = ("secret santa", "token of thanks", PW + " reset link sent",  # no ':
 
 
 def _round_3() -> dict[str, str]:
-    """The review's own repros, with fresh characters: a single-quoted value with an early comma or space, a
+    """Redaction cases with fresh characters: a single-quoted value with an early comma or space, a
     double-quoted one with an escaped quote, and a JSON memo holding an assignment."""
     h = secrets.token_hex(5)
     return {"single_quoted_early_comma": f"{PW} = '{h[:2]},{h[2:]}'",
@@ -238,7 +238,7 @@ def _forms(name: str, v: str) -> dict[str, str]:
 
 def _corpus() -> list[tuple[str, str]]:
     """Every ASCII punctuation character and the space, at a value's start, middle and end, in every form, the
-    names taken in turn; a name written with a JSON escape; and the review's own cases."""
+    names taken in turn; a name written with a JSON escape; and other redaction cases."""
     out, i = [], 0
     for c in string.punctuation + " ":
         for at in ("start", "middle", "end"):

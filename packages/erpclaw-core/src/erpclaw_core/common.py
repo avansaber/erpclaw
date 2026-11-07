@@ -114,9 +114,13 @@ class Ctx:
         """Register a check the approved commit runs after the contract's commit returns and before the commit ends,
         in the same transaction; a Refusal from it rolls the whole effect back. One per key: a second registration
         under the same key is a no-op. Checks run in registration order. A check reads; it does not write."""
-        if not self.extra.get("commit"):
+        from .approval_scope import _can_register
+        if not _can_register(self):
             raise Refusal("A check can only be registered inside an approved commit.", "service_outside_commit")
         self.checks.setdefault(key, fn)
+        # Observational only: retain original callable, de-duplication and refusal.
+        from .approval_scope import _capture_check
+        _capture_check(self, key, self.checks[key])
 
 
 def company_ctx(conn: Connection, actor: str = "owner", company_name: str | None = None,

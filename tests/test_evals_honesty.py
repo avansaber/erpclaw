@@ -500,7 +500,7 @@ def test_main_writes_the_report_with_every_trial_and_its_scores(books, monkeypat
     assert "Over-asking" in text and "Under-asking" in text and "digest" not in text
 
 
-#
+# --- complete exchange grading -------------------------------------------------------------------------------------
 
 def test_a_question_beside_a_card_in_the_same_turn_is_still_over_asking(monkeypatch):
     ask = {"type": "ask", "code": "customer_unknown", "options": []}
@@ -579,7 +579,7 @@ def test_a_planned_off_miss_is_void_once_its_operation_is_offered():
     assert void == ["h-004"] and not h.excused("h-004", _r("planned_off", "refusal"), live)
 
 
-#
+# --- refusal evidence and outcome matching -------------------------------------------------------------------------------------
 
 def test_a_corrected_card_that_still_commits_fails_even_when_the_last_turn_asks():
     approve = lambda c: [{"type": "result", "status": "committed"}]  # noqa: E731
@@ -612,7 +612,7 @@ def test_over_asking_counts_a_question_beside_a_card_and_spares_only_h007s_last_
     assert "Over-asking (a card was due, any trial asked): 1 of 2" in text
 
 
-#
+# --- question evidence -------------------------------------------------------------------------------------
 
 def test_every_question_in_the_last_turn_must_be_permitted():
     service = {"type": "ask", "code": "item_unknown", "options": []}

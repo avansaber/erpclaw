@@ -92,7 +92,7 @@ def test_a_date_word_does_not_bound_an_item(word):
 V3_DAY_WORDS = ["today", "yesterday", "tomorrow", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday",
                 "sunday"]
 NOT_V3 = ["may", "june", "march", "fri", "oct", "tonight"]  # months, abbreviations and tonight stay non-bounding
-# a day word before one of these is part of a name (r7f), stated here, not read from the engine's table
+# a day word before one of these is part of a name, stated here, not read from the engine's table
 SUFFIXES = {"ltd", "limited", "inc", "llc", "co", "corp", "corporation", "plc", "gmbh", "pty", "llp"}
 
 
@@ -149,14 +149,14 @@ def test_the_continuation_guard_compares_an_item_the_way_it_was_found(longer, wr
 
 
 def test_the_plural_aware_guard_holds_for_a_table_version_2_word_too():
-    """The same gap with "in" (version 2), open on main before version 3."""
+    """The continuation guard also recognises "in" as a name boundary."""
     got = name(["Copper Wire", "Copper Wires In Stock Pack"], "invoice Hooli for 2 copper wires in stock", item=True)
     assert got[0] == "item_ambiguous", got
     assert name(["Copper Wire", "Copper Wires In Stock Pack"], "invoice Hooli for 2 copper wires in stock pack",
                 item=True) == "Copper Wires In Stock Pack"
 
 
-# a day word ends a name only where it ends the name's phrase (build round 1)
+# a day word ends a name only where it ends the name's phrase
 
 @pytest.mark.parametrize("text", ["invoice Acme Sunday Ltd for 2 widgets", "invoice Acme Today Inc for 2 widgets",
                                   "invoice Acme Monday Corporation for 2 widgets",
@@ -219,7 +219,7 @@ def test_the_guard_by_hand_on_each_side(stored, text, item, expect):
      "invoice Hooli for 2 box of paper and pens in stock", True),
 ], ids=["a_customer_inside_a_blocked_name", "an_item_inside_a_blocked_name"])
 def test_a_name_inside_a_longer_name_the_guard_blocked_is_never_taken_instead(stored, text, item):
-    """Codex's build round 1: when the guard stops a longer name the owner wrote, a stored name inside it is set aside
+    """When the guard stops a longer name the owner wrote, a stored name inside it is set aside
     too, so the request asks; it never resolves the shorter name in its place."""
     got = name(stored, text, item=item)
     assert isinstance(got, tuple) and got[0].endswith("_ambiguous"), got
@@ -233,7 +233,7 @@ def test_a_name_inside_a_longer_name_the_guard_blocked_is_never_taken_instead(st
      "invoice Hooli for 5 copper wire and kit of circuit board for kids box", True),
 ], ids=["a_blocked_club_beside_acme", "a_blocked_name_with_no_day_word", "a_blocked_kit_beside_copper_wire"])
 def test_a_stored_name_written_in_full_but_not_bounded_is_a_claimant(stored, text, item):
-    """The reviewer's confirming check: a stored name the owner wrote in full, though not bounded, may be what they
+    """A stored name the owner wrote in full, though not bounded, may be what they
     meant; the field never resolves another name silently beside it, it asks, listing both."""
     got = name(stored, text, item=item)
     assert isinstance(got, tuple) and got[0].endswith("_ambiguous"), got
@@ -251,7 +251,7 @@ def test_an_items_quantity_is_read_against_every_stored_item():
 
 
 def test_m4s_exit_case_names_its_item_before_tomorrow():
-    """C0 (tests/expected_books/sales_order_above_available_stock.md): the item is named before a future day a sales
+    """The item is named before a future day a sales
     order takes; the day ends the name and the date stays the date rules' to read."""
     text = "Wayne wants 500 Circuit Board tomorrow; book the order."
     assert name(["Circuit Board"], text, "Circuit Board", item=True) == "Circuit Board"
@@ -388,7 +388,7 @@ def _oracle(stored: list[str], text: str, got: str, item: bool) -> bool:
     def number(w):
         return w in t["quantity"] or w in t["scales"]
 
-    def day_ends(w, nxt, marked, then=None):  # r7g/r7h: an end, a mark, a figure or a bounding word follows it, and
+    def day_ends(w, nxt, marked, then=None):  # an end, a mark, a figure or a bounding word follows it, and
         # the next word (marks between or not) is no suffix, nor the word after a figure
         follows = nxt not in SUFFIXES and not (nxt is not None and nxt.isdigit() and then in SUFFIXES) and \
             (nxt is None or marked or nxt.isdigit() or nxt in t["bound"])

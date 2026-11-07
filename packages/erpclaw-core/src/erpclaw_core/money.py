@@ -94,7 +94,7 @@ def fmt(amount: Decimal | None, currency: str = "USD") -> str:
 def fmt_rate(rate: Decimal, currency: str = "USD") -> str:
     """A unit rate as stored, never rounded: at least the currency's places, and every place the rate has
     (a rate holds at most four, by the contract input and the database check). An owner approving a card sees
-    the rate that will be posted."""
+    the rate that will be posted (displaying 0.12 for a stored 0.1234 would hide the posted rate)."""
     d = to_decimal(rate)
     places = max(MINOR_UNITS.get(currency, 2), -d.normalize().as_tuple().exponent)
     return f"{d:,.{places}f}"

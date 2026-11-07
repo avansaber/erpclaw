@@ -24,6 +24,16 @@ def token_digest(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def code_digest(code: str) -> str:
+    """Domain-separated SHA-256 of UTF-8 text; hash lookup gives no timing oracle on the code itself."""
+    return hashlib.sha256(b"erpclaw:sign-in-code:v1\0" + code.encode("utf-8")).hexdigest()
+
+
+def session_digest(secret: str) -> str:
+    """Domain-separated SHA-256 of UTF-8 text; hash lookup gives no timing oracle on the secret itself."""
+    return hashlib.sha256(b"erpclaw:session-secret:v1\0" + secret.encode("utf-8")).hexdigest()
+
+
 def authenticate(conn: Connection, token: str | None) -> dict:
     """The principal a bearer token names; unknown, missing or disabled is refused."""
     if not token:

@@ -4,7 +4,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
-from erpclaw_core.common import Ctx
+from erpclaw_core.common import Ctx, Refusal
 from erpclaw_stock import service
 
 
@@ -26,12 +26,30 @@ def move(direction, value, *, original_direction, against=None, account="inv"):
                            original={"direction": original_direction, "against_entry_id": against})
 
 
-@pytest.mark.parametrize("voucher_type", ["stock_receipt", "stock_goods_received"])
-def test_receipt_reversal_is_inventory_only_regardless_of_voucher_type(context, monkeypatch, voucher_type):
+@pytest.mark.parametrize("voucher_type", ["stock_receipt", "stock_opening"])
+def test_plain_receipt_reversal_is_inventory_only(context, monkeypatch, voucher_type):
     moves = [move("out", "345", original_direction="in")]
     monkeypatch.setattr(service, "_reverse_moves", lambda *args, **kwargs: moves)
     result = service.preview_reverse(context, voucher_type, "voucher", context.today)
     assert result["contribution"] == [{"account": "inv", "net": "-345.00"}]
+
+
+def test_goods_received_requires_delivery_reversal_before_contribution(context, monkeypatch):
+    queries = []
+
+    def execute(query):
+        queries.append(query)
+        return SimpleNamespace(mappings=lambda: SimpleNamespace(first=lambda: None))
+
+    monkeypatch.setattr(context.conn, "execute", execute)
+    monkeypatch.setattr(service, "_reverse_moves", lambda *a, **k: pytest.fail("generic goods-received reversal"))
+    with pytest.raises(Refusal) as exc:
+        service.preview_reverse(context, "stock_goods_received", "voucher", context.today)
+    assert exc.value.code == "goods_received_reversal_required"
+    assert exc.value.message == "Goods received must be reversed as a delivery."
+    assert exc.value.data == {"points_to": "reverse_goods_received"}
+    assert len(queries) == 1
+    assert queries[0].compile().params == {"company_id_1": "company", "voucher_id_1": "voucher"}
 
 
 def test_mixed_receipt_issue_reversal_has_only_the_original_cogs(context, monkeypatch):

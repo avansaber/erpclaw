@@ -101,6 +101,8 @@ def _reply_events(r) -> list[dict]:
         detail = r.json().get("detail")
     except ValueError:
         detail = None
+    if r.status_code >= 500:
+        detail = None  # a failure before any commit is said in the client's own words: nothing was changed
     con.print(f"[yellow]{_plain(detail) if isinstance(detail, str) and detail else NO_ANSWER}[/yellow]")
     return []
 
@@ -199,7 +201,9 @@ def _approval_outcome_events(response):
             if kind == "ask":
                 choices = event.get("choices") or []
                 if not isinstance(choices, list) or any(not isinstance(ch, dict)
-                        or not isinstance(ch.get("code"), str) or not isinstance(ch.get("label"), str)
+                        or not isinstance(ch.get("label"), str)
+                        or ((event.get("kind") in NUMBERED or "code" in ch)
+                            and not isinstance(ch.get("code"), str))
                         for ch in choices):
                     return None
         elif kind == "card":
@@ -590,6 +594,43 @@ def users_disable(name: str):
 
     _admin(lambda conn: disable(conn, name))
     con.print(f"[green]Disabled {name}.[/green]")
+
+
+@users_app.command("sign-in")
+def users_sign_in(name: str, cancel: bool = typer.Option(False, "--cancel", help="Cancel unused sign-in codes")):
+    """Mint a sign-in code shown once, or cancel this principal's unused codes."""
+    from erpclaw_core.administration import cancel_sign_in_codes, mint_sign_in_code
+    from erpclaw_core.principals import OWNER
+
+    if cancel:
+        count = _admin(lambda conn: cancel_sign_in_codes(conn, name, OWNER))
+        con.print(f"Cancelled {count} sign-in codes for {_plain(name)}.")
+    else:
+        code = _admin(lambda conn: mint_sign_in_code(conn, name, OWNER))
+        con.print(f"Sign-in code: {code}\nIt lasts 10 minutes and works once.", markup=False)
+
+
+@users_app.command("sign-out")
+def users_sign_out(name: str):
+    """End every open session of this principal."""
+    from erpclaw_core.administration import sign_out_principal
+    from erpclaw_core.principals import OWNER
+
+    count = _admin(lambda conn: sign_out_principal(conn, name, OWNER))
+    con.print(f"Ended {count} sessions for {_plain(name)}.")
+
+
+@users_app.command("sessions")
+def users_sessions(name: str = typer.Argument(None)):
+    """List open sessions, optionally for one principal."""
+    from erpclaw_core.administration import list_sessions
+
+    rows = _admin(lambda conn: list_sessions(conn, name))
+    table = Table("Principal", "Created", "Last seen", "User agent")
+    for row in rows:
+        table.add_row(_plain(row["principal"]), row["created_at"].isoformat(), row["last_seen_at"].isoformat(),
+                      _plain(row["user_agent"] or ""))
+    con.print(table)
 
 
 company_app = typer.Typer(help="The company's settings (as the owner)")

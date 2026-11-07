@@ -5,7 +5,7 @@ Revises: 0014
 Create Date: 2026-11-02
 Data class: schema
 
-Execution requires the complete preceding migration chain.
+Execution waits for the complete migration chain.
 
 What it changes:
 - `supplier_payable`: one item per still-owed delivery, with the source voucher's type, id and number, its date,
@@ -13,7 +13,7 @@ What it changes:
   `outstanding` and `status`, every DELETE and TRUNCATE; open exactly when something is outstanding, never more than
   the amount.
 - `supplier_payment`: a payment's supplier, date, amount, paying account, number and status; `unallocated` is held
-  at zero by a CHECK in v3.0 (advances are planned for banking). Only `status` and `reverse_operation_key` change, and a
+  at zero by a CHECK in v3.0. Only `status` and `reverse_operation_key` change, and a
   reversed payment never changes again; DELETE and TRUNCATE are refused.
 - `supplier_payment_allocation`: insert only (UPDATE, DELETE and TRUNCATE refused).
 - The payable-source rule's backstop: a ledger line naming a party on an account of role `payable` is refused

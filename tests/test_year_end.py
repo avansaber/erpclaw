@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from erpclaw_core import ledger, models as m
 from erpclaw_core.common import Refusal, company_ctx, new_id, now
 from erpclaw_core.masters import create_party
-from erpclaw_core.setup import create_company
+from erpclaw_core.setup import CHART, create_company
 
 EXTRA = [("2100", "Payables", "liability", "payable"), ("3200", "Opening Balance Equity", "equity", None),
          ("6100", "Rent", "expense", None)]
@@ -21,10 +21,22 @@ EXTRA = [("2100", "Payables", "liability", "payable"), ("3200", "Opening Balance
 
 def company(engine, name: str, years=range(2025, 2028)) -> str:
     cid = create_company(engine, name, years=years)
+    seeded = {number: (aname, root, atype) for number, aname, root, atype, _group, _parent in CHART}
     with engine.begin() as conn:
         for number, aname, root, atype in EXTRA:
-            conn.execute(m.account.insert().values(id=new_id(), company_id=cid, number=number, name=aname,
-                                                   root_type=root, account_type=atype, is_group=False, frozen=False))
+            if number in seeded:
+                row = conn.execute(select(m.account).where(m.account.c.company_id == cid,
+                                                           m.account.c.number == number)).mappings().one()
+                if number == "2100":
+                    assert row["name"] == "Accounts Payable"
+                    assert row["root_type"] == "liability"
+                    assert row["account_type"] == "payable"
+                continue
+            exists = conn.execute(select(m.account.c.id).where(m.account.c.company_id == cid,
+                                                               m.account.c.number == number)).scalar_one_or_none()
+            if exists is None:
+                conn.execute(m.account.insert().values(id=new_id(), company_id=cid, number=number, name=aname,
+                                                       root_type=root, account_type=atype, is_group=False, frozen=False))
     return name
 
 

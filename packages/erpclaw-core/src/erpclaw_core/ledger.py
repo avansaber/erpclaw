@@ -90,6 +90,10 @@ def account_by_number(ctx: Ctx, number: str) -> dict:
 
 # A role in the owner's words, so a refusal never shows a column value; a role not named here is its own name.
 ROLE_WORDS = {
+    "payable": "accounts payable",
+    "opening_balance": "opening balance equity",
+    "stock_adjustment": "stock adjustment",
+    "stock_write_off": "inventory write-off",
     "stock": "inventory",
     "cost_of_goods_sold": "cost of goods sold",
     "stock_received_not_billed": "stock received not billed",
@@ -361,7 +365,7 @@ def _check_closing_target(ctx: Ctx, closing: _Closing, posting_date: date, vouch
 
 
 def _check_opening_order(ctx: Ctx, posting_date: date, voucher_type: str, lines: list[Line]) -> None:
-    """Validate opening-entry order under the chain-head lock."""
+    """Check opening balances and posting date order under the chain-head lock."""
     p = m.posting
     if voucher_type == OPENING:
         roots = ctx.conn.execute(select(m.account.c.root_type).where(
@@ -392,6 +396,9 @@ def check_post(ctx: Ctx, posting_date: date, voucher_type: str, voucher_id: str 
         raise Refusal("A year-end closing entry is made only by closing the year.", "closing_voucher")
     open_period(ctx, posting_date)
     clean = _check_lines(ctx, lines)
+    from .payables import check_payable_source
+
+    check_payable_source(ctx, voucher_type, clean)
     _check_opening_order(ctx, posting_date, voucher_type, clean)
     from .integration import account_codes, system_of_record
 
@@ -422,6 +429,9 @@ def _post(ctx: Ctx, posting_date: date, voucher_type: str, voucher_id: str, line
     else:
         _check_closing_target(ctx, closing, posting_date, voucher_type, voucher_id)
     clean = _check_lines(ctx, lines)
+    from .payables import check_payable_source
+
+    check_payable_source(ctx, voucher_type, clean)
     _check_opening_order(ctx, posting_date, voucher_type, clean)
     # The ledger kind comes only from the system of record, read under the head lock.
     from .integration import account_codes, stage_outbound_posting, system_of_record

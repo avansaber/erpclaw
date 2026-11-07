@@ -53,7 +53,7 @@ invoice = Table(
     CheckConstraint(INVOICE_STATUS, name="ck_inv_status"),
     *_amount("sales_invoice", "total", "positive"),
     *_amount("sales_invoice", "outstanding", "not_negative"),
-    # a draft owes nothing: a state rule, so it holds for restored rows too (amendment r4, 2.4)
+    # a draft owes nothing: a state rule, so it holds for restored rows too
     CheckConstraint(f"status <> 'draft' OR ({_sign('outstanding', 'zero')})", name="ck_sales_invoice_draft_owes_nothing"),
     # status follows outstanding (the reversal revision, sales_0002; credit notes, sales_0003)
     *[CheckConstraint(check, name=name) for name, check in (

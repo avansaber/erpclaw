@@ -1,5 +1,5 @@
 """The chat window's own part of the turn loop: a card answered or changed by typing, a question answered by number,
-and an approval that survives a lost reply (the CLI half of the D3 requirement).
+and an approval that survives a lost reply.
 
 At a card the window asks "Approve (a), decline (d), or type a change:"; anything other than a, approve, d or decline
 is the owner's next message. At a question with choices they are numbered, control actions last, and a number typed
@@ -414,7 +414,7 @@ def test_an_entry_whose_card_was_committed_is_read_back_at_the_next_start(engine
 
 @pytest.mark.parametrize("ended", ["expired", "superseded", "declined"])
 def test_an_ended_card_re_sent_after_a_restart_returns_its_outcome_and_never_commits(engine, monkeypatch, home, ended):
-    """The v2 reviewer's point: a re-send never commits a card that is not pending; the window shows what the engine
+    """A re-send never commits a card that is not pending; the window shows what the engine
     says of that card, the same words a repeat approval gets."""
     api, cid, card = a_card(engine)
     if ended == "declined":
@@ -531,7 +531,7 @@ def test_a_question_returned_at_the_start_is_answered_in_the_cards_own_conversat
     belongs to, and completes it."""
     with journal.Journal(journal.folder(), main._books_key(None)) as j:
         j.keep(j.publish("ap-q", "d" * 64, "c-old"))
-    api = Recording([[FIELD], []])
+    api = Recording([[dict(FIELD, status="superseded")], []])
     monkeypatch.setattr(main, "_client", lambda url: api)
     out = CliRunner().invoke(main.app, ["chat"], input="2\nquit\n")
     assert out.exit_code == 0, out.output
@@ -677,7 +677,7 @@ def test_an_entry_whose_name_cannot_be_taken_back_is_sent_as_published(engine, m
 
 
 
-# --- one entry per approval, whatever the windows do (Codex's build round 1) ------------------------------------------
+# --- one entry per approval, whatever the windows do ------------------------------------------
 
 def test_an_approval_already_being_sent_by_another_window_is_not_sent_again(engine, monkeypatch, home):
     """Two windows approving the same card: the second finds the first's locked entry, sends nothing, and the first's

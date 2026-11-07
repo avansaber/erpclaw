@@ -251,7 +251,8 @@ def test_the_api_refuses_an_unknown_disabled_or_missing_token(engine, api, auth)
     headers = {"Authorization": auth} if auth else {}
     assert c.post("/v1/conversations", headers=headers).status_code == 401
     assert c.get("/v1/operations/x", headers=headers).status_code == 401
-    assert c.get("/v1/health").status_code == 200  # health only
+    health = c.get("/v1/health")
+    assert health.status_code == 200 and health.json() == {"ok": True}
 
 
 def test_through_the_api_a_principal_drafts_and_another_approves(engine, api):
@@ -464,8 +465,12 @@ def test_a_write_contracts_commit_is_called_only_by_the_card_commit():
 def test_the_api_has_no_write_route_but_messages_approve_and_decline(engine):
     app = create_app(engine, ScriptedModel([]))
     posts = sorted(r.path for r in app.routes if "POST" in getattr(r, "methods", set()))
+    # POST /v1/session is the one other POST: the host's sign-in. It writes only the two session tables (never a
+    # business table: tests/test_api_session.py checks the book diff), and answers 404 anywhere but the host listener.
     assert posts == ["/v1/cards/{aid}/approve", "/v1/cards/{aid}/decline", "/v1/conversations",
-                     "/v1/conversations/{cid}/messages"]
+                     "/v1/conversations/{cid}/messages", "/v1/session"]
+    session_post = next(r for r in app.routes if getattr(r, "path", None) == "/v1/session" and "POST" in r.methods)
+    assert (session_post.openapi_extra or {}).get("erpclaw_access") == "app"
 
 
 @pytest.mark.parametrize("contract, args, said", [  # the owner's words give every field the card takes
@@ -540,7 +545,7 @@ def _preview_of(conn, contract, args):
     ("submit_invoice", None),
 ])
 def test_every_row_whose_values_reach_the_preview_is_in_the_declared_read_set(engine, contract, args):
-    """The recording test: change each candidate row's values, one row at a time, and see whether the
+    """The read-set recording test: change each candidate row's values, one row at a time, and see whether the
     preview changes; every row that changes it must be declared. Resolver candidate scans (a new name that would
     match) are covered by the recomputation at commit, not by the read set, and are not changed here."""
     args = args or {"invoice": _draft_number(engine)}
@@ -571,7 +576,7 @@ def test_every_row_whose_values_reach_the_preview_is_in_the_declared_read_set(en
 
 
 
-#
+# --- authority and implementation version checks --------------------------------------------------------------------------------------
 
 def test_a_principal_without_view_reads_nothing_of_the_books(engine, api):
     """Reads, read-back and replay are company-scoped like writes."""

@@ -62,14 +62,14 @@ def refused_code(fn) -> str:
 # --- posting when accounting is external ---------------------------------------
 
 def test_an_external_company_posts_an_invoice_to_the_sub_ledger_and_stages_its_journal(engine):
-    """An external-accounting company stages its journal."""
+    """An external company posts to the sub-ledger and stages its journal."""
     from conftest import drop_everything
 
     from erpclaw_sales import service as s
 
     # Books with this company alone: the pilot sales tables number invoices
     # uniquely across the books, so the demo company's numbers would collide
-    # (the original pilot behaviour).
+    # (a pilot limit).
     drop_everything(engine)
     name = company(engine, "External Co")
     with engine.begin() as conn:
@@ -356,7 +356,7 @@ def test_the_setter_and_a_first_posting_race(engine, monkeypatch):
             assert (outcome["set"] == "ok") == (mode == "external")
 
 
-# --- round 1 of the build review --------------------------------------------
+# --- integration regressions --------------------------------------------
 
 @pytest.mark.parametrize("body", [{"amount": 0.1 + 0.2}, {"lines": [{"debit": 1.5}]}, {"deep": {"x": [[2.0]]}}])
 def test_payloads_refuse_binary_floats_anywhere(engine, body):

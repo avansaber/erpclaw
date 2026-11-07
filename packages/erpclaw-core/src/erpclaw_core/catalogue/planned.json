@@ -132,7 +132,7 @@
    "bank feed",
    "import statement"
   ],
-  "wave": "v3.0"
+  "wave": "v3.1"
  },
  {
   "id": "planned.country_packs",
@@ -401,7 +401,7 @@
    "vendor",
    "supplier"
   ],
-  "wave": "v3.0"
+  "wave": "later"
  },
  {
   "id": "planned.quality",
@@ -529,7 +529,7 @@
    "gst",
    "tax rate"
   ],
-  "wave": "v3.0"
+  "wave": "later"
  },
  {
   "id": "planned.users",

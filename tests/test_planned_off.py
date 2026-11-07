@@ -115,7 +115,7 @@ def test_the_model_is_not_offered_the_switched_off_tools(engine, payments_off):
         enabled = enabled_plugins(conn)
     offered = {c.name for c in REGISTRY.contracts.values() if REGISTRY.contract_plugin[c.name] in enabled
                and not c.planned}
-    assert offered == {"create_invoice", "submit_invoice"}
+    assert offered == {"set_up_company", "add_customer", "add_item", "create_invoice", "submit_invoice"}
 
 
 def test_an_invoice_the_owner_asks_to_email_is_drafted_without_the_email_and_says_so(engine, as_released):

@@ -239,7 +239,7 @@ def test_a_card_commit_and_another_writer_never_deadlock(engine, hold, other):
     assert not isinstance(box["other"], Exception) or isinstance(box["other"], Refusal), box["other"]
 
 
-# --- crashes: a real process kill (spike S2, ported) -----------------------------------------------------------
+# --- crashes: a real process kill -----------------------------------------------------------
 
 CHILD = """
 import os, sys
@@ -307,7 +307,7 @@ def test_every_card_flow_commits_under_a_genuine_runtime_login(engine, runtime_l
 
 
 def test_the_commit_locks_every_read_set_table_the_runtime_role_may_change(engine, monkeypatch):
-    """Spec 2.4's coupling: a read-set row of a table with an UPDATE grant is locked; one without is compared by
+    """Read-set locking: a read-set row of a table with an UPDATE grant is locked; one without is compared by
     digest only; and granting UPDATE on a master makes the commit lock it with no other change."""
     locked = []
     real = ledger.for_update
@@ -325,7 +325,7 @@ def test_the_commit_locks_every_read_set_table_the_runtime_role_may_change(engin
         approvals._lock_read_set(conn, ctx, rs)
         tables = {tb for tb, _, _ in rs}
         updatable = {tb for tb in tables if m.metadata.tables[tb].info["runtime"].update}
-        assert updatable - {"fiscal_period"} <= set(locked) and "party" not in locked and "company" not in locked
+        assert updatable - {"fiscal_period"} <= set(locked) and "party" not in locked and "company" in locked
         conn.rollback()
     locked.clear()
     monkeypatch.setitem(m.item.info, "runtime", Runtime(insert=True, update=("standard_rate",)))

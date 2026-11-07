@@ -139,7 +139,7 @@ def test_eight_bit_sequences_are_removed_whole_and_neighbouring_text_kept(raw, s
 
 
 def test_a_tool_calls_arguments_carry_no_control_characters():
-    """An escaped name in a native call's arguments reached the API and the window."""
+    """Native call arguments lose terminal control sequences before reaching the API and the window."""
     raw = '{"customer": "\\u001b[31mZork Ltd\\u001b[0m", "items": [{"item": "x\\u009b1m", "quantity": 1}]}'
     reply = clean_reply("", [("c1", "create_invoice", raw)])
     assert reply.calls[0].args == {"customer": "Zork Ltd", "items": [{"item": "x", "quantity": 1}]}

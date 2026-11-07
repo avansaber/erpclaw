@@ -306,13 +306,13 @@ def _pair(ctx: Ctx, pairs: dict, item_id: str, warehouse_id: str, posting_date: 
           dated: bool = True) -> Pair:
     key = (item_id, warehouse_id)
     if key not in pairs:
-        item, wh = stock_item(ctx, item_id), warehouse(ctx, warehouse_id)  # rule 1 (rule 6 inside stock_item)
+        item, wh = stock_item(ctx, item_id), warehouse(ctx, warehouse_id)  # validate the item, its kind and the warehouse
         h = head(ctx, item_id, warehouse_id, lock=lock)
         pairs[key] = Pair(item, wh, inventory_account(ctx, wh), h, *((h["qty"], h["value"]) if h else (ZERO, ZERO)),
                           fifo_groups(ctx, item_id, warehouse_id) if item["method"] == "fifo" else [])
     p = pairs[key]
     if dated:
-        check_date(ctx, posting_date, p.head)  # rule 3
+        check_date(ctx, posting_date, p.head)  # validate the period and the pair's movement date
     return p
 
 
@@ -358,9 +358,9 @@ def _issue_moves(ctx: Ctx, lines: list[dict], posting_date: date, *, lock: bool,
     pairs: dict = {}
     moves = []
     for n, line in enumerate(lines, first_line):
-        qty = parse_qty(line.get("qty"))  # rule 2
+        qty = parse_qty(line.get("qty"))  # validate the positive quantity
         p = _pair(ctx, pairs, line["item"], line["warehouse"], posting_date, lock=lock)
-        if qty > p.qty:  # rule 4: never negative stock
+        if qty > p.qty:  # never negative stock
             raise _short(ctx, line["item"], line["warehouse"], qty, p.qty)
         if p.item["method"] == "fifo":
             takes = fifo_take(p.groups, qty, ctx.currency)
@@ -502,28 +502,22 @@ class Trusted:
 
 
 def authorize(ctx: Ctx, trusted: Trusted | None, write: str) -> None:
-    """A stock write's authority, failing closed: the card being committed now, or an explicit Trusted caller that
-    sets no flag. Core marks a commit only by the flag naming its approval (ctx.extra["commit"]), so the card is read
-    from core's own rows: claimed for its commit (status consumed) with no outcome yet. Core writes a card's claim and
-    its outcome in one transaction, and another transaction's claim is not visible here, so such a card is this
-    transaction's own commit; a pending, declined, expired, superseded or already committed card is not. Its contract
-    must belong to a plugin that declares this stock service, plainly or as an optional use (core answers which), or
-    to the stock plugin itself. Anything else is refused."""
+    """Require core's current approval or the explicit, non-approval Trusted path."""
+    from erpclaw_core import approval_scope, approvals
     from erpclaw_core.plugins import REGISTRY, declares_service
 
     if trusted is not None:
-        if ctx.extra.get("commit"):
+        if ctx.extra.get("commit") or approval_scope._related_issued(ctx):
             raise ValueError("a trusted write never runs under an approval's commit flag")
-        ledger.lock_chain(ctx)  # the engine's one lock order: the chain head before any stock row
+        ledger.lock_chain(ctx)  # preserve chain-first order for the explicit bootstrap path
         return
-    approval_id = ctx.extra.get("commit")
-    card = ctx.conn.execute(select(m.approval.c.status, m.approval.c.contract).where(
-        m.approval.c.id == approval_id)).first() if approval_id else None
-    outcome = ctx.conn.execute(select(m.operation_outcome.c.key).where(
-        m.operation_outcome.c.approval_id == approval_id)).first() if card is not None else None
+    approval_id = approvals.committing(ctx)
+    card = ctx.conn.execute(select(m.approval.c.contract).where(
+        m.approval.c.id == approval_id, m.approval.c.company_id == ctx.company_id
+    )).first() if approval_id else None
     plugin = REGISTRY.contract_plugin.get(card.contract) if card is not None else None
     declared = plugin is not None and (plugin == "stock" or declares_service(plugin, f"stock.{write}"))
-    if card is None or card.status != "consumed" or outcome is not None or not declared:
+    if card is None or not declared:
         raise Refusal("A stock write runs only inside the commit of an approved card that declares it.",
                       "not_approved")
 
@@ -534,12 +528,16 @@ def check_fresh(ctx: Ctx, pairs: list[Pair], extra_rows: list[tuple[str, str]] =
     Backstop: every head it moves, and the entries it reads, must be in that card's read set with the digest stored
     at approval, unless this commit already moved them. A card whose read set left them out, or a row that moved, is
     refused as stale. A trusted internal write has no card, so nothing to compare."""
-    from erpclaw_core.approvals import _row_digest
+    from erpclaw_core.approvals import _row_digest, committing
 
     if trusted is not None:  # authorized by the caller's own explicit path (authorize ran first)
         return
+    approval_id = committing(ctx)
+    if approval_id is None:
+        raise Refusal("A stock write runs only inside the commit of an approved card that declares it.",
+                      "not_approved")
     approval = ctx.conn.execute(select(m.approval.c.read_set_json).where(
-        m.approval.c.id == ctx.extra["commit"])).scalar_one()
+        m.approval.c.id == approval_id, m.approval.c.company_id == ctx.company_id)).scalar_one()
     stored = {(tbl, key): dig for tbl, key, dig in json.loads(approval)}
     moved = ctx.extra.setdefault("stock_heads_moved", set())
     rows = [("stock_head", p.head["id"]) for p in pairs if p.head is not None] + list(extra_rows)
@@ -667,13 +665,13 @@ def returned_against(ctx: Ctx, issue_id: str) -> tuple[Decimal, Decimal]:
 
 
 def _return_move(ctx: Ctx, original: dict, posting_date: date, qty_value: object, *, lock: bool) -> Move:
-    qty = parse_qty(qty_value)  # rule 2
+    qty = parse_qty(qty_value)  # validate the positive quantity
     if original["reverses_entry_id"] is not None or ctx.conn.execute(select(t.entry.c.id).where(
             t.entry.c.reverses_entry_id == original["id"])).first():
         raise Refusal("That issue has been reversed; nothing can come back against it.", "issue_reversed")
     p = _pair(ctx, {}, original["item_id"], original["warehouse_id"], posting_date, lock=lock)
     back_qty, back_value = returned_against(ctx, original["id"])
-    if back_qty + qty > original["qty"]:  # rule 5
+    if back_qty + qty > original["qty"]:  # never return more than the original issue
         raise Refusal(f"Only {qty_text(original['qty'] - back_qty)} of the {qty_text(original['qty'])} issued can "
                       f"still come back.", "return_exceeds_issue", issued=qty_text(original["qty"]),
                       returned=qty_text(back_qty))
@@ -706,7 +704,7 @@ def return_in(ctx: Ctx, voucher_type: str, voucher_id: str, posting_date: date, 
 
 def _receipt_move(ctx: Ctx, item_id: str, warehouse_id: str, qty_value: object, rate_value: object,
                   posting_date: date, *, lock: bool) -> Move:
-    qty, rate = parse_qty(qty_value), parse_qty(rate_value, "rate")  # rule 2, the rate as a quantity's
+    qty, rate = parse_qty(qty_value), parse_qty(rate_value, "rate")  # validate the rate like a quantity
     p = _pair(ctx, {}, item_id, warehouse_id, posting_date, lock=lock)
     value = receipt_value(qty, rate, ctx.currency)
     if value == 0:
@@ -729,7 +727,7 @@ def receive(ctx: Ctx, voucher_id: str, item_id: str, warehouse_id: str, qty: obj
     check_fresh(ctx, [mv.pair], trusted=trusted)
     out = ledger_lines(ctx, [mv], srnb=True)
     lines = [ledger.Line(ln["account"], debit=Decimal(ln["debit"]), credit=Decimal(ln["credit"])) for ln in out]
-    ledger.check_post(ctx, posting_date, "stock_receipt", voucher_id, lines)  # rule 7, the whole posting
+    ledger.check_post(ctx, posting_date, "stock_receipt", voucher_id, lines)  # validate the whole posting
     eid = _entry_id(ctx, mv, posting_date, "stock_receipt", voucher_id)
     ledger.post(ctx, posting_date, "stock_receipt", voucher_id, lines)
     return {"value": money_text(mv.value, ctx.currency), "ledger_lines": out, "entry_id": eid}
@@ -757,7 +755,7 @@ def _reverse_moves(ctx: Ctx, voucher_type: str, voucher_id: str, reversal_date: 
     for x in entries:
         by_pair.setdefault((x["item_id"], x["warehouse_id"]), []).append(x)
     for (item_id, wh_id), rows in by_pair.items():
-        p = _pair(ctx, pairs, item_id, wh_id, reversal_date, lock=lock, dated=False)  # rule 1 (and 6)
+        p = _pair(ctx, pairs, item_id, wh_id, reversal_date, lock=lock, dated=False)  # validate the item, its kind and the warehouse
         seqs = sorted(r["seq"] for r in rows)
         # only while its movements are the latest: the pair's last contiguous run, nothing from another voucher after
         if seqs[-1] != p.head["last_seq"] or seqs != list(range(seqs[0], seqs[-1] + 1)):
@@ -766,7 +764,7 @@ def _reverse_moves(ctx: Ctx, voucher_type: str, voucher_id: str, reversal_date: 
                           if outgoing else "Stock has moved since this document, so it cannot be reversed.",
                           "not_latest", item=item_id, warehouse=wh_id,
                           **({"points_to": POINTS_TO_CREDIT_NOTE} if outgoing else {}))
-        check_date(ctx, reversal_date, p.head)  # then rule 3: an open period, not before the pair's last movement
+        check_date(ctx, reversal_date, p.head)  # an open period, not before the pair's last movement
         for r in sorted(rows, key=lambda r: r["seq"], reverse=True):  # descending sequence per pair
             mv = Move(p, "in" if r["direction"] == "out" else "out", r["qty"], r["value"], r["line_no"],
                       reverses=r["id"], original=r)
@@ -816,7 +814,25 @@ def _mirror_entry(mv: Move, ctx: Ctx) -> dict:
             "value_after": money_text(mv.value_after, ctx.currency)}
 
 
+def _require_delivery_reversal(ctx: Ctx, voucher_type: str, voucher_id: str) -> None:
+    """All GR settlement variants use their owner, so no generic path can orphan a payable."""
+    if voucher_type != "stock_goods_received":
+        return
+    header = ctx.conn.execute(select(t.goods_received).where(t.goods_received.c.company_id == ctx.company_id,
+        t.goods_received.c.voucher_id == voucher_id)).mappings().first()
+    text = "Goods received must be reversed as a delivery."
+    if header is not None:
+        text = f"{header['number']} must be reversed as a delivery."
+        if header["settlement"] == "still_owed":
+            supplier = ctx.conn.execute(select(m.party.c.name).where(m.party.c.company_id == ctx.company_id,
+                m.party.c.id == header["supplier_id"])).scalar_one_or_none()
+            if supplier is not None:
+                text = f"{header['number']} is still owed to {supplier}; reverse it as a delivery."
+    raise Refusal(text, "goods_received_reversal_required", points_to="reverse_goods_received")
+
+
 def preview_reverse(ctx: Ctx, voucher_type: str, voucher_id: str, reversal_date: date) -> dict:
+    _require_delivery_reversal(ctx, voucher_type, voucher_id)
     moves = _reverse_moves(ctx, voucher_type, voucher_id, reversal_date, lock=False)
     pairs = {id(mv.pair): mv.pair for mv in moves}.values()
     return {"mirror_entries": [_mirror_entry(mv, ctx) for mv in moves],
@@ -827,6 +843,7 @@ def preview_reverse(ctx: Ctx, voucher_type: str, voucher_id: str, reversal_date:
 def reverse_movements(ctx: Ctx, voucher_type: str, voucher_id: str, reversal_date: date, reversal_type: str,
                       reversal_id: str, *, trusted: Trusted | None = None) -> dict:
     authorize(ctx, trusted, "reverse_movements")
+    _require_delivery_reversal(ctx, voucher_type, voucher_id)
     moves = _reverse_moves(ctx, voucher_type, voucher_id, reversal_date, lock=True)
     check_fresh(ctx, list({id(mv.pair): mv.pair for mv in moves}.values()), trusted=trusted)
     contribution = _contribution(ctx, moves)

@@ -17,12 +17,21 @@ Modes, chosen from the push URL and the policy file:
   private  the repository is listed in policy "private_repos" and not in
            "clean_history_repos": secret and PII shapes block.
   clean    listed in "clean_history_repos" (private now, public later): as
-           public.
+           public for content checks, but every commit still requires a
+           "Plan: M<n>-T<n>" trailer and may carry plan ids in its message.
   public   anything else, and every repository when no policy is given:
            secret and PII shapes block, and so do internal-path and
            plan-artifact shapes plus every policy "engine_forbidden" pattern,
            in file contents, file names and whole commit messages (trailers
-           included), and every commit needs a "Plan: M<n>-T<n>" trailer.
+           included). Plan trailers and task ids anywhere in commit messages
+           are forbidden.
+
+In clean and public modes, added lines in engine code, tests, tools and
+repository docs must also be free of internal references. This check is
+skipped in private mode. Only the two exact scanner paths in
+INTERNAL_REF_EXEMPT_PATHS are exempt; inline markers grant no exemption.
+This added-line check never scans commit messages; the mode-specific message
+rules above apply separately.
 
 The policy file keeps deployment-specific values (private repository names,
 internal codenames, host addresses) out of this source, which is itself public.
@@ -334,6 +343,32 @@ PUBLIC_CONTENT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(r"(?:[A-Z0-9]+_)*PLAN_[0-9]{4}-[0-9]{2}-[0-9]{2}\.md"),
     ),
 )
+
+# These two files define and exercise the forbidden shapes themselves.
+INTERNAL_REF_EXEMPT_PATHS = frozenset({
+    "tools/push_scan.py",
+    "tools/tests/test_push_scan.py",
+})
+INTERNAL_REF_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("task id", re.compile(r"\bM[0-9]+-T[0-9]+[a-z]?\b")),
+    ("artifact path", re.compile(r"(?:specs/|notes/|reviews/|lanes/|PLAN_)[\w.-]+")),
+    ("spec filename", re.compile(r"\bM[0-9]+_[A-Z][A-Z0-9_]{3,}\b")),
+    ("decision record", re.compile(r"DR-[0-9]{3}")),
+    ("review round", re.compile(
+        r"\b(?:(?:build|spec|review) round [0-9]+|round [0-9]+ (?:finding|review))\b",
+        re.IGNORECASE,
+    )),
+    ("finding number", re.compile(r"\bfinding [0-9]+\b", re.IGNORECASE)),
+    ("section citation", re.compile(
+        r"\(spec\s+[0-9]+\.[0-9]+\)|"
+        r"\bspec\b\s*[,:(]?\s*[0-9]+\.[0-9]+\b|"
+        r"\bsection\s+[0-9]+\.[0-9]+\b",
+        re.IGNORECASE,
+    )),
+)
+_INTERNAL_REF_CONTEXT = re.compile(r"\b(?:decision|invariant|spec)\b", re.IGNORECASE)
+_INTERNAL_REF_LABEL = re.compile(r"\b[DGI][0-9]{1,2}\b")
+
 
 SAFE_EMAIL_DOMAINS = {
     "avansaber.com",
@@ -819,7 +854,7 @@ def _emit_redacted(
 
 
 def _collect_warning(commit: str, path: str, line_no: int, label: str, value: str, size: int | None = None) -> None:
-    """Every warning goes through here, so each is listed once and counted in the summary (review round 1)."""
+    """Every warning goes through here, so each is listed once and counted in the summary."""
     seen = _WARNINGS.setdefault((path, label, value), {"commits": [], "lines": set(), "size": None})
     if commit[:12] not in seen["commits"]:
         seen["commits"].append(commit[:12])
@@ -915,6 +950,27 @@ def _has_plan_trailer(commit: str) -> bool:
     )
     values = [v.strip() for v in proc.stdout.decode("utf-8", "replace").splitlines() if v.strip()]
     return bool(values) and all(re.fullmatch(r"M[0-9]+-T[0-9]+", v) for v in values)
+
+
+def _public_message_plan_hard_blocks(commit: str, message: bytes) -> int:
+    """Reject task ids anywhere and Plan trailers recognised by Git."""
+    label = "plan id in a public commit message"
+    hits = _scan_regex_set(
+        commit=commit, path="<commit-message>", data=message,
+        patterns=((label, re.compile(r"\bM[0-9]+-T[0-9]+[a-z]?\b")),),
+        kind="HARD BLOCK",
+    )
+    proc = _run_git(
+        ["log", "-1", "--format=%(trailers:key=Plan,only,unfold)", commit]
+    )
+    for trailer in proc.stdout.decode("utf-8", "replace").splitlines():
+        if trailer.strip():
+            _emit_redacted(
+                commit=commit, path="<commit-message>", line_no=0,
+                label=label, value=trailer, kind="HARD BLOCK",
+            )
+            hits += 1
+    return hits
 
 
 def _scan_hard_content(commit: str, path: str, data: bytes) -> int:
@@ -1059,6 +1115,79 @@ def _scan_regex_set(
                     label=label, value=match.group(0), kind=kind,
                 )
                 hits += 1
+    return hits
+
+
+def _internal_ref_path_in_scope(path: str) -> bool:
+    return path not in INTERNAL_REF_EXEMPT_PATHS and (
+        path.startswith(("packages/", "plugins/", "tests/", "tools/", "docs/", "doc/"))
+        or Path(path).suffix.lower() in {".md", ".markdown", ".rst", ".txt", ".adoc"}
+        or Path(path).name.upper() in {"README", "LICENSE", "NOTICE", "COPYING", "AUTHORS",
+                                      "CHANGELOG", "CONTRIBUTING", "INSTALL"}
+    )
+
+
+def _scan_internal_refs(commit: str, path: str, lines: Iterable[tuple[int, str]]) -> int:
+    """Hard-block internal references, reporting only location, label and length."""
+    if not _internal_ref_path_in_scope(path):
+        return 0
+    hits = 0
+    for line_no, line in lines:
+        patterns = INTERNAL_REF_PATTERNS
+        if _INTERNAL_REF_CONTEXT.search(line):
+            patterns += (("decision/invariant label", _INTERNAL_REF_LABEL),)
+        for label, pattern in patterns:
+            for match in pattern.finditer(line):
+                _emit_redacted(
+                    commit=commit, path=path, line_no=line_no,
+                    label=f"internal reference: {label}", value=match.group(0),
+                    kind="HARD BLOCK",
+                )
+                hits += 1
+    return hits
+
+
+def _added_diff_lines(patch: bytes) -> Iterable[tuple[int, str]]:
+    """Read destination line numbers from ordinary, zero-context Git patches.
+
+    Paths are supplied separately through NUL-delimited tree records; patch
+    headers are never used to recover a path. Hunk counts distinguish an
+    added line beginning with two plus signs from a file header.
+    """
+    old_left = new_left = 0
+    line_no = 0
+    for raw_line in patch.split(b"\n"):
+        hunk = re.match(rb"@@ -[0-9]+(?:,([0-9]+))? \+([0-9]+)(?:,([0-9]+))? @@", raw_line)
+        if hunk:
+            old_left = int(hunk[1]) if hunk[1] is not None else 1
+            line_no = int(hunk[2])
+            new_left = int(hunk[3]) if hunk[3] is not None else 1
+        elif old_left or new_left:
+            if raw_line.startswith(b"+"):
+                yield line_no, raw_line[1:].decode("utf-8", "surrogateescape")
+                line_no += 1
+                new_left -= 1
+            elif raw_line.startswith(b"-"):
+                old_left -= 1
+            elif raw_line.startswith(b" "):
+                line_no += 1
+                old_left -= 1
+                new_left -= 1
+
+
+def _internal_ref_hard_blocks(versions: Iterable[Version]) -> int:
+    """Check additions in every introduced commit, including each merge parent."""
+    hits = 0
+    for version in versions:
+        if not _internal_ref_path_in_scope(version.path):
+            continue
+        patch = _run_git([
+            "diff-tree", "--root", "-m", "--no-commit-id", "-r", "-p",
+            "--unified=0", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--text",
+            "--output-indicator-new=+", "--output-indicator-old=-", "--output-indicator-context= ",
+            version.commit, "--", f":(literal){version.path}",
+        ]).stdout
+        hits += _scan_internal_refs(version.commit, version.path, _added_diff_lines(patch))
     return hits
 
 
@@ -1360,6 +1489,8 @@ def _scan_main(argv: list[str]) -> int:
         hard_hits = len(secrets)
         hard_hits += _filename_hard_blocks(paths, is_private=is_private)
         hard_hits += _external_payload_hard_blocks(external_payloads)
+        if mode in ("clean", "public"):
+            hard_hits += _internal_ref_hard_blocks(versions)
         warn_hits = 0
         for version in versions:
             hard_hits += _scan_hard_content(
@@ -1401,12 +1532,14 @@ def _scan_main(argv: list[str]) -> int:
                     patterns=content_policy,
                     kind="HARD BLOCK",
                 )
-                if not _has_plan_trailer(commit):
+                if mode == "clean" and not _has_plan_trailer(commit):
                     print(
                         f"  HARD BLOCK: commit={commit[:12]} path=\"<commit-message>\" "
                         "label='no Plan trailer'"
                     )
                     hard_hits += 1
+                elif mode == "public":
+                    hard_hits += _public_message_plan_hard_blocks(commit, message)
             warn_hits += _scan_warnings(commit, "<commit-message>", message)
 
         print("\n[WARN-ONLY checks]")

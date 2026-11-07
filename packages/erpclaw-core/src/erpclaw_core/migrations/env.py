@@ -1,6 +1,5 @@
 """Alembic environment: core's revisions and each loaded plugin's branch.
-Every table on the metadata is created by exactly
-one revision of core or of its plugin."""
+Every table on the metadata is created by exactly one revision of core or of its plugin."""
 from __future__ import annotations
 
 from alembic import context

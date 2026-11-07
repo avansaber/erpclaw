@@ -69,7 +69,7 @@ def test_check_reverse_refuses_with_reverses_own_code(engine, code):
             when = date(2026, 9, 30)
         elif code == "already_reversed":
             ledger.reverse(ctx, pid, D)
-        elif code == "frozen_account":  # Reversal must reject a frozen account before presenting a card
+        elif code == "frozen_account":  # reverse must refuse before creating a card
             conn.execute(update(m.account).where(m.account.c.id == acc(ctx, "1100")).values(frozen=True))
         before = counts(conn)
         with pytest.raises(Refusal) as checked:
@@ -101,7 +101,7 @@ def _lock_october(engine):
 
 @pytest.mark.parametrize("why", ["receivable frozen", "sales frozen", "period locked"])
 def test_no_create_and_submit_card_for_a_posting_the_books_would_refuse(engine, why):
-    """Refuse invalid postings before presenting an approval card."""
+    """The posting is refused before creating an approval card."""
     {"receivable frozen": lambda: _freeze(engine, "1200"), "sales frozen": lambda: _freeze(engine, "4100"),
      "period locked": lambda: _lock_october(engine)}[why]()
     before = snapshot(engine)
@@ -133,7 +133,7 @@ def test_a_change_between_preview_and_commit_is_still_refused_at_commit(engine):
     _freeze(engine, "1200")  # after the card: the commit's own checks, under its locks, still refuse
     with engine.connect() as conn:
         posted_before = counts(conn)
-    try:  # The recomputed preview refuses and the card ends superseded
+    try:  # the recomputed preview refuses and supersedes the card without an escaped refusal
         out = approvals.approve(engine, card.approval_id, card.digest)
         assert out.status in ("refused", "superseded") and "frozen" in out.text, (out.status, out.text)
     except Refusal as r:

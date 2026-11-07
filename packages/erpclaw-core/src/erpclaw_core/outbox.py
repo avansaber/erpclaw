@@ -7,6 +7,7 @@ import datetime as dt
 import re
 import unicodedata
 from dataclasses import dataclass
+from threading import Condition
 from typing import Callable
 
 from sqlalchemy import select, text
@@ -392,6 +393,72 @@ def _marked_for_folder(conn: Connection) -> bool:
     return bool(conn.execute(select(owner.c.mark).where(owner.c.mark.in_((DEMO_MARK, EVAL_MARK)))).first())
 
 
+class _MarkScope:
+    """One connector invocation's mark; not approval authority or a SQL sandbox.
+
+    The condition linearizes admission and closing, never database work. Local
+    draining does not bound DB completion or make concurrent settings reads safe.
+    """
+
+    def __init__(self, engine: Engine, oid: str, aid: str, settings: ReadCtx):
+        self._engine, self._oid, self._aid, self._settings = engine, oid, aid, settings
+        self._condition = Condition()
+        self._phase = "live"
+        self._reserved = self._inflight = self._marked = self._faulted = False
+
+    def __call__(self) -> bool:
+        with self._condition:
+            if self._phase != "live" or self._reserved:
+                return False
+            self._reserved = self._inflight = True
+        try:
+            self._settings.close()  # failure propagates; final close retries it
+            try:
+                ok = mark_data(self._engine, self._oid, self._aid)
+            except Exception:  # preserve existing failed-mark behavior
+                return False
+            if ok:
+                with self._condition:
+                    self._marked = True
+                try:
+                    fault("after_data_mark")
+                except BaseException:
+                    with self._condition:
+                        self._faulted = True
+                    raise
+            return ok
+        finally:
+            with self._condition:
+                self._inflight = False
+                self._condition.notify_all()
+
+    def finish(self) -> tuple[bool, bool]:
+        """Revoke on every connector exit; a cleanup error never records a result."""
+        interrupted = None
+        with self._condition:
+            self._phase = "closing"
+            while self._inflight:
+                try:
+                    self._condition.wait()  # releases mutex while waiting
+                except BaseException as exc:
+                    if interrupted is None:
+                        interrupted = (exc, exc.__traceback__)
+                    # Keep admission closed and drain even after interruption.
+        try:
+            self._settings.close()  # preserve existing finally/repeated-close behavior
+        except BaseException as exc:
+            if interrupted is not None:
+                raise exc from interrupted[0]
+            raise
+        finally:
+            with self._condition:
+                self._phase = "revoked"
+        if interrupted is not None:
+            raise interrupted[0].with_traceback(interrupted[1])
+        with self._condition:
+            return self._marked, self._faulted
+
+
 def _send(engine: Engine, r: dict, plugin: str, fn: Callable) -> None:
     aid = claim(engine, r["id"])
     if aid is None:
@@ -403,32 +470,19 @@ def _send(engine: Engine, r: dict, plugin: str, fn: Callable) -> None:
         record_result(engine, r["id"], aid, UNAVAILABLE)
         return
     settings = ReadCtx(engine, r["company_id"], plugin)
-    marked, faulted = [], []
-
-    def mark() -> bool:
-        settings.close()
-        try:
-            ok = mark_data(engine, r["id"], aid)
-        except Exception:  # a mark that did not commit is no mark
-            return False
-        if ok:
-            marked.append(True)
-            try:
-                fault("after_data_mark")
-            except BaseException:
-                faulted.append(True)
-                raise
-        return ok
-
+    mark = _MarkScope(engine, r["id"], aid, settings)
+    cleaned = False
     try:
-        outcome = fn(settings, _message(r, attachments), mark)
+        try:
+            outcome = fn(settings, _message(r, attachments), mark)
+        finally:
+            marked, faulted = mark.finish()
+            cleaned = True
     except Exception as e:
-        if faulted:
-            raise
+        if not cleaned or faulted:
+            raise  # cleanup and controlled faults retain traceback/chaining
         outcome = SendOutcome("after_data" if marked else "before_data", "no_answer" if marked else "temporary",
-                              None, type(e).__name__)  # the class only: a connector's message can carry a secret
-    finally:
-        settings.close()
+                              None, type(e).__name__)  # class only: exception text may contain a secret
     if not isinstance(outcome, SendOutcome):
         outcome = SendOutcome("after_data" if marked else "before_data", "no_answer" if marked else "temporary",
                               None, "the connector returned no outcome")

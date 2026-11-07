@@ -22,11 +22,11 @@ from erpclaw_sales import service as s
 from erpclaw_sales import tables as t
 
 STATUSES = ("draft", "submitted", "partly_paid", "paid", "cancelled")
-# The status rule, the forward rule beside the reversal revision's (sales_0002). "yes" is admitted by the transition
+# The status rule, the forward-only rule beside the reversal revision's (sales_0002). "yes" is admitted by the transition
 # rule; the amount and posting rules still decide (outstanding must match the payments standing; a submitted
 # invoice is cancelled only with its posting reversed).
 #
-#   from \ to    draft   submitted  partly_paid  paid   cancelled      Forward rule
+#   from \ to    draft   submitted  partly_paid  paid   cancelled      forward-only rule
 #   draft        same    yes        no           no     yes            the same
 #   submitted    no      same       yes          yes    yes (reversed) the same
 #   partly_paid  no      yes (new)  same         yes    no             back to submitted was refused
@@ -429,7 +429,7 @@ def test_amounts_rates_and_quantities_are_refused_unless_exact_and_canonical(eng
 
 # --- the path: submit_invoice through its card ----------------------------------------------------------------
 
-from bookdiff import assert_changes, snapshot  # noqa: E402
+from bookdiff import assert_changes, snapshot  # noqa: E402  (the book-diff harness)
 from erpclaw_core import ledger  # noqa: E402
 from erpclaw_core.common import Refusal  # noqa: E402
 
@@ -550,7 +550,7 @@ def test_a_rate_is_shown_as_stored_never_rounded(rate, currency, shown):
 
 
 def test_a_four_decimal_rate_is_shown_exactly_on_the_create_and_submit_cards(engine):
-    """The submit card showed `@ 0.12` for a stored rate of 0.1234; the owner must approve the rate
+    """The submit card must not show `@ 0.12` for a stored rate of 0.1234; the owner must approve the rate
     that is posted. 1000 x 0.1234 = 123.40, worked out here."""
     from sqlalchemy import update
 

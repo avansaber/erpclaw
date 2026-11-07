@@ -1,6 +1,6 @@
 [project]
 name = "erpclaw-sales"
-version = "0.0.1"
+version = "0.0.2"
 description = "ERPClaw sales plugin: customers, invoices, payments"
 license = "GPL-3.0-only"
 requires-python = ">=3.12"

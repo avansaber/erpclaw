@@ -57,6 +57,34 @@ class ReconciliationIncomplete(Exception):
     """An earlier version recorded an outcome without applying it; do not guess what was shown."""
 
 
+def _checkpoint_resolution(engine: Engine, claim: store.Claim, request_id: str, resolution: dict) -> dict | None:
+    """Supersede a pending card before making a name confirmation durable in the assistant store."""
+    question = resolution.get("pending") or {}
+    notice = None
+    if question.get("span_id"):
+        if not store.renew(claim):
+            raise Stopped()
+        req = store.get_request(request_id)
+        pending = approvals.pending_card(engine, claim.conversation_id)
+        if pending:
+            refusal = Refusal(question["text"], "money_name_ambiguous",
+                              [c["label"] for c in question["choices"]], field=question["field"],
+                              question_id=question["id"], span_id=question["span_id"], choices=question["choices"])
+            try:
+                out = approvals.set_aside(engine, claim.conversation_id, req["token"], pending["id"],
+                                          question["text"], refusal)
+            except Refusal as rf:
+                if rf.code == "fenced":
+                    raise Stopped() from None
+                raise
+            if out.status == "set_aside":
+                notice = {"type": "notice", "code": "card_set_aside",
+                          "text": SET_ASIDE.format(title=out.data["title"])}
+    if not store.save_resolution(claim, request_id, resolution):
+        raise Stopped()
+    return notice
+
+
 class State(TypedDict, total=False):
     conversation_id: str
     transcript: list                            # what the model sees before this turn: ended requests, the request
@@ -70,6 +98,7 @@ class State(TypedDict, total=False):
     pending_args: str | None                    # that card's stored arguments (JSON), for the engine's re-proposal
     pending_card: str | None                    # that card's id: a new card replaces it only while it is pending
     reproposed: dict | None                     # the arguments the engine re-proposed this turn, if it did
+    request_id: str
     claim: object                               # the turn's claim on its conversation (store.Claim)
     token: str                                  # the request's card token, live in the books' fence
     turn: list                                  # this turn's model-facing messages
@@ -80,6 +109,7 @@ class State(TypedDict, total=False):
     candidates: list                            # catalogue ids find_capability returned this turn
     selected: str | None                        # the catalogue entry chosen this turn: only its tool is offered
     searched: bool                              # find_capability ran this turn: only choose_capability is offered
+    catalogue_reply: bool                       # the final event is the catalogue's choice or refusal
     principal_id: str | None                    # who is asking: a card is drafted by them; never the model
     resolution: dict | None                     # the resolution step's questions, kept across turns (codes never reuse)
     setup: bool                                 # the books' company is not set up yet: only set_up_company runs
@@ -212,6 +242,15 @@ def build_graph(engine: Engine, model: Model):
         if state.get("claim") is not None and not store.renew(state["claim"]):
             raise Stopped()
 
+    def propose(state: State, contract, inp, session: Session, **kwargs):
+        """Every card passes the same request-wide guard, after resolution and before persistence."""
+        resolve.guard_messages(session)
+        if state.get("claim") and not store.save_resolution(state["claim"], state["request_id"], session.dump()):
+            raise Stopped()
+        renew(state)
+        return approvals.propose(engine, contract, inp.model_dump(mode="json"), state.get("conversation_id"),
+                                 request_card_token=state.get("token"), **kwargs)
+
     def model_node(state: State) -> dict:
         renew(state)  # the lease, before every model call
         with read_only(engine) as conn:
@@ -281,7 +320,8 @@ def build_graph(engine: Engine, model: Model):
             store.record_demand(company_id, d.outcome, d.entry.id if d.entry else None, state["message_text"])
         # the engine's reply in place of the model's text
         event, resolution = _capability_event(d, state.get("resolution"), engine_reply=True)
-        return {"l3": True, "events": list(state.get("events", [])) + [event], "resolution": resolution}
+        return {"l3": True, "events": list(state.get("events", [])) + [event], "resolution": resolution,
+                "catalogue_reply": True}
 
     def setup_ask(state: State) -> dict:
         """The pending gate: a reply that does not set up the books gets the setup's own next step, never its own
@@ -332,13 +372,10 @@ def build_graph(engine: Engine, model: Model):
                 events.append(event(with_codes(rf, session, scope)))
                 return {"events": events, "resolution": session.dump()}
             break
-        renew(state)  # the lease, immediately before the card is made
         who = {"id": state["principal_id"]} if state.get("principal_id") else None
         try:
-            out = approvals.propose(engine, contract, inp.model_dump(mode="json"), state.get("conversation_id"),
-                                    principal=who, date_source={"not_applicable": True},
-                                    owner_words=state.get("request_text") or said,
-                                    request_card_token=state.get("token"))
+            out = propose(state, contract, inp, session, principal=who, date_source={"not_applicable": True},
+                          owner_words=state.get("request_text") or said)
         except Refusal as rf:
             return {"events": events + [event(rf)], "resolution": session.dump()}
         session.end()  # a card using the request's answers ends them
@@ -383,7 +420,7 @@ def build_graph(engine: Engine, model: Model):
 
     def unsure(state: State) -> dict:
         event, resolution = _unsure_event(state, state.get("candidates", []), state.get("resolution"))
-        return {"events": list(state.get("events", [])) + [event], "resolution": resolution}
+        return {"events": list(state.get("events", [])) + [event], "resolution": resolution, "catalogue_reply": True}
 
     def tools_node(state: State) -> dict:
         r = state["reply"]
@@ -391,6 +428,7 @@ def build_graph(engine: Engine, model: Model):
         grounding = list(state.get("grounding", []))
         turn = list(state["turn"])
         candidates, selected, searched = list(state.get("candidates", [])), state.get("selected"), state.get("searched", False)
+        catalogue_reply = False
         message = state.get("message_text") or owner_words(state["turn"])
         request = state.get("request_text") or message
         turn.append({"role": "assistant", "content": r["text"] or None, "tool_calls": [
@@ -403,13 +441,15 @@ def build_graph(engine: Engine, model: Model):
             event, resolution = _unsure_event(state, candidates, state.get("resolution"))
             events.append(event)
             return {"turn": turn, "events": events, "grounding": grounding, "reply": None,
-                    "candidates": candidates, "selected": selected, "searched": searched, "resolution": resolution}
+                    "candidates": candidates, "selected": selected, "searched": searched, "resolution": resolution,
+                    "catalogue_reply": True}
         resolution = state.get("resolution")
         # The reply's writes are resolved together before any runs (one record per call): a question, the planned
         # reply or a refusal among them makes no card in this reply; otherwise the reply drafts one card, the first
         # in the owner's order, and says each other write was not run.
         with read_only(engine) as conn:  # the plugins these books have enabled, read once for the reply
             enabled = enabled_plugins(conn)
+            ctx = company_ctx(conn)
         writes = []  # (position in the reply, contract, arguments)
         for k, c in enumerate(r["calls"]):
             w = REGISTRY.contracts.get(c["name"])
@@ -427,9 +467,32 @@ def build_graph(engine: Engine, model: Model):
             request = message
         if writes and (len(writes) > 1 or write_intents(message) > 1):  # one change per message
             session = Session.load(resolution)
-            rf = session.ask("changes", say("one_change"), "changes_ambiguous", [], [])
-            stop = {"type": "ask", "text": rf.message, "code": rf.code, "options": rf.options,
-                    "data": public_data(rf.data)}
+            try:
+                with read_only(engine) as conn:
+                    ctx = company_ctx(conn)
+                    for _, w, args in writes:
+                        marked = resolve.marks(w.input_model)
+                        lines = next((n for n, v in marked.items() if v["kind"] == "lines"), None)
+                        if not lines:
+                            continue
+                        customer = next((args.get(n) for n, v in marked.items() if v["kind"] == "customer"), None)
+                        line_marks = resolve.marks(resolve._line_model(w.input_model, lines))
+                        item = next((n for n, v in line_marks.items() if v["kind"] == "item"), None)
+                        item_args = [line.get(item) for line in args.get(lines, []) if isinstance(line, dict)] \
+                            if isinstance(args.get(lines), list) else []
+                        resolve.record_message_names(ctx, session, resolve.customers(ctx), resolve._items(ctx),
+                                                     customer, item_args, request)
+                        resolve.guard_messages(session)
+            except Planned as p:
+                store.record_demand(ctx.company_id, "c", p.route, request)
+                stop = {"type": "answer", "outcome": "c", "text": p.message, "capability": p.route}
+            except Refusal as rf:
+                stop = {"type": "ask", "text": rf.message, "code": rf.code, "options": rf.options,
+                        "data": public_data(rf.data)}
+            if stop is None:
+                rf = session.ask("changes", say("one_change"), "changes_ambiguous", [], [])
+                stop = {"type": "ask", "text": rf.message, "code": rf.code, "options": rf.options,
+                        "data": public_data(rf.data)}
             resolution = session.dump()
         elif writes and not (searched and not selected):
             session = Session.load(resolution)
@@ -479,6 +542,23 @@ def build_graph(engine: Engine, model: Model):
                         "options": rf.options, "data": public_data(data),
                         **({"capability": capability} if capability else {})}
             resolution = session.dump()
+        session = Session.load(resolution)
+        try:
+            # Catalogue routing runs no write; its choices and planned replies come first.
+            if writes and not (searched and not selected):
+                resolve.guard_messages(session)
+        except Planned as p:
+            if stop is None or stop.get("capability") != p.route:
+                store.record_demand(ctx.company_id, "c", p.route, request)
+            stop = {"type": "answer", "outcome": "c", "text": p.message, "capability": p.route}
+        except Refusal as rf:
+            stop = {"type": "ask", "text": rf.message, "code": rf.code, "options": rf.options,
+                    "data": public_data(rf.data)}
+        resolution = session.dump()
+        if state.get("claim"):
+            notice = _checkpoint_resolution(engine, state["claim"], state["request_id"], resolution or {})
+            if notice:
+                events.append(notice)
         lead = writes[rank[0]][0] if rank else None
         later = [writes[j] for j in rank[1:]]
         drafted = None  # the lead's contract and canonical arguments, once its card is made
@@ -490,6 +570,7 @@ def build_graph(engine: Engine, model: Model):
             if out_of_phase:  # a second search, a direct tool after a search, or a choice with nothing searched
                 event, resolution = _unsure_event(state, candidates, resolution)
                 events.append(event)
+                catalogue_reply = True
                 break
             if c["name"] in ("find_capability", "choose_capability") and not selected:
                 with read_only(engine) as conn:
@@ -516,10 +597,12 @@ def build_graph(engine: Engine, model: Model):
                     store.record_demand(company_id, d.outcome, d.entry.id if d.entry else None, request)
                 event, resolution = _capability_event(d, resolution)
                 events.append(event)
+                catalogue_reply = True
                 break  # the outcome ends the batch: nothing after it in this reply runs
             if selected and not _call_is_selected(selected, c["name"], args):
                 event, resolution = _unsure_event(state, candidates, resolution)
                 events.append(event)
+                catalogue_reply = True
                 break
             contract = REGISTRY.contracts.get(c["name"])
             if contract is not None and contract.planned:  # switched off: refused as planned
@@ -590,11 +673,9 @@ def build_graph(engine: Engine, model: Model):
                             contract.input_model.model_validate(state["reproposed"]).model_dump(mode="json"):
                         events.append({"type": "notice", "code": "card_set_aside", "text": say("card_unchanged")})
                         continue
-                    renew(state)  # the lease, immediately before the card is made
-                    out = approvals.propose(engine, contract, inp.model_dump(mode="json"),
-                                            state.get("conversation_id"), principal=who, date_source=source,
-                                            owner_words=request, request_card_token=state.get("token"),
-                                            replaces=state.get("pending_card"))
+                    session = Session.load(resolution)
+                    out = propose(state, contract, inp, session, principal=who, date_source=source,
+                                  owner_words=request, replaces=state.get("pending_card"))
                     events += not_done + dated  # the parts not done, said before the card and never part of it
                     events += approvals.card_events(out)
                     drafted = (contract, given)
@@ -611,7 +692,8 @@ def build_graph(engine: Engine, model: Model):
         if drafted is not None:  # each other write of the reply, said after the card it waits behind
             events += [one_at_a_time(drafted, (w, resolved[k].args)) for k, w, _ in later]
         return {"turn": turn, "events": events, "grounding": grounding, "reply": None,
-                "candidates": candidates, "selected": selected, "searched": searched, "resolution": resolution}
+                "candidates": candidates, "selected": selected, "searched": searched, "resolution": resolution,
+                "catalogue_reply": catalogue_reply}
 
     def after_tools(state: State) -> str:
         if state.get("events"):
@@ -733,7 +815,7 @@ def _controls(qid: str | None, kind: str, code: str, choices: list[dict]) -> lis
     candidate), at a part the engine cannot set (its own "Leave it" ends the request) or at one without an id; only
     cancel at a free question, which has no candidate to set aside, and at a confirm, whose own "someone else" is
     already one of its choices."""
-    if not qid or kind == "capability" or code.endswith("_choice_missing"):
+    if not qid or kind == "capability" or code.endswith("_choice_missing") or code == "money_name_ambiguous":
         return []
     words = resolve.table()["answers"]["someone_else"]
     own = kind == "free" or any(" ".join(c["label"].lower().split()) in words for c in choices)
@@ -877,6 +959,8 @@ class Assistant:
                 session.pending = {"id": rf.data.get("question_id"), "field": rf.data.get("field"), "choices": [
                     {"code": x["code"], "label": x["label"], "ref": x.get("ref", x["label"] if named else None)}
                     for x in rf.data.get("choices") or []]}
+            if rf.data.get("span_id"):
+                session.pending.update(span_id=rf.data["span_id"], text=rf.message)
             question = dict(session.pending, event=asked)
             said = [] if told else [{"type": "notice", "code": "card_set_aside", "text": SET_ASIDE.format(title=title)},
                                     asked]
@@ -956,20 +1040,28 @@ class Assistant:
         said = store.messages(req["id"])
         mine = next(x for x in said if x["id"] == c.message_id)
         text = mine["text"]
+        session.owner_messages = [{**x, **store.message_resolution(x["id"])} for x in said]
         matched = resolve.match_answer(req["pending_question"], text, mine["choice"],  # before the model runs
                                        card_pending=bool(req["pending_card"]))
-        if matched and not store.mark_answer(c):
-            raise Stopped()
-        # the request's words: every owner message of it but those an answer consumed (L1, L4)
+        # the request's words: every owner message of it but those an answer consumed
         request_text = " ".join(x["text"] for x in said if not x["answer"] and not (matched and x is mine))
         picked = next((ch for ch in (req["pending_question"] or {}).get("choices") or []
                        if matched and matched[0] == "choice" and ch["code"] == matched[1]), None)
         leave = picked is not None and picked.get("ref") == LEAVE and \
             str(req["pending_question"].get("field") or "").rpartition(":")[2] in ASKED
+        if matched:
+            current_message = next(x for x in session.owner_messages if x["id"] == c.message_id)
+            current_message.update(answer=1, question_id=(req["pending_question"] or {}).get("id"),
+                                   field=(req["pending_question"] or {}).get("field"),
+                                   answer_ref=picked.get("ref") if picked else None,
+                                   choice_label=picked.get("label") if picked else None)
         if matched == ("control", "cancel") or leave:  # the request ends; its pending card is declined
             if req["pending_card"]:
                 approvals.decline(self.engine, req["pending_card"], principal)
             events = notices + [{"type": "answer", "text": say("cancelled"), "checked": "engine"}]
+            session.end()
+            if not store.save_resolution(c, req["id"], session.dump()):
+                raise Stopped()
             if not store.finalise(c, req["id"], events, pending_question=None, pending_card=None, state="ended",
                                   why="cancelled", serial_now=session.serial, bindings_now={}, intent_state="unused"):
                 return [{"type": "refused", "code": "busy", "text": say("busy")}]
@@ -979,11 +1071,21 @@ class Assistant:
             session.answer(matched[1])
         elif matched:
             session.control(matched[1])
-        elif (req["pending_question"] or {}).get("choices") and req["pending_question"].get("event"):
+        elif (req["pending_question"] or {}).get("choices") and req["pending_question"].get("event") and \
+                not req["pending_question"].get("span_id"):
             with read_only(self.engine) as conn:
                 ctx = company_ctx(conn)
                 said_values = resolve.inventory(ctx, text, resolve._items(ctx))
             if not said_values:  # a reply naming no choice and no value: the same question, its codes still valid
+                try:
+                    contract_name = str(req["pending_question"].get("field") or "").partition("#")[0]
+                    contract = REGISTRY.contracts.get(contract_name)
+                    if contract and any(v["kind"] == "lines" for v in resolve.marks(contract.input_model).values()):
+                        resolve.guard_messages(session)
+                except Planned as p:
+                    store.record_demand(company_id, "c", p.route, text)
+                    return self._finish(c, req, notices + [{"type": "answer", "outcome": "c", "text": p.message,
+                                                           "capability": p.route}], session, None)
                 return self._finish(c, req, notices + [req["pending_question"]["event"]], session,
                                     req["pending_question"])
         pending = approvals.pending_card(self.engine, cid) if req["pending_card"] else None
@@ -1000,7 +1102,7 @@ class Assistant:
                                          "pending_card"] else None,
                                      "pending_card": pending["id"] if pending and pending["id"] == req[
                                          "pending_card"] else None,
-                                     "claim": c, "token": req["token"],
+                                     "claim": c, "token": req["token"], "request_id": req["id"],
                                      "turn": [{"role": "user", "content": text}], "events": [], "grounding": [],
                                      "requests": 0, "reply": None, "candidates": [], "selected": None, "searched": False,
                                      "principal_id": principal["id"] if principal else None,
@@ -1019,7 +1121,7 @@ class Assistant:
         session = Session.load(out.get("resolution"))
         last = events[-1] if events else {"type": "answer", "text": ""}
         question = dict(session.pending, event=last) if last["type"] == "ask" and session.pending else None
-        return self._finish(c, req, events, session, question)
+        return self._finish(c, req, events, session, question, catalogue_reply=out.get("catalogue_reply", False))
 
     def _set_aside(self, c: store.Claim, req: dict, last: dict, question: dict | None = None) -> dict | None:
         """The request's pending card, set aside by a turn that ends with anything but a new card (a question, a
@@ -1052,10 +1154,34 @@ class Assistant:
             return {"type": "notice", "code": "card_set_aside", "text": SET_ASIDE.format(title=out.data["title"]) + again}
         return {"type": "notice", "code": "card_already_ended", "text": out.text}  # an approval won the card's row
 
-    def _finish(self, c: store.Claim, req: dict, events: list[dict], session: Session, question: dict | None) -> list:
+    def _finish(self, c: store.Claim, req: dict, events: list[dict], session: Session, question: dict | None,
+                *, catalogue_reply: bool = False) -> list:
         """The request's new state from the turn's events, the pending card set aside when the turn ends without a
         new card, and the turn written in one short transaction."""
         cid = c.conversation_id
+        if not session.owner_messages:
+            session.owner_messages = [{**x, **store.message_resolution(x["id"])} for x in store.messages(req["id"])]
+        try:
+            # A catalogue outcome runs nothing and already has its own reply. A later write still
+            # checks every original message before proposing a card.
+            if not catalogue_reply:
+                resolve.guard_messages(session)
+        except Planned as p:
+            if not any(e.get("capability") == p.route and e.get("outcome") == "c" for e in events):
+                with read_only(self.engine) as conn:
+                    company_id = company_ctx(conn).company_id
+                store.record_demand(company_id, "c", p.route, " ".join(msg["text"] for msg in session.owner_messages))
+            events = [e for e in events if e["type"] == "notice"] + [
+                {"type": "answer", "outcome": "c", "text": p.message, "capability": p.route}]
+            question = None
+        except Refusal as rf:
+            event = {"type": "ask", "text": rf.message, "code": rf.code, "options": rf.options,
+                     "data": public_data(rf.data)}
+            events = [e for e in events if e["type"] == "notice"] + [event]
+            question = dict(session.pending, event=event)
+        notice = _checkpoint_resolution(self.engine, c, req["id"], session.dump())
+        if notice:
+            events = [notice, *events]
         events = [_asked(e) for e in events]
         if question is not None and question.get("event"):
             question = {**question, "event": _asked(question["event"])}

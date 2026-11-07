@@ -31,6 +31,8 @@ the conversation fence, the card, then the rest.
 """
 from __future__ import annotations
 
+from . import approval_scope
+
 import hashlib
 import hmac
 import json
@@ -45,7 +47,7 @@ from sqlalchemy.engine import Connection, Engine
 
 from . import ledger, models as m
 from . import principals as pr
-from .common import Refusal, audit, company_ctx, new_id, now
+from .common import Ctx, Refusal, audit, company_ctx, new_id, now
 from .contracts import (Contract, Result, amount_dicts, check_amount_names, check_card_amounts, no_date_sentence,
                         planned_capability, planned_reply)
 from .db import metadata, read_only
@@ -178,8 +180,8 @@ def check_date_source(ctx, contract: Contract, inp, source: dict, owner_words: s
 
 
 def _preview(ctx, contract: Contract, inp, date_source: dict | None = None) -> dict:
-    """The card the owner sees: the contract's preview, with the company first and the validity footer last
-    (the card's field list), and its date's source last among its lines when the assistant drafted it."""
+    """The card the owner sees: the contract's preview, with the company first and the validity footer last,
+    and its date's source last among its lines when the assistant drafted it."""
     card = contract.preview(ctx, inp).card.as_dict()
     card["lines"] = [["Company", ctx.company_name], *[list(x) for x in card["lines"]]]
     card["footer"] = (card["footer"] + " " if card["footer"] else "") + FOOTER
@@ -539,7 +541,7 @@ class _Invalid(Exception):
 
 
 def _lock_read_set(conn: Connection, ctx, rs: list) -> None:
-    """Spec 2.3, steps 3 and 4, in the one lock order: the chain head, the fiscal years and periods of the read
+    """Lock in the one order: the chain head, the fiscal years and periods of the read
     set (periods by start date), then its document rows the runtime role may change, by table then id. Rows of
     tables it may not change (company, party, item) are compared by digest only."""
     ledger.lock_chain(ctx)
@@ -596,6 +598,11 @@ def _end_before_claim(engine: Engine, a, r: Refusal, seen: dict) -> Outcome:
     if now_card["status"] == "consumed":
         return read_back(engine, a["operation_key"], seen)
     return Outcome(now_card["status"], GONE.get(now_card["status"], "That card can no longer be approved."), a["id"])
+
+
+def committing(ctx: Ctx) -> str | None:
+    """Name the current live Core approval; the returned ID is ordinary data, not authority."""
+    return approval_scope.committing(ctx)
 
 
 def approve(engine: Engine, approval_id: str, digest_sent: str | None, principal: dict | None = None,
@@ -680,23 +687,26 @@ def approve(engine: Engine, approval_id: str, digest_sent: str | None, principal
             # registration order; the outcome in the same transaction. Only this context may run a write service.
             effect = conn.begin_nested()
             ctx.extra["commit"] = approval_id
-            try:
-                result: Result = contract.commit(ctx, inp, key)
-                check_amount_names(contract, result.amounts)
-                for check in list(ctx.checks.values()):
-                    check(ctx)
-                audit(ctx, f"commit:{contract.name}", approval_id=approval_id,
-                      detail={"operation_key": key, **result.data})
-                effect.commit()
-                stored = {"text": result.text, "data": result.data, "figures": result.figures,
-                          "amounts": amount_dicts(result.amounts)}
-                outcome = "committed"
-            except Refusal as r:
-                effect.rollback()
-                stored = {"text": f"Nothing was saved: {r.message}", **refusal_data(r)}
-                outcome = "refused"
-            finally:
-                ctx.extra.pop("commit", None)
+            with approval_scope._issue(ctx, approval_id, contract.name, key,
+                                       REGISTRY.contract_plugin.get(contract.name), effect):
+                try:
+                    result: Result = contract.commit(ctx, inp, key)
+                    check_amount_names(contract, result.amounts)
+                    for check_key, check in list(ctx.checks.items()):
+                        with approval_scope._check(ctx, check_key, check):
+                            check(ctx)
+                    audit(ctx, f"commit:{contract.name}", approval_id=approval_id,
+                          detail={"operation_key": key, **result.data})
+                    effect.commit()
+                    stored = {"text": result.text, "data": result.data, "figures": result.figures,
+                              "amounts": amount_dicts(result.amounts)}
+                    outcome = "committed"
+                except Refusal as r:
+                    effect.rollback()
+                    stored = {"text": f"Nothing was saved: {r.message}", **refusal_data(r)}
+                    outcome = "refused"
+                finally:
+                    ctx.extra.pop("commit", None)
             conn.execute(m.operation_outcome.insert().values(
                 key=key, company_id=a["company_id"], approval_id=approval_id, card_digest=a["digest"],
                 status=outcome, result_json=canonical(stored), committed_at=now()))

@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import OrderedDict, UserDict, deque
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,7 @@ from erpclaw_assistant.model import Reply, ScriptedModel, call
 from erpclaw_core import approvals, models as m
 from erpclaw_core.catalogue import catalogue
 from erpclaw_core.common import Refusal, company_ctx
-from erpclaw_core.contracts import Service, ServiceModel
+from erpclaw_core.contracts import Result, Service, ServiceModel
 from erpclaw_core.manifest import Manifest, ServiceDecl
 from erpclaw_core.plugins import REGISTRY, PluginRefused, Registry, call_service, check_installed
 
@@ -52,14 +53,39 @@ def _posted(engine) -> int:
 
 
 def _call(engine, name: str, inp, caller: str = CONSUMER, commit: bool = False):
-    """call_service on a fresh company context, rolled back afterwards; `commit` marks it as approve does."""
+    """Call in a real approved commit, or on a fresh context rolled back afterwards."""
+    if commit:
+        called = []
+
+        def approved_commit(ctx, approved_input, key):
+            try:
+                out = call_service(ctx, caller, name, inp)
+            except Refusal as refusal:
+                called.append(refusal)
+                raise  # approve must roll back and record the service's refusal
+            called.append(out)
+            return Result("Checked the service response.")
+
+        consumer = REGISTRY.plugins[CONSUMER]
+        consumer = replace(consumer, contracts=[
+            replace(c, commit=approved_commit) if c.name == "svc_post" else c
+            for c in consumer.contracts])
+        with pytest.MonkeyPatch.context() as patch:
+            sp.register(patch, REGISTRY.plugins[PROVIDER], consumer)
+            card = approvals.propose(engine, REGISTRY.contracts["svc_post"], {"amount": "1"})
+            assert card.status == "card"
+            outcome = approvals.approve(engine, card.approval_id, card.digest)
+        assert len(called) == 1
+        value = called[0]
+        assert outcome.status == ("refused" if isinstance(value, Refusal) else "committed"), outcome.text
+        if isinstance(value, Refusal):
+            raise value
+        return value
+
     with engine.connect() as conn:
         tx = conn.begin()
         try:
-            ctx = company_ctx(conn)
-            if commit:
-                ctx.extra["commit"] = "an approval"
-            return call_service(ctx, caller, name, inp)
+            return call_service(company_ctx(conn), caller, name, inp)
         finally:
             tx.rollback()
 

@@ -16,12 +16,13 @@ stay out of the tool schema the model sees. Language rules are data, one table p
 from __future__ import annotations
 
 import re
+import secrets
 import unicodedata
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import Callable, get_args
+from typing import Callable, Iterable, get_args
 
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -32,6 +33,7 @@ from erpclaw_core.catalogue import planned_instead
 from erpclaw_core.common import Ctx, Refusal, is_question
 from erpclaw_core.masters import STOP, _distance, _norm, customers, regular_plural, same_word
 from erpclaw_core.money import fmt_rate
+from erpclaw_core.plugins import call_service
 
 # ---------- the language tables (English ships; another language is a new table, never code) ----------
 
@@ -463,10 +465,20 @@ def bounded_names(ws: list[str], names: list[str], *, item: bool, lang: str | No
         return any(len(s) > k and ((s[-k - 1] == w and same(s[-k:], nw)) if before else (same(s[:k], nw) and s[k] == w))
                    for s in stored)
 
-    def bounds(nw: list[str], w: str | None, before: bool, after: str | None = None, marked: bool = False,
-               then: str | None = None) -> bool:
+    def bounds(nw: list[str], pos: int, before: bool) -> bool:
+        w = ws[pos] if 0 <= pos < len(ws) else None
         if not bounded or w is None or w.isdigit():
             return True
+        if not before and w in t["weekday_ahead"] | t["weekday_behind"] and \
+                pos + 1 < len(ws) and ws[pos + 1] in t["weekdays"]:
+            # A qualified weekday has the same name guards as a bare day, including its qualifier.
+            if continues(nw, w, before) or any(s and s[0] == w for s in stored):
+                return False
+            pos += 1
+            w = ws[pos]
+        after = ws[pos + 1] if pos + 1 < len(ws) else None
+        then = ws[pos + 2] if pos + 2 < len(ws) else None
+        marked = pos in breaks
         if (w in t["quantity"] or w in t["scales"]) and ((item and before) or (not before and w not in t["articles"])):
             edge = nw[0] if before else nw[-1]  # a number word after a name, or before an item: a quantity
             return not (edge in t["quantity"] or edge in t["scales"]) and not continues(nw, w, before)
@@ -495,10 +507,7 @@ def bounded_names(ws: list[str], names: list[str], *, item: bool, lang: str | No
             run = ws[i:i + k]
             if run[:-1] != nw[:-1] or not (run[-1] == nw[-1] or (item and same_word(run[-1], nw[-1]))):
                 continue
-            if bounds(nw, ws[i - 1] if i else None, True) and \
-                    bounds(nw, ws[i + k] if i + k < len(ws) else None, False,
-                           ws[i + k + 1] if i + k + 1 < len(ws) else None, (i + k) in breaks,
-                           ws[i + k + 2] if i + k + 2 < len(ws) else None):
+            if bounds(nw, i - 1, True) and bounds(nw, i + k, False):
                 found.append(Found(name, i, i + k))
     return [f for f in found if not any(g.start <= f.start and f.end <= g.end and (g.end - g.start) > (f.end - f.start)
                                         for g in found)]
@@ -551,6 +560,8 @@ class Session:
     pending: dict | None = None  # {"id", "field", "choices": [{"code", "label", "ref"}]}
     bindings: dict = field(default_factory=dict)  # field path -> canonical reference (None: "someone else")
 
+    owner_messages: list[dict] = field(default_factory=list)
+
     def answer(self, code: str) -> bool:
         """Bind the pending question's field by a choice's full code; any other code binds nothing. A choice whose
         reference names fields ({"invoice": ...} or {"oldest_first": true}) binds each of them."""
@@ -558,7 +569,12 @@ class Session:
             return False
         for c in self.pending["choices"]:
             if c["code"] == code:
-                if isinstance(c["ref"], dict):  # each field it names, within the question's own write
+                if self.pending.get("span_id"):
+                    for msg in self.owner_messages:
+                        for span in msg["spans"]:
+                            if span["id"] == self.pending["span_id"]:
+                                span["classification"] = c["ref"]
+                elif isinstance(c["ref"], dict):  # each field it names, within the question's own write
                     scope = self.pending["field"].rpartition(":")[0]
                     self.bindings.update({f"{scope}:{k}" if scope else k: val for k, val in c["ref"].items()})
                 else:
@@ -566,6 +582,11 @@ class Session:
                 self.pending = None
                 return True
         return False
+
+    def record_free_answer(self, path: str) -> None:
+        """Keep the question identity when a resolver consumes a free answer's value."""
+        if self.owner_messages and self.pending and self.pending["field"] == path and not self.pending["choices"]:
+            self.owner_messages[-1].update(question_id=self.pending["id"], field=path)
 
     def control(self, name: str) -> None:
         """A control action at the pending question: "someone_else" leaves its field bound to no candidate, so the
@@ -579,12 +600,14 @@ class Session:
 
     def dump(self) -> dict:
         """Plain data, for the turn's saved state; the references stay in the engine's state, never in an event."""
-        return {"serial": self.serial, "pending": self.pending, "bindings": dict(self.bindings)}
+        return {"serial": self.serial, "pending": self.pending, "bindings": dict(self.bindings),
+                **({"owner_messages": self.owner_messages} if self.owner_messages else {})}
 
     @classmethod
     def load(cls, data: dict | None) -> "Session":
         data = data or {}
-        return cls(int(data.get("serial", 0)), data.get("pending"), dict(data.get("bindings") or {}))
+        return cls(int(data.get("serial", 0)), data.get("pending"), dict(data.get("bindings") or {}),
+                   list(data.get("owner_messages") or []))
 
     def ask(self, path: str, text: str, code: str, labels: list[str], refs: list, **data) -> Refusal:
         """The field's question: its id, and one single-use code per choice; the event carries no reference."""
@@ -633,6 +656,15 @@ def match_answer(pending: dict | None, text: str, choice: str | None = None,
     if not pending:
         return ("control", "cancel") if card_pending and said in table()["answers"]["cancel"] else None
     choices = pending.get("choices") or []
+    if pending.get("span_id"):
+        if choice is not None:
+            if any(c["code"] == choice for c in choices):
+                return ("choice", choice)
+            return ("control", "cancel") if choice == f"{pending['id']}-cancel" else None
+        if said in table()["answers"]["cancel"]:
+            return ("control", "cancel")
+        exact = [c for c in choices if c["label"].strip().casefold() == text.strip().casefold()]
+        return ("choice", exact[0]["code"]) if len(exact) == 1 else None
     if choice is not None:
         if any(c["code"] == choice for c in choices):
             return ("choice", choice)
@@ -1088,6 +1120,11 @@ def _resolve_record(rows: list[dict], what: str, text: str, arg, session: Sessio
             return session.bindings[path]
         raise session.ask(path, _missing(what), f"{what}_missing", [], [])
     ws = words(text)
+    confirmed = {s["name"] for msg in session.owner_messages for s in msg["spans"]
+                 if s["kind"] == what and s.get("classification") == "name"}
+    named_whole = {f.name for f in bounded_names(ws, [r["name"] for r in rows], item=item, bounded=False)}
+    if len(named_whole) == 1 and named_whole <= confirmed:
+        return next(iter(named_whole))
     either = _alternatives(ws, rows, item)
     if either:
         raise session.ask(path, _say("which", what=what, names=", ".join(either)), f"{what}_ambiguous", either, either)
@@ -1264,6 +1301,11 @@ def literal_quantity(value, text: str, item_name: str, session: Session, path: s
                      names: list[str] | None = None) -> str:
     """2.4: a number the owner wrote in digits, or the number word directly before the item's words (or before the
     item's own unit and "of": "two months of support retainer"); an omitted quantity is that one, if written."""
+    def taken(value):
+        if session.owner_messages and any(f == _decimal(value) for f, _, _ in figures(session.owner_messages[-1]["text"])):
+            session.record_free_answer(path)
+        return str(value)
+
     ws = words(text)
     # bounded among every stored item (`names`), so the guard sees a longer name; the item's own runs kept
     runs = [r for r in bounded_names(ws, names or [item_name], item=True, breaks=punct_after(text))
@@ -1275,12 +1317,12 @@ def literal_quantity(value, text: str, item_name: str, session: Session, path: s
         pass  # never guessed at: asked
     elif v is None:
         if len(set(before)) == 1:
-            return str(before[0])
+            return taken(before[0])
     elif before:  # the model's figure must be the one written before the item, never another of the owner's
         if v in before:
-            return str(v)
+            return taken(v)
     elif any(f == v and not _marks_at(text, st, en) for f, st, en in figures(text)):
-        return str(v)  # no quantity before the item's words: a figure the owner wrote, not a sum of money
+        return taken(v)  # no quantity before the item's words: a figure the owner wrote, not a sum of money
     raise session.ask(path, _say("quantity_missing", plural=_plural(item_name)), "quantity_missing", [], [])
 
 
@@ -1533,16 +1575,216 @@ def _due_date_asked(ws: list[str], text: str, today: date) -> bool:
     return False
 
 
-def planned_money(text: str, spans: list[Found], today: date) -> None:
+# Guard matching has its own alphabet; the stored message and the card keep the owner's text.
+_MONEY_LOOKALIKES = str.maketrans({
+    "А": "A", "а": "a", "Е": "E", "е": "e", "О": "O", "о": "o",
+    "Р": "P", "р": "p", "С": "C", "с": "c", "Х": "X", "х": "x",
+    "Т": "T", "т": "t", "Ѕ": "S", "ѕ": "s", "І": "I", "і": "i",
+    "Α": "A", "α": "a", "Β": "B", "β": "b", "Ε": "E", "ε": "e",
+    "Ο": "O", "ο": "o", "Τ": "T", "τ": "t", "Χ": "X", "χ": "x",
+})
+_MONEY_NUMBER = (
+    r"(?:\d+(?: \d+)?|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+    r"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|"
+    r"(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)"
+    r"(?: (?:one|two|three|four|five|six|seven|eight|nine))?|(?:one )?hundred|half)"
+)
+_MONEY_PERCENT = r"(?:%|per cent\b|percent\b|pct\b|pc\b)"
+MONEY_PATTERNS = (
+    ("tax", re.compile(
+        r"\b(?:tax|v ?a ?t|g ?s ?t|h ?s ?t)\b|"
+        r"\b(?:tax|vat|gst|hst)(?:inclusive|exclusive)\b|"
+        r"\b(?:incl|ex)(?:tax|vat|gst|hst)\b|"
+        r"\b\d+(?: \d+)? *% *(?:sales )?tax\b|\bplus tax\b")),
+    ("discount", re.compile(
+        r"\bdiscount(?:ed)?\b|"
+        rf"\b{_MONEY_NUMBER} *{_MONEY_PERCENT} *off\b|"
+        rf"\bless +{_MONEY_NUMBER} *{_MONEY_PERCENT}|"
+        r"\bhalf price\b|\boff list\b")),
+)
+
+
+def mask_money_spans(text: str, ranges: Iterable[tuple[int, int]]) -> str:
+    """Blank exempt ranges in original code points, preserving every other character and its position."""
+    masked = list(text)
+    for start, end in ranges:
+        if not 0 <= start <= end <= len(text):
+            raise ValueError("A name range must lie inside its original message")
+        masked[start:end] = " " * (end - start)
+    return "".join(masked)
+
+
+def normalise_money(text: str) -> str:
+    """Normalise only for money matching, keeping punctuation as word separators."""
+    visible = "".join(c for c in text if unicodedata.category(c) != "Cf")
+    folded = unicodedata.normalize("NFKC", visible).translate(_MONEY_LOOKALIKES)
+    separated = "".join(c if c.isalpha() or c.isdigit() or c == "%" or c.isspace() else " "
+                        for c in folded)
+    return " ".join(separated.casefold().split())
+
+
+def money_area(text: str, ranges: Iterable[tuple[int, int]] = ()) -> str | None:
+    """The first tax or discount instruction outside explicitly exempt original-text ranges."""
+    normal = normalise_money(mask_money_spans(text, ranges))
+    matches = [(match.start(), index, area) for index, (area, pattern) in enumerate(MONEY_PATTERNS)
+               if (match := pattern.search(normal)) is not None]
+    return min(matches)[2] if matches else None
+
+
+def consumed_ranges(text: str, name: str, *, item: bool = False, bounded: bool = False,
+                    runs: list[Found] | None = None) -> list[tuple[int, int]]:
+    """Project the resolver's matched word runs onto their original code points."""
+    found = runs if runs is not None else bounded_names(words(text), [name], item=item, bounded=bounded,
+                                                       breaks=punct_after(text))
+    tokens = [(mt.start(), mt.end()) for mt in re.finditer(r"\S+", text) if words(mt.group())]
+    raw = list(re.finditer(re.escape(name), text, re.I))
+    out = []
+    for f in found:
+        exact = next((mt for mt in raw if len(words(text[:mt.start()])) == f.start and
+                      len(words(text[:mt.end()])) == f.end), None)
+        if exact:
+            out.append((exact.start(), exact.end()))
+        elif f.end <= len(tokens):
+            a, b = tokens[f.start][0], tokens[f.end - 1][1]
+            while a < b and not text[a].isalnum():
+                a += 1
+            while b > a and not text[b - 1].isalnum():
+                b -= 1
+            out.append((a, b))
+    return out
+
+
+def record_message_names(ctx: Ctx, session: Session, custs: list[dict], items: list[dict],
+                         customer_arg=None, item_args: list | None = None, resolution_text: str | None = None) -> None:
+    """Resolve name occurrences for each unfinished original message, never rewriting an earlier result."""
+    warehouses = None
+    for msg in session.owner_messages:
+        if msg.get("completed"):
+            continue
+        text = msg["text"]
+        msg["spans"] = []
+        money_answer = str(msg.get("field") or "").startswith("money_span:")
+        if confirmation_choice_message(msg):
+            msg["completed"] = True
+            continue
+        groups = [("customer", custs, False), ("item", items, True)]
+        sources = warehouse_words(text, items, custs, ctx)
+        if sources or str(msg.get("field") or "").endswith("warehouse"):
+            if warehouses is None:
+                try:
+                    warehouses = call_service(ctx, "core", "stock.list_warehouses", {})["warehouses"]
+                except Refusal as rf:
+                    if rf.code != "plugin_not_enabled":
+                        raise
+                    warehouses = []
+            groups.append(("warehouse", warehouses, False))
+        for kind, rows, is_item in groups:
+            # Choice answers consume only the chosen reference, even if another stored name occurs beside it.
+            chosen = msg.get("answer_ref") if not money_answer else None
+            choice_answer = msg.get("question_id") and not money_answer
+            if choice_answer and (chosen is None or not str(msg.get("field") or "").endswith(kind)):
+                continue
+            if choice_answer:
+                consumed = [chosen] if chosen is not None else []
+            elif kind == "warehouse":
+                consumed = []
+                for source in sources:
+                    matches = [r["name"] for r in rows if _norm(r["name"]) == _norm(source.said) or
+                               (_norm(r["name"]) == "the " + _norm(source.said) and _raw_in(text, r["name"]))]
+                    if len(matches) == 1:
+                        consumed.extend(matches)
+            else:
+                consumed = []
+                arguments = item_args if is_item else [customer_arg]
+                for argument in arguments or []:
+                    try:
+                        resolving = resolution_text if resolution_text is not None else text
+                        if kind == "customer":
+                            source_spans = [Found(p.said, p.start, p.end)
+                                            for p in warehouse_words(resolving, items, custs, ctx)]
+                            resolving = without_names(resolving, source_spans)
+                        consumed.append(_resolve_record(rows, kind, resolving, argument, Session(), kind,
+                                                        item=is_item, peers=arguments))
+                    except Refusal as rf:
+                        # A full name awaiting confirmation can use the same choice to establish its meaning.
+                        if rf.data.get("confirm"):
+                            consumed.extend(n for n in rf.options if any(r["name"] == n for r in rows)
+                                            and _raw_in(text, n))
+            found = bounded_names(words(text), [r["name"] for r in rows], item=is_item,
+                                  bounded=not choice_answer and kind != "warehouse",
+                                  breaks=punct_after(text))
+            found = [f for f in found if f.name in consumed]
+            for name in set(consumed):
+                if isinstance(name, str) and money_area(name) and not any(f.name == name for f in found):
+                    found.extend(bounded_names(words(text), [name], item=is_item, bounded=False))
+            for f in found:
+                if chosen is not None and f.name != chosen:
+                    continue
+                for start, end in consumed_ranges(text, f.name, item=is_item, runs=[f]):
+                    if kind == "warehouse" and not choice_answer and not any(
+                            p.start <= len(words(text[:start])) < p.end for p in sources):
+                        continue
+                    if any(s["kind"] == kind and s["start"] == start and s["end"] == end for s in msg["spans"]):
+                        continue
+                    row = next(r for r in rows if r["name"] == f.name)
+                    area = money_area(text[start:end])
+                    msg["spans"].append({"id": secrets.token_hex(16), "start": start, "end": end,
+                                         "kind": kind, "record_id": row["warehouse"] if kind == "warehouse" else row["id"],
+                                         "name": row["name"],
+                                         "area": area, "question": None, "classification": None})
+        msg["spans"].sort(key=lambda s: (s["start"], s["end"]))
+        if session.pending and not session.pending["choices"] and msg is session.owner_messages[-1]:
+            path = session.pending["field"]
+            if any(path.endswith(s["kind"]) for s in msg["spans"]):
+                session.record_free_answer(path)
+        msg["completed"] = True
+
+
+def confirmation_choice_message(msg: dict) -> bool:
+    """Only the choice label itself (or an empty coded answer) is consumed as confirmation text."""
+    return str(msg.get("field") or "").startswith("money_span:") and (
+        not msg["text"].strip() or msg["text"].strip().casefold() == str(msg.get("choice_label") or "").casefold())
+
+
+def guard_messages(session: Session) -> None:
+    """Read only recorded ranges and original text, including every answer in the request."""
+    for msg in session.owner_messages:
+        if confirmation_choice_message(msg):
+            continue
+        area = money_area(msg["text"], [(s["start"], s["end"]) for s in msg["spans"]
+                                      if s.get("classification") != "instruction"])
+        if area:
+            raise Planned(_say("tax" if area == "tax" else "discount"),
+                          "planned.tax_engine" if area == "tax" else "planned.discounts")
+    for msg in session.owner_messages:
+        for span in msg["spans"]:
+            if not span.get("area") or span.get("classification"):
+                continue
+            if span.get("question"):
+                pending = span["question"]
+                session.pending = pending
+                raise Refusal(pending["text"], "money_name_ambiguous", [c["label"] for c in pending["choices"]],
+                              field=pending["field"], question_id=pending["id"], span_id=span["id"],
+                              choices=[{k: c[k] for k in ("code", "label")} for c in pending["choices"]])
+            rf = session.ask(f"money_span:{span['id']}", f"Do you mean the {span['kind']} {span['name']}?",
+                             "money_name_ambiguous", [span["name"], "no, I mean tax or a discount"],
+                             ["name", "instruction"], span_id=span["id"])
+            session.pending.update(span_id=span["id"], text=rf.message)
+            span["question"] = dict(session.pending)
+            raise rf
+
+
+def planned_money(text: str, spans: list[Found], today: date, *, check_money: bool = True) -> None:
     """The parts that would make the card write something other than what the owner asked (amounts, dates):
     the whole request gets the planned reply. Words inside a resolved name never count."""
-    t, low = table(), text.lower()
+    t = table()
     outside = [w for k, w in enumerate(words(text)) if not any(f.start <= k < f.end for f in spans)]
-    if set(outside) & t["tax"] or re.search(t["tax_phrase"], low):
-        raise Planned(_say("tax"), "planned.tax_engine")
-    if set(outside) & t["discount"] or re.search(t["discount_phrase"], low) or \
-            any(_has_run(outside, r) for r in t["discount_words"]):
-        raise Planned(_say("discount"), "planned.discounts")
+    if check_money:
+        ranges = [r for f in spans for r in consumed_ranges(text, f.name, item=True, runs=[f])]
+        area = money_area(text, ranges)
+        if area:
+            raise Planned(_say("tax" if area == "tax" else "discount"),
+                          "planned.tax_engine" if area == "tax" else "planned.discounts")
     if any(_has_run(outside, r) for r in t["terms_words"]) or _due_date_asked(outside, text, today):
         raise Planned(_say("terms"), "planned.payment_terms")
 
@@ -1618,7 +1860,7 @@ def memo_qualifier(text: str) -> tuple[str, str]:
 
 
 def invoice_not_done(ctx: Ctx, text: str, spans: list[Found], lines: list[dict], items: list[dict],
-                     emailed: bool) -> list[dict]:
+                     emailed: bool, *, reads_date: bool = False) -> list[dict]:
     """Parts of an invoice request that change nothing written: one event each, beside the card."""
     t, low, out = table(), text.lower(), []
     if emailed or _outside(words(text), spans) & t["email"]:
@@ -1638,13 +1880,14 @@ def invoice_not_done(ctx: Ctx, text: str, spans: list[Found], lines: list[dict],
             out.append({"type": "not_done", "part": "rate", "capability": NOT_DONE["rate"], "text": _say(
                 "nd_rate", said=fmt_rate(said, ctx.currency), list=fmt_rate(rates[name], ctx.currency),
                 item=_plural(name))})
-    try:
-        dated = any(d != ctx.today for reading in date_phrases(without_names(text, spans), ctx.today)
-                    for d in reading)  # today: the default
-    except Refusal:
-        dated = True
-    if dated:
-        out.append({"type": "not_done", "part": "date", "capability": NOT_DONE["date"], "text": _say("nd_date")})
+    if not reads_date:
+        try:
+            dated = any(d != ctx.today for reading in date_phrases(without_names(text, spans), ctx.today)
+                        for d in reading)  # today: the default
+        except Refusal:
+            dated = True
+        if dated:
+            out.append({"type": "not_done", "part": "date", "capability": NOT_DONE["date"], "text": _say("nd_date")})
     if re.search(t["memo"], low):
         qualifier, notice = memo_qualifier(text)
         out.append({"type": "not_done", "part": "memo", "capability": NOT_DONE["memo"],
@@ -1714,11 +1957,55 @@ class WarehouseWords:
     item_start: int | None
 
 
-def warehouse_words(text: str, items: list[dict], custs: list[dict] = ()) -> list[WarehouseWords]:
+def _company_warehouse_names(ctx: Ctx) -> set[str]:
+    try:
+        rows = call_service(ctx, "core", "stock.list_warehouses", {})["warehouses"]
+    except Refusal as refusal:
+        if refusal.code != "plugin_not_enabled":
+            raise
+        return set()
+    return {_norm(r["name"]) for r in rows}
+
+
+def _trailing_date_start(text: str, start: int, end: int, today: date) -> int | None:
+    """Drop leading words only while the date reader still reads the same trailing phrases."""
+    reading, boundary = None, None
+    for j in range(start, end):
+        try:
+            got = date_phrases(_as_written(text, (j, end)), today)
+        except Refusal:
+            continue
+        if got and (reading is None or got == reading):
+            reading, boundary = got, j
+    if boundary is not None:
+        t = table()
+        joinable = t["date_touch"] | t["weekday_ahead"] | t["weekday_behind"] | \
+            set(t["quantity"]) | set(t["scales"]) | {"on", "the"}
+        ws = words(text)
+        while boundary > start and ws[boundary - 1] in joinable:
+            try:
+                got = date_phrases(_as_written(text, (boundary - 1, end)), today)
+            except Refusal:
+                break
+            if got != reading:
+                break
+            boundary -= 1
+    return boundary
+
+
+def warehouse_words(text: str, items: list[dict], custs: list[dict] = (),
+                    ctx: Ctx | None = None) -> list[WarehouseWords]:
     """A source phrase belongs to the nearest preceding item mention in its own sentence.
-    Keep unknown names too: the stock contract asks, rather than silently choosing a default.
+    Keep unknown stock sources; service sources must say warehouse or name one in the company.
     """
     t, ws, raw = table(), words(text), _raw_words(text)
+    services = {r["name"] for r in items if r.get("kind") == "service"}
+    warehouse_names = None
+    date_words = t["today"] | t["yesterday"] | t["tomorrow"] | set(t["weekdays"]) | \
+        t["date_vocab"] | t["calendar_words"] | t["weekday_ahead"] | t["weekday_behind"] | set(t["months"])
+    today = ctx.today if ctx is not None else date.today()
+    ago_runs = [(len(words(text[:mt.start()])), len(words(text[:mt.end()])))
+                for mt in re.finditer(_ago(), text.lower())]
     found = bounded_names(ws, [r["name"] for r in items], item=True, bounded=False)
     protected = found + bounded_names(ws, [r["name"] for r in custs], item=False, bounded=False)
     # Use the existing memo inventory's boundary; its owner text is not a stock-source instruction.
@@ -1741,6 +2028,7 @@ def warehouse_words(text: str, items: list[dict], custs: list[dict] = ()) -> lis
         while end < len(ws):
             if end > start and (ws[end] in t["warehouse_stops"] or
                                 (ws[end] in t["coordinators"] and end + 1 < len(ws) and
+                                 not any(a <= end < b for a, b in ago_runs) and
                                  (ws[end + 1].isdigit() or ws[end + 1] in t["quantity"] or
                                   ws[end + 1] in t["write_verbs"]))):
                 break
@@ -1749,17 +2037,34 @@ def warehouse_words(text: str, items: list[dict], custs: list[dict] = ()) -> lis
                 break
         if end == start:
             continue
-        # Without an item, only an explicit warehouse noun belongs to this reader (not a payment's payer).
-        if owner is None and "warehouse" not in ws[start:end]:
-            continue
-        out.append(WarehouseWords(i, end, _as_written(text, (start, end)),
+        dates = [j for j in range(start + 1, end) if ws[j] in date_words]
+        date_start = _trailing_date_start(text, start + 1, end, today)
+        if dates or date_start is not None or \
+                ((owner is None or owner.name in services) and "warehouse" not in ws[start:end]):
+            if warehouse_names is None:
+                warehouse_names = _company_warehouse_names(ctx) if ctx is not None else set()
+        if dates or date_start is not None:
+            # A stored name wins over calendar words inside it; dates after it remain the date reader's.
+            known_end = max((j for j in range(start + 1, end + 1)
+                             if _norm(_as_written(text, (start, j))) in warehouse_names), default=start)
+            date_start = _trailing_date_start(text, max(start + 1, known_end), end, today)
+            if date_start is not None:
+                dates.append(date_start)
+            end = min((j for j in dates if j >= known_end), default=end)
+        said = _as_written(text, (start, end))
+        # An unattached known warehouse must reach occurrence accounting, rather than disappear as a payer.
+        if (owner is None or owner.name in services) and "warehouse" not in ws[start:end]:
+            if _norm(said) not in warehouse_names:
+                continue
+        out.append(WarehouseWords(i, end, said,
                                   owner.name if owner else None, owner.start if owner else None))
     return out
 
 
-def _warehouse(ctx: Ctx, text: str, item: dict, items: list[dict], custs: list[dict],
+def _warehouse(ctx: Ctx, item: dict, phrases: list[WarehouseWords],
                session: Session, path: str, mark: dict) -> str | None:
-    phrases = [p for p in warehouse_words(text, items, custs) if p.item == item["name"]]
+    if item.get("kind") != "stock" and session.bindings.get(path) is False:
+        return None  # the owner's choice to omit this line's source; None remains "someone else"
     if path in session.bindings:
         said = session.bindings[path]
     elif len(phrases) == 1:
@@ -1773,7 +2078,13 @@ def _warehouse(ctx: Ctx, text: str, item: dict, items: list[dict], custs: list[d
         raise session.ask(path, "Which warehouse should this item come from?", "warehouse_ambiguous", [], [])
     if item.get("kind") != "stock":
         raise session.ask(path, f"{item['name']} is a service item; it cannot come from a warehouse.",
-                          "warehouse_ambiguous", [], [])
+                          "warehouse_ambiguous", ["Invoice it without a warehouse"], [False])
+    for msg in session.owner_messages:
+        for span in msg["spans"]:
+            if span["kind"] == "warehouse" and span.get("classification") == "name" and \
+                    _norm(span["name"]) == "the " + _norm(said):
+                said = span["name"]
+                session.bindings[path] = said
     try:
         return mark["resolve"](ctx, item, said)["name"]
     except Refusal as refusal:
@@ -1838,15 +2149,26 @@ def resolve_args(ctx: Ctx, contract, args: dict, text: str, session: Session, pe
     item_rows = _items(ctx) if lines_field else []
     spans = bounded_names(ws, [r["name"] for r in cust_rows], item=False, breaks=punct_after(text)) + \
         bounded_names(ws, [r["name"] for r in item_rows], item=True, breaks=punct_after(text))
-    spans += [Found(p.said, p.start, p.end) for p in warehouse_words(text, item_rows, cust_rows)]
+    source_spans = [Found(p.said, p.start, p.end) for p in warehouse_words(text, item_rows, cust_rows, ctx)]
+    spans += source_spans
+    customer_text = without_names(text, source_spans) if lines_field else text
     emailed = False
+    warehouse_not_done = []
     for name, v in mk.items():  # a switched-off option is removed, never refused for the whole request
         if v["kind"] == "off":
             emailed = bool(out.pop(name, False)) or emailed
     lm = marks(_line_model(contract.input_model, lines_field)) if lines_field else {}
     item_field = next((k for k, v in lm.items() if v["kind"] == "item"), None)
+    customer_arg = next((out.get(n) for n, v in mk.items() if v["kind"] == "customer"), None)
+    item_args = [line.get(item_field) for line in out.get(lines_field, []) if isinstance(line, dict)] \
+        if isinstance(out.get(lines_field), list) else []
+    if lines_field and (out.get(lines_field) == [] or (
+            out.get(lines_field) is None and mk[lines_field].get("presence") != "optional")):
+        item_args = [None]  # the implicit line resolves its item from the owner's words, just like an explicit line
+    record_message_names(ctx, session, cust_rows, item_rows, customer_arg, item_args, text)
     if lines_field:
-        planned_money(text, spans, ctx.today)
+        guard_messages(session)
+        planned_money(text, spans, ctx.today, check_money=not bool(session.owner_messages))
         # the planned stock reply, before any item question: a stock word, and no item's full name anywhere in
         # the owner's words (bounded or not), so an item question could only steer the owner to a service item
         if not bounded_names(ws, [r["name"] for r in item_rows], item=True, bounded=False):
@@ -1879,7 +2201,7 @@ def resolve_args(ctx: Ctx, contract, args: dict, text: str, session: Session, pe
                 or path in session.bindings or bool(out.get(name) and _owner_words_taken(ws, text, out.get(name))) \
                 or any((set(_norm(r["name"]).split()) - STOP) & set(ws) for r in cust_rows)
             got = None if named else v["derive"](ctx, out)
-            out[name] = got if got is not None else resolve_record(cust_rows, "customer", text, out.get(name),
+            out[name] = got if got is not None else resolve_record(cust_rows, "customer", customer_text, out.get(name),
                                                                    session, path, item=False,
                                                                    peers=peers["customer"],
                                                                    alike=peers["customer_calls"].get(contract.name))
@@ -1891,11 +2213,11 @@ def resolve_args(ctx: Ctx, contract, args: dict, text: str, session: Session, pe
             if presence == "optional" and not out.get(name) and \
                     not _named_records(cust_rows, text, [f.name for f in spans if f.name in cust_names]):
                 continue
-            out[name] = resolve_record(cust_rows, "customer", text, out.get(name), session, path, item=False,
+            out[name] = resolve_record(cust_rows, "customer", customer_text, out.get(name), session, path, item=False,
                                        peers=peers["customer"], alike=peers["customer_calls"].get(contract.name))
         elif kind == "lines":
             if presence == "optional" and out.get(name) is None:
-                out.pop(name, None)  # Delivery/credit: omitted means the rest/everything, not an empty item.
+                out.pop(name, None)  # delivery/credit: omitted means the rest/everything, not an empty item.
                 continue
             if not _lines_shape(out.get(name)):
                 continue  # not a list of objects: validation sends it back to the model
@@ -1913,10 +2235,21 @@ def resolve_args(ctx: Ctx, contract, args: dict, text: str, session: Session, pe
                                                      names=[r["name"] for r in item_rows])
                     elif fv["kind"] == "warehouse":
                         item = next(r for r in item_rows if r["name"] == li[item_field])
-                        chosen = _warehouse(ctx, text, item, item_rows, cust_rows, session, path, fv)
+                        # Match repeated names in line order, just as occurrence accounting claims each item.
+                        mentions = [f for f in bounded_names(ws, [r["name"] for r in item_rows],
+                                                            item=True, bounded=False) if f.name == item["name"]]
+                        ordinal = sum(previous[item_field] == item["name"] for previous in new)
+                        item_start = mentions[ordinal].start if ordinal < len(mentions) else None
+                        phrases = [p for p in warehouse_words(text, item_rows, cust_rows, ctx)
+                                   if p.item == item["name"] and item_start is not None and p.item_start == item_start]
+                        chosen = _warehouse(ctx, item, phrases, session, path, fv)
                         li.pop(fname, None)
                         if chosen is not None:
                             li[fname] = chosen
+                        elif session.bindings.get(path) is False:
+                            source = ", ".join(p.said for p in phrases)
+                            warehouse_not_done.append({"type": "not_done", "part": "warehouse",
+                                                       "text": f"The warehouse source {source} was not used for {item['name']}."})
                 new.append(li)
             out[name] = new
         elif kind == "figure":
@@ -1926,6 +2259,8 @@ def resolve_args(ctx: Ctx, contract, args: dict, text: str, session: Session, pe
         elif kind == "date":
             order = getattr(ctx, "date_order", None) or ctx.extra.get("date_order")
             d = resolve_date(without_names(text, spans), ctx.today, session, path, out.get(name), order)
+            if d is None and contract.input_model.model_fields[name].is_required():
+                d = ctx.today  # a required date has no contract default to supply today
             if d is None:
                 out.pop(name, None)  # absent: the contract's default (today)
             else:
@@ -1971,9 +2306,10 @@ def resolve_args(ctx: Ctx, contract, args: dict, text: str, session: Session, pe
                 out[name] = said[0]
             else:
                 out.pop(name, None)
-    events = invoice_not_done(ctx, text, spans, out[lines_field], item_rows, emailed) \
+    events = invoice_not_done(ctx, text, spans, out[lines_field], item_rows, emailed,
+                              reads_date=any(v["kind"] == "date" for v in mk.values())) \
         if lines_field and _lines_shape(out.get(lines_field)) else []
-    return Result(out, events)
+    return Result(out, events + warehouse_not_done)
 
 
 # ---------- several writes in one reply: one card, in the owner's order ----------
@@ -2126,7 +2462,7 @@ def inventory(ctx: Ctx, text: str, items: list[dict]) -> list[Occurrence]:
         stop = re.search(r"[.;!?](?:\s|$)", text[memo.start():])
         add("memo", at(memo.start()), at(memo.start() + stop.start()) if stop else len(ws), text[memo.start():])
     custs = customers(ctx)
-    for p in warehouse_words(text, items, custs):
+    for p in warehouse_words(text, items, custs, ctx):
         add("warehouse", p.start, p.end, p.said, {"item": p.item, "item_start": p.item_start})
     for mt in re.finditer(r"[^\s,;<>()]+@[^\s,;<>()]+\.[a-z]+", low):  # a customer's email is a mention of it;
         hit = [r["name"] for r in custs if (r.get("email") or "").lower() == mt.group(0)]  # another is emailing
@@ -2224,6 +2560,12 @@ def unclear_numerals(text: str) -> list[str]:
         after = re.match(r"\s+(\d[\d.,]*)", text[mt.end():])
         if re.fullmatch(r"\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}(?:/(?:\d{2}|\d{4}))?|\d{1,2}\.\d{1,2}\.\d{4}", raw):
             continue  # a figure date
+        before = words(text[:mt.start()])
+        month = table()["months"].get(before[-1]) if before else None
+        year = after.group(1).rstrip(".,") if after else ""
+        if not spaced and month and raw.isdigit() and len(raw) <= 2 and len(year) == 4 and year.isdigit() and \
+                _recent(date.min, month, int(raw), int(year)) is not None:
+            continue  # a named month's day and year, as date_phrases reads them
         if spaced or not NUMERAL.match(raw) or (after and not re.search(r"[a-zA-Z]", text[mt.end():mt.end() + 1])
                                                and NUMERAL.match(after.group(1).rstrip(".,"))):
             out.append(text[mt.start():mt.end()] + (after.group(0) if after else ""))
@@ -2283,6 +2625,11 @@ def account(ctx: Ctx, text: str, calls: list[tuple[object, dict]], results: list
             val = args.get(name)
             if v["kind"] == "customer" and val:  # one mention of it, if the owner wrote one (else answered or derived)
                 claim("customer", lambda o, val=val: mentions(val, o))
+                confirmed_mentions = sum(s["kind"] == "customer" and s["name"] == val and
+                                         s.get("classification") == "name"
+                                         for msg in session.owner_messages for s in msg["spans"])
+                for _ in range(max(0, confirmed_mentions - 1)):
+                    claim("customer", lambda o, val=val: mentions(val, o))
             elif v["kind"] == "document" and val:
                 claim("document", lambda o, val=val: _same_document(o.said, val) or o.said == str(val))
                 party = v.get("party")
@@ -2309,8 +2656,9 @@ def account(ctx: Ctx, text: str, calls: list[tuple[object, dict]], results: list
                 wm = next((n for n, fv in lm.items() if fv["kind"] == "warehouse"), None)
                 for line_index, li in enumerate(val or []):
                     it = claim("item", lambda o, li=li: mentions(li.get(im), o))
-                    if wm and li.get(wm) is not None:
-                        bound = f"{scopes[k]}{name}.{line_index}.{wm}" in session.bindings
+                    warehouse_path = f"{scopes[k]}{name}.{line_index}.{wm}"
+                    if wm and (li.get(wm) is not None or session.bindings.get(warehouse_path) is False):
+                        bound = warehouse_path in session.bindings
                         claim("warehouse", lambda o, li=li, it=it, bound=bound:
                               o.value["item"] == li.get(im) and it is not None and
                               o.value["item_start"] == it.start and (bound or _norm(o.said) == _norm(li[wm])))

@@ -25,7 +25,7 @@ def test_committed_lost_response_then_revoked_view_keeps_receipt_and_recovers(
     engine, runtime_login, monkeypatch, tmp_path
 ):
     admin = engine
-    # This integration harness runs only on the task's dedicated loopback test books.
+    # This integration harness runs only on dedicated loopback test books.
     assert (admin.url.host, admin.url.port, admin.url.database, admin.url.username) == (
         "127.0.0.1", 55465, "m3_t5_receipt_test", "m3_t5_receipt_owner"
     )

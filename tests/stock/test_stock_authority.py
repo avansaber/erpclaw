@@ -60,7 +60,7 @@ def test_the_commit_flag_with_no_approval_behind_it_is_refused(stocked):
         ctx.extra["commit"] = new_id()  # set by hand: no approval row has this id
         with pytest.raises(Refusal) as caught:
             call_service(ctx, CONSUMER, "stock.issue", _issue_input(stocked))
-        assert caught.value.code == "not_approved"
+        assert caught.value.code == "service_outside_commit"
         with pytest.raises(Refusal) as caught:  # the module's own function, called directly, fails closed too
             stock.issue(ctx, "sales_invoice", "inv-x", WHEN, [{"item": stocked["item"],
                                                                "warehouse": stocked["warehouse"], "qty": "1"}])
@@ -116,7 +116,12 @@ def test_the_trusted_path_cannot_be_reached_through_a_service():
     """The services are the only way in from another plugin, the assistant or the API: none takes an authority, and
     an input naming one is refused before the service runs."""
     services = {k: v for k, v in REGISTRY.services.items() if k.startswith("stock.")}
-    assert len(services) == 8
+    assert set(services) == {
+        "stock.stock_on_hand", "stock.choose_warehouse", "stock.preview_issue", "stock.issue",
+        "stock.preview_return", "stock.return_in", "stock.preview_reverse", "stock.reverse_movements",
+        "stock.list_warehouses", "stock.preview_create_warehouse", "stock.create_warehouse",
+        "stock.preview_make_stock_item", "stock.make_stock_item",
+    }
     for name, sv in services.items():
         fields = set(sv.input_model.model_fields)
         assert not fields & {"trusted", "authority", "commit"}, name

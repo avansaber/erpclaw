@@ -5,17 +5,19 @@ the long-running process: the runtime role may read principals and grants and
 lock a principal's row, but not change either, so under its credential each
 of these fails with permission denied. A grant change takes only the
 principal's row FOR UPDATE and bumps its grants_version; cards are
-invalidated lazily, so no card row is taken here.
+invalidated lazily by their grants version, so no card row is taken here.
 """
 from __future__ import annotations
 
+import base64
 import secrets
+from datetime import timedelta
 
 from sqlalchemy import select, update
 
 from . import models as m
 from .common import Refusal, audit, company_ctx, new_id, now
-from .principals import OWNER, token_digest
+from .principals import OWNER, code_digest, token_digest
 
 OWNER_ONLY = True  # the runtime-policy scanner skips this module (tests/test_runtime_role.py)
 
@@ -94,7 +96,79 @@ def revoke(conn, name: str, permissions, company_id: str) -> int:
 def disable(conn, name: str) -> int:
     p = _locked(conn, name)
     conn.execute(update(m.principal).where(m.principal.c.id == p["id"]).values(disabled=True))
+    end_sessions(conn, p["id"], "disabled", OWNER)
+    _cancel_codes(conn, p, OWNER, unexpired_only=False)
     return _bump(conn, p)
+
+
+def _principal_audit(conn, p: dict, actor: str, action: str, **detail) -> None:
+    """Principals belong to the books; attach their audit to an existing company."""
+    cid = conn.execute(select(m.company.c.id).order_by(m.company.c.id).limit(1)).scalar()
+    ctx = company_ctx(conn, actor=actor, company_id=cid)
+    audit(ctx, action, "principal", p["id"], detail={"principal": p["name"], **detail})
+
+
+def mint_sign_in_code(conn, name: str, actor: str, run_id: str | None = None) -> str:
+    """Return a single-use, ten-minute code once; store only its hash in this transaction."""
+    p = _locked(conn, name)
+    if p["disabled"]:
+        raise Refusal(f"The principal {name} is disabled; a sign-in code cannot be made.", "forbidden")
+    code = base64.b32encode(secrets.token_bytes(16)).decode("ascii").rstrip("=")
+    at = now()
+    conn.execute(m.principal_sign_in.insert().values(
+        code_sha256=code_digest(code), principal_id=p["id"], created_at=at,
+        expires_at=at + timedelta(minutes=10), used_at=None, created_by=actor, run_id=run_id))
+    _principal_audit(conn, p, actor, "mint_sign_in_code")
+    return code
+
+
+def _cancel_codes(conn, p: dict, actor: str, *, unexpired_only: bool) -> int:
+    at = now()
+    t = m.principal_sign_in
+    q = update(t).where(t.c.principal_id == p["id"], t.c.used_at.is_(None))
+    if unexpired_only:
+        q = q.where(t.c.expires_at > at)
+    count = conn.execute(q.values(used_at=at)).rowcount
+    if count:
+        _principal_audit(conn, p, actor, "cancel_sign_in_codes", count=count)
+    return count
+
+
+def cancel_sign_in_codes(conn, name: str, actor: str) -> int:
+    """Use every still-valid code of this principal, preserving used and expired history."""
+    return _cancel_codes(conn, _locked(conn, name), actor, unexpired_only=True)
+
+
+def end_sessions(conn, principal_id: str, why: str, actor: str) -> int:
+    """End this principal's open sessions and audit the reason in the caller's transaction."""
+    if why not in ("sign_out", "expired", "disabled", "restored", "engine_start", "sign_out_all"):
+        raise Refusal("That is not an allowed reason to end a session.", "bad_session_end_reason")
+    p = conn.execute(select(m.principal).where(m.principal.c.id == principal_id)
+                     .with_for_update()).mappings().first()
+    if p is None:
+        raise Refusal("That principal does not exist.", "no_principal")
+    t = m.principal_session
+    count = conn.execute(update(t).where(t.c.principal_id == principal_id, t.c.ended_at.is_(None))
+                         .values(ended_at=now(), ended_why=why)).rowcount
+    if count:
+        _principal_audit(conn, p, actor, "end_sessions", count=count, why=why)
+    return count
+
+
+def sign_out_principal(conn, name: str, actor: str) -> int:
+    """Sign out every open session of the named principal."""
+    return end_sessions(conn, _locked(conn, name)["id"], "sign_out_all", actor)
+
+
+def list_sessions(conn, name: str | None = None) -> list[dict]:
+    """Open sessions' owner-visible details, with no authentication hashes or secrets."""
+    t = m.principal_session
+    q = select(m.principal.c.name.label("principal"), t.c.id, t.c.created_at,
+               t.c.last_seen_at, t.c.user_agent).join(m.principal, t.c.principal_id == m.principal.c.id)
+    q = q.where(t.c.ended_at.is_(None))
+    if name is not None:
+        q = q.where(m.principal.c.name == name)
+    return [dict(row) for row in conn.execute(q.order_by(m.principal.c.name, t.c.created_at, t.c.id)).mappings()]
 
 
 def _bump(conn, p: dict) -> int:

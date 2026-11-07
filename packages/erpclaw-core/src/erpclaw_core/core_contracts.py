@@ -11,18 +11,19 @@ from typing import Annotated, Literal
 
 from pydantic import BeforeValidator, Field, WithJsonSchema, field_validator
 from pydantic.json_schema import SkipJsonSchema
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from . import models as m
+from .catalogue import stock_item_creation_on
 from .common import Ctx, Refusal, audit
 from .contracts import FIGURES, Contract, Input, Preview, Result, Shown, WriteContract
 from .masters import _near, _norm, _same_name, create_item, create_party, customers, find_customer
 from .metrics import Metric, MetricResult, MetricRow, render
 from .periods import Period, fiscal_year_bounds, fiscal_year_of, resolve
 from .manifest import PUBLISHER, Capabilities, Events, Manifest, Source
-from .plugins import REGISTRY, Plugin, enabled_plugins
+from .plugins import REGISTRY, Plugin, call_service, enabled_plugins
 from .textkey import text_key
-from .setup import CHART, open_year
+from .setup import open_year
 
 
 def receivables(ctx: Ctx, period: Period, customer: str | None, city: str | None) -> MetricResult:
@@ -239,6 +240,8 @@ def _year_text(start_month: int) -> str:
 
 def preview_set_up(ctx: Ctx, inp: SetUpCompany) -> Preview:
     name, month, order, years = _setup_plan(ctx, inp)
+    account_count = ctx.conn.execute(select(func.count()).select_from(m.account).where(
+        m.account.c.company_id == ctx.company_id)).scalar_one()
     # the card's Company line and currency are the books being set up (approvals._preview reads them from ctx)
     ctx.company_name, ctx.currency = name, USD
     opened = " and ".join(f"FY {fy} ({s.day} {s:%b %Y} to {e.day} {e:%b %Y})"
@@ -249,11 +252,11 @@ def preview_set_up(ctx: Ctx, inp: SetUpCompany) -> Preview:
     sh.line("Years opened", f"{opened}, twelve monthly periods each. Earlier years open only when you add opening "
                             "balances.")
     sh.line("Dates", DATE_ORDER_LINE[order])
-    sh.book(f"Your chart of accounts: {len(CHART)} accounts for a small business (bank, receivables, sales, cost of "
+    sh.book(f"Your chart of accounts: {account_count} accounts for a small business (bank, receivables, sales, cost of "
             "goods, and the rest); more are added when you need them.")
     sh.book(NOTHING_POSTED)
     sh.title("Set up your books")
-    return Preview(sh.card(), _token(ctx.company_id, name, USD, month, order, *years))
+    return Preview(sh.card(), _token(ctx.company_id, name, USD, month, order, *years, "account_count", account_count))
 
 
 def read_set_set_up(ctx: Ctx, inp: SetUpCompany) -> list[tuple[str, str]]:
@@ -366,6 +369,11 @@ class AddItem(Input):
         description="The unit it is sold in (hour, each, meter), only as the owner said it.")
     price: Annotated[Price | None, _mark("figure", ask=_price_question)] = Field(
         default=None, description="The selling price, only as the owner wrote it in digits.")
+    # These choices come from engine questions, never from the model's arguments.
+    kind: SkipJsonSchema[Literal["service", "stock"] | None] = None
+    valuation_method: SkipJsonSchema[Literal["fifo", "moving_average"] | None] = None
+    warehouse: SkipJsonSchema[str | None] = None  # chosen stored name, not a model-supplied id
+    inventory_account: SkipJsonSchema[str | None] = None  # chosen account number for a new warehouse
     # the owner's answer when a near name was asked about: True a new item, False the stored one
     new_item: SkipJsonSchema[bool | None] = None
 
@@ -380,8 +388,7 @@ class AddItem(Input):
 
 
 def _item_plan(ctx: Ctx, inp: AddItem) -> dict | None:
-    """A service item (stock items, a later build): a duplicate refused, a near name asked about, then its unit and its
-    price asked when missing, never defaulted. Returns the near item the owner said is another one, if any."""
+    """Keep the existing duplicate/near-name and unit/price rules before planning stock setup."""
     rows = [dict(r) for r in ctx.conn.execute(select(m.item).where(m.item.c.company_id == ctx.company_id)).mappings()]
     same = [r for r in rows if _same_name(inp.name, r["name"], True)]
     if same:
@@ -392,6 +399,18 @@ def _item_plan(ctx: Ctx, inp: AddItem) -> dict | None:
     if near is not None and inp.new_item is None:
         raise _near_question("item", inp.name, say("item_near", name=near["name"], said=inp.name), near["name"],
                              "new_item")
+    if inp.kind is None:
+        stock_on = stock_item_creation_on(enabled_plugins(ctx.conn))
+        choices = [{"label": "A service I sell", "ref": "service"}]
+        if stock_on:
+            choices.append({"label": "Goods I keep in stock", "ref": "stock"})
+        question = ("Is this a service you sell, or goods you keep in stock?" if stock_on
+                    else "Is this a service you sell?")
+        raise Refusal(question, "item_kind_missing", field="kind", choices=choices)
+    if inp.kind == "service" and any(v is not None for v in
+                                      (inp.valuation_method, inp.warehouse, inp.inventory_account)):
+        raise Refusal("A valuation method and warehouse apply only to goods kept in stock.",
+                      "stock_fields_for_service")
     if not inp.unit:
         raise Refusal(say("item_unit_missing", name=inp.name), "item_unit_missing", field="unit")
     if inp.price is None:
@@ -399,39 +418,135 @@ def _item_plan(ctx: Ctx, inp: AddItem) -> dict | None:
     return near
 
 
+def _stock_setup_call(ctx: Ctx, name: str, args: dict) -> dict:
+    """Stock owns its tables and authority; core consumes only its declared setup services."""
+    try:
+        return call_service(ctx, "core", "stock." + name, args)
+    except Refusal as rf:
+        if rf.code == "plugin_not_enabled":
+            raise Refusal("Keeping stock isn't switched on in these books.", rf.code) from None
+        if name == "preview_create_warehouse" and rf.code == "account_ambiguous":
+            # Stock's refs are account numbers. Bind the consumer field, then
+            # resolve its number to a company-scoped core id before the next call.
+            data = {**rf.data, "field": "inventory_account"}
+            raise Refusal(rf.message, rf.code, rf.options, rf.capability, **data) from None
+        raise
+
+
+def _item_stock_plan(ctx: Ctx, inp: AddItem) -> dict | None:
+    if inp.kind != "stock":
+        return None
+    warehouses = _stock_setup_call(ctx, "list_warehouses", {})["warehouses"]
+    if inp.valuation_method is None:
+        raise Refusal("How should these goods be valued? FIFO uses the oldest stock's cost first; moving average "
+                      "uses the average cost of the stock on hand.", "valuation_method_missing",
+                      field="valuation_method", choices=[{"label": "FIFO", "ref": "fifo"},
+                                                        {"label": "Moving average", "ref": "moving_average"}])
+    chosen = None
+    if inp.warehouse is not None:
+        chosen = next((row for row in warehouses if _norm(row["name"]) == _norm(inp.warehouse)), None)
+        if chosen is None and (warehouses or _norm(inp.warehouse) != _norm("Main Warehouse")):
+            choices = [{"label": row["name"], "ref": row["name"]} for row in warehouses] or [
+                {"label": "Create Main Warehouse", "ref": "Main Warehouse"}]
+            raise Refusal("Which warehouse should this item use?", "warehouse_unknown", field="warehouse",
+                          choices=choices)
+    elif len(warehouses) == 1:
+        chosen = warehouses[0]
+    elif len(warehouses) > 1:
+        raise Refusal("Which warehouse should this item use?", "warehouse_ambiguous", field="warehouse",
+                      choices=[{"label": row["name"], "ref": row["name"]} for row in warehouses])
+    create = None
+    read_set = []
+    if chosen is None:
+        args = {"name": "Main Warehouse", "company_default": True}
+        if inp.inventory_account is not None:
+            account = ctx.conn.execute(select(m.account).where(
+                m.account.c.company_id == ctx.company_id,
+                m.account.c.number == inp.inventory_account)).mappings().first()
+            if account is None:
+                # Reuse the producer's current account choices. Even if just one
+                # remains, ask it explicitly rather than replacing the stale choice.
+                available = _stock_setup_call(ctx, "preview_create_warehouse", args)["account"]
+                raise Refusal("Choose an inventory account from these books.", "account_unknown",
+                              field="inventory_account", choices=[{
+                                  "label": f"{available['number']} {available['name']}",
+                                  "ref": available["number"]}])
+            args["account"] = account["id"]
+        create = _stock_setup_call(ctx, "preview_create_warehouse", args)
+        read_set.extend(create["read_set"])
+    elif inp.inventory_account is not None:
+        raise Refusal("An existing warehouse already has its inventory account.", "warehouse_account_fixed")
+    stock_args = {"method": inp.valuation_method}
+    if chosen is not None:
+        stock_args["default_warehouse"] = chosen["warehouse"]
+    checked = _stock_setup_call(ctx, "preview_make_stock_item", stock_args)
+    read_set.extend(checked["read_set"])
+    return {"warehouse": chosen, "create": create, "method": checked["method"], "read_set": read_set}
+
+
 def preview_add_item(ctx: Ctx, inp: AddItem) -> Preview:
     near = _item_plan(ctx, inp)
+    stock = _item_stock_plan(ctx, inp)
     sh = Shown(ctx.currency)
     sh.line("Item", inp.name)
-    sh.line("Kind", "a service, not kept in stock")
+    sh.line("Kind", "goods kept in stock" if stock else "a service, not kept in stock")
     sh.line("Unit", inp.unit)
     sh.line("Selling price", f"{sh.unit_price(inp.price)} {ctx.currency} per {inp.unit}")
+    if stock:
+        sh.line("Valuation method", "FIFO" if stock["method"] == "fifo" else "Moving average")
+        if stock["create"]:
+            new = stock["create"]
+            sh.line("Warehouse", f"Create {new['name']} as the company's default warehouse")
+            sh.line("Inventory account", f"{new['account']['number']} {new['account']['name']}")
+        else:
+            sh.line("Warehouse", stock["warehouse"]["name"])
+        sh.book("Stock: none yet. Receive or count stock to add some.")
     if near is not None:
         sh.warning(f"{near['name']} is already an item; this adds {inp.name} as another one.")
     sh.book(NOTHING_POSTED)
     sh.title("Add an item")
-    return Preview(sh.card(), _token(inp.name, inp.unit, inp.price, near and near["id"]))
+    return Preview(sh.card(), _token(inp.name, inp.unit, inp.price, near and near["id"], inp.kind,
+                                    json.dumps(stock, sort_keys=True)))
 
 
 def read_set_add_item(ctx: Ctx, inp: AddItem) -> list[tuple[str, str]]:
-    return [("company", ctx.company_id)]
+    stock = _item_stock_plan(ctx, inp)
+    return [("company", ctx.company_id)] + ([tuple(row) for row in stock["read_set"]] if stock else [])
 
 
 def commit_add_item(ctx: Ctx, inp: AddItem, key: str) -> Result:
     _item_plan(ctx, inp)
+    stock = _item_stock_plan(ctx, inp)  # approval already recomputed the same plan/token under the company lock
     iid = create_item(ctx, inp.name, inp.price, inp.unit)
-    audit(ctx, "add_item", "item", iid, detail={"name": inp.name, "unit": inp.unit, "price": str(inp.price)})
-    return Result(f"Added {inp.name} as an item, sold by the {inp.unit}.", {"name": inp.name})
+    if stock:
+        if stock["create"]:
+            new = stock["create"]
+            warehouse = _stock_setup_call(ctx, "create_warehouse", {
+                "name": new["name"], "account": new["account"]["account"],
+                "company_default": new["company_default"]})["warehouse"]
+        else:
+            warehouse = stock["warehouse"]["warehouse"]
+        _stock_setup_call(ctx, "make_stock_item", {
+            "item": iid, "method": stock["method"], "default_warehouse": warehouse})
+    audit(ctx, "add_item", "item", iid, detail={"name": inp.name, "unit": inp.unit, "price": str(inp.price),
+                                              "kind": inp.kind})
+    suffix = " Stock: none yet. Receive or count stock to add some." if stock else ""
+    sh = Shown(ctx.currency)
+    price = sh.unit_price(inp.price, "rate", inp.name)
+    return Result(f"I added {inp.name} at {price} {ctx.currency} per {inp.unit}." + suffix,
+                  {"name": inp.name}, figures=[price], amounts=sh.amounts)
 
 
 MANIFEST = Manifest(
-    name="core", version="0.0.1", publisher=PUBLISHER, distribution="erpclaw-core", licence="GPL-3.0-only",
-    source=Source(repository="workspace", commit="workspace"), engine=">=0.0.1", after_core_revision="0001",
+    name="core", version="0.0.2", publisher=PUBLISHER, distribution="erpclaw-core", licence="GPL-3.0-only",
+    source=Source(repository="workspace", commit="workspace"), engine=">=0.0.2", after_core_revision="0001",
     depends={}, conflicts=[], owned_tables=[],  # core's tables carry the "core" owner mark (models.py)
     contracts={"get_metric": "read", "set_up_company": "write", "add_customer": "write", "add_item": "write"},
     calls=[], events=Events(emits=[], consumes=[]), slots={},
-    voucher_types=["journal", "opening", "year_end_close"], capabilities=Capabilities(network=[], files=[]),
+    voucher_types=["journal", "opening", "year_end_close", "supplier_payment"], capabilities=Capabilities(network=[], files=[]),
     metrics=["receivables"],
+    uses=["stock.list_warehouses?", "stock.preview_create_warehouse?", "stock.create_warehouse?",
+          "stock.preview_make_stock_item?", "stock.make_stock_item?"],
 )
 
 PLUGIN = Plugin(
@@ -459,12 +574,13 @@ PLUGIN = Plugin(
                              no_date_reason={"en": "adding a customer posts nothing."}),
                # its selling price is a money figure the books keep, shown on its card
                WriteContract("add_item", "core", "write",
-                             "Add a new item the owner sells as a service, with its name, unit and selling price "
+                             "Add a new item, with its name, unit and selling price "
                              "exactly as the owner gave them. The owner approves a card before anything is saved.",
                              AddItem, preview=preview_add_item, commit=commit_add_item,
                              find_by_operation_key=_committed, read_set=read_set_add_item,
                              synonyms=("add an item", "new item", "add a product", "new product", "add a service"),
                              plain="add items", planned_name="adding an item", moves_money=True,
+                             amounts=("rate",),
                              no_date_reason={"en": "adding an item posts nothing."})],
     metrics=[RECEIVABLES],
 )

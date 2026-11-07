@@ -38,7 +38,7 @@ def count(engine, table) -> int:
 
 # ---------- the store ----------
 
-def test_a_version_1_store_moves_to_version_2_keeping_its_demand():
+def test_a_version_1_store_moves_to_the_current_version_keeping_its_demand():
     p = store.path()
     p.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(p)
@@ -49,8 +49,11 @@ def test_a_version_1_store_moves_to_version_2_keeping_its_demand():
     conn.execute("INSERT INTO capability_demand VALUES ('2026-10-26T00:00:00Z', 'c', 'd', NULL, 'fly me')")
     conn.commit()
     conn.close()
-    assert store.version() == 2
-    assert [r[-1] for r in store.demand()] == ["fly me"]
+    assert store.version() == store.VERSION
+    assert store.demand() == [("2026-10-26T00:00:00Z", "c", "d", None, "fly me")]
+    with sqlite3.connect(p) as conn:
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert {"message_resolution", "message_name_span", "span_confirmation"} <= tables
     assert store.open_request("c1") is None
 
 

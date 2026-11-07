@@ -77,8 +77,12 @@ def only(events):
 ], ids=["emailing", "stock", "sales tax"])
 def test_a_planned_area_chosen_through_the_catalogue_names_its_id(engine, as_released, said, pick):
     before = snapshot(engine)
+    with engine.connect() as conn:
+        entry = next(e for e in cat.catalogue(conn) if e.id == pick)
+    expected = cat.decide([entry], pick)
     e = only(through_catalogue(engine, said, pick))
     assert e["outcome"] == "c" and e["capability"] == pick and "not in ERPClaw yet" in e["text"]
+    assert e["text"] == expected.text
     assert snapshot(engine) == before
 
 
@@ -284,7 +288,7 @@ def test_the_ids_a_refusal_can_carry_never_collide_with_the_planned_areas():
 def test_the_no_match_reply_lists_what_is_switched_on_and_holds_no_number(engine, as_released):
     e = only(chat(engine, [Reply("", [call("find_capability", request="fly me to the moon")]),
                            Reply("", [call("choose_capability", pick="none")])], "fly me to the moon"))
-    assert e["text"].endswith(" Right now I can draft invoices and submit a draft invoice.")
+    assert e["text"].endswith(" Right now I can add customers, add items, draft invoices, and submit a draft invoice.")
     assert not re.search(r"\d", e["text"])
 
 
@@ -295,19 +299,21 @@ def test_the_list_changes_when_a_contract_is_switched_off(engine, payments_off, 
     with engine.connect() as conn:
         after = cat.switched_on(conn)
     assert "submit a draft invoice" in before and "submit a draft invoice" not in after
-    assert after == "Right now I can draft invoices."
+    assert after == "Right now I can add customers, add items, and draft invoices."
     with engine.begin() as conn:
         disable_plugin(conn, "sales")
     with engine.connect() as conn:
-        assert cat.switched_on(conn) == "Nothing is switched on in these books yet."
+        assert cat.switched_on(conn) == "Right now I can add customers and add items."
 
 
 def test_with_every_operation_on_the_list_names_each_once_in_plain_words(engine):
     with engine.connect() as conn:
         text = cat.switched_on(conn)
-    assert text == ("Right now I can give figures and reports, draft invoices, submit a draft invoice, record "
+    assert text == ("Right now I can give figures and reports, add customers, add items, draft invoices, "
+                    "submit a draft invoice, record "
                     "payments, cancel an invoice, reverse a payment, take sales orders, deliver sales orders, issue "
-                    "credit notes, and list invoices.")
+                    "credit notes, list invoices, record opening stock, write off stock, record stock counts, "
+                    "and cancel stock movement.")
     assert not re.search(r"\d", text)
 
 

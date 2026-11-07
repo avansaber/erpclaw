@@ -134,7 +134,7 @@ def test_two_warehouses_holding_enough_is_the_warehouse_question_by_name(wired):
     with pytest.raises(Refusal) as caught:
         wired.run("create_invoice", customer="Acme Corporation", items=[{"item": "Copper Wire", "quantity": 5}])
     q = caught.value
-    assert q.code == "warehouse_ambiguous" and q.data["field"] == "warehouse"
+    assert q.code == "warehouse_ambiguous" and q.data["field"] == "items.0.warehouse"
     assert [c["ref"] for c in q.data["choices"]] == ["North", "South"]
     assert q.options == ["North (10 on hand)", "South (10 on hand)"]
 
@@ -144,7 +144,7 @@ def test_an_unknown_warehouse_name_asks_with_the_items_warehouses(wired):
         wired.run("create_invoice", customer="Acme Corporation",
                   items=[{"item": "Copper Wire", "quantity": 5, "warehouse": "Pune"}])
     q = caught.value
-    assert q.code == "warehouse_unknown" and q.data["field"] == "warehouse" and "Pune" in q.message
+    assert q.code == "warehouse_unknown" and q.data["field"] == "items.0.warehouse" and "Pune" in q.message
     assert [c["ref"] for c in q.data["choices"]] == ["North", "South"]
 
 

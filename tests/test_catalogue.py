@@ -158,10 +158,10 @@ def test_a_planned_entry_that_becomes_installed_changes_its_outcome_with_no_prom
     assert after[0].id == "op.order_tea" and "planned.tea" not in [e.id for e in after]
 
 
-# the phases are enforced
+# --- the phases are enforced ------------------------------------------
 
 def test_free_text_after_a_search_is_never_the_answer(engine):
-    """Round 1 major: model text could bypass the choice and invent a status or a figure."""
+    """Model text must not bypass the choice and invent a status or a figure."""
     before = books(engine)
     replies = [Reply("", [call("find_capability", request="payroll")]),
                Reply("Payroll is fully supported and costs 1,234.00 USD."),
@@ -192,7 +192,7 @@ def test_after_a_search_only_the_choice_runs(engine, second):
 
 
 def test_two_choices_in_one_reply_run_nothing(engine):
-    """Round 1 major, then the route change of round 3: in the catalogue path a reply is one call or nothing."""
+    """In the catalogue path a reply is one call or nothing."""
     before = books(engine)
     replies = [Reply("", [call("find_capability", request="payroll")]),
                Reply("", [call("choose_capability", pick="none"), call("choose_capability", pick="planned.payroll")])]
@@ -237,7 +237,7 @@ def test_a_mixed_reply_naming_nothing_asks_and_claims_nothing(engine):
      call("create_invoice", customer="Acme Corporation", items=[{"item": "copper wire", "quantity": 2}])],
 ], ids=["allowed then wrong", "wrong then allowed", "the chosen write twice"])
 def test_after_choosing_a_reply_of_more_than_one_call_runs_nothing(engine, calls):
-    """Round 3 major: no card can be made before a later call in the same reply is refused, and no second card."""
+    """No card can be made before a later call in the same reply is refused, and no second card."""
     from erpclaw_core import models as m
     from sqlalchemy import func, select
 

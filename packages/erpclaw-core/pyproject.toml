@@ -1,6 +1,6 @@
 [project]
 name = "erpclaw-core"
-version = "0.0.1"
+version = "0.0.2"
 description = "ERPClaw core: ledger, money, periods, approvals, operation keys, outbox, plugin loader"
 license = "GPL-3.0-only"
 requires-python = ">=3.12"

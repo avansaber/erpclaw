@@ -7,7 +7,7 @@ from sqlalchemy import text
 
 from conftest import drop_everything
 from erpclaw_core import ledger
-from erpclaw_core.common import Refusal, company_ctx
+from erpclaw_core.common import Ctx, Refusal, today
 from erpclaw_core.migrate import upgrade
 from test_revision_0006 import _rows
 
@@ -34,6 +34,12 @@ WORDS = {
     "exchange_gain_loss_realised": "realized exchange gain or loss",
     "exchange_gain_loss_unrealised": "unrealized exchange gain or loss",
 }
+
+
+def older_company_ctx(conn):
+    # Read only columns present at revision 0010; company_ctx selects the current model.
+    company = conn.execute(text("SELECT id, name, functional_currency FROM company WHERE id = 'c1'")).one()
+    return Ctx(conn, company.id, company.name, company.functional_currency, today())
 
 
 @pytest.fixture
@@ -76,7 +82,7 @@ def test_an_older_company_gets_no_new_account_and_each_new_role_refuses_in_words
     with engine.begin() as conn:
         upgrade(conn, "0010")  # Current lookup uses the pre-format-2 head, before the new refusal.
     with engine.connect() as conn:
-        ctx = company_ctx(conn, company_id="c1")
+        ctx = older_company_ctx(conn)
         before = _rows(conn)
         for role, words in WORDS.items():
             with pytest.raises(Refusal) as e:
@@ -92,5 +98,5 @@ def test_an_older_frozen_role_account_still_refuses_as_frozen(engine, older):
         upgrade(conn, "0010")  # Current lookup uses the pre-format-2 head, before the new refusal.
     with engine.connect() as conn:
         with pytest.raises(Refusal) as e:
-            ledger.account_by_type(company_ctx(conn, company_id="c1"), "income")
+            ledger.account_by_type(older_company_ctx(conn), "income")
     assert (e.value.code, e.value.message) == ("frozen_account", "4100 Account 4100 is frozen.")

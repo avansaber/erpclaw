@@ -1,4 +1,6 @@
-"""Every value a card, a result and a read-back show is the stored value it stands for, exactly.
+"""Every value a card, a result and a read-back show is the stored value it stands for, exactly. A
+card once showed `@ 0.12` for a stored rate of 0.1234, in three places; a check that pooled the shown values let
+rounding and truncation through.
 
 For every write contract, a card is drawn over awkward stored values (four-place rates, fractional quantities,
 amounts that are not whole) on two invoice lines, approved and committed. Then each shown value is compared with its
@@ -130,6 +132,51 @@ SCENARIOS = {  # each sets up the books, and returns the card's arguments
 }
 
 
+# These writes keep master prices or stock vouchers rather than invoice lines.
+def _add_item_scenario(engine):
+    return {"name": "Calibration labour", "unit": "hour", "price": "12.3456", "kind": "service"}
+
+
+def _opening_stock_scenario(engine):
+    from erpclaw_core.common import company_ctx
+    from erpclaw_stock import service as stock
+    with engine.begin() as conn:
+        ctx = company_ctx(conn)
+        stock.create_warehouse(ctx, "Main Store", default=True)
+        for name in ("Copper Wire", "Circuit Board"):
+            item = conn.execute(select(m.item.c.id).where(m.item.c.company_id == ctx.company_id,
+                                                          m.item.c.name == name)).scalar_one()
+            stock.make_stock_item(ctx, item, "moving_average")
+    return {"lines": [{"item": "Copper Wire", "warehouse": "Main Store", "quantity": "1000.5", "rate": "0.1234"},
+                      {"item": "Circuit Board", "warehouse": "Main Store", "quantity": "2.25", "rate": "45.0075"}]}
+
+
+def _stock_count_scenario(engine):
+    _stocked(engine)
+    return {"lines": [{"item": "Copper Wire", "warehouse": "Main Store", "counted": "999.5"},
+                      {"item": "Circuit Board", "warehouse": "Main Store", "counted": "7.75"}]}
+
+
+def _write_off_scenario(engine):
+    _stocked(engine)
+    return {"item": "Copper Wire", "warehouse": "Main Store", "quantity": "1000.5", "reason": "Damaged insulation"}
+
+
+def _cancel_stock_scenario(engine):
+    _, out = _commit(engine, "write_off_stock", _write_off_scenario(engine))
+    return {"document": out.data["number"], "date": out.data["posting_date"]}
+
+
+MASTER_STOCK_SCENARIOS = {
+    "add_item": _add_item_scenario,
+    "record_opening_stock": _opening_stock_scenario,
+    "record_stock_count": _stock_count_scenario,
+    "write_off_stock": _write_off_scenario,
+    "cancel_stock_movement": _cancel_stock_scenario,
+}
+SCENARIOS.update(MASTER_STOCK_SCENARIOS)
+
+
 def _stock_entries(conn, voucher_id: str) -> list[tuple[Decimal, Decimal, Decimal]]:
     """A voucher's stock entries in line order: (quantity, value, quantity after)."""
     from erpclaw_stock import tables as st
@@ -139,6 +186,8 @@ def _stock_entries(conn, voucher_id: str) -> list[tuple[Decimal, Decimal, Decima
 
 
 def _stored(engine, contract, args, out, before) -> dict:
+    if contract in MASTER_STOCK_SCENARIOS:
+        return _stored_master_stock(engine, contract, args, out, before)
     """What the commit stored, read from the books: the document, its lines, the allocations, the new ledger entries."""
     new_ledger = changes(before, snapshot(engine)).get("ledger_entry", {}).get("added", [])
     with engine.connect() as conn:
@@ -193,6 +242,8 @@ def _stored(engine, contract, args, out, before) -> dict:
 
 
 def problems(contract: str, card: dict, texts: list[str], stored: dict) -> list[str]:
+    if contract in MASTER_STOCK_SCENARIOS:
+        return _master_stock_problems(contract, card, texts, stored)
     """Each shown value against the stored value it stands for; an empty list when every one is exact."""
     out = []
 
@@ -357,7 +408,7 @@ def test_every_value_a_card_and_its_result_show_is_its_stored_value_exactly(engi
     assert problems(contract, card, texts, stored) == []
 
 
-@pytest.mark.parametrize("contract, old, new, where", [  # the exit review's round-2 mutations, and more: each is caught
+@pytest.mark.parametrize("contract, old, new, where", [  # each value mutation is caught
     ("submit_invoice", "1000.5 x", "1000 x", "card"),
     ("submit_invoice", "1000.5 x", "1000.50 x", "none"),  # the same value, written longer: not a defect
     ("record_payment", "+300.25", "+300.3", "card"),
@@ -387,3 +438,117 @@ def test_the_check_catches_each_rounding_and_truncation(engine, contract, old, n
     else:
         found = problems(contract, bad_card, texts, stored)
     assert bool(found) == (where != "none"), (old, new, found)
+
+
+
+def _stored_master_stock(engine, contract, args, out, before):
+    """Read each master/voucher line, movement and newly posted ledger line independently of its card."""
+    from erpclaw_stock import tables as st
+    added = changes(before, snapshot(engine)).get("ledger_entry", {}).get("added", [])
+    with engine.connect() as conn:
+        if contract == "add_item":
+            item = dict(conn.execute(select(m.item).where(m.item.c.name == out.data["name"])).mappings().one())
+            return {"lines": [item], "ledger": added}
+        voucher = dict(conn.execute(select(st.voucher).where(st.voucher.c.id == out.data["voucher_id"])
+                                    ).mappings().one())
+        lines = [dict(r) for r in conn.execute(select(st.voucher_line).where(
+            st.voucher_line.c.voucher_id == voucher["id"]).order_by(st.voucher_line.c.line_no)).mappings()]
+        entries = [dict(r) for r in conn.execute(select(st.entry).where(
+            st.entry.c.voucher_id == voucher["id"], st.entry.c.voucher_type == out.data["voucher_type"]
+        ).order_by(st.entry.c.line_no)).mappings()]
+        items = {r["id"]: dict(r) for r in conn.execute(select(m.item)).mappings()}
+        warehouses = {r["id"]: dict(r) for r in conn.execute(select(st.warehouse)).mappings()}
+        accounts = {r["id"]: dict(r) for r in conn.execute(select(m.account)).mappings()}
+    assert len(lines) == len(entries) > 0
+    for line, entry in zip(lines, entries):
+        assert line["item_id"] == entry["item_id"] and line["warehouse_id"] == entry["warehouse_id"]
+        assert _d(line["qty_moved"]) == _d(entry["qty"]) and _d(line["value"]) == _d(entry["value"])
+    return {"lines": lines, "entries": entries, "voucher": voucher, "items": items,
+            "warehouses": warehouses, "accounts": accounts, "ledger": added}
+
+
+def _master_stock_problems(contract, card, texts, stored):
+    """Compare complete value-bearing strings with persisted fields, including quantities and balances."""
+    def qty(value):
+        return format(_d(value).normalize(), "f")
+
+    def amount(value):
+        return f"{_d(value):,.2f}"
+
+    def rate(value):
+        places = max(2, -_d(value).normalize().as_tuple().exponent)
+        return f"{_d(value):,.{places}f}"
+
+    def dated(value):
+        return f"{value.day} {value:%b %Y}"
+
+    expected, out = [], []
+    if contract == "add_item":
+        item = stored["lines"][0]
+        expected = [("Item", item["name"]), ("Kind", "a service, not kept in stock"), ("Unit", item["unit"]),
+                    ("Selling price", f"{rate(item['standard_rate'])} USD per {item['unit']}")]
+        result = f"I added {item['name']} at {rate(item['standard_rate'])} USD per {item['unit']}."
+        books = ["Nothing is posted."]
+        if stored["ledger"]:
+            out.append(f"adding an item unexpectedly posted ledger entries: {stored['ledger']}")
+    else:
+        voucher, entries = stored["voucher"], stored["entries"]
+        when = entries[0]["posting_date"]
+        if contract == "record_opening_stock":
+            expected.append(("Date", f"Opening stock dated {dated(when)} (when these books start)"))
+        elif contract == "cancel_stock_movement":
+            expected += [("Original date", dated(voucher["posting_date"])), ("Reversal date", dated(when))]
+        else:
+            expected.append(("Date", dated(when)))
+        for line, entry in zip(stored["lines"], entries):
+            item = stored["items"][entry["item_id"]]
+            wh = stored["warehouses"][entry["warehouse_id"]]["name"]
+            q, value, unit = qty(entry["qty"]), amount(entry["value"]), item["unit"]
+            if contract == "record_opening_stock":
+                text = f"{q} {unit} in {wh} at {rate(line['rate'])} USD per {unit}: {value} USD"
+            elif contract == "record_stock_count":
+                difference = _d(line["counted_qty"]) - _d(line["books_qty"])
+                assert difference < 0 and entry["direction"] == "out"
+                assert _d(line["counted_qty"]) == _d(entry["qty_after"])
+                text = (f"{wh}: books {qty(line['books_qty'])}, counted {qty(line['counted_qty'])}, "
+                        f"difference {qty(difference)} {unit}, value {value} USD; moving-average cost")
+            elif contract == "write_off_stock":
+                text = f"{q} {unit} from {wh} ({qty(_d(entry['qty_after']) + _d(entry['qty']))} on hand)"
+            else:
+                assert entry["reverses_entry_id"] and entry["direction"] == "in"
+                text = (f"{wh}: restore {q} {unit}, value {value} USD; afterward {qty(entry['qty_after'])} {unit}, "
+                        f"value {amount(entry['value_after'])} USD")
+            expected.append((item["name"], text))
+        total = sum((_d(e["value"]) for e in entries), Decimal(0))
+        if contract == "record_opening_stock":
+            expected.append(("Total", f"{amount(total)} USD"))
+            result = f"Recorded opening stock {voucher['number']}, dated {dated(when)}: {amount(total)} USD."
+        elif contract == "record_stock_count":
+            result = (f"Recorded stock count {voucher['number']}, dated {dated(when)}: {len(entries)} stock adjustments, "
+                      f"{amount(total)} USD written off.")
+        elif contract == "write_off_stock":
+            expected += [("Reason", voucher["reason"]), ("Stock cost", f"Moving average: {amount(total)} USD")]
+            result = (f"Wrote off {q} {unit} of {item['name']} from {wh}: {amount(total)} USD at book cost, "
+                      f"{voucher['number']}, dated {dated(when)}.")
+        else:
+            result = (f"Cancelled {voucher['number']} with reversal entries dated {dated(when)}; "
+                      f"{amount(total)} USD of stock value is reversed.")
+        expected.append(("Accounting destination", "ERPClaw general ledger"))
+        if contract == "cancel_stock_movement":
+            expected.append(("Original document", "Kept unchanged; linked reversal entries record this cancellation."))
+        books = []
+        for entry in stored["ledger"]:
+            account = stored["accounts"][entry["account_id"]]
+            debit = _d(entry["debit"])
+            side, value = ("debit", debit) if debit else ("credit", _d(entry["credit"]))
+            books.append(f"{account['number']} {account['name']}: {side} {amount(value)} USD")
+        assert books, "the scenario must produce a real ledger posting"
+    shown = [(k, v) for k, v in card["lines"] if k != "Company"]
+    if shown != expected:
+        out.append(f"card lines: shown {shown}, stored {expected}")
+    if Counter(card["books"]) != Counter(books):
+        out.append(f"books: shown {card['books']}, stored {books}")
+    for text in texts:
+        if text != result:
+            out.append(f"text: shown {text}, stored {result}")
+    return out

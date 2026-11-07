@@ -132,6 +132,7 @@ def test_source_does_not_attach_across_sentence_and_unknown_phrase_is_inventorie
 
 def test_a_service_item_cannot_silently_consume_a_warehouse(memory, monkeypatch):
     monkeypatch.setattr(rv, "_items", lambda ctx: [{**ITEMS[0], "kind": "service"}])
+    monkeypatch.setattr(rv, "_company_warehouse_names", lambda ctx: {"main store"})  # these books name that warehouse
     with pytest.raises(Refusal) as error:
         request("invoice Acme Corporation for 5 Copper Wire from Main Store", memory)
     assert error.value.code == "warehouse_ambiguous"

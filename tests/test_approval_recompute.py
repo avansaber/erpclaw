@@ -1,6 +1,6 @@
-"""A card that can no longer be approved as it stands ends, visibly, and nothing is written for it. Before, a refusal raised while the card was recomputed at approval escaped its
-transaction: the claim rolled back, the card stayed pending and refused the same way on every approval until it
-expired, with nothing recorded; and an approval-time question never reached the owner as a question."""
+"""A card that can no longer be approved as it stands ends visibly, with no business write.
+Approval-time recomputation records refusals and questions on the card, so repeated approvals return its
+stored outcome and an approval-time question reaches the owner as a question."""
 from __future__ import annotations
 
 import json

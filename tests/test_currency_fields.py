@@ -129,6 +129,36 @@ EXPECTED = {
 }
 
 
+EXPECTED.update({
+    "add_item": {
+        ("lines", "Selling price", "12.3456 USD per hour"): [(P, "12.3456", "USD")]},
+    "record_opening_stock": {
+        ("lines", "Copper Wire", "1000.5 unit in Main Store at 0.1234 USD per unit: 123.46 USD"):
+            [(P, "0.1234", "USD"), (A, "123.46", "USD")],
+        ("lines", "Circuit Board", "2.25 unit in Main Store at 45.0075 USD per unit: 101.27 USD"):
+            [(P, "45.0075", "USD"), (A, "101.27", "USD")],
+        ("lines", "Total", "224.73 USD"): [(A, "224.73", "USD")],
+        ("books", "", "1300 Inventory: debit 224.73 USD"): [(A, "224.73", "USD")],
+        ("books", "", "3900 Opening Balance Equity: credit 224.73 USD"): [(A, "224.73", "USD")]},
+    "record_stock_count": {
+        ("lines", "Copper Wire", "Main Store: books 2000, counted 999.5, difference -1000.5 unit, value 77.74 USD; "
+                                 "moving-average cost"): [(A, "77.74", "USD")],
+        ("lines", "Circuit Board", "Main Store: books 10, counted 7.75, difference -2.25 unit, value 27.78 USD; "
+                                   "moving-average cost"): [(A, "27.78", "USD")],
+        ("books", "", "5200 Stock Adjustment: debit 105.52 USD"): [(A, "105.52", "USD")],
+        ("books", "", "1300 Inventory: credit 105.52 USD"): [(A, "105.52", "USD")]},
+    "write_off_stock": {
+        ("lines", "Stock cost", "Moving average: 77.74 USD"): [(A, "77.74", "USD")],
+        ("books", "", "5210 Inventory Write-offs: debit 77.74 USD"): [(A, "77.74", "USD")],
+        ("books", "", "1300 Inventory: credit 77.74 USD"): [(A, "77.74", "USD")]},
+    "cancel_stock_movement": {
+        ("lines", "Copper Wire", "Main Store: restore 1000.5 unit, value 77.74 USD; afterward 2000 unit, "
+                                 "value 155.40 USD"): [(A, "77.74", "USD"), (A, "155.40", "USD")],
+        ("books", "", "5210 Inventory Write-offs: credit 77.74 USD"): [(A, "77.74", "USD")],
+        ("books", "", "1300 Inventory: debit 77.74 USD"): [(A, "77.74", "USD")]},
+})
+
+
 # ---- every write contract's card: strings unchanged, every money figure named ----------------------------------
 
 def test_every_write_contract_is_covered():

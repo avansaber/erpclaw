@@ -106,7 +106,7 @@ def pinned(monkeypatch, tmp_path):
     monkeypatch.delenv("ERPCLAW_DATABASE_URL", raising=False)
     monkeypatch.delenv("ERPCLAW_MIGRATION_URL", raising=False)
     # The suite connects as the test database's owner; the runtime role tests
-    # unset this and connect as a genuine runtime login.
+    # unset this and connect as a genuine runtime login (runtime role spec).
     monkeypatch.setenv("ERPCLAW_ALLOW_OWNER_RUNTIME", "1")
     # Any default path a test reaches lands in its own temp dir, never in real books.
     monkeypatch.setenv("ERPCLAW_HOME", str(tmp_path / "home"))
@@ -138,7 +138,8 @@ def engine():
 @pytest.fixture
 def runtime_login(engine, monkeypatch):
     """A genuine runtime login role, created by the test database's owner, with
-    the books' grants applied; yields its URL, and the owner checks are on."""
+    the books' grants applied; yields its URL, and the owner checks are on
+    (runtime role spec)."""
     from sqlalchemy.engine import make_url
 
     from erpclaw_core.grants import apply_grants

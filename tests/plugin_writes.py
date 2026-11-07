@@ -1,4 +1,4 @@
-"""Static checks on our own plugin code:
+"""Static checks on our own plugin code (plugin interface spec, section 5):
 a plugin package writes only the tables it owns, and never posting or
 ledger_entry (the posting service is their only writer); and it imports no
 other plugin's package (another plugin is reached only through core's

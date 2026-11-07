@@ -69,6 +69,8 @@ def test_every_write_that_moves_no_money_has_its_scenario():
 
 @pytest.mark.parametrize("name", NO_MONEY)
 def test_a_write_that_says_it_moves_no_money_leaves_the_money_unchanged(request, engine, name):
+    if name == "set_up_company":
+        return approve_setup_leaves_global_money(request, engine)
     args, words = _scenarios()[name](request, engine)
     approve_leaves_money(engine, REGISTRY.contracts[name], args, words)
 
@@ -144,3 +146,29 @@ def test_a_write_that_says_it_moves_no_money_and_issues_stock_fails(engine, monk
     after = money_snapshot(engine)
     assert before["stock_ledger_entry"] != after["stock_ledger_entry"]
     assert "stock_head" in after
+
+
+
+def approve_setup_leaves_global_money(request, engine):
+    """Set up fresh company B while preserving every company's money, including A's populated ledger."""
+    args, words = _scenarios()["set_up_company"](request, engine)
+    with engine.connect() as conn:
+        company = conn.execute(select(m.company.c.id).where(m.company.c.status == "pending")).scalar_one()
+        assert conn.execute(select(m.posting.c.id).where(m.posting.c.company_id != company)).first()
+        assert conn.execute(select(m.ledger_entry.c.id).where(m.ledger_entry.c.company_id != company)).first()
+        assert conn.execute(select(m.posting.c.id).where(m.posting.c.company_id == company)).first() is None
+    # money_snapshot/_dump read every row globally, without a company filter.
+    before = money_snapshot(engine)
+    assert before["posting"] and before["ledger_entry"], "an empty ledger cannot show a write left it unchanged"
+    card = approvals.propose(engine, REGISTRY.contracts["set_up_company"], args, company_id=company, owner_words=words)
+    assert card.status == "card", (card.status, card.text)
+    assert card.card["amounts"] == []
+    out = approvals.approve(engine, card.approval_id, card.digest)
+    assert out.status == "committed", (out.status, out.text)
+    after = money_snapshot(engine)
+    assert before == after, "setting up company B changed the global money snapshot"
+    with engine.connect() as conn:
+        row = conn.execute(select(m.company).where(m.company.c.id == company)).mappings().one()
+        assert (row["status"], row["name"], row["functional_currency"], row["date_order"]) == (
+            "ready", args["name"], "USD", args["date_order"])
+        assert len(conn.execute(select(m.fiscal_period.c.id).where(m.fiscal_period.c.company_id == company)).all()) == 24

@@ -27,6 +27,7 @@ from packaging.version import Version
 from sqlalchemy import inspect, select
 from sqlalchemy.engine import Connection, Engine
 
+from . import approval_scope
 from .common import Ctx
 from .contracts import Contract, Money, Service, WriteContract, no_date_reason_problem
 from .manifest import (EFFECTS, FIRST_PARTY_DISTRIBUTIONS, PUBLISHER, SERVICE_EFFECTS, Manifest, artifact_digest,
@@ -107,9 +108,16 @@ class Registry:
             self.plugins[name] = p
             self.order.append(name)
             for c in p.contracts:
+                # Core registration covers reads/previews dispatched by the assistant
+                # without changing its paths or any frozen Contract fields.
+                for callback in ("run", "preview", "commit", "read_set", "find_by_operation_key"):
+                    fn = getattr(c, callback)
+                    if fn is not None:
+                        setattr(c, callback, approval_scope._wrap_contract(fn, name, c.name, callback))
                 self.contracts[c.name] = c
                 self.contract_plugin[c.name] = name
             for mt in p.metrics:
+                mt.run = approval_scope._wrap_metric(mt.run, name)
                 self.metrics[mt.name] = mt
                 self.metric_plugin[mt.name] = name
             for slot, fn in p.slots.items():
@@ -650,19 +658,22 @@ def call_service(ctx: Ctx, caller: str, name: str, input: dict) -> dict:
     sv = REGISTRY.services.get(name)
     callee = name.partition(".")[0]
     optional = p is not None and any(parse_use(u) == (name, True) for u in p.manifest.uses)
-    if not declares_service(caller, name) or (sv is None and not optional):
+    owner = approval_scope._caller_owner(ctx)
+    if (not declares_service(caller, name) or (sv is None and not optional)
+            or (owner is not None and owner != caller)):
         raise Refusal(f"The {caller} plugin calls the service {name}, which it does not declare.",
                       "undeclared_service")
     if sv is None:  # an optional service whose plugin is not loaded here: as disabled, never a silent no-op
         raise Refusal(f"The {callee} plugin is not enabled in these books.", "plugin_not_enabled")
     ensure_enabled(ctx.conn, callee)
-    if sv.effect == "write" and not ctx.extra.get("commit"):
+    if sv.effect == "write" and approval_scope.committing(ctx) is None:
         raise Refusal(f"The service {name} writes, so it runs only inside an approved card's commit.",
                       "service_outside_commit")
     inp = _validated(sv.input_model, input, f"The input to {name}", "service_input")
     _known_currencies(ctx, inp, f"The input to {name}")  # each Money's currency is a row of the books' currency table
     what = f"The result the service {name} returned"
-    out = _validated(sv.output_model, sv.fn(ctx, inp), what, "service_output")
+    with approval_scope._service(ctx, caller, callee, sv.effect):
+        out = _validated(sv.output_model, sv.fn(ctx, inp), what, "service_output")
     _known_currencies(ctx, out, what)
     try:
         result = out.model_dump(mode="json", by_alias=True)
@@ -697,7 +708,7 @@ def _install_checks(conn: Connection, p: Plugin) -> None:
             if row["status"] == "installed" and q is not None and MESSAGE_SLOTS & set(q.slots):
                 raise Refusal(f"These books already send messages through {other}; disable it first.",
                               "message_connector_installed")
-    applied = applied_core_revision(conn)  # The books' core revision, not only the engine's
+    applied = applied_core_revision(conn)  # the books' core revision, not only the engine's
     if applied is None or not core_at_or_after(applied, p.manifest.after_core_revision):
         raise Refusal(f"The {p.name} plugin needs these books at core revision {p.manifest.after_core_revision} "
                       f"or later; they are at {applied or 'no core revision'}.", "plugin_core_revision")

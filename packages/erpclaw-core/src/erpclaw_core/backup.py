@@ -3,6 +3,8 @@
 A backup is a logical export: every table the engine knows, one JSON object
 per row, values in one canonical text form, so two sets of books compare
 byte for byte. It is taken in one read transaction (one snapshot).
+Restore additionally invalidates live sign-in codes and sessions; comparisons
+accept only those field changes.
 
 Restore never writes into books that exist and never uses a
 connection a running engine holds. It stages a new database privately under a
@@ -29,7 +31,7 @@ from decimal import Decimal, Inexact, Rounded, localcontext
 from importlib.metadata import version
 from pathlib import Path
 
-from sqlalchemy import Boolean, Date, DateTime, Integer, create_engine, inspect, select, text
+from sqlalchemy import Boolean, Date, DateTime, Integer, create_engine, func, inspect, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.pool import NullPool
@@ -159,6 +161,39 @@ def _rows(lines: list[str]) -> list[dict]:
     return [json.loads(line) for line in lines]
 
 
+def _matches_backup(name: str, lines: list[str], restored: list[str]) -> bool:
+    """Exact rows, except restore must invalidate previously live authentication rows.
+
+    Already-used codes and already-ended sessions stay byte-for-byte equivalent.
+    A previously unused code must be used; an open session must end as restored.
+    All keys, other values, and the number of rows must still match.
+    """
+    if name not in ("principal_sign_in", "principal_session"):
+        return lines == restored
+    if len(lines) != len(restored):
+        return False
+    for before, after in zip(_rows(lines), _rows(restored)):
+        changed = None
+        if name == "principal_sign_in" and before["used_at"] is None:
+            changed = "used_at"
+        elif name == "principal_session" and before["ended_at"] is None:
+            if before["ended_why"] is not None or after.get("ended_why") != "restored":
+                return False
+            changed = "ended_at"
+            after["ended_why"] = None
+        if changed:
+            value = after.get(changed)
+            try:
+                if value is None or _encode(_decode(value, DateTime(timezone=True)), DateTime(timezone=True)) != value:
+                    return False
+            except (TypeError, ValueError):
+                return False
+            after[changed] = None
+        if before != after:
+            return False
+    return True
+
+
 def _sha(lines: list[str]) -> str:
     return hashlib.sha256("\n".join(lines).encode()).hexdigest()
 
@@ -284,7 +319,7 @@ def _integrity(conn: Connection) -> None:
         where = f"posting {p['seq']} of company {p['company_id']}"
         if len(ls) < 2:
             raise BackupRefused(f"{where} has fewer than two lines")
-        for ln in ls:  # every amount within the money rules, so the sums below are exact
+        for ln in ls:  # every amount within the decimal precision bounds, so the sums below are exact
             for side in ("debit", "credit"):
                 try:
                     to_amount(ln[side], currency[p["company_id"]])
@@ -610,6 +645,7 @@ def _require_identity(manifest: dict, files: dict[str, list[str]]) -> str:
 def restore(path: Path, target: NewPostgresDatabase) -> RestoreResult:
     """Restore the backup at `path` into new books, then publish them.
     Takes no engine and reads no books URL: it never opens books in use."""
+    from . import models as m
     from .grants import apply_grants
     from .migrate import upgrade
     from .plugins import BooksRefused, check_books, load_plugins
@@ -644,7 +680,8 @@ def restore(path: Path, target: NewPostgresDatabase) -> RestoreResult:
             triggers = _plugin_triggers(conn)
             _suspend(conn, triggers)  # a copy of a state, not business steps
             for name in SEEDED:
-                if _dump(conn, name if name == VERSION_TABLE else metadata.tables[name]) != files[name]:
+                if not _matches_backup(name, files[name], _dump(
+                        conn, name if name == VERSION_TABLE else metadata.tables[name])):
                     raise BackupRefused(f"the backup's {name} rows differ from this engine's")
             for t in tables:
                 if t.name in SEEDED:
@@ -658,6 +695,11 @@ def restore(path: Path, target: NewPostgresDatabase) -> RestoreResult:
             _resume(conn, triggers)
             if _plugin_triggers(conn) != triggers:
                 raise BackupRefused("restore could not put back the plugin tables' triggers exactly")
+            # Invalidate the copied credentials in this staging transaction, before any commit or publication.
+            conn.execute(m.principal_session.update().where(m.principal_session.c.ended_at.is_(None)).values(
+                ended_at=func.now(), ended_why="restored"))
+            conn.execute(m.principal_sign_in.update().where(m.principal_sign_in.c.used_at.is_(None)).values(
+                used_at=func.now()))
             _hook("inserted", stage=stage)
             _integrity(conn)
             try:
@@ -673,7 +715,7 @@ def restore(path: Path, target: NewPostgresDatabase) -> RestoreResult:
             stage.check(conn)
             for t in [VERSION_TABLE, *tables]:
                 name = t if isinstance(t, str) else t.name
-                if _dump(conn, t) != files[name]:
+                if not _matches_backup(name, files[name], _dump(conn, t)):
                     raise BackupRefused(f"the committed {name} differs from the backup")
         _hook("proved", stage=stage)
         engine.dispose()
@@ -738,7 +780,7 @@ def verify(path: Path, target: NewPostgresDatabase) -> list[str]:
                 out.append("the books do not carry this engine's ownership mark")
             for t in [VERSION_TABLE, *_tables(_versions(files[VERSION_TABLE]))]:
                 name = t if isinstance(t, str) else t.name
-                if _dump(conn, t) != files[name]:
+                if not _matches_backup(name, files[name], _dump(conn, t)):
                     out.append(f"{name} differs from the backup")
             if not out:
                 try:
@@ -815,7 +857,7 @@ def clean_staging(item: str, server_url: str) -> None:
 # --- the book diff -----------------------------------------------------------
 
 def book_diff(a: Engine, b: Engine) -> list[str]:
-    """Differences between two sets of books, table by table; empty when identical."""
+    """Differences between books, allowing restore's authentication invalidation on either side."""
     out: list[str] = []
     with a.connect() as ca, b.connect() as cb:
         tables = books_tables(ca)  # each side's own tables; one that only one side has is reported just below
@@ -828,7 +870,7 @@ def book_diff(a: Engine, b: Engine) -> list[str]:
             if name not in names_a or name not in names_b:
                 continue
             la, lb = _dump(ca, t), _dump(cb, t)
-            if la != lb:
+            if la != lb and not (_matches_backup(name, la, lb) or _matches_backup(name, lb, la)):
                 first = next((i for i, (x, y) in enumerate(zip(la, lb)) if x != y), min(len(la), len(lb)))
                 out.append(f"{name}: {len(la)} and {len(lb)} rows; first difference at row {first + 1}")
     return out

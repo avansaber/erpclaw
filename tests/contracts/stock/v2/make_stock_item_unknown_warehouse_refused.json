@@ -19,7 +19,7 @@
   "after": {
     "unchanged": true
   },
-  "note": "Original M4_STOCK_CORE_SETUP r1a section 2.11; setup only, no stock movement.",
+  "note": "Setup only, no stock movement.",
   "refusal": {
     "code": "not_company_warehouse",
     "warehouse": "@wh:unknown"

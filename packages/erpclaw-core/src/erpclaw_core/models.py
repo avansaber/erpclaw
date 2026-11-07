@@ -286,7 +286,7 @@ fiscal_year_close = Table(  # one row per closed year, written once by close_yea
     _company_fk(["closing_posting_id"], "posting", "fk_fiscal_year_close_posting"),
 )
 
-# the integration kernel
+# --- the integration kernel ---------------
 
 AREAS = ("accounting", "payroll", "hr", "stock", "crm")
 
@@ -389,7 +389,7 @@ audit_log = Table(
 )
 
 PERMISSIONS = ("view", "draft", "approve", "post", "reverse", "close_period", "export", "administer_users",
-               "install_plugins", "manage_secrets")  # Named permissions checked by individual operations
+               "install_plugins", "manage_secrets")  # the engine's named operations
 CARD_STATUS = ("pending", "approved", "consumed", "declined", "expired", "superseded", "invalidated")
 
 principal = Table(  # who may act; only a SHA-256 of the API token is kept
@@ -406,6 +406,42 @@ principal = Table(  # who may act; only a SHA-256 of the API token is kept
     CheckConstraint("grants_version >= 1", name="ck_principal_grants_version"),
     UniqueConstraint("name", name="uq_principal_name"),
     UniqueConstraint("token_sha256", name="uq_principal_token"),
+)
+
+principal_sign_in = Table(  # only the code's hash, never the bearer code
+    "principal_sign_in",
+    metadata,
+    Column("code_sha256", String(64), primary_key=True),
+    Column("principal_id", String(36), ForeignKey("principal.id"), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("used_at", DateTime(timezone=True), nullable=True),
+    Column("created_by", String(100), nullable=False),
+    Column("run_id", String(32), nullable=True),
+    PrimaryKeyConstraint("code_sha256", name="pk_principal_sign_in"),
+    CheckConstraint("expires_at > created_at", name="ck_principal_sign_in_expiry"),
+)
+
+principal_session = Table(  # only the session secret's hash
+    "principal_session",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("secret_sha256", String(64), nullable=False),
+    Column("principal_id", String(36), ForeignKey("principal.id"), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("last_seen_at", DateTime(timezone=True), nullable=False),
+    Column("idle_expires_at", DateTime(timezone=True), nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("ended_at", DateTime(timezone=True), nullable=True),
+    Column("ended_why", String(20), nullable=True),
+    Column("user_agent", String(200), nullable=True),
+    PrimaryKeyConstraint("id", name="pk_principal_session"),
+    UniqueConstraint("secret_sha256", name="uq_principal_session_secret"),
+    CheckConstraint("ended_why is null or ended_why in "
+                    "('sign_out','expired','disabled','restored','engine_start','sign_out_all')",
+                    name="ck_principal_session_end_reason"),
+    CheckConstraint("(ended_at is null) = (ended_why is null)", name="ck_principal_session_end_pair"),
+    CheckConstraint("idle_expires_at <= expires_at", name="ck_principal_session_idle"),
 )
 
 principal_grant = Table(  # a permission on one company; there is no global grant
@@ -460,7 +496,7 @@ conversation_fence = Table(  # which turn of a conversation may make or approve 
     CheckConstraint("generation >= 0", name="ck_conversation_fence_generation"),
 )
 
-operation_outcome = Table(  # Written in the same transaction as the effect
+operation_outcome = Table(  # written in the same transaction as the effect
     "operation_outcome",
     metadata,
     Column("key", String(36), primary_key=True),
@@ -568,7 +604,8 @@ plugin_install = Table(
 # one away (plugin interface: ownership is a mark, not import order).
 CORE_TABLES = frozenset({"currency", "company", "fiscal_year", "fiscal_period", "account", "party", "item",
                          "posting_chain_head", "posting", "ledger_entry", "dimension_set", "number_series", "audit_log", "approval",
-                         "principal", "principal_grant", "operation_outcome", "conversation_fence", "outbox",
+                         "principal", "principal_grant", "principal_sign_in", "principal_session",
+                         "operation_outcome", "conversation_fence", "outbox",
                          "outbox_attempt", "outbox_attachment", "file_object", "plugin_install", "erpclaw_books", "books_identity", "fiscal_year_close",
                          "system_of_record", "external_ref", "account_map", "sync_payload", "sync_journal"})
 from .payable_tables import PAYABLE_TABLES  # noqa: E402  (core's supplier payables tables)
@@ -576,7 +613,8 @@ CORE_TABLES = CORE_TABLES | PAYABLE_TABLES
 for _name in CORE_TABLES:
     metadata.tables[_name].info["owner"] = "core"
 
-# The PostgreSQL runtime role's privileges on each core table. UPDATE names only the columns the engine sets; DELETE only where it
+# The PostgreSQL runtime role's privileges on each core table.
+# UPDATE names only the columns the engine sets; DELETE only where it
 # deletes; a SELECT ... FOR UPDATE needs an UPDATE privilege on its table, so the
 # locked tables are among them. tests/test_runtime_role.py derives each from the code.
 RUNTIME = {
@@ -597,6 +635,8 @@ RUNTIME = {
     "operation_outcome": APPEND,
     # read and locked FOR SHARE at commit, never written by the runtime: grants change as the owner only
     "principal": Runtime(lock=("grants_version",)), "principal_grant": READ,
+    "principal_sign_in": Runtime(update=("used_at",)),
+    "principal_session": Runtime(insert=True, update=("last_seen_at", "idle_expires_at", "ended_at", "ended_why")),
     "outbox": Runtime(insert=True, update=("status", "detail", "current_attempt_id", "next_try_at", "tries",
                                            "first_failed_at", "accepted_at")),
     "outbox_attempt": Runtime(insert=True, update=("data_at", "finished_at", "code", "result", "text")),

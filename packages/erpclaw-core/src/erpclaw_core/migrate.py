@@ -1,10 +1,10 @@
-"""Run the migrations (Alembic, plan section 10) on a connection.
+"""Run the Alembic migrations on a connection.
 
 Core's revisions carry the branch label `core`. Each plugin with tables ships
 its own branch in its package (`migrations/versions/`), labelled with its
 name, with its own base and no `depends_on`:
 `alembic_version` holds one row per head, core's and one per installed
-plugin. The required order (a plugin after its core revision) is the
+plugin. The order (a plugin after its core revision) is the
 engine's check against the books, not Alembic's.
 """
 from __future__ import annotations
@@ -39,7 +39,9 @@ CORE_TABLES = ("currency", "company", "fiscal_year", "fiscal_period", "account",
                # revision 0010: the file store
                "file_object",
                # revision 0015: supplier payables
-               "supplier_payable", "supplier_payment", "supplier_payment_allocation")
+               "supplier_payable", "supplier_payment", "supplier_payment_allocation",
+               # revision 0016: principal sign-in and session history
+               "principal_sign_in", "principal_session")
 
 
 def config(connection: Connection | None = None, *, plugins: bool = True,

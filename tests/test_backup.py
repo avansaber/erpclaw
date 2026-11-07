@@ -421,7 +421,7 @@ def _foreign_account(path):
 
 
 def test_cross_company_references_are_refused(books, tmp_path, pg_new):
-    """Acceptance (r3, section 6): a ledger line pointing at another company's
+    """Acceptance: a ledger line pointing at another company's
     account is refused, and the target is removed."""
     bk.backup(books, tmp_path / "b")
     _edit_entries(tmp_path / "b", _foreign_account(tmp_path / "b"))
@@ -450,7 +450,7 @@ def test_a_posting_committed_in_the_middle_of_a_backup_is_not_half_in_it(books, 
     _restored(tmp_path / "b")  # restore re-proves chain and head: a torn read would fail
 
 
-# the target: new books, never books in use
+# --- the target: new books, never books in use ------------------------
 
 def test_restore_takes_no_engine_and_reads_no_books_url():
     """Acceptance: the restore module takes no Engine and reads no database URL
@@ -465,8 +465,7 @@ def test_restore_takes_no_engine_and_reads_no_books_url():
 
 @pytest.mark.parametrize("fail_at", ["staged_ready", "inserted", "committed", "proved"])
 def test_a_running_engine_and_its_books_are_untouched_whatever_restore_does(books, tmp_path, monkeypatch, fail_at):
-    """Acceptance (the in-place build's lock-timeout and live-connection tests,
-    restated): restores that fail at each step leave the running engine's books
+    """Restores that fail at each step leave the running engine's books
     byte-identical and its pooled connection transactional."""
     bk.backup(books, tmp_path / "b")
     with books.connect() as conn:
@@ -604,7 +603,7 @@ def test_postgresql_publication_grants_the_runtime_role_only(books, tmp_path, ru
     admin.dispose()
 
 
-# --- crashes and uncertain outcomes (section 4a) ---------------------------------------
+# --- crashes and uncertain outcomes ---------------------------------------
 
 PG_CRASH = """
 import os, sys
@@ -645,7 +644,7 @@ def test_a_crash_inside_postgresql_publication_leaves_no_final_name(books, tmp_p
     admin.dispose()
     stale = bk.stale_stagings(PG_URL)
     assert len(stale) == 1 and stale[0].startswith(bk.PG_STAGE_PREFIX)
-    _until_no_session(admin, stale[0])  # Wait for the stale session to close
+    _until_no_session(admin, stale[0])  # wait until the stale restore has no session
     bk.clean_staging(stale[0], PG_URL)
     assert bk.stale_stagings(PG_URL) == []
     bk.restore(tmp_path / "b", target)  # and a retry publishes
@@ -1111,14 +1110,14 @@ def test_the_cli_zip_is_private_from_the_start(books, tmp_path, monkeypatch):
     assert stat.S_IMODE(os.stat(tmp_path / "early.zip").st_mode) == 0o600
 
 
-#
+# --- restore safety regressions -------------------------------------------------------------
 
 @pytest.mark.parametrize("param", ["dbname", "options", "service"])
 def test_a_server_url_that_could_choose_the_database_is_refused(books, tmp_path, pg_new, param):
-    """Round 1 blocker: a dbname parameter redirected restore into existing books."""
+    """A dbname parameter must not redirect restore into existing books."""
     bk.backup(books, tmp_path / "b")
     target = pg_new()
-    decoy = f"decoy_{secrets.token_hex(3)}_test"  # an existing, empty database, as in Codex's reproduction
+    decoy = f"decoy_{secrets.token_hex(3)}_test"  # an existing, empty database
     admin = create_engine(make_url(PG_URL).set(database="postgres"), isolation_level="AUTOCOMMIT")
     with admin.connect() as c:
         c.exec_driver_sql(f'CREATE DATABASE "{decoy}"')
@@ -1158,7 +1157,7 @@ def test_a_working_connection_on_another_database_is_refused(books, tmp_path, pg
 
 
 def test_a_backup_without_this_engines_ownership_mark_is_refused(books, tmp_path):
-    """Round 1 major: another mark alone is not the engine's books."""
+    """Another mark alone is not the engine's books."""
     from erpclaw_core.db import OWNER_MARK
 
     bk.backup(books, tmp_path / "b")
@@ -1173,7 +1172,7 @@ def test_a_backup_without_this_engines_ownership_mark_is_refused(books, tmp_path
 
 @pytest.mark.parametrize("ps", ["refused", "timeout", "fails"])
 def test_a_restore_whose_process_cannot_be_inspected_is_never_stale(tmp_path, monkeypatch, ps):
-    """Round 1 major: uncertain liveness keeps the staging."""
+    """Uncertain liveness keeps the staging."""
     import socket
 
     dead_proc = subprocess.Popen([sys.executable, "-c", "pass"])
@@ -1216,7 +1215,7 @@ bk.restore(Path(sys.argv[1]), bk.NewPostgresDatabase(sys.argv[2], sys.argv[3]))
 @pytest.mark.parametrize("point", ["staged", "staged_ready", "inserted", "committed", "proved", "before_publish",
                                    "publishing"])
 def test_postgresql_crashes_before_publication_leave_no_final_name(books, tmp_path, pg_new, point):
-    """Codex's round 1 note: every crash point of r3 on PostgreSQL, not only inside publication."""
+    """Exercise every restore crash point on PostgreSQL, including those outside publication."""
     bk.backup(books, tmp_path / "b")
     target = pg_new()
     proc = subprocess.run([sys.executable, "-c", PG_CRASH_AT, str(tmp_path / "b"), PG_URL, target.name, point],
@@ -1235,7 +1234,7 @@ def test_postgresql_crashes_before_publication_leave_no_final_name(books, tmp_pa
 
 
 def test_a_login_held_in_startup_makes_the_barrier_refuse(books, tmp_path, pg_new, monkeypatch):
-    """Codex's round 1 note: a deterministic login in progress, held by a login
+    """A deterministic login in progress, held by a login
     event trigger (PostgreSQL 17 and later), while the rename barrier runs."""
     bk.backup(books, tmp_path / "b")
     role, password = f"erpclaw_slow_{secrets.token_hex(3)}", secrets.token_hex(12)
@@ -1296,7 +1295,7 @@ def test_a_login_held_in_startup_makes_the_barrier_refuse(books, tmp_path, pg_ne
 
 
 def test_a_start_time_unknown_when_marked_keeps_the_staging_database(books, tmp_path, pg_new, monkeypatch):
-    """Round 2 major: inspection failing at marking and working at cleanup must not make a live restore stale."""
+    """Inspection failing at marking and working at cleanup must not make a live restore stale."""
     bk.backup(books, tmp_path / "b")
     real = bk._process_started
     seen = []

@@ -13,26 +13,33 @@ is read or written.
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import secrets
 import shutil
+import sys
 import tempfile
 import time
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Callable
 
-from sqlalchemy import create_engine, select
-from sqlalchemy.engine import Engine, make_url
+from psycopg.errors import InsufficientPrivilege
+from sqlalchemy import create_engine, event, select
+from sqlalchemy.engine import Connection, Engine, make_url
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.pool import NullPool
 
 from erpclaw_core.backup import books_tables
 from erpclaw_core.db import data_root, make_engine, require_postgresql
 
 SERVER_VARS = ("ERPCLAW_EVAL_PG_URL", "ERPCLAW_PG_TEST_URL")
+DROP_DATABASE_RETRY_WINDOW = 15.0
+DROP_DATABASE_RETRY_INTERVAL = 0.25
 
 UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I)
 MONEY = re.compile(r"\d[\d,]*\.\d\d")
@@ -199,7 +206,7 @@ class Case:
     reason: str = ""                           # why the expectation changed: dated, old -> new
 
     def __post_init__(self):
-        # Every write case here posts exactly once, and since the hash chain a posting adds its row and
+        # Every write case here posts exactly once, and with the hash chain a posting adds its row and
         # changes its company's chain head once: the cases were written before the chain existed.
         if self.kind == "write":
             self.added = {"posting": 1, **self.added}
@@ -340,6 +347,32 @@ class EvalRefused(RuntimeError):
     """The eval's server URL or a connection it opened is not the disposable books it made."""
 
 
+class _Cleanup(ExitStack):
+    """Attempt every cleanup, preserving an active failure over cleanup errors."""
+
+    def __init__(self):
+        super().__init__()
+        self.errors: list[Exception] = []
+
+    def callback(self, callback, /, *args, ignore_disconnect=False, **kwargs):
+        def attempt():
+            try:
+                callback(*args, **kwargs)
+            except Exception as exc:
+                logging.getLogger(__name__).warning("Eval cleanup failed: %s", callback, exc_info=True)
+                if not (ignore_disconnect and isinstance(exc, DBAPIError) and exc.connection_invalidated):
+                    self.errors.append(exc)
+
+        super().callback(attempt)
+        return callback
+
+    def close(self):
+        original = sys.exception()
+        super().close()
+        if original is None and self.errors:
+            raise self.errors[0]
+
+
 class EvalBooks:
     """One eval run's disposable books on the server of `url`: a seeded pristine database, a copy of it
     per trial, and a runtime login role; `close` drops every database it made, then the role. Every engine
@@ -356,6 +389,7 @@ class EvalBooks:
         self.admin = create_engine(self.url, isolation_level="AUTOCOMMIT", poolclass=NullPool)
         self.made: list[str] = []
         self.engines: list[Engine] = []  # trial engines still open; closed before their databases are dropped
+        self._engine_cleanup: dict[Engine, _Cleanup] = {}
         self.role_made = False
         self.pristine: str | None = None
         self.trials = 0
@@ -370,17 +404,35 @@ class EvalBooks:
         """An engine on one of this run's databases, after checking the server says it is that database and
         that login."""
         eng = make_engine(self._url(database, runtime))
+        cleanup = self._engine_cleanup[eng] = _Cleanup()
+        cleanup.callback(eng.pool.dispose)  # drain idle sessions even if engine disposal fails
+        cleanup.callback(eng.dispose)
+
+        def connected(conn: Connection) -> None:
+            cleanup.callback(conn.close, ignore_disconnect=True)
+
+        event.listen(eng, "engine_connect", connected)
+        cleanup.callback(event.remove, eng, "engine_connect", connected)
         want = (database, self.role if runtime else None)
         try:
             with eng.connect() as conn:
                 got = tuple(conn.exec_driver_sql("SELECT current_database(), current_user").one())
-        except Exception:
-            eng.dispose()
+            if got[0] != want[0] or (want[1] and got[1] != want[1]):
+                raise EvalRefused(f"connected to {got[0]} as {got[1]}, not the eval's own {want[0]}")
+        except BaseException:
+            self._close_engine(eng)
             raise
-        if got[0] != want[0] or (want[1] and got[1] != want[1]):
-            eng.dispose()
-            raise EvalRefused(f"connected to {got[0]} as {got[1]}, not the eval's own {want[0]}")
         return eng
+
+    def _close_engine(self, engine: Engine) -> None:
+        """Disposal alone leaves checked-out connections alive, including those held by tracebacks."""
+        cleanup = self._engine_cleanup.pop(engine, None)
+        if cleanup is not None:
+            cleanup.close()
+        else:
+            cleanup = _Cleanup()
+            cleanup.callback(engine.dispose)
+            cleanup.close()
 
     def _create(self, name: str, template: str = "template0") -> str:
         with self.admin.connect() as c:
@@ -406,7 +458,7 @@ class EvalBooks:
             with eng.begin() as conn:
                 apply_grants(conn, self.role)
         finally:
-            eng.dispose()  # a template database takes no other session while it is copied
+            self._close_engine(eng)  # a template database takes no other session while it is copied
 
     def trial(self) -> Engine:
         """A new copy of the pristine books, opened as the runtime role."""
@@ -419,25 +471,64 @@ class EvalBooks:
     def finish(self, engine: Engine) -> None:
         """Close a trial's books and drop its database."""
         name = engine.url.database
-        engine.dispose()  # first: the eval's server login may not end another role's sessions
+        cleanup = _Cleanup()
+        cleanup.callback(self._drop_database, name)
+        cleanup.callback(self._close_engine, engine)  # the server login may not end another role's sessions
         if engine in self.engines:
             self.engines.remove(engine)
-        with self.admin.connect() as c:
-            c.exec_driver_sql(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+        cleanup.close()
+
+    def _drop_database(self, name: str) -> None:
+        deadline = time.monotonic() + DROP_DATABASE_RETRY_WINDOW
+        original = None
+        while True:
+            try:
+                with self.admin.connect() as c:
+                    c.exec_driver_sql(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+                break
+            except DBAPIError as exc:
+                if not isinstance(exc.orig, InsufficientPrivilege):
+                    raise
+                if original is None:
+                    original = exc
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self._log_database_sessions(name)
+                    raise original
+                time.sleep(min(DROP_DATABASE_RETRY_INTERVAL, remaining))
         self.made.remove(name)
 
-    def close(self) -> None:
-        for engine in self.engines:
-            engine.dispose()
-        self.engines.clear()
+    def _log_database_sessions(self, name: str) -> None:
         try:
             with self.admin.connect() as c:
-                for name in reversed(self.made):
-                    c.exec_driver_sql(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
-                if self.role_made:
-                    c.exec_driver_sql(f'DROP ROLE IF EXISTS "{self.role}"')
-        finally:
-            self.admin.dispose()
+                sessions = c.exec_driver_sql(
+                    "SELECT backend_type, usename, state, application_name, "
+                    "EXTRACT(EPOCH FROM (clock_timestamp() - state_change)) AS state_age_seconds, "
+                    "LEFT(query, 60) AS query FROM pg_stat_activity WHERE datname = %(name)s ORDER BY pid",
+                    {"name": name}).mappings().all()
+            details = "; ".join(
+                ", ".join(f"{key}={value!r}" for key, value in session.items()) for session in sessions)
+            logging.getLogger(__name__).warning("Eval database drop blocked for %s: %s", name,
+                                               details or "no sessions visible")
+        except Exception:
+            pass  # Diagnostics must never replace the original cleanup failure.
+
+    def _drop_role(self) -> None:
+        with self.admin.connect() as c:
+            c.exec_driver_sql(f'DROP ROLE IF EXISTS "{self.role}"')
+        self.role_made = False
+
+    def close(self) -> None:
+        cleanup = _Cleanup()
+        cleanup.callback(self.admin.dispose)
+        if self.role_made:
+            cleanup.callback(self._drop_role)
+        for name in self.made:
+            cleanup.callback(self._drop_database, name)
+        for engine in reversed(self.engines):
+            cleanup.callback(self._close_engine, engine)
+        self.engines.clear()
+        cleanup.close()
 
 
 def snapshot(engine) -> dict[str, dict]:
@@ -544,10 +635,14 @@ def run_trial(case: Case, books: EvalBooks, model) -> dict:
     work = Path(tempfile.mkdtemp(prefix=f"erpclaw3-{case.id}-"))
     mail = work / "mail"
     os.environ["ERPCLAW_MAIL_DIR"] = str(mail)
-    engine = books.trial()
+    engine = c = None
+    resources = _Cleanup()
     try:
+        engine = books.trial()
+        resources.callback(books.finish, engine)
         before = snapshot(engine)
         c = TestClient(create_app(engine, model, embedded_owner=True))  # in-process: the owner
+        resources.callback(c.close)
         cid = c.post("/v1/conversations").json()["id"]
         t0 = time.time()
         events = c.post(f"/v1/conversations/{cid}/messages", json={"text": case.says}).json()["events"]
@@ -587,8 +682,11 @@ def run_trial(case: Case, books: EvalBooks, model) -> dict:
             with engine.connect() as conn:
                 error = case.check(conn, d, mail)
     finally:  # a model timeout or any failure still closes the trial and drops its database
-        books.finish(engine)
-        shutil.rmtree(work, ignore_errors=True)
+        try:
+            resources.close()
+        finally:
+            del c, engine
+            shutil.rmtree(work, ignore_errors=True)
     return {"ok": error is None, "error": error, "trace": all_text, "seconds": round(time.time() - t0, 1)}
 
 

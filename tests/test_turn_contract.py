@@ -268,6 +268,20 @@ def test_a_tie_with_an_installed_entry_is_a_choice_of_the_tied_two(engine, as_re
     assert e["type"] == "ask" and e.get("options") == [names["op.create_invoice"], names["planned.projects"]], e
 
 
+def test_a_discount_survives_a_catalogue_choice_before_an_invoice_is_drafted(engine, as_released):
+    clean = nothing_written(engine)
+    c, cid = client(engine, [Reply("", [call("find_capability", request=H044)]),
+                            Reply("", [call("choose_capability", pick="unsure")]),
+                            Reply("", [call("create_invoice", customer="Acme Corporation",
+                                            items=[{"item": "consulting", "quantity": 4}])])])
+    e = only(say(c, cid, H044))
+    assert e["type"] == "ask" and len(e["options"]) == 2, e
+    assert clean()
+    e = only(say(c, cid, e["options"][0]))
+    assert e["type"] == "answer" and e.get("outcome") == "c" and e.get("capability") == "planned.discounts", e
+    assert clean()
+
+
 def test_an_unsure_pick_after_the_model_s_own_search_asks_over_that_search(engine, as_released):
     # h-901 when the model searches in its own words and picks "unsure": the choice is over its search's candidates
     with engine.connect() as conn:

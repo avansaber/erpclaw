@@ -145,7 +145,7 @@ def _model_shape(name: str, parts: tuple) -> dict:
 
 def _rendered_checks(name: str, t: sa.Table) -> list:
     """Each check's name and definition as this database renders it, from a scratch table built to the
-    frozen definition and dropped again, so both sides are spelled the same way (review: names alone
+    frozen definition and dropped again, so both sides are spelled the same way (names alone
     accepted a different predicate under the same name)."""
     bind = op.get_bind()
     scratch = sa.Table(f"erpclaw_shape_{name}", sa.MetaData(), *[c.copy() for c in t.columns],

@@ -78,7 +78,7 @@ def scale_check(column: str, currency_column: str) -> str:
 
 def rate_check(column: str) -> str:
     """CHECK for a rate or quantity: canonical decimal text, positive, at most four decimal places
-    (the contract input already bounds them so)."""
+    (the contract input enforces the same bounds)."""
     a = column
     return f"{a} ~ '^(0|[1-9][0-9]*)(\\.[0-9]{{1,4}})?$' AND {a} ~ '[1-9]'"
 
@@ -170,7 +170,8 @@ def runtime_role() -> str:
 
 @dataclass(frozen=True)
 class Runtime:
-    """The PostgreSQL runtime role's privileges on one table: SELECT, INSERT, UPDATE on the named columns only, DELETE."""
+    """The PostgreSQL runtime role's privileges on one table:
+    SELECT, INSERT, UPDATE on the named columns only, DELETE."""
 
     insert: bool = False
     update: tuple[str, ...] = ()

@@ -123,7 +123,7 @@ def test_a_question_without_an_id_lists_no_control_actions():
 
 
 def test_the_control_labels_come_from_the_language_table(monkeypatch):
-    """A stand-in second table (English is supported first; other languages are planned): its labels are the ones
+    """A stand-in second table (only English is supported for now): its labels are the ones
     listed, never literals in the code."""
     other = copy.deepcopy(resolve.TABLES["en"])
     other["text"]["controls"] = {"someone_else": "Another one", "cancel": "Stop here"}

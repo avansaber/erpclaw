@@ -1,5 +1,5 @@
 """The plugin interface: manifest, loader (fails closed), table ownership,
-per-books installs and slots."""
+per-books installs and slots (plugin interface spec)."""
 from __future__ import annotations
 
 from dataclasses import replace
@@ -411,7 +411,7 @@ def test_the_cli_exits_with_the_loaders_message(monkeypatch, capsys):
     assert e.value.code == 1 and "dependency cycle" in capsys.readouterr().out
 
 
-# --- round 1 of the build review --------------------------------------------
+# --- plugin boundary regressions --------------------------------------------
 
 def test_core_tables_are_a_fixed_set_not_a_mark_anyone_can_set(extra_table):
     """A table marked core that is not one of core's tables is refused (an

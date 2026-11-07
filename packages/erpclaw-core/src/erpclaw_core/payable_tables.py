@@ -4,7 +4,7 @@
 - `supplier_payable`: one item per still-owed delivery (or, from `record_opening_balances`, per opening balance):
   insert only, except `outstanding` and `status`, which move only through core's own commits under the read set.
   It names its source voucher by type, id and number, so core never reads a plugin's table.
-- `supplier_payment`: one row per payment, `unallocated` held at zero in v3.0 (advances are planned for banking); only
+- `supplier_payment`: one row per payment, `unallocated` held at zero in v3.0; only
   `status` and `reverse_operation_key` change, once, when it is reversed.
 - `supplier_payment_allocation`: insert only; a reversal restores each item from these rows, never recomputed.
 

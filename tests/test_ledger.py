@@ -57,7 +57,7 @@ def counts(conn):
             conn.execute(select(m.posting_chain_head.c.last_seq, m.posting_chain_head.c.last_hash)).all())
 
 
-# money parsing
+# ---------------------------------------------------------------- money parsing
 
 @pytest.mark.parametrize("value", [0.1, True, None, "1e3", "1,000.00", "+5", ".5", "05", "NaN", "Infinity",
                                    "1.234", "-1.00", Decimal("1E+15"), "1000000000000000000000000000000.01"])
@@ -387,7 +387,7 @@ def test_13_migrated_schema_matches_the_models(engine):
 
 def test_06d_postgresql_truncate_is_refused(engine):
     """TRUNCATE fires no row triggers, so a statement trigger refuses it on
-    both ledger tables (round 5 review blocker)."""
+    both ledger tables."""
     count = "SELECT (SELECT count(*) FROM posting), (SELECT count(*) FROM ledger_entry)"
     with engine.connect() as conn:
         before = tuple(conn.execute(text(count)).one())

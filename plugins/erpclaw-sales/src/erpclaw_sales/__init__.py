@@ -290,7 +290,7 @@ def invoice_by_key(ctx: Ctx, key: str) -> Result | None:
                            r["status"] != "draft", None)
 
 
-# read sets
+# ---------- read sets ----------
 
 def _period(ctx: Ctx, d) -> tuple[str, str]:
     return ("fiscal_period", ledger.find_period(ctx, d)["id"])
@@ -1055,7 +1055,7 @@ def invoice_count_metric(ctx, period, customer, city) -> MetricResult:
 
 MANIFEST = Manifest(
     name="sales", version="0.0.2", publisher=PUBLISHER, distribution="erpclaw-sales", licence="GPL-3.0-only",
-    source=Source(repository="workspace", commit="workspace"), engine=">=0.0.1", after_core_revision="0013",
+    source=Source(repository="workspace", commit="workspace"), engine=">=0.0.2", after_core_revision="0013",
     depends={}, conflicts=[],
     owned_tables=["sales_invoice", "sales_invoice_line", "sales_payment", "sales_payment_allocation",
                   *[tbl.name for tbl in t.STOCK_TABLES]],
