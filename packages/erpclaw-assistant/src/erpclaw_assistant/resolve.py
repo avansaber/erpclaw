@@ -1592,15 +1592,15 @@ _MONEY_NUMBER = (
 _MONEY_PERCENT = r"(?:%|per cent\b|percent\b|pct\b|pc\b)"
 MONEY_PATTERNS = (
     ("tax", re.compile(
-        r"\b(?:tax|v ?a ?t|g ?s ?t|h ?s ?t)\b|"
+        r"\b(?:tax(?:es)?|v ?a ?t|g ?s ?t|h ?s ?t)\b|"
         r"\b(?:tax|vat|gst|hst)(?:inclusive|exclusive)\b|"
         r"\b(?:incl|ex)(?:tax|vat|gst|hst)\b|"
         r"\b\d+(?: \d+)? *% *(?:sales )?tax\b|\bplus tax\b")),
     ("discount", re.compile(
-        r"\bdiscount(?:ed)?\b|"
+        r"\bdiscount(?:s|ed)?\b|"
         rf"\b{_MONEY_NUMBER} *{_MONEY_PERCENT} *off\b|"
-        rf"\bless +{_MONEY_NUMBER} *{_MONEY_PERCENT}|"
-        r"\bhalf price\b|\boff list\b")),
+        rf"\b(?:less|minus) +{_MONEY_NUMBER} *{_MONEY_PERCENT}|"
+        r"\bhalf (?:price|off)\b|\boff list\b|\ba reduction of\b")),
 )
 
 
