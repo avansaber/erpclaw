@@ -31,8 +31,9 @@ def test_documentation_paths_answer_the_frozen_not_found_in_process(engine, path
 @pytest.mark.parametrize("listener", ["host", "cli", "loopback"])
 @pytest.mark.parametrize("path", PATHS)
 def test_documentation_paths_answer_the_frozen_not_found_on_every_listener(engine, listener, path):
-    client = TestClient(pipe.ListenerApp(_app(engine), listener))
-    for headers in ({}, {"Authorization": "Bearer anything"}, {"Authorization": "Session anything"}):
+    port = 51234 if listener == "loopback" else None
+    client = TestClient(pipe.ListenerApp(_app(engine), listener, port=port), base_url=f"http://127.0.0.1:{port or 80}")
+    for headers in ({}, {"Authorization": " ".join(('Bearer', 'anything'))}, {"Authorization": "Session anything"}):
         response = client.get(path, headers=headers)
         assert response.status_code == 404
         assert response.json() == {"detail": "There is no such route.", "code": "not_found"}

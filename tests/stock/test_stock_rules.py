@@ -157,7 +157,7 @@ def test_a_quantity_is_refused_with_its_field_and_value_floats_included(co):
     with co["engine"].connect() as conn:
         ok = stock.preview_issue(company_ctx(conn, company_id=co["company"]), date(2026, 3, 12), [
             {"item": s["item"], "warehouse": s["warehouses"][0], "qty": "1.5000"}])
-    assert ok["lines"] == [{"cost": "1.50"}]
+    assert ok["lines"] == [{"cost": "1.50", "currency": "USD"}]
     verify(co)
 
 

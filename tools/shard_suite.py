@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Split the engine's pytest suite across N shards, and check that the shards together ran it all.
 
-Standard library only, so it adds nothing to uv.lock and runs on any Python 3.12 or later.
+Standard library commands, so it adds nothing to uv.lock and runs on Python 3.12.
 
   collect   run `pytest --collect-only -q` (pytest options after `--`) and write the node ids, one per line;
             `--from-output FILE` parses output captured earlier instead of running pytest
@@ -12,7 +12,13 @@ Standard library only, so it adds nothing to uv.lock and runs on any Python 3.12
             plan as JSON (`--plan-out FILE` writes it too)
   check     read every shard's JUnit XML (DIR/shard-<i>.xml for i in 0..N-1) against the collected list: the
             union must equal the collected set exactly (none missing, none duplicated, none extra), every
-            expected shard must have reported, and no test may have failed or errored; print the totals
+            expected shard must have reported, and no test may have failed, errored or strictly xpassed;
+            print passed, failed, skipped, xfailed, xpassed and error totals separately
+  durations refresh .test_durations from shard JUnit reports and the collected list; parameter cases share
+            one function key with their mean seconds; ambiguous and unmatched testcases are skipped
+
+The shard's pytest run loads this module with `-p shard_suite` (tools on PYTHONPATH) to record non-strict
+xpasses as JUnit properties; pytest otherwise writes them as ordinary passes. The commands need no pytest.
 
 Exit status: 0 when all is well, 1 when a check fails, 2 on a usage or input error.
 """
@@ -30,8 +36,9 @@ from pathlib import Path
 
 JUNIT_NAME = "shard-{index}.xml"
 _JUNIT_FILE = re.compile(r"^shard-(\d+)\.xml$")
-OUTCOMES = ("passed", "failed", "skipped", "errors")
-_RANK = {"passed": 0, "skipped": 1, "errors": 2, "failed": 3}  # merging one test's two testcase elements
+OUTCOMES = ("passed", "failed", "skipped", "xfailed", "xpassed", "errors")
+_RANK = {"passed": 0, "skipped": 1, "xfailed": 1, "xpassed": 1,
+         "errors": 2, "strict xpass": 3, "failed": 4}  # merging one test's two testcase elements
 LIST_LIMIT = 50  # ids printed per kind of problem; the counts are always complete
 
 # Tests normally stay together because fixtures and module state are per file; only listed files have
@@ -44,6 +51,22 @@ _ILLEGAL_XML = re.compile("[^\u0009\u000a\u000d -~\u0080-퟿-�\U00010000-\U
 
 class InputError(Exception):
     """Input this script cannot work from (exit status 2)."""
+
+
+def pytest_configure(config):
+    """Preserve non-strict xpasses in JUnit when loaded as a pytest plugin."""
+    import pytest  # only the report hook needs pytest; the commands remain standard library only
+
+    class XpassProperties:
+        @pytest.hookimpl(wrapper=True, tryfirst=True)
+        def pytest_runtest_makereport(self, item, call):
+            report = yield  # pytest's xfail handling must have finished before inspecting the outcome
+            if report.passed and hasattr(report, "wasxfail"):
+                # JUnit takes properties from the teardown report, so store on the item for later phases.
+                item.user_properties.append(("pytest.xpass", "true"))
+            return report
+
+    config.pluginmanager.register(XpassProperties())
 
 
 # ---------------------------------------------------------------- collect
@@ -100,6 +123,11 @@ def file_of(nodeid: str) -> str:
     return nodeid.split("::", 1)[0]
 
 
+def function_key(nodeid: str) -> str:
+    """A stable duration key without parameter text, including any nested brackets or colons."""
+    return nodeid.partition("[")[0]
+
+
 def group_by_file(ids: list[str]) -> dict[str, list[str]]:
     """{file: its node ids}, both in collection order."""
     groups: dict[str, list[str]] = {}
@@ -122,12 +150,13 @@ def load_durations(path: Path) -> dict[str, float]:
 
 def file_weights(groups: dict[str, list[str]], durations: dict[str, float] | None) -> dict[str, float]:
     """A file's weight: its test count, or the sum of its tests' durations; a test the durations file does not
-    know (new since it was written) counts as the known tests' mean."""
+    know by exact id or function key counts as the known collected tests' mean."""
     if durations is None:
         return {f: float(len(ids)) for f, ids in groups.items()}
-    known = [durations[n] for ids in groups.values() for n in ids if n in durations]
+    seconds = {n: durations.get(n, durations.get(function_key(n))) for ids in groups.values() for n in ids}
+    known = [value for value in seconds.values() if value is not None]
     default = sum(known) / len(known) if known else 1.0
-    return {f: sum(durations.get(n, default) for n in ids) for f, ids in groups.items()}
+    return {f: sum(seconds[n] if seconds[n] is not None else default for n in ids) for f, ids in groups.items()}
 
 
 def make_plan(ids: list[str], shards: int, durations: dict[str, float] | None = None) -> dict:
@@ -197,14 +226,29 @@ def junit_key(nodeid: str) -> tuple[str, str]:
     return ".".join(names[:-1]), _ILLEGAL_XML.sub(repl, names[-1])
 
 
+def junit_index(ids: list[str]) -> dict[tuple[str, str], list[str]]:
+    """Keep every candidate for each JUnit name so collisions cannot silently choose a test."""
+    by_key: dict[tuple[str, str], list[str]] = {}
+    for nodeid in ids:
+        by_key.setdefault(junit_key(nodeid), []).append(nodeid)
+    return by_key
+
+
 def _outcome(testcase: ET.Element) -> str:
     tags = {child.tag for child in testcase}
     if "failure" in tags:
+        if any(f.get("message", "").startswith("[XPASS(strict)]") for f in testcase.findall("failure")):
+            return "strict xpass"
         return "failed"
     if "error" in tags:
         return "errors"
     if "skipped" in tags:
+        if any(s.get("type") == "pytest.xfail" for s in testcase.findall("skipped")):
+            return "xfailed"
         return "skipped"
+    if any(p.get("name") == "pytest.xpass" and p.get("value") == "true"
+           for p in testcase.findall("properties/property")):
+        return "xpassed"
     return "passed"
 
 
@@ -228,13 +272,11 @@ def read_junit(path: Path) -> tuple[list[tuple[tuple[str, str], str, float]], fl
 def check(ids: list[str], junit_dir: Path, shards: int, plan: dict | None = None) -> dict:
     problems: dict[str, list[str]] = {k: [] for k in
                                       ("ambiguous", "absent shard", "unexpected file", "duplicated", "extra",
-                                       "missing", "misplaced", "failed", "errors")}
-    by_key: dict[tuple[str, str], str] = {}
-    for nodeid in ids:
-        key = junit_key(nodeid)
-        if key in by_key:
-            problems["ambiguous"].append(f"{by_key[key]} and {nodeid} share a JUnit name")
-        by_key.setdefault(key, nodeid)
+                                       "missing", "misplaced", "failed", "errors", "strict xpass")}
+    candidates = junit_index(ids)
+    by_key = {key: matches[0] for key, matches in candidates.items() if len(matches) == 1}
+    problems["ambiguous"] = [f"{matches[0]} and {nodeid} share a JUnit name"
+                             for matches in candidates.values() for nodeid in matches[1:]]
 
     planned: dict[str, int] = {}
     if plan is not None:
@@ -273,9 +315,10 @@ def check(ids: list[str], junit_dir: Path, shards: int, plan: dict | None = None
                 durations[nodeid] = durations.get(nodeid, 0.0) + seconds
         for key, found in here.items():
             label = by_key.get(key) or f"{key[0]}::{key[1]}"
-            # pytest writes a second testcase element for a test whose call failed and whose teardown then
-            # errored; any other repeat inside one report is a test that ran twice
-            if len(found) > 1 and not ("failed" in found and "errors" in found):
+            # pytest writes a second testcase element for a failed call (including a strict xpass)
+            # followed by a teardown error; other repeats mean a test ran twice.
+            double_report = "errors" in found and ("failed" in found or "strict xpass" in found)
+            if len(found) > 1 and not double_report:
                 problems["duplicated"].append(f"{label} ({len(found)} times in shard {i})")
             outcome = max(found, key=_RANK.__getitem__)
             nodeid = by_key.get(key)
@@ -286,6 +329,10 @@ def check(ids: list[str], junit_dir: Path, shards: int, plan: dict | None = None
                 problems["duplicated"].append(f"{nodeid} (shards {seen_in[nodeid]} and {i})")
                 continue
             seen_in[nodeid] = i
+            if "strict xpass" in found:
+                problems["strict xpass"].append(nodeid)
+            if outcome == "strict xpass":
+                outcome = "xpassed"
             outcomes[nodeid] = outcome
             row["tests"] += 1
             row[outcome] += 1
@@ -326,16 +373,16 @@ def render_markdown(result: dict, sha: str | None) -> str:
     if sha:
         out.append(f"Candidate `{sha}`")
         out.append("")
-    out += ["| collected | reported | passed | failed | skipped | errors |", "|---|---|---|---|---|---|",
-            f"| {result['collected']} | {result['reported']} | {t['passed']} | {t['failed']} | {t['skipped']} "
-            f"| {t['errors']} |", "",
-            "| shard | tests | passed | failed | skipped | errors | pytest seconds |", "|---|---|---|---|---|---|---|"]
+    columns = " | ".join(OUTCOMES)
+    out += [f"| collected | reported | {columns} |", "|" + "---|" * (2 + len(OUTCOMES)),
+            f"| {result['collected']} | {result['reported']} | " + " | ".join(str(t[k]) for k in OUTCOMES) + " |", "",
+            f"| shard | tests | {columns} | pytest seconds |", "|" + "---|" * (3 + len(OUTCOMES))]
     for r in result["per_shard"]:
         if r["reported"]:
-            out.append(f"| {r['index']} | {r['tests']} | {r['passed']} | {r['failed']} | {r['skipped']} "
-                       f"| {r['errors']} | {r['seconds']:.1f} |")
+            out.append(f"| {r['index']} | {r['tests']} | " + " | ".join(str(r[k]) for k in OUTCOMES)
+                       + f" | {r['seconds']:.1f} |")
         else:
-            out.append(f"| {r['index']} | did not report | | | | | |")
+            out.append(f"| {r['index']} | did not report |" + " |" * (1 + len(OUTCOMES)))
     for kind, items in result["problems"].items():
         out += ["", f"**{kind}: {len(items)}**", ""]
         out += [f"- `{item}`" for item in items[:LIST_LIMIT]]
@@ -414,6 +461,30 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 1 if result["problems"] else 0
 
 
+def cmd_durations(args: argparse.Namespace) -> int:
+    candidates = junit_index(read_nodeids(Path(args.collected)))
+    seconds: dict[str, list[float]] = {}
+    total = ambiguous = unmatched = 0
+    for path in sorted(Path(args.junit_dir).iterdir()):
+        if not _JUNIT_FILE.match(path.name):
+            continue
+        cases, _ = read_junit(path)
+        for key, _, duration in cases:
+            total += 1
+            matches = candidates.get(key, [])
+            if not matches:
+                unmatched += 1
+            elif len(matches) > 1:
+                ambiguous += 1
+            else:
+                seconds.setdefault(function_key(matches[0]), []).append(duration)
+    durations = {key: round(sum(values) / len(values), 3) for key, values in seconds.items()}
+    _write(Path(args.out), json.dumps(durations, indent=2, sort_keys=True) + "\n")
+    print(f"durations: {len(durations)} keys from {total} testcases "
+          f"({ambiguous + unmatched} skipped: ambiguous {ambiguous}, unmatched {unmatched})", file=sys.stderr)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="shard_suite.py", description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="command", required=True)
@@ -447,6 +518,12 @@ def build_parser() -> argparse.ArgumentParser:
     k.add_argument("--report", help="write {node id: outcome} and the totals as JSON here (for comparing runs)")
     k.add_argument("--write-durations", help="write {node id: seconds} here, a durations file for `split`")
     k.set_defaults(func=cmd_check)
+
+    d = sub.add_parser("durations", help="refresh function durations from the collected tests' JUnit reports")
+    d.add_argument("--collected", required=True, help="the node-id list `collect` wrote")
+    d.add_argument("--junit-dir", required=True, help="holds shard-<i>.xml reports")
+    d.add_argument("--out", default=".test_durations", help="output JSON (default: .test_durations)")
+    d.set_defaults(func=cmd_durations)
     return p
 
 

@@ -10,6 +10,7 @@ import pytest
 from erpclaw_core import core_contracts as cc
 from erpclaw_core.common import Ctx, Refusal
 from erpclaw_assistant import resolve
+from erpclaw_assistant import resolve_args
 
 FIXTURES = Path(__file__).resolve().parents[1] / "contracts/stock/v2"
 
@@ -95,7 +96,9 @@ def owner_choice(rf, session, scope, position):
 def resolved(monkeypatch, ctx, session, scope="add_item#0:", **values):
     # Isolate this consumer from the deliberately retained catalogue guard.
     # The actual installed stock route is still unavailable; no graph is run.
-    monkeypatch.setattr(resolve, "planned_instead", lambda *_: None)
+    _replacement = (lambda *_: None)
+    for _module in (resolve, resolve_args):
+        monkeypatch.setattr(_module, 'planned_instead', _replacement)
     contract = next(c for c in cc.PLUGIN.contracts if c.name == "add_item")
     return resolve.resolve_args(ctx, contract,
         {"name": "Copper Coil", "unit": "meter", "price": "12.00", **values},
@@ -332,6 +335,6 @@ def test_kind_change_does_not_silently_ignore_stock_only_choices(ctx, boundary):
 
 
 def test_stock_catalogue_guard_remains_planned_during_development():
-    entries = json.loads((Path(cc.__file__).parent / "catalogue/planned.json").read_text())
+    entries = json.loads((Path(cc.__file__).parent / "catalogue/planned.json").read_text())["entries"]
     entry = next(x for x in entries if x["id"] == "planned.stock_item")
     assert entry["instead_of"] == ["add_item"] and entry["installed_as"] == []

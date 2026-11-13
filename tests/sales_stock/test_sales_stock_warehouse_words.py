@@ -56,6 +56,7 @@ def _never_the_default_quietly(events: list[dict]) -> None:
 
 
 def test_probe_1_the_customer_is_confirmed_first_then_the_unknown_warehouse_is_asked(stocked):
+    Assistant(stocked, ScriptedModel([]))
     before = snapshot(stocked)
     first, second = _turns(stocked, ["invoice Acme for 5 copper wire from the Pune warehouse", "yes"], "Acme")
     assert [e["code"] for e in first if e["type"] == "ask"] == ["customer_ambiguous"]  # records first

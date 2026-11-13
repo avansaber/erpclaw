@@ -4,6 +4,7 @@ absent or disabled is the typed plugin_not_enabled refusal, never a silent no-op
 and what "declares" means is answered by core alone."""
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 
@@ -48,6 +49,26 @@ def refused(engine, name: str, inp: dict) -> Refusal:
     with pytest.raises(Refusal) as e:
         call(engine, name, inp)
     return e.value
+
+
+def assert_value_absent_from_record(record: logging.LogRecord, value: str) -> None:
+    assert value not in record.getMessage()
+    assert value not in repr(record.args)
+    assert value not in repr({name: attr for name, attr in record.__dict__.items() if name not in {
+        "created", "msecs", "relativeCreated", "process", "thread", "processName", "threadName", "taskName"
+    }})
+
+
+def test_record_value_check_ignores_timestamps():
+    record = logging.makeLogRecord({"msg": "Service refused", "created": 1.5})
+    assert "1.5" in repr(record.__dict__)
+    assert_value_absent_from_record(record, "1.5")
+
+
+def test_record_value_check_rejects_value_in_message():
+    record = logging.makeLogRecord({"msg": "Service refused: 1.5"})
+    with pytest.raises(AssertionError):
+        assert_value_absent_from_record(record, "1.5")
 
 
 # --- one parser, a strict shape --------------------------------------------------------------------------------------
@@ -151,10 +172,19 @@ def test_an_optional_service_of_a_plugin_that_is_not_loaded_is_the_typed_refusal
     assert e.code == "plugin_not_enabled" and "?" not in str(e)
 
 
-def test_an_undeclared_service_is_refused_naming_the_plain_service(engine, monkeypatch):
+def test_an_undeclared_service_is_refused_naming_the_plain_service(engine, monkeypatch, caplog):
     sp.install(monkeypatch, engine, sp.provider(), optional_consumer(uses=[]))
-    e = refused(engine, QUOTE, QUOTE_IN)
-    assert e.code == "undeclared_service" and QUOTE in str(e) and "?" not in str(e)
+    private = "private-quote-7c9e"
+    with caplog.at_level("WARNING", logger="erpclaw_core.plugins"):
+        e = refused(engine, QUOTE, {**QUOTE_IN, "quoteRef": private})
+    assert e.code == "undeclared_service" and "?" not in str(e)
+    assert str(e) == "Something went wrong inside your books' software, so nothing was changed."
+    assert caplog.record_tuples == [("erpclaw_core.plugins", 30,
+        f"Service {QUOTE} refused (undeclared_service): caller={sp.CONSUMER}, owner=None")]
+    for value in (private, "10.00", "USD", "1.5"):
+        assert value not in caplog.text
+        assert_value_absent_from_record(caplog.records[0], value)
+    assert caplog.records[0].exc_info is None
 
 
 def test_a_write_through_an_optional_service_still_runs_only_inside_a_commit(engine, monkeypatch):

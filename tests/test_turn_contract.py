@@ -173,6 +173,7 @@ def test_a_customer_the_owner_rules_out_is_never_a_claimant(services, said):
 P2 = "what's still outstanding from customers?"
 R5 = "sales to customers based in Pune in the last 6 months"
 W4 = "record a payment of 500 from Pied Piper by bank transfer"
+PLANNED_WAGES = "pay wages by bank transfer"
 H022 = "Invoice Initech for copper wire."
 H044 = "Invoice Acme Corporation for 4 hours of consulting at 10% off."
 H901 = "Did the Initech invoice go out?"
@@ -231,8 +232,7 @@ def test_a_text_reply_naming_an_installed_entry_gets_what_it_gets_with_no_catalo
     assert chat(engine, [Reply(text)] * 6, said) == ours
 
 
-@pytest.mark.parametrize("said", [H901, "Change the posted invoice INV-2026-00007 from 2 training days to 3. "
-                                  "Leave it posted and just edit it."], ids=["h-901", "h-035"])
+@pytest.mark.parametrize("said", [H901], ids=["h-901"])
 def test_none_over_one_installed_entry_named_by_a_question_or_an_edit_keeps_the_no_match_reply(engine, as_released,
                                                                                                said):
     clean = nothing_written(engine)
@@ -254,10 +254,18 @@ def test_unsure_over_one_named_installed_entry_asks_over_the_search_never_one_op
 
 def test_two_planned_entries_tied_give_both_their_replies_and_no_question(engine, as_released):
     clean = nothing_written(engine)
-    e = only(chat(engine, [Reply("I can't record payments yet.")], W4))
+    e = only(chat(engine, [Reply("I can't pay wages yet.")], PLANNED_WAGES))
     assert e["type"] == "answer" and e.get("outcome") == "c" and not e.get("options"), e
     assert e["text"].count("not in ERPClaw yet") == 2, e  # each tied entry says what is not there yet
     assert clean()
+
+
+def test_payment_phrase_reaches_the_enabled_operation(engine, as_released):
+    from bookdiff import changes, snapshot
+    before = snapshot(engine)
+    e = only(chat(engine, [Reply("", [call("record_payment", customer="Pied Piper", amount=500)])], W4))
+    assert e["type"] in {"card", "ask"} and "not in ERPClaw yet" not in e.get("text", ""), e
+    assert set(changes(before, snapshot(engine))) <= ({"approval"} if e["type"] == "card" else set())
 
 
 def test_a_tie_with_an_installed_entry_is_a_choice_of_the_tied_two(engine, as_released):
@@ -356,6 +364,64 @@ def test_a_tool_less_reply_gives_the_strongest_named_entry_s_reply(engine, as_re
     assert e["type"] == "answer" and e.get("capability") == "unsupported.edit_posted" and e.get("checked") == "engine", e
 
 
-def test_a_none_pick_still_ranks_the_named_entries_by_state_first(engine, as_released):
-    e = only(none_after_search(engine, H035))  # create_invoice is first by state, and "none" over it stands
-    assert e.get("outcome") == "d" and e.get("capability") == "unsupported.no_match", e
+def test_none_never_chooses_installed_first_by_state_and_gives_strong_refusal(engine, as_released, monkeypatch):
+    # Dispatcher 1's ruling (A), 12 Nov 2026: the installed entry is never selected.
+    from erpclaw_core import approvals
+    calls = []
+    propose = approvals.propose
+    def observe_propose(engine, contract, *args, **kwargs):
+        calls.append(contract.name)
+        return propose(engine, contract, *args, **kwargs)
+    monkeypatch.setattr(approvals, "propose", observe_propose)
+    clean = nothing_written(engine)
+    e = only(none_after_search(engine, H035))
+    assert e.get("outcome") == "d" and e.get("capability") == "unsupported.edit_posted", e
+    assert e.get("type") == "answer" and not e.get("options") and clean()
+    assert "create_invoice" not in calls
+
+
+def test_none_h035_gives_refusal(engine, as_released):
+    # Deliberate move under dispatcher 1's ruling (A), 12 Nov 2026.
+    clean = nothing_written(engine)
+    e = only(none_after_search(engine, H035))
+    assert e.get("outcome") == "d" and e.get("capability") == "unsupported.edit_posted", e
+    assert e.get("type") == "answer" and clean()
+
+
+@pytest.mark.parametrize("top,other,expected", [
+    ("unsupported.edit_posted", "op.create_invoice", "unsupported.no_match"),
+    ("planned.payroll", "op.create_invoice", "unsupported.no_match"),
+    ("op.create_invoice", "unsupported.edit_posted", "unsupported.no_match"),
+    ("planned.payroll", "op.create_invoice", "planned.payroll"),
+], ids=["near-tie", "planned-near-tie", "installed-strong", "planned-strong"])
+def test_none_strength_guard_through_decide_and_turn(engine, as_released, monkeypatch, top, other, expected):
+    with engine.connect() as conn:
+        entries = {e.id: e for e in cat.catalogue(conn)}
+    score = 7 if expected == "unsupported.no_match" and top != "op.create_invoice" else 2
+    named = [(entries[other], score), (entries[top], 8)]
+    # Normal inventory is state-ranked, so an installed entry comes first.
+    named.sort(key=lambda pair: cat.STATE_RANK[pair[0].state])
+    decision = cat.decide([e for e, _ in named], "none", named=named)
+    assert decision.capability == expected
+    monkeypatch.setattr(cat, "named_by_synonym", lambda conn, said: named)
+    clean = nothing_written(engine)
+    event = only(none_after_search(engine, "run payroll"))
+    assert event.get("capability") == expected and event.get("type") == "answer", event
+    assert event.get("outcome") == ("c" if expected == "planned.payroll" else "d")
+    assert not event.get("options") and clean()
+
+
+def test_reversal_reason_correction_keeps_explicit_pick_through_turn(engine, monkeypatch):
+    said = "Reverse the posted supplier payment to correct an error"
+    decisions = []
+    original = cat.decide
+    def observe(*args, **kwargs):
+        result = original(*args, **kwargs)
+        decisions.append(result)
+        return result
+    monkeypatch.setattr(cat, "decide", observe)
+    clean = nothing_written(engine)
+    events = chat(engine, [Reply("", [call("find_capability", request=said)]),
+                           Reply("", [call("choose_capability", pick="op.reverse_supplier_payment")])], said)
+    assert any(d.outcome == "a" and d.entry.id == "op.reverse_supplier_payment" for d in decisions), events
+    assert clean()

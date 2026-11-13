@@ -28,6 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.engine import Engine
 from starlette.exceptions import HTTPException
 
+from erpclaw_assistant import store
 from erpclaw_assistant.graph import Assistant
 from erpclaw_assistant.model import Model
 from erpclaw_core import approvals, models as m
@@ -53,6 +54,7 @@ class Body(BaseModel):
 class Message(Body):
     text: str = Field(min_length=1, max_length=4000)
     choice: str | None = Field(default=None, min_length=1, max_length=200)  # the code of a choice the engine issued
+    client_message_id: str | None = None
 
 
 class Approval(Body):
@@ -217,14 +219,17 @@ def create_app(engine: Engine, model: Model, *, embedded_owner: bool = False,
 
     @app.post("/v1/conversations")
     def new_conversation(body: Body | None = None, who: dict = Depends(principal)):
-        return {"id": new_id()}
+        cid = new_id()
+        store.create_conversation(cid, who["id"])
+        return {"id": cid}
 
     @app.post("/v1/conversations/{cid}/messages")
     def message(cid: str, body: Message, who: dict = Depends(principal)):
         try:
-            events = assistant.turn(cid, body.text.strip(), principal=who, choice=body.choice)
+            events = assistant.turn(cid, body.text.strip(), principal=who, choice=body.choice, create=False,
+                                    client_message_id=body.client_message_id)
         except Refusal as r:
-            if r.code in ("forbidden", "no_conversation"):
+            if r.code in ("forbidden", "no_conversation", "client_message_id_reused"):
                 raise Refused(refusal_status(r), r) from None
             # a busy conversation (one turn at a time) is refused with its code, and changes nothing
             events = [{"type": "refused", "code": r.code, "text": r.message,

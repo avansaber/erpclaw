@@ -1,8 +1,8 @@
 # ERPClaw
 
-An open-source ERP you run by chat. GPL-3.0-only (see `LICENSE`; dependencies in `THIRD_PARTY_NOTICES.md` and `DEPENDENCY_NOTES.md`).
+An open-source ERP you run by chat. GPL-3.0-only (see `LICENSE`; dependencies in `THIRD_PARTY_NOTICES.md`).
 
-ERPClaw v3 combines a CLI, PostgreSQL books and first-party business plugins. The engine calculates financial effects and requires approval for proposed writes. Operation availability is declared by each plugin; a planned operation returns a planned response.
+Work in progress: the first milestone has not landed yet. What is here today is an early end-to-end slice (one company, service invoices and payments, an approval card before every write) that the next milestones rebuild properly.
 
 ## Layout
 
@@ -13,8 +13,6 @@ ERPClaw v3 combines a CLI, PostgreSQL books and first-party business plugins. Th
 | `packages/erpclaw-api` | The engine API (FastAPI) |
 | `packages/erpclaw-cli` | `erpclaw` command: `init`, `chat`, `serve`, `eval`, `demo` |
 | `plugins/erpclaw-sales` | Customers, invoices, payments; demo books |
-| `plugins/erpclaw-stock` | Stock operations and warehouse setup |
-| `plugins/erpclaw-email` | Email connector |
 | `plugins/erpclaw-email-folder` | Email connector that writes `.eml` files instead of sending |
 | `tools/` | Push scanner, dependency licence gate |
 | `tests/` | Engine tests, on the PostgreSQL `*_test` database named by `ERPCLAW_PG_TEST_URL` |

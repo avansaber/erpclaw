@@ -6,9 +6,11 @@ from types import SimpleNamespace
 import pytest
 
 from erpclaw_assistant import resolve as rv
+from erpclaw_assistant.resolve_warehouse import _company_warehouse_names as read_company_warehouse_names
 from erpclaw_core.common import Ctx, Refusal
 import erpclaw_sales as sales
 from erpclaw_sales import stock_sales as stock
+from erpclaw_assistant import resolve_args, resolve_inventory, resolve_policy, resolve_records, resolve_types, resolve_warehouse
 
 
 ITEMS = [
@@ -32,9 +34,20 @@ class NoBooks:
 
 @pytest.fixture
 def memory(monkeypatch):
-    monkeypatch.setattr(rv, "customers", lambda ctx: CUSTOMERS)
-    monkeypatch.setattr(rv, "_items", lambda ctx: ITEMS)
+    _replacement = (lambda ctx: CUSTOMERS)
+    for _module in (rv, resolve_args, resolve_inventory, resolve_records):
+        monkeypatch.setattr(_module, 'customers', _replacement)
+    _replacement = (lambda ctx: ITEMS)
+    for _module in (rv, resolve_args, resolve_inventory, resolve_policy, resolve_types):
+        monkeypatch.setattr(_module, '_items', _replacement)
     monkeypatch.setattr(stock, "holdings", lambda ctx, item: WAREHOUSES)
+    _replacement = (lambda ctx: {r['name'].lower() for r in WAREHOUSES})
+    for _module in (rv, resolve_warehouse):
+        monkeypatch.setattr(_module, '_company_warehouse_names', _replacement)
+    _replacement = (lambda *a, **kw: {'warehouses': WAREHOUSES})
+    for _module in (rv, resolve_args, resolve_policy, resolve_warehouse):
+        monkeypatch.setattr(_module, 'call_service', _replacement)
+    assert read_company_warehouse_names(None) == {r['name'].lower() for r in WAREHOUSES}
     return Ctx(NoBooks(), "company", "Test Company", "USD", date(2026, 11, 4))
 
 
@@ -131,8 +144,12 @@ def test_source_does_not_attach_across_sentence_and_unknown_phrase_is_inventorie
 
 
 def test_a_service_item_cannot_silently_consume_a_warehouse(memory, monkeypatch):
-    monkeypatch.setattr(rv, "_items", lambda ctx: [{**ITEMS[0], "kind": "service"}])
-    monkeypatch.setattr(rv, "_company_warehouse_names", lambda ctx: {"main store"})  # these books name that warehouse
+    _replacement = (lambda ctx: [{**ITEMS[0], 'kind': 'service'}])
+    for _module in (rv, resolve_args, resolve_inventory, resolve_policy, resolve_types):
+        monkeypatch.setattr(_module, '_items', _replacement)
+    _replacement = (lambda ctx: {'main store'})
+    for _module in (rv, resolve_warehouse):
+        monkeypatch.setattr(_module, '_company_warehouse_names', _replacement)  # these books name that warehouse
     with pytest.raises(Refusal) as error:
         request("invoice Acme Corporation for 5 Copper Wire from Main Store", memory)
     assert error.value.code == "warehouse_ambiguous"

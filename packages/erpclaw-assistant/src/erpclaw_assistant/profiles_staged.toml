@@ -1,0 +1,78 @@
+# These routes are inactive. Replace every UNCONFIRMED value after independent review.
+# Account terms and consent wording also require entries in the engine's approval registries.
+
+[openai_direct]
+backend = "openai"
+model = "UNCONFIRMED_MODEL"
+base_url = "https://api.openai.com/v1"
+hosted = true
+hosted_books = "seeded_only"
+key_item = "erpclaw-openai"
+key_env = "ERPCLAW_OPENAI_API_KEY"
+max_tokens = "UNCONFIRMED_LIMIT"
+max_input_tokens = "UNCONFIRMED_LIMIT"
+context_window = "UNCONFIRMED_LIMIT"
+timeout_s = "UNCONFIRMED_TIMEOUT"
+temperature = "UNCONFIRMED_TEMPERATURE"
+reasoning = {}
+parameters = {}
+terms = "UNCONFIRMED_TERMS"
+consent = "UNCONFIRMED_CONSENT"
+admission = "conservative_bound"
+
+[claude_direct]
+backend = "claude"
+model = "UNCONFIRMED_MODEL"
+base_url = "https://api.anthropic.com"
+hosted = true
+hosted_books = "seeded_only"
+key_item = "erpclaw-anthropic"
+key_env = "ERPCLAW_ANTHROPIC_API_KEY"
+max_tokens = "UNCONFIRMED_LIMIT"
+max_input_tokens = "UNCONFIRMED_LIMIT"
+context_window = "UNCONFIRMED_LIMIT"
+timeout_s = "UNCONFIRMED_TIMEOUT"
+temperature = "UNCONFIRMED_TEMPERATURE"
+reasoning = {}
+parameters = {}
+terms = "UNCONFIRMED_TERMS"
+consent = "UNCONFIRMED_CONSENT"
+admission = "conservative_bound"
+
+[openai_openrouter]
+backend = "openrouter"
+model = "UNCONFIRMED_MODEL"
+base_url = "https://openrouter.ai/api/v1"
+hosted = true
+hosted_books = "seeded_only"
+key_item = "erpclaw-v3-openrouter"
+key_env = "ERPCLAW_OPENROUTER_API_KEY"
+max_tokens = "UNCONFIRMED_LIMIT"
+max_input_tokens = "UNCONFIRMED_LIMIT"
+context_window = "UNCONFIRMED_LIMIT"
+timeout_s = "UNCONFIRMED_TIMEOUT"
+temperature = "UNCONFIRMED_TEMPERATURE"
+reasoning = {}
+parameters = {}
+provider = { order = ["UNCONFIRMED_PROVIDER"], quantizations = ["UNCONFIRMED_QUANTIZATION"], allow_fallbacks = false, data_collection = "deny", zdr = true, require_parameters = true }
+consent = "UNCONFIRMED_CONSENT"
+admission = "conservative_bound"
+
+[claude_openrouter]
+backend = "openrouter"
+model = "UNCONFIRMED_MODEL"
+base_url = "https://openrouter.ai/api/v1"
+hosted = true
+hosted_books = "seeded_only"
+key_item = "erpclaw-v3-openrouter"
+key_env = "ERPCLAW_OPENROUTER_API_KEY"
+max_tokens = "UNCONFIRMED_LIMIT"
+max_input_tokens = "UNCONFIRMED_LIMIT"
+context_window = "UNCONFIRMED_LIMIT"
+timeout_s = "UNCONFIRMED_TIMEOUT"
+temperature = "UNCONFIRMED_TEMPERATURE"
+reasoning = {}
+parameters = {}
+provider = { order = ["UNCONFIRMED_PROVIDER"], quantizations = ["UNCONFIRMED_QUANTIZATION"], allow_fallbacks = false, data_collection = "deny", zdr = true, require_parameters = true }
+consent = "UNCONFIRMED_CONSENT"
+admission = "conservative_bound"

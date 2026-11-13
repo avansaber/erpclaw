@@ -21,7 +21,7 @@ def plan(kind, moves, currency="USD", roles=ROLES):
 
 
 def line(account, debit="0.00", credit="0.00"):
-    return {"account": account, "debit": debit, "credit": credit}
+    return {"account": account, "debit": debit, "credit": credit, "currency": "USD"}
 
 
 def test_original_k7_opening_posts_two_inventory_debits_and_summed_equity():
@@ -90,8 +90,8 @@ def test_empty_count_is_no_adjustment_while_other_kinds_require_a_movement():
                                                    ("USD", "12.30", "0.00")])
 def test_company_scale_is_exact_on_both_sides(currency, value, zero):
     assert plan("opening", [move("in", value)], currency) == [
-        {"account": "raw", "debit": value, "credit": zero},
-        {"account": "equity", "debit": zero, "credit": value}]
+        {"account": "raw", "debit": value, "credit": zero, "currency": currency},
+        {"account": "equity", "debit": zero, "credit": value, "currency": currency}]
 
 
 @pytest.mark.parametrize("value", [D("-1"), D("NaN"), D("Infinity"), D("-Infinity"), D("sNaN"),

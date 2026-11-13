@@ -2,10 +2,9 @@
 
 This internal slice opens and closes delivery items and supplies the ledger's
 role-based source refusal. It registers no supplier, payment or owed-read contract,
-resolves no owner/model name or identity, and changes no schema. Callers hold the
+resolves no owner/model name or identity. Callers hold the
 company chain and (for delivery reversal) stock heads before this item's row, and
-own the transaction, posting and approved read-set/recompute checks. The ledger's
-frozen 0015 database source guard remains a separate backstop.
+own the transaction, posting and approved read-set/recompute checks. The ledger's database source guard remains a separate backstop.
 """
 from __future__ import annotations
 
@@ -22,16 +21,21 @@ from .payable_tables import supplier_payable
 DELIVERY = "stock_goods_received"
 PAYMENT = "supplier_payment"
 REVERSAL = ":reversal"
-PAYABLE_SOURCES = (DELIVERY, DELIVERY + REVERSAL, PAYMENT, PAYMENT + REVERSAL)
-ITEM_SOURCES = (DELIVERY,)
+OPENING = "opening"
+PAYABLE_SOURCES = (OPENING, DELIVERY, DELIVERY + REVERSAL, PAYMENT, PAYMENT + REVERSAL)
+ITEM_SOURCES = (DELIVERY, OPENING)
 WRITERS = ("core", "stock")
-SOURCE_TEXT = "Only a delivery still owed or a supplier payment can change what a supplier is owed in these books."
+SOURCE_TEXT = ("Only an approved opening position, a delivery still owed or a supplier payment can change what a supplier "
+               "is owed in these books. For a wrong supplier amount, pay or reverse against the actual items, or ask "
+               "your accountant; do not journal the payable account.")
 
 
-def check_payable_source(ctx: Ctx, voucher_type: str, lines: list) -> None:
+def check_payable_source(ctx: Ctx, voucher_type: str, lines: list, *, preview: bool = False) -> None:
     """The payable-source rule, by role: a line naming a party on an account of role `payable` is refused unless the
     voucher type is a payable source. The posting service calls it on its cleaned lines, before any write."""
-    if voucher_type in PAYABLE_SOURCES:
+    if voucher_type in PAYABLE_SOURCES and voucher_type != OPENING:
+        return
+    if voucher_type == OPENING and (preview or _opening_approved(ctx)):
         return
     ids = {ln.account_id for ln in lines if ln.party_id is not None}
     if not ids:
@@ -40,6 +44,18 @@ def check_payable_source(ctx: Ctx, voucher_type: str, lines: list) -> None:
                                        m.account.c.account_type == "payable")
                         .limit(1)).first():
         raise Refusal(SOURCE_TEXT, "payable_source_not_allowed")
+
+def _opening_approved(ctx: Ctx) -> bool:
+    from .approvals import committing
+
+    approval_id = committing(ctx)
+    if not approval_id:
+        return False
+    return ctx.conn.execute(select(m.approval.c.id).where(
+        m.approval.c.id == approval_id, m.approval.c.company_id == ctx.company_id,
+        m.approval.c.contract == "record_opening_position", m.approval.c.status == "consumed"
+    )).first() is not None
+
 
 def _authorize(ctx: Ctx) -> None:
     """Require this company's in-flight core/stock approval, not a completed outcome.
@@ -80,20 +96,40 @@ def _supplier(ctx: Ctx, supplier_id: str) -> dict:
     return dict(row)
 
 def open_item(ctx: Ctx, *, supplier_id: str, source_type: str, source_id: str, source_number: str,
-              posting_date: date, amount) -> ledger.Line:
+              posting_date: date, amount, posting_id: str | None = None, control_line_no: int | None = None,
+              source_voucher_id: str | None = None, opening_sequence: int | None = None,
+              old_reference: str | None = None, due_date: date | None = None) -> ledger.Line:
     """Open the supplier payable item for one still-owed posting, in the caller's transaction, and return its line
     (Accounts Payable credit, the supplier as party) for that posting. Refused outside an approved commit of core or
     the stock plugin. The caller owns the transaction and its posting."""
+    if source_type == OPENING:
+        from .opening_position import _opening_item_commit
+
+        if _opening_item_commit.get() is not ctx or not _opening_approved(ctx):
+            raise Refusal(SOURCE_TEXT, "payable_source_not_allowed")
     _authorize(ctx)
     if source_type not in ITEM_SOURCES:
         raise Refusal(SOURCE_TEXT, "payable_source_not_allowed")
     value = _amount(ctx, amount, "A payable")
     _supplier(ctx, supplier_id)
     ap = payable_account(ctx)
+    linkage = {}
+    if source_type == OPENING:
+        if not posting_id or not source_voucher_id or not control_line_no or not opening_sequence:
+            raise Refusal("A supplier starting figure needs its actual posting and payable line.", "payment_source")
+        linkage = dict(posting_id=posting_id, control_line_no=control_line_no,
+            source_voucher_id=source_voucher_id, opening_sequence=opening_sequence,
+            old_reference=old_reference, due_date=due_date)
+        from .supplier_payments import _source, MAX_HISTORY
+
+        _source(ctx, dict(id=source_id, company_id=ctx.company_id, supplier_id=supplier_id,
+            source_type=source_type, source_id=source_id, source_number=source_number, posting_date=posting_date,
+            currency=ctx.currency, amount=value, outstanding=value, status="open", **linkage),
+            supplier_id, ap, set(), MAX_HISTORY, {}, set())
     ctx.conn.execute(supplier_payable.insert().values(
         id=new_id(), company_id=ctx.company_id, supplier_id=supplier_id, source_type=source_type, source_id=source_id,
         source_number=source_number, posting_date=posting_date, currency=ctx.currency, amount=value,
-        outstanding=value, status="open", created_at=now()))
+        outstanding=value, status="open", created_at=now(), **linkage))
     return ledger.Line(ap["id"], credit=value, party_id=supplier_id)
 
 def _items(ctx: Ctx, supplier_id: str, *, status: tuple[str, ...] = ("open",)) -> list[dict]:
@@ -102,10 +138,10 @@ def _items(ctx: Ctx, supplier_id: str, *, status: tuple[str, ...] = ("open",)) -
     t = supplier_payable
     return [dict(r) for r in ctx.conn.execute(select(t).where(
         t.c.company_id == ctx.company_id, t.c.supplier_id == supplier_id, t.c.status.in_(status)).order_by(
-        t.c.posting_date, t.c.source_number, t.c.id)).mappings()]
+        t.c.posting_date, t.c.source_number, t.c.opening_sequence, t.c.id)).mappings()]
 
 def _item_by_source(ctx: Ctx, source_type: str, source_id: str, lock: bool = False) -> dict:
-    if source_type not in ITEM_SOURCES:
+    if source_type not in (DELIVERY,):
         raise Refusal(SOURCE_TEXT, "payable_source_not_allowed")
     t = supplier_payable
     q = select(t).where(t.c.company_id == ctx.company_id, t.c.source_type == source_type, t.c.source_id == source_id)

@@ -1,0 +1,84 @@
+[
+  {
+    "area": "planned.purchasing",
+    "target": "op.pay_supplier",
+    "states": [
+      "installed",
+      "available"
+    ],
+    "triggers": [
+      "bill",
+      "bills",
+      "supplier",
+      "vendor",
+      "supplier invoice"
+    ],
+    "intent": [
+      "pay",
+      "paid",
+      "payment",
+      "settle",
+      "owe"
+    ],
+    "exclude": [
+      "purchase order",
+      "order",
+      "quote",
+      "request",
+      "bill the customer",
+      "invoice the customer"
+    ],
+    "exclude_customer_billing": true,
+    "protect_from": [
+      "op.create_invoice",
+      "op.record_payment"
+    ]
+  },
+  {
+    "area": "planned.purchasing",
+    "target": "op.reverse_supplier_payment",
+    "states": [
+      "installed",
+      "available",
+      "planned"
+    ],
+    "triggers": [
+      "supplier",
+      "vendor",
+      "payment to"
+    ],
+    "triggers_followed_by_token": [
+      "payment to"
+    ],
+    "require": [
+      "payment"
+    ],
+    "intent": [
+      "reverse",
+      "undo"
+    ],
+    "protect_from": [
+      "op.record_payment",
+      "op.reverse_payment"
+    ],
+    "preserve_area_pick": true,
+    "score": 6
+  },
+  {
+    "area": "planned.stock",
+    "target": "op.record_goods_received",
+    "states": [
+      "installed",
+      "available"
+    ],
+    "triggers": [
+      "receive the delivery into stock",
+      "receive stock",
+      "goods received",
+      "stock receipt"
+    ],
+    "protect_from": [
+      "op.record_payment"
+    ]
+  }
+]

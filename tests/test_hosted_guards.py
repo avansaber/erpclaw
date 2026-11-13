@@ -6,9 +6,12 @@ written as a literal. The books tests run on PostgreSQL only, the one database E
 from __future__ import annotations
 
 import json
+import os
+import platform
 import secrets
 import sqlite3
 import string
+import sys
 import time
 from pathlib import Path
 
@@ -329,13 +332,97 @@ BRACES = {"open_braces": "{" * 100_000, "mixed": "[{" * 50_000, "unclosed_object
 
 
 @pytest.mark.parametrize("case", sorted(BRACES))
-def test_a_long_text_of_braces_is_checked_in_under_a_second_and_refused_never_half_read(case):
+def test_a_long_text_of_braces_is_checked_in_near_linear_time_and_refused_never_half_read(case):
+    from timeit import repeat
+
+    def cpu_samples(value):
+        # timeit pauses cyclic GC so earlier tests' garbage cannot skew the samples.
+        return repeat(lambda: hosted.check(value), timer=time.process_time, repeat=5, number=1)
+
     text, fake = BRACES[case], FakeServer()
-    started = time.perf_counter()
+    # Keep both ends so the 10x shorter deep_but_closed input is still balanced.
+    end = len(text) // 20
+    short_samples = cpu_samples(text[:end] + text[-end:])
+    long_samples = cpu_samples(text)
+    short_cpu = sorted(short_samples)[len(short_samples) // 2]
+    long_cpu = sorted(long_samples)[len(long_samples) // 2]
     label = hosted.check(text)
-    assert time.perf_counter() - started < 1.0
+    # CPU time excludes runner scheduling delays; medians dampen measurement noise.
+    assert long_cpu <= 20 * short_cpu, json.dumps({
+        "case": case, "short_cpu": short_cpu, "long_cpu": long_cpu,
+        "short_samples": short_samples, "long_samples": long_samples,
+        "sys.version": sys.version, "platform": platform.platform(), "os.cpu_count()": os.cpu_count(),
+        "json.decoder.c_scanstring": json.decoder.c_scanstring is not None,
+        "json.scanner.c_make_scanner": json.scanner.c_make_scanner is not None,
+        "process_time.resolution": time.get_clock_info("process_time").resolution,
+        "process_time.implementation": time.get_clock_info("process_time").implementation,
+    }, indent=2)
     assert label == "unreadable_json" and hosted.refused_input(_Hosted(), text)["code"] == "credential_refused"
     assert not _sent(openrouter(fake), text, "text") and fake.bodies == []
+
+
+def test_the_braces_timing_failure_reports_every_sample_and_its_runtime(monkeypatch):
+    import timeit
+
+    short = [0.02, 0.01, 0.05, 0.03, 0.04]
+    long = [0.8, 0.7, 1.1, 0.9, 1.0]
+    batches = iter((short, long))
+    monkeypatch.setattr(timeit, "repeat", lambda *args, **kwargs: next(batches))
+    monkeypatch.setattr(hosted, "check", lambda value: "unreadable_json")
+    with pytest.raises(AssertionError) as failure:
+        test_a_long_text_of_braces_is_checked_in_near_linear_time_and_refused_never_half_read("open_brackets")
+    # Decode the message even when pytest appends its rewritten comparison.
+    diagnostics, _ = json.JSONDecoder().raw_decode(str(failure.value))
+    assert diagnostics == {
+        "case": "open_brackets", "short_cpu": 0.03, "long_cpu": 0.9,
+        "short_samples": short, "long_samples": long,
+        "sys.version": sys.version, "platform": platform.platform(), "os.cpu_count()": os.cpu_count(),
+        "json.decoder.c_scanstring": json.decoder.c_scanstring is not None,
+        "json.scanner.c_make_scanner": json.scanner.c_make_scanner is not None,
+        "process_time.resolution": time.get_clock_info("process_time").resolution,
+        "process_time.implementation": time.get_clock_info("process_time").implementation,
+    }
+
+
+@pytest.mark.parametrize("case", ["open_brackets", "deep_but_closed"])
+@pytest.mark.parametrize("prefix", ["", 'an unmatched prose quote: " '])
+def test_excessive_json_nesting_is_refused_before_using_the_decoder_s_native_stack(monkeypatch, case, prefix):
+    attempts = []
+    raw_decode = json.JSONDecoder.raw_decode
+
+    def record(self, text, idx=0):
+        attempts.append(idx)
+        return raw_decode(self, text, idx)
+
+    monkeypatch.setattr(json.JSONDecoder, "raw_decode", record)
+    assert hosted.check(prefix + BRACES[case]) == "unreadable_json"
+    # A larger native stack must not turn one RecursionError into 65 full-depth parses.
+    assert attempts == []
+
+
+@pytest.mark.parametrize("scanner", ["c", "python"])
+@pytest.mark.parametrize("opening, closing", [("[", "]"), ('{"item":', "}")])
+def test_the_json_nesting_limit_allows_its_boundary_and_refuses_the_next_level(monkeypatch, scanner, opening, closing):
+    if scanner == "c" and json.scanner.c_make_scanner is None:
+        pytest.skip("JSON C accelerator unavailable")
+    monkeypatch.setattr(json.scanner, "make_scanner",
+                        json.scanner.c_make_scanner if scanner == "c" else json.scanner.py_make_scanner)
+    text = opening * hosted.JSON_DEPTH + "0" + closing * hosted.JSON_DEPTH
+    assert hosted.check(text) is None
+    assert hosted.check(opening + text + closing) == "unreadable_json"
+
+
+@pytest.mark.parametrize("scanner", ["c", "python"])
+def test_the_json_depth_check_ignores_quoted_braces_and_escaped_quotes(monkeypatch, scanner):
+    if scanner == "c" and json.scanner.c_make_scanner is None:
+        pytest.skip("JSON C accelerator unavailable")
+    monkeypatch.setattr(json.scanner, "make_scanner",
+                        json.scanner.c_make_scanner if scanner == "c" else json.scanner.py_make_scanner)
+    value = {"memo": '\\"' + "[" * (hosted.JSON_DEPTH + 1) + '\\\\"' + "}" * (hosted.JSON_DEPTH + 1)}
+    # The outer JSON is shallow even though its string holds many braces. Its decoded
+    # strings are checked separately by _texts and _fields.
+    assert list(hosted._held_json(json.dumps(value))) == [value]
+    assert hosted.check(json.dumps([[] for _ in range(hosted.JSON_DEPTH * 2)])) is None
 
 
 def test_a_model_tool_call_the_check_cannot_read_ends_its_turn_cleanly_and_stores_nothing(engine):

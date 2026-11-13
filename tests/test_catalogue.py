@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from bookdiff import CONTROL
 from erpclaw_api.app import create_app
 from erpclaw_assistant import store
+from erpclaw_assistant.graph import Assistant
 from erpclaw_assistant.model import Reply, ScriptedModel, call
 from erpclaw_core import backup as bk, catalogue as cat
 from erpclaw_core.plugins import disable_plugin
@@ -24,6 +25,7 @@ def chat(engine, replies, text):
 
 
 def books(engine):
+    Assistant(engine, ScriptedModel([]))
     with engine.connect() as conn:
         return [bk._dump(conn, t) for t in bk.books_tables(conn) if t.name not in CONTROL]
 
@@ -44,6 +46,17 @@ def test_the_catalogue_is_generated_from_the_registry_and_the_planned_file(engin
     assert "planned.sales" not in entries  # delivered by the sales plugin, installed in these books
 
 
+def test_invoice_fields_stays_until_the_invoice_fields_work_lands(engine):
+    # The invoice-fields assistant work must flip this guard and enable the plan's retirement assertion.
+    with engine.connect() as conn:
+        entries = {e.id: e for e in cat.catalogue(conn)}
+    assert "planned.invoice_fields" in entries, "Flip this guard only when the invoice-fields assistant work retires planned.invoice_fields."
+    entry = entries["planned.invoice_fields"]
+    assert entry.state == "planned" and entry.kind == "area" and entry.wave == "Core"
+    assert entry.name == "a rate, an invoice date or a memo on an invoice"
+    assert entry.synonyms == ("rate per item", "item rate", "invoice date", "memo", "note on the invoice")
+
+
 def test_disabling_a_plugin_moves_its_entries_to_available_and_brings_its_area_back(engine):
     with engine.begin() as conn:
         disable_plugin(conn, "sales")
@@ -54,6 +67,21 @@ def test_disabling_a_plugin_moves_its_entries_to_available_and_brings_its_area_b
 
 
 # --- search ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("said, invoice_fields", [
+    ("what's the exchange rate for GBP", False),
+    ("what's the exchange rate for GBP and the item rate", True),
+    ("add an invoice date and show the exchange rate for GBP", True),
+    ("add a memo and show the exchange rate for GBP", True),
+])
+def test_exchange_rate_search_avoids_invoice_rate_collision_and_keeps_explicit_fields(monkeypatch, said, invoice_fields):
+    entries = [cat.Entry(a["id"], a["kind"], a["name"], a["name"], tuple(a["synonyms"]), "planned", wave=a["wave"])
+               for a in cat._planned() if a["id"] in ("planned.invoice_fields", "planned.multi_currency")]
+    monkeypatch.setattr(cat, "catalogue", lambda conn: entries)
+    ids = [e.id for e in cat.find_capability(None, said)]
+    assert "planned.multi_currency" in ids
+    assert ("planned.invoice_fields" in ids) is invoice_fields
+
 
 def test_the_search_is_deterministic_bounded_and_finds_by_synonym_and_words(engine):
     with engine.connect() as conn:
@@ -110,7 +138,7 @@ def test_outcomes_c_d_e_answer_from_fixed_text_record_demand_and_change_no_books
     assert ev[-1]["outcome"] == outcome
     text = ev[-1]["text"]
     if outcome == "c":
-        assert "planned for release v3.1" in text
+        assert text == "Payroll is not in ERPClaw yet."
     nums = {w for w in text.replace("(", " ").replace(")", " ").split() if any(ch.isdigit() for ch in w)}
     assert nums <= {"v3.1.", "v3.1", "1", "2", "3"}, nums  # no figure: only a release name or choice numbers
     rows = store.demand()
@@ -135,8 +163,9 @@ def test_a_planned_entry_that_becomes_installed_changes_its_outcome_with_no_prom
         monkeypatch.setattr(REGISTRY.contracts[name], "planned", "Core")  # installed op sharing "order" ranks first
 
     planned = tmp_path / "planned.json"
-    planned.write_text(json.dumps([{"id": "planned.tea", "kind": "area", "name": "tea rounds", "wave": "v3.1",
-                                    "synonyms": ["tea", "tea round"], "installed_as": ["extra"]}]))
+    planned.write_text(json.dumps({"none_refusal": {"min_gap": 3, "min_ratio": 2},
+                                   "entries": [{"id": "planned.tea", "kind": "area", "name": "tea rounds", "wave": "v3.1",
+                                                "synonyms": ["tea", "tea round"], "installed_as": ["extra"]}]}))
     monkeypatch.setattr(cat, "PLANNED", planned)
 
     class TeaIn(Input):
@@ -272,3 +301,16 @@ def test_a_synonym_named_entry_ranks_above_five_installed_entries_matched_only_b
 
 def test_from_is_a_stop_word():
     assert cat.words("Change it from 2 days to 3") == ["change", "2", "days", "3"]
+
+
+@pytest.mark.parametrize("policy", [None, {}, {"min_gap": 3}, {"min_gap": 0, "min_ratio": 2},
+                                    {"min_gap": 3, "min_ratio": True}, {"min_gap": 3, "min_ratio": "2"}])
+def test_catalogue_rejects_invalid_none_refusal_on_load(tmp_path, monkeypatch, policy):
+    data = {"entries": []}
+    if policy is not None:
+        data["none_refusal"] = policy
+    path = tmp_path / "planned.json"
+    path.write_text(json.dumps(data))
+    monkeypatch.setattr(cat, "PLANNED", path)
+    with pytest.raises(ValueError, match="none_refusal"):
+        cat._planned()

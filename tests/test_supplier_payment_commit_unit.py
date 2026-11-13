@@ -199,9 +199,9 @@ def test_registered_future_writer_orders_header_allocations_cas_posting_and_audi
     assert approvals.committing(w.ctx) is None
 
 
-def test_production_manifest_has_no_payment_or_reversal_public_contract():
+def test_production_manifest_has_reversal_and_no_forward_payment_contract():
     assert "pay_supplier" not in core_contracts.MANIFEST.contracts
-    assert "reverse_supplier_payment" not in core_contracts.MANIFEST.contracts
+    assert core_contracts.MANIFEST.contracts["reverse_supplier_payment"] == "write"
     assert p.PAYMENT in core_contracts.MANIFEST.voucher_types
 
 

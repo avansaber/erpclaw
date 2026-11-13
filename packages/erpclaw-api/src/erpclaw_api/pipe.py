@@ -33,6 +33,13 @@ _TOKEN = re.compile(rb"[!#$%&'*+.^_`|~0-9A-Za-z-]+\Z")
 _DECIMAL = re.compile(rb"[0-9]+\Z")
 _LISTENERS = {"host": {"app", "shared"}, "cli": {"bearer", "shared"},
               "loopback": {"bearer", "shared"}}
+_API_HEADERS = (
+    (b"cache-control", b"no-store"),
+    (b"x-content-type-options", b"nosniff"),
+    (b"referrer-policy", b"no-referrer"),
+    (b"cross-origin-resource-policy", b"same-origin"),
+    (b"content-security-policy", b"default-src 'none'; frame-ancestors 'none'"),
+)
 
 
 # The routes each listener serves, explicitly: a (method, path-template) pair that is not listed here is the frozen 404
@@ -80,10 +87,13 @@ async def _error(send, status, code="invalid_request", detail="That HTTP request
 class ListenerApp:
     """ASGI route-table gate usable by both the byte stream and TCP servers."""
 
-    def __init__(self, app, kind, table=None):
+    def __init__(self, app, kind, table=None, *, port=None):
         if kind not in _LISTENERS:
             raise ValueError("Unknown listener kind")
+        if kind == "loopback" and (type(port) is not int or not 1 <= port <= 65535):
+            raise ValueError("A loopback listener requires its run port")
         self.app, self.kind = app, kind
+        self._host = f"127.0.0.1:{port}".encode("ascii") if kind == "loopback" else None
         self.table = frozenset(LISTENER_TABLES[kind] if table is None else table)
         self._all_routes = tuple(app.routes)
         self.route_table = frozenset(listener_routes(self._all_routes)[kind])
@@ -94,6 +104,22 @@ class ListenerApp:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+
+        original_send = send
+
+        async def send(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                present = {key.lower() for key, _ in headers}
+                headers.extend((key, value) for key, value in _API_HEADERS if key not in present)
+                message = {**message, "headers": headers}
+            await original_send(message)
+
+        if self.kind == "loopback":
+            hosts = [value for key, value in scope["headers"] if key.lower() == b"host"]
+            if len(hosts) != 1 or hosts[0].lower() != self._host:
+                await _error(send, 421, "wrong_host", "That Host is not allowed.")
+                return
         # Follow the original router's precedence, including overlapping paths.
         # An excluded specific route must not slip through an allowed wildcard.
         partial = None
@@ -118,6 +144,13 @@ class ListenerApp:
                 await _error(send, 401, "unauthenticated", "Sign in to use the engine.")
                 return
         await self.app(scope, receive, send)
+
+
+def served_app(engine, model, kind="loopback", *, port=None):
+    """Build the API behind the explicit route table for its listener."""
+    from erpclaw_api.app import create_app
+
+    return ListenerApp(create_app(engine, model), kind, port=port)
 
 
 class _Invalid(Exception):

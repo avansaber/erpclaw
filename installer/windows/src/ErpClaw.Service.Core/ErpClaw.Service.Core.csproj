@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The service's platform-neutral core (INSTALLER 2.2, 2.3), tested on Linux. Everything
+       Windows-only (the job, process start times, the control pipe's server, Credential Manager) is an interface here. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>ErpClaw.Service.Core</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="ErpClaw.Service.Core.Tests" />
+  </ItemGroup>
+</Project>

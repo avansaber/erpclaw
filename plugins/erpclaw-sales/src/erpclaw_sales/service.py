@@ -8,12 +8,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
+from typing import Callable
 
 from sqlalchemy import select
 
 from erpclaw_core import ledger, outbox
 from erpclaw_core import models as m
 from erpclaw_core.common import Ctx, Refusal, audit, new_id, now
+from erpclaw_core.contracts import Shown
 from erpclaw_core.money import fmt, fmt_qty, fmt_rate, quantize, to_decimal
 from erpclaw_core.numbering import next_number
 
@@ -32,27 +34,46 @@ class PricedLine:
 
 
 def price_lines(ctx: Ctx, lines: list[tuple[dict, Decimal]],
-                rates: list[Decimal] | None = None) -> tuple[list[PricedLine], Decimal]:
+                rates: list[Decimal | None] | None = None) -> tuple[list[PricedLine], Decimal]:
     """Each line at the item's rate, or at the rates given (an order's)."""
     out = []
     for n, (item, qty) in enumerate(lines):
         q = to_decimal(qty)
         if q <= 0:
             raise Refusal(f"The quantity for {item['name']} must be more than zero.", "bad_quantity")
-        rate = to_decimal(rates[n] if rates is not None else item["standard_rate"])
+        rate = to_decimal(rates[n] if rates is not None and rates[n] is not None else item["standard_rate"])
         out.append(PricedLine(item, q, rate, quantize(q * rate, ctx.currency)))
     return out, sum((x.amount for x in out), Decimal("0"))
 
 
 def invoice_email(customer: dict, number: str, priced: list[PricedLine], total: Decimal, due: date,
-                  ctx: Ctx) -> tuple[str, str]:
+                  ctx: Ctx, *, shown: Shown | None = None) -> tuple[str, str]:
+    """One text builder for the card's template and the allocated invoice's message.
+
+    Record logical lines while building them, so newlines in customer/item data
+    cannot shift the card's money records onto a different line.
+    """
     subject = f"Invoice {number} from {ctx.company_name}"
-    body_lines = [f"Hello {customer['name']},", "", f"Please find invoice {number} below.", ""]
+    if shown is not None:
+        shown.line("Email subject", subject)
+    body_lines = []
+
+    def line(value: str) -> None:
+        body_lines.append(value)
+        if shown is not None:
+            shown.line("Email body", value)
+
+    for value in (f"Hello {customer['name']},", "", f"Please find invoice {number} below.", ""):
+        line(value)
     for p in priced:
-        body_lines.append(f"  {fmt_qty(p.quantity)} x {p.item['name']} @ {fmt_rate(p.rate, ctx.currency)} = "
-                          f"{fmt(p.amount, ctx.currency)}")
-    body_lines += ["", f"Total: {fmt(total, ctx.currency)} {ctx.currency}", f"Due: {due:%d %b %Y}", "",
-                   f"Thank you, {ctx.company_name}"]
+        rate = shown.unit_price(p.rate) if shown is not None else fmt_rate(p.rate, ctx.currency)
+        amount = shown.amount(p.amount) if shown is not None else fmt(p.amount, ctx.currency)
+        line(f"  {fmt_qty(p.quantity)} x {p.item['name']} @ {rate} = {amount}")
+    line("")
+    total_text = shown.amount(total) if shown is not None else fmt(total, ctx.currency)
+    for value in (f"Total: {total_text} {ctx.currency}", f"Due: {due:%d %b %Y}", "",
+                  f"Thank you, {ctx.company_name}"):
+        line(value)
     return subject, "\n".join(body_lines)
 
 
@@ -62,7 +83,10 @@ def _zero(ctx: Ctx) -> Decimal:
 
 def create_invoice(ctx: Ctx, customer: dict, lines: list[tuple[dict, Decimal]], posting_date: date,
                    submit: bool = True, email: bool = False, operation_key: str | None = None,
-                   warehouses: list[str | None] | None = None, order: dict | None = None) -> dict:
+                   warehouses: list[str | None] | None = None, order: dict | None = None, *,
+                   sender: outbox.SenderSnapshot | None = None,
+                   email_check: Callable[[], None] | None = None,
+                   rates: list[Decimal | None] | None = None) -> dict:
     """Save the invoice as a draft with its lines, then, unless a draft was asked for, submit it in the
     same transaction (the database admits lines only into a draft). A stock line keeps the id of the warehouse the
     owner named, if any (`warehouses`: resolved ids, never the owner's words). From an order, the lines are what its deliveries hold uninvoiced, worked out under the order's
@@ -77,7 +101,7 @@ def create_invoice(ctx: Ctx, customer: dict, lines: list[tuple[dict, Decimal]], 
         lines = [(b.item, b.qty) for b in cover.lines]
         priced, total = price_lines(ctx, lines, [b.order_line["rate"] for b in cover.lines])
     else:
-        priced, total = price_lines(ctx, lines)
+        priced, total = price_lines(ctx, lines, rates)
     inv_id = new_id()
     due = posting_date + timedelta(days=PAYMENT_TERMS_DAYS)
     ctx.conn.execute(t.invoice.insert().values(
@@ -103,7 +127,13 @@ def create_invoice(ctx: Ctx, customer: dict, lines: list[tuple[dict, Decimal]], 
     queued_to = None
     if email:
         subject, body = invoice_email(customer, number, priced, total, due, ctx)
-        outbox.enqueue(ctx, "deliver_message", customer["email"], subject, body, operation_key)
+    # Run on both send paths, after invoice writes and immediately before queueing.
+    # A changed approval rolls these writes and the allocated number back too.
+    if email_check is not None:
+        email_check()
+    if email:
+        outbox.enqueue(ctx, "send_message", customer["email"], subject, body, operation_key,
+                       sender=sender, attachments=())
         queued_to = customer["email"]
     audit(ctx, "submit_invoice" if submit else "save_draft_invoice", "sales_invoice", inv_id,
           detail={"number": number, "total": str(total)})
@@ -367,6 +397,7 @@ class Reversal:
     original: dict | None            # the posting reversed; none for a draft invoice
     mirror: list                     # its lines mirrored, as the posting service will write them
     invoices: list[tuple[dict, Decimal]] = None  # a payment's invoices, each with the amount given back
+    stock: dict | None = None        # the invoice's own stock reversal, never a delivery's
 
 
 def _check_date(ctx: Ctx, when: date) -> None:
@@ -383,11 +414,21 @@ def plan_cancel(ctx: Ctx, inv: dict, when: date) -> Reversal:
         first = live[0]["number"]
         raise Refusal(f"{inv['number']} has payments applied: {names}. Reverse those first (\"reverse {first}\"), "
                       "then cancel the invoice.", "has_payments")
+    # Credit notes stand against the whole invoice, including service lines which have no
+    # stock return for the stock reversal planner to notice. They cannot be cancelled here.
+    if ctx.conn.execute(select(t.credit_note.c.id).where(
+            t.credit_note.c.company_id == ctx.company_id,
+            t.credit_note.c.invoice_id == inv["id"])).first():
+        raise Refusal(f"{inv['number']} has credit notes applied; it can't be cancelled.", "has_credit_notes")
     if inv["status"] == "draft":
         return Reversal(inv, when, None, [])
     _check_date(ctx, when)
     original = ledger.posting_for_voucher(ctx, "sales_invoice", inv["id"])
-    return Reversal(inv, when, original, ledger.check_reverse(ctx, original["id"], when))
+    mirror = ledger.check_reverse(ctx, original["id"], when)
+    from . import stock_sales
+
+    return Reversal(inv, when, original, mirror,
+                    stock=stock_sales.preview_invoice_reversal(ctx, inv["id"], when))
 
 
 def cancel_invoice(ctx: Ctx, plan: Reversal, operation_key: str | None = None) -> dict:
@@ -395,6 +436,13 @@ def cancel_invoice(ctx: Ctx, plan: Reversal, operation_key: str | None = None) -
     the chain head."""
     inv = plan.document
     if plan.original is not None:
+        if plan.stock and plan.stock["mirror_entries"]:
+            from . import stock_sales
+
+            stock_sales.stock(ctx, "reverse_movements",
+                              original={"voucher_type": "sales_invoice", "voucher": inv["id"]},
+                              reversal_date=plan.reversal_date.isoformat(),
+                              reversal={"voucher_type": "sales_invoice_reversal", "voucher": inv["id"]})
         ledger.reverse(ctx, plan.original["id"], plan.reversal_date)
     res = ctx.conn.execute(t.invoice.update().where(t.invoice.c.id == inv["id"],
                                                     t.invoice.c.status == inv["status"]).values(

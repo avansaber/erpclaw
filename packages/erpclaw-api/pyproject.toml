@@ -3,7 +3,7 @@ name = "erpclaw-api"
 version = "0.0.1"
 description = "ERPClaw engine API (FastAPI)"
 license = "GPL-3.0-only"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = ["erpclaw-core", "erpclaw-assistant", "fastapi>=0.115", "uvicorn>=0.30"]
 
 [build-system]

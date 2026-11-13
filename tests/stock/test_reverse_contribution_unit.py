@@ -31,7 +31,7 @@ def test_plain_receipt_reversal_is_inventory_only(context, monkeypatch, voucher_
     moves = [move("out", "345", original_direction="in")]
     monkeypatch.setattr(service, "_reverse_moves", lambda *args, **kwargs: moves)
     result = service.preview_reverse(context, voucher_type, "voucher", context.today)
-    assert result["contribution"] == [{"account": "inv", "net": "-345.00"}]
+    assert result["contribution"] == [{"account": "inv", "net": "-345.00", "currency": "USD"}]
 
 
 def test_goods_received_requires_delivery_reversal_before_contribution(context, monkeypatch):
@@ -56,18 +56,18 @@ def test_mixed_receipt_issue_reversal_has_only_the_original_cogs(context, monkey
     moves = [move("out", "345", original_direction="in"), move("in", "100", original_direction="out")]
     monkeypatch.setattr(service, "_reverse_moves", lambda *args, **kwargs: moves)
     result = service.preview_reverse(context, "stock_test_mixed", "voucher", context.today)
-    assert result["contribution"] == [{"account": "cogs", "net": "-100.00"}, {"account": "inv", "net": "-245.00"}]
+    assert result["contribution"] == [{"account": "cogs", "net": "-100.00", "currency": "USD"}, {"account": "inv", "net": "-245.00", "currency": "USD"}]
 
 
 def test_return_reversal_retains_its_cogs_side(context, monkeypatch):
     moves = [move("out", "40", original_direction="in", against="original-issue")]
     monkeypatch.setattr(service, "_reverse_moves", lambda *args, **kwargs: moves)
     result = service.preview_reverse(context, "sales_credit_note", "voucher", context.today)
-    assert result["contribution"] == [{"account": "cogs", "net": "40.00"}, {"account": "inv", "net": "-40.00"}]
+    assert result["contribution"] == [{"account": "cogs", "net": "40.00", "currency": "USD"}, {"account": "inv", "net": "-40.00", "currency": "USD"}]
 
 
 def test_issue_reversal_retains_its_cogs_side(context, monkeypatch):
     moves = [move("in", "100", original_direction="out")]
     monkeypatch.setattr(service, "_reverse_moves", lambda *args, **kwargs: moves)
     result = service.preview_reverse(context, "sales_invoice", "voucher", context.today)
-    assert result["contribution"] == [{"account": "cogs", "net": "-100.00"}, {"account": "inv", "net": "100.00"}]
+    assert result["contribution"] == [{"account": "cogs", "net": "-100.00", "currency": "USD"}, {"account": "inv", "net": "100.00", "currency": "USD"}]

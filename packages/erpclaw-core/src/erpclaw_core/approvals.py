@@ -31,15 +31,16 @@ the conversation fence, the card, then the rest.
 """
 from __future__ import annotations
 
-from . import approval_scope
+from . import approval_scope, credentials
 
 import hashlib
 import hmac
 import json
 import secrets
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from importlib.metadata import version
+from packaging.version import InvalidVersion, Version
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -53,6 +54,11 @@ from .contracts import (Contract, Result, amount_dicts, check_amount_names, chec
 from .db import metadata, read_only
 from .ledger import _for_share, _for_update
 from .plugins import REGISTRY, ensure_enabled
+
+payment_purpose_recovery = None
+
+PAYMENT_SWITCH_VERSION = "0.0.3"
+_PAYMENT_SWITCH_CONTRACTS = frozenset({"record_payment", "reverse_payment", "cancel_invoice"})
 
 VALID_FOR = timedelta(minutes=10)
 FOOTER = "Valid 10 minutes. Rechecked before saving."
@@ -198,11 +204,15 @@ def _owner(conn: Connection) -> dict:
     return pr.owner(conn)
 
 
+def _not_a_write(contract: Contract) -> None:
+    raise Refusal(f"{contract.name} is not a write with a declared read set.", "not_a_write")
+
+
 def _write_contract(contract: Contract) -> None:
     if contract.planned:  # switched off until its release
         raise Refusal(planned_reply(contract), "planned", capability=planned_capability(contract))
     if contract.effect == "read" or contract.read_set is None:
-        raise Refusal(f"{contract.name} is not a write with a declared read set.", "not_a_write")
+        _not_a_write(contract)
 
 
 GONE = {"expired": "That card expired after 10 minutes. Ask again and I'll prepare a fresh one.",
@@ -385,11 +395,17 @@ def _propose(engine: Engine, contract: Contract, args: dict, conversation_id: st
              date_source: dict | None = None, owner_words: str | None = None) -> Outcome:
     """`stale_of` is approve's stale path: the fresh card replaces that card, which the engine itself chose,
     inherits its token and passes the fence like any tokened proposal."""
+    credentials.refuse([args, owner_words])
+    registered = REGISTRY.contracts.get(contract.name)
+    if registered is None:
+        _not_a_write(contract)
+    _write_contract(registered)
     _write_contract(contract)
     if token and conversation_id is None:
         raise ValueError("a request token needs a conversation")
     inp = contract.input_model.model_validate(args)
     norm = inp.model_dump(mode="json")
+    credentials.refuse(norm)
     with engine.begin() as conn:
         who = principal or _owner(conn)
         ctx = company_ctx(conn, company_id=company_id)
@@ -434,6 +450,7 @@ def _propose(engine: Engine, contract: Contract, args: dict, conversation_id: st
         elif date_source is not None:
             check_date_source(ctx, contract, inp, date_source, owner_words)
         preview = _preview(ctx, contract, inp, date_source)
+        credentials.refuse(preview)
         rs = read_set(conn, contract, ctx, inp)
         new = new_id()
         set_aside = None
@@ -544,6 +561,10 @@ def _lock_read_set(conn: Connection, ctx, rs: list) -> None:
     """Lock in the one order: the chain head, the fiscal years and periods of the read
     set (periods by start date), then its document rows the runtime role may change, by table then id. Rows of
     tables it may not change (company, party, item) are compared by digest only."""
+    if "opening_batch_number" in ctx.extra:
+        from .opening_position import _batch_number
+
+        ctx.extra["opening_batch_number"] = _batch_number(ctx)
     ledger.lock_chain(ctx)
     periods = [k for t, k, _ in rs if t == "fiscal_period"]
     if periods:
@@ -629,8 +650,20 @@ def approve(engine: Engine, approval_id: str, digest_sent: str | None, principal
         if r.code != "planned":
             raise
         return _end_before_claim(engine, a, r, seen)  # it ends, rather than refusing until it expires
+    if contract.name in _PAYMENT_SWITCH_CONTRACTS:
+        try:
+            older = Version(a["contract_version"]) < Version(PAYMENT_SWITCH_VERSION)
+        except (InvalidVersion, TypeError):
+            older = True
+        if older:
+            historical = replace(contract, planned="Core")
+            return _end_before_claim(engine, a, Refusal(planned_reply(historical), "planned",
+                                                       capability=planned_capability(historical)), seen)
     args = json.loads(a["args_json"])
-    inp = contract.input_model.model_validate(args)
+    credential_match = credentials.check([args, json.loads(a["card_json"])])
+    inp = None if credential_match else contract.input_model.model_validate(args)
+    if inp is not None:
+        credential_match = credentials.check(inp.model_dump(mode="json"))
     key = a["operation_key"]
     ended: Refusal | None = None
     try:
@@ -666,30 +699,52 @@ def approve(engine: Engine, approval_id: str, digest_sent: str | None, principal
             # plugin no longer enabled, the request no longer allowed or now ambiguous) ends the card inside this
             # transaction, the claim still held, so no other approval can claim it in between: no outcome, no
             # effect, no fresh card.
+            opening_effect = None
             try:
-                ensure_enabled(conn, REGISTRY.contract_plugin[contract.name], contract.name)
-                stored_rs = json.loads(a["read_set_json"])
-                _lock_read_set(conn, ctx, stored_rs)
-                preview = _preview(ctx, contract, inp,
-                                   _recheck_date_source(ctx, inp, json.loads(a["card_json"]).get("date_source")))
-                rs = read_set(conn, contract, ctx, inp)
+                if not credential_match:
+                    ensure_enabled(conn, REGISTRY.contract_plugin[contract.name], contract.name)
+                    if contract.name == "record_opening_position":
+                        # Numbering precedes the chain lock, but rolls back with any
+                        # refused or superseded opening, including its number draw.
+                        opening_effect = conn.begin_nested()
+                        ctx.extra["opening_batch_number"] = None
+                    stored_rs = json.loads(a["read_set_json"])
+                    _lock_read_set(conn, ctx, stored_rs)
+                    # Admission checks may instead be repeated as business refusals
+                    # by commit. This marker grants no authority to write.
+                    ctx.extra["approval_recheck"] = True
+                    try:
+                        preview = _preview(ctx, contract, inp,
+                                           _recheck_date_source(ctx, inp, json.loads(a["card_json"]).get("date_source")))
+                        credential_match = credentials.check(preview)
+                        rs = read_set(conn, contract, ctx, inp)
+                    finally:
+                        ctx.extra.pop("approval_recheck", None)
             except Refusal as r:
-                ended = r
-                _end(conn, approval_id, "superseded", _decision("superseded", _ended(approval_id, r).text, r),
-                     unclaim=True)
+                if r.code == "credential_refused":
+                    credential_match = True
+                else:
+                    if opening_effect is not None:
+                        opening_effect.rollback()
+                    ended = r
+                    _end(conn, approval_id, "superseded", _decision("superseded", _ended(approval_id, r).text, r),
+                         unclaim=True)
             if ended is not None:
                 return _ended(approval_id, ended)
             p = REGISTRY.plugins[REGISTRY.contract_plugin[contract.name]]
             running = {**a, "contract_version": p.version, "impl_version": impl_version(contract)}
-            if digest(_fields(running, args, rs, preview)) != a["digest"]:  # also a version change since the card
+            # Credential-bearing cards refuse inside the effect; they cannot become fresh cards or echo a preview.
+            if not credential_match and digest(_fields(running, args, rs, preview)) != a["digest"]:
                 raise _Changed()
             # 5. the effect under a savepoint: the commit, then the checks its write services registered, in
             # registration order; the outcome in the same transaction. Only this context may run a write service.
-            effect = conn.begin_nested()
+            effect = opening_effect if opening_effect is not None else conn.begin_nested()
             ctx.extra["commit"] = approval_id
             with approval_scope._issue(ctx, approval_id, contract.name, key,
                                        REGISTRY.contract_plugin.get(contract.name), effect):
                 try:
+                    if credential_match:
+                        raise Refusal(credentials.CREDENTIAL_REFUSED, "credential_refused")
                     result: Result = contract.commit(ctx, inp, key)
                     check_amount_names(contract, result.amounts)
                     for check_key, check in list(ctx.checks.items()):
@@ -727,6 +782,8 @@ def approve(engine: Engine, approval_id: str, digest_sent: str | None, principal
             return _now_outcome(engine, approval_id, seen)
         if fresh.card is not None:
             fresh.status, fresh.text = "superseded", FRESH
+            if payment_purpose_recovery:
+                payment_purpose_recovery(engine, fresh, a)
         return fresh
     except _Invalid:
         with engine.begin() as conn:
@@ -767,8 +824,11 @@ def _decided(engine: Engine, a: dict, seen: dict, depth: int = 0) -> Outcome:
             f = _card(conn, fresh_id)
             status, live = _status_now(conn, f), _fenced_live(conn, f, lock=False)
         if status == "pending" and live:
-            return Outcome("superseded", d["text"], f["id"], json.loads(f["card_json"]), f["operation_key"],
-                           digest=f["digest"], data={"replaces": a["id"]})
+            result = Outcome("superseded", d["text"], f["id"], json.loads(f["card_json"]), f["operation_key"],
+                             digest=f["digest"], data={"replaces": a["id"]})
+            if payment_purpose_recovery:
+                payment_purpose_recovery(engine, result, a)
+            return result
         if status == "pending":  # its request has ended: approving it would end it so
             return Outcome("superseded", ENDED, f["id"])
         if status == "consumed":

@@ -1,23 +1,22 @@
-"""Inactive delivery reversal, using stored delivery facts and exact mirrors.
-
-No public Contract/Input/registry or owner-name resolver is supplied. The caller
-owns provenance, the company chain, approved read-set/recompute and savepoint.
-An exact future stock approval is required; another card or a caller flag cannot
-activate this private backend while that contract remains absent.
-"""
+"""Delivery reversal using stored facts and exact mirrors behind its approved stock card."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
+import datetime as dt
 from decimal import Decimal, localcontext
 import hashlib
 import json
+from typing import Annotated
+
+from pydantic import Field
 
 from sqlalchemy import select
 
 from erpclaw_core import integration, ledger, models as m, payables
 from erpclaw_core.common import Ctx, Refusal
-from erpclaw_core.contracts import Amount, Preview, Result, Shown
+from erpclaw_core.core_contracts import resolution_field, reversal_document
+from erpclaw_core.contracts import Amount, Input, Preview, Result, Shown, WriteContract
 from erpclaw_core.money import fmt_qty, to_amount
 
 from . import service as s, tables as t
@@ -218,3 +217,80 @@ def find_reverse_goods_received(ctx: Ctx, operation_key: str) -> Result | None:
     result = json.loads(raw)
     return Result(result["text"], result.get("data", {}), result.get("figures", []),
                   [Amount(**amount) for amount in result.get("amounts", [])])
+
+
+def _delivery_number(ctx: Ctx, said: str) -> str:
+    return reversal_document(ctx, t.voucher, said, "delivery", t.voucher.c.kind == "goods_received")["number"]
+
+
+class ReverseGoodsReceivedInput(Input):
+    delivery: Annotated[str, resolution_field("document", what="delivery", prefix="GR", nouns=("delivery", "receipt"),
+                                   resolve=_delivery_number)] = Field(min_length=1, max_length=40,
+                          description="The stored GR number as the owner said it, or its trailing digits.")
+    date: Annotated[dt.date | None, resolution_field("date", presence="optional")] = Field(
+        default=None, description="The reversal date from the owner's words; defaults to today.")
+
+
+def _request(ctx: Ctx, inp: ReverseGoodsReceivedInput) -> ReverseGoodsReceived:
+    voucher = reversal_document(ctx, t.voucher, inp.delivery, "delivery", t.voucher.c.kind == "goods_received")
+    header = ctx.conn.execute(select(t.goods_received.c.id).where(
+        t.goods_received.c.company_id == ctx.company_id,
+        t.goods_received.c.voucher_id == voucher["id"])).first()
+    if header is None:
+        raise Refusal("There is no such delivery in these books.", "goods_received_inconsistent")
+    when = inp.date or ctx.today
+    if when > ctx.today:
+        raise Refusal("A reversal can't be dated in the future.", "future_date")
+    if when < voucher["posting_date"]:
+        raise Refusal("A reversal cannot be dated before its delivery.", "reversal_before_original")
+    return ReverseGoodsReceived(voucher["id"], when)
+
+
+def preview(ctx: Ctx, inp: ReverseGoodsReceivedInput) -> Preview:
+    request = _request(ctx, inp)
+    try:
+        previewed = preview_reverse_goods_received(ctx, request)
+    except Refusal as exc:
+        if exc.code == "already_reversed":
+            number = ctx.conn.execute(select(t.voucher.c.number).where(
+                t.voucher.c.company_id == ctx.company_id, t.voucher.c.id == request.voucher_id)).scalar_one()
+            raise Refusal(f"{number} is already reversed.", "already_reversed") from None
+        raise
+
+    # The public card puts its total immediately after the document dates.
+    total = next(i for i in reversed(range(len(previewed.card.lines)))
+                 if previewed.card.lines[i][0] == "Total reversed")
+    order = [0, 1, 2, total] + [i for i in range(3, len(previewed.card.lines)) if i != total]
+    previewed.card.lines = [previewed.card.lines[i] for i in order]
+    previewed.card.amounts = [replace(a, index=order.index(a.index)) if a.where == "lines" else a
+                            for a in previewed.card.amounts]
+    voucher, _ = _document(ctx, request)
+    previewed.card.lines.append(("Original entries",
+        f"The original entries stay; reversing entries are added on {request.reversal_date.isoformat()}."))
+    original_period = ledger.find_period(ctx, voucher["posting_date"])
+    reversal_period = ledger.find_period(ctx, request.reversal_date)
+    if original_period["id"] != reversal_period["id"]:
+        previewed.card.warnings.append(
+            f"{voucher['number']} stays in the period beginning {original_period['start_date']}; "
+            f"this reversal is in the period beginning {reversal_period['start_date']}.")
+    return previewed
+
+
+def read_set(ctx: Ctx, inp: ReverseGoodsReceivedInput) -> list[tuple[str, str]]:
+    request = _request(ctx, inp)
+    rows = reverse_goods_received_read_set(ctx, request)
+    voucher, _ = _document(ctx, request)
+    period = ledger.find_period(ctx, voucher["posting_date"])
+    return sorted(set(rows) | {("fiscal_period", period["id"]), ("fiscal_year", period["fiscal_year_id"])})
+
+
+def commit_goods_reversal(ctx: Ctx, inp: ReverseGoodsReceivedInput, key: str) -> Result:
+    _authorize(ctx)
+    return commit_reverse_goods_received(ctx, _request(ctx, inp), key)
+
+
+CONTRACT = WriteContract(NAME, "stock", "write", "Reverse a stored goods-received delivery by its GR number.",
+                         ReverseGoodsReceivedInput, preview=preview, commit=commit_goods_reversal, read_set=read_set,
+                         find_by_operation_key=find_reverse_goods_received,
+                         planned="v3.0",
+                         plain="reverse goods received", moves_money=True, amounts=("value",))

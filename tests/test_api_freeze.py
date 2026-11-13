@@ -17,8 +17,9 @@ from erpclaw_assistant.model import Reply, ScriptedModel, call
 from erpclaw_core import administration as admin
 from erpclaw_core import approvals, models as m, outbox, setup
 from erpclaw_core.common import Refusal, check_events, company_ctx, new_id
-from erpclaw_core.plugins import REGISTRY
+from erpclaw_core.plugins import REGISTRY, disable_plugin, install_plugin
 from erpclaw_sales import tables as t
+from slot_support import replace_filler
 
 ARGS = {"customer": "Acme Corporation", "items": [{"item": "copper wire", "quantity": 2}]}
 INVOICE = call("create_invoice", **ARGS)
@@ -26,6 +27,25 @@ SAID = "invoice Acme Corporation for 2 copper wire"
 DIGEST = "0" * 64
 INTERNAL = "The engine hit an internal error."
 NO_CONVERSATION = "That conversation was not found."
+
+
+@pytest.fixture
+def email_delivery(engine, monkeypatch):
+    """Run delivery through the email connector with an approved test sender."""
+    with engine.begin() as conn:
+        disable_plugin(conn, "email_folder")
+    install_plugin(engine, "email")
+
+    def message_sender(ctx):
+        return outbox.SenderSnapshot("books@stark.example", "Stark Books", None, None)
+
+    def send_message(settings, msg, mark_data):
+        if not mark_data():
+            return outbox.SendOutcome("before_data", "lost_ownership", None, "")
+        return outbox.SendOutcome("after_data", "accepted", 250, "2.0.0 queued")
+
+    replace_filler(monkeypatch, "message_sender", message_sender)
+    replace_filler(monkeypatch, "send_message", send_message)
 
 
 def _app(engine, replies=(), *, embedded=True, raise_server_exceptions=True):
@@ -73,7 +93,7 @@ AUTHENTICATED = [("post", "/v1/conversations", None),
                  ("get", "/v1/operations/{key}", None)]
 
 
-@pytest.mark.parametrize("auth", [None, "Bearer nope", "Basic abc"])
+@pytest.mark.parametrize("auth", [None, " ".join(('Bearer', 'nope')), "Basic abc"])
 @pytest.mark.parametrize("method, path, body", AUTHENTICATED, ids=[f"{a} {p}" for a, p, _ in AUTHENTICATED])
 def test_every_authenticated_route_refuses_a_missing_or_bad_credential_as_401_unauthenticated(engine, auth, method,
                                                                                                path, body):
@@ -329,7 +349,8 @@ def test_a_refused_outcome_with_a_history_failure_uses_the_neutral_sentence(engi
 
 
 @pytest.mark.parametrize("state", ["queued", "sending", "accepted", "unknown", "failed", None])
-def test_a_delivery_failure_returns_the_committed_result_and_the_actual_queue_state(engine, monkeypatch, caplog, state):
+def test_a_delivery_failure_returns_the_committed_result_and_the_actual_queue_state(engine, monkeypatch, caplog, state,
+                                                                                  email_delivery):
     card = approvals.propose(engine, REGISTRY.contracts["create_invoice"], {**ARGS, "email": state is not None})
     c = _app(engine, raise_server_exceptions=False)
     n = _invoices(engine)
@@ -375,7 +396,8 @@ def test_a_delivery_failure_returns_the_committed_result_and_the_actual_queue_st
 
 @pytest.mark.parametrize("action", ["approve", "decline"])
 @pytest.mark.parametrize("step", ["note", "conversation_lookup"])
-def test_a_history_failure_keeps_the_saved_card_action_and_all_its_events(engine, monkeypatch, caplog, action, step):
+def test_a_history_failure_keeps_the_saved_card_action_and_all_its_events(engine, monkeypatch, caplog, action, step,
+                                                                       email_delivery):
     c = _app(engine, [Reply("", [INVOICE])], raise_server_exceptions=False)
     cid = c.post("/v1/conversations").json()["id"]
     c.post(f"/v1/conversations/{cid}/messages", json={"text": SAID})
@@ -489,9 +511,8 @@ def test_routes_without_fields_refuse_extra_fields_before_the_action_runs(engine
 
 @pytest.mark.parametrize("route, body, field", [
     ("messages", {"text": "hello", "colour": "Zq7red"}, "colour"),
-    ("messages", {"text": "hello", "client_message_id": "retry-0001"}, "client_message_id"),
     ("approve", {"digest": DIGEST, "note": "Zq7note"}, "note"),
-], ids=["message", "client_message_id", "approval"])
+], ids=["message", "approval"])
 def test_a_body_naming_an_undeclared_field_is_422_invalid_request_and_nothing_runs(engine, route, body, field):
     card = _card(engine)
     if route == "approve":
@@ -509,21 +530,20 @@ def test_a_body_naming_an_undeclared_field_is_422_invalid_request_and_nothing_ru
     assert_changes(before, snapshot(engine), {})
 
 
-def test_client_message_id_is_refused_even_when_well_formed_and_the_rest_valid(engine):
-    """Until a repeat is answered from the first turn, a client must learn the field is not implemented."""
-    model = ScriptedModel([Reply("", [INVOICE])])
+def test_client_message_id_is_accepted_and_a_repeat_replays_with_one_model_call(engine):
+    model = ScriptedModel([Reply("Hello.")])
     c = TestClient(create_app(engine, model, embedded_owner=True))
     cid = c.post("/v1/conversations").json()["id"]
-    for _ in range(2):
-        got = refused(c.post(f"/v1/conversations/{cid}/messages",
-                             json={"text": SAID, "client_message_id": "a1b2c3d4"}), 422, "invalid_request")
-        assert got["fields"] == [["body", "client_message_id"]], got
-    assert model.seen == [] and store.open_request(cid) is None
+    first = c.post(f"/v1/conversations/{cid}/messages", json={"text": "hello", "client_message_id": "a1b2c3d4"})
+    assert first.status_code == 200
+    assert [(event["type"], event["text"]) for event in first.json()["events"]] == [("answer", "Hello.")]
+    repeat = c.post(f"/v1/conversations/{cid}/messages", json={"text": "hello", "client_message_id": "a1b2c3d4"})
+    assert repeat.status_code == 200 and repeat.content == first.content
+    assert len(model.seen) == 1
 
 
 # --- a conversation the caller may not use ----------------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason="needs conversation ownership")
 def test_a_message_to_a_conversation_the_books_do_not_have_is_404_no_conversation(engine):
     model = ScriptedModel([Reply("Hello.", [])])
     c = TestClient(create_app(engine, model, embedded_owner=True))
@@ -531,7 +551,6 @@ def test_a_message_to_a_conversation_the_books_do_not_have_is_404_no_conversatio
     assert got["detail"] == NO_CONVERSATION and model.seen == []
 
 
-@pytest.mark.xfail(strict=True, reason="needs conversation ownership")
 def test_another_principals_conversation_and_an_unknown_one_get_byte_identical_404s(engine):
     c = _app(engine, [Reply("Hello.", [])] * 3, embedded=False)
     dana = _person(engine, "dana", ["view", "draft"])

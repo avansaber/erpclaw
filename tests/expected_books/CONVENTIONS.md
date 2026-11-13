@@ -17,6 +17,10 @@ engine involved, and checked by a separate Decimal-only calculation.
   advances its number series by one. Nothing else in the control tables changes.
 - **A request the engine answers with a question** (an unclear request, a missing choice) makes no
   card and leaves no row in any table, business or control.
+- **The conversation's approval fence** is the one control row any turn may change, question turns
+  included: the conversation has exactly one conversation_fence row, its generation never decreases,
+  its live token is opaque and is never compared to a figure in a key, and its values are as the
+  engine's own fence tests specify. No other control row changes on a question turn.
 - **A card that is not carried out**, whatever the approval service records for it (declined,
   expired, superseded by a fresh card because the books changed under it, invalidated), adds no
   business row, no operation outcome and no audit row. Its approval rows are not set by these keys:

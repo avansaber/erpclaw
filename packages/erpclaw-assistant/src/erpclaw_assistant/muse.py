@@ -12,6 +12,7 @@ Rules for the Muse route:
 """
 from __future__ import annotations
 
+import logging
 import os
 import random
 import re
@@ -22,9 +23,12 @@ from email.utils import parsedate_to_datetime
 from typing import Callable
 
 from erpclaw_core.common import Refusal
+from erpclaw_core.plugin_text import say
 
 from . import hosted as guards
-from .model import OpenAICompatModel, Reply, clean_reply
+from .model import OpenAICompatModel, Reply, _remaining_budget, clean_reply, request_timeout, retry_sleep
+
+log = logging.getLogger(__name__)
 
 BASE_URL = "https://api.meta.ai/v1"
 DEFAULT_MODEL = "muse-spark-1.3"
@@ -54,7 +58,8 @@ def _tool(t: dict) -> dict:
     f = t["function"]
     name = f["name"]
     if not TOOL_NAME.match(name) or name.count(".") > 1:
-        raise Refusal(f"The tool name {name!r} cannot be sent to Muse. Nothing was saved.", "model_input_invalid")
+        log.warning("model_input_invalid: invalid tool name <key>")
+        raise Refusal(say("model_input_invalid"), "model_input_invalid")
     out = {"type": "function", "name": name, "parameters": f.get("parameters") or {"type": "object", "properties": {}},
            "strict": False}  # set explicitly: Meta's pages disagree on the default; the engine validates arguments
     if f.get("description"):
@@ -85,8 +90,8 @@ def to_responses(messages: list[dict]) -> tuple[str, list[dict]]:
                               "arguments": tc["function"]["arguments"] or "{}"})
         elif role == "tool":
             if m["tool_call_id"] not in calls:  # Meta returns HTTP 400 for it; refuse before sending
-                raise Refusal("The conversation could not be sent to Muse (a tool result without its call). "
-                              "Nothing was saved.", "model_input_invalid")
+                log.warning("model_input_invalid: tool result without its call; call_id=<key>")
+                raise Refusal(say("model_input_invalid"), "model_input_invalid")
             items.append({"type": "function_call_output", "call_id": m["tool_call_id"], "output": m["content"]})
     return "\n\n".join(instructions), items
 
@@ -160,24 +165,27 @@ class MuseModel:
         statuses: list[int] = []
         for attempt in (1, 2):
             try:
-                resp = self.client.responses.create(**body)
+                resp = self.client.responses.create(**body, **request_timeout(self.client.timeout))
                 break
             except openai.APIStatusError as e:
                 statuses.append(e.status_code)
                 wait = _retry_after(e.response.headers.get("retry-after"), self._now())
                 if e.status_code in RETRY and attempt == 1 and wait is not None:
-                    self._sleep(wait)
+                    retry_sleep(self._sleep, wait)
                     continue
                 self.usage.append({"statuses": statuses, "native_calls": 0, "reasoning_tokens": None})
+                if e.status_code == 429:
+                    raise Refusal("The model service is busy right now.", "model_rate_limited") from None
                 if e.status_code in RETRY:
                     raise Refusal("The Muse model is unavailable right now. Nothing was saved.",
                                   "model_unavailable") from None
                 raise Refusal(f"The Muse model refused the request ({e.status_code}). Nothing was saved.",
                               "model_refused") from None
             except (openai.APITimeoutError, openai.APIConnectionError):
+                _remaining_budget()
                 statuses.append(504)  # a request with no answer counts as a gateway timeout
                 if attempt == 1:
-                    self._sleep(_retry_after(None, self._now()))
+                    retry_sleep(self._sleep, _retry_after(None, self._now()))
                     continue
                 self.usage.append({"statuses": statuses, "native_calls": 0, "reasoning_tokens": None})
                 raise Refusal("The Muse model is unavailable right now. Nothing was saved.",

@@ -14,6 +14,7 @@ from erpclaw_core.common import company_ctx
 from erpclaw_core.plugins import REGISTRY
 from erpclaw_sales import service as s
 from erpclaw_sales import tables as t
+from erpclaw_assistant import resolve_inventory
 
 # For now a reply makes one change: replies with several writes ask the
 # owner for one change at a time (test_a_second_change_in_one_message_asks_for_one_at_a_time). These tests state how
@@ -157,7 +158,8 @@ def test_sales_tax_gets_the_planned_reply_with_its_capability_and_no_card(engine
                                                                                    "quantity": 5}])]))
     ev = a.turn("c1", "invoice Hooli for 5 copper wire and add 8% sales tax")
     assert ev == [{"type": "answer", "outcome": "c", "capability": "planned.tax_engine", "currency": "USD",
-                   "text": "Sales tax isn't available yet, so I haven't drafted this invoice."}]
+                   "text": ("Sales tax isn't available yet, so I haven't submitted this invoice. "
+                            "If you send the same invoice without tax words, I will submit it without tax.")}]
     assert clean()
 
 
@@ -187,14 +189,11 @@ def test_another_currency_is_refused_naming_its_capability(engine):
     assert clean()
 
 
-def test_a_stated_rate_is_said_naming_its_capability(engine):
-    a = turns(engine, *[Reply("", [call("create_invoice", customer="Hooli", items=[{"item": "copper wire",
-                                                                                     "quantity": 5}])])] * 2)
+def test_a_stated_rate_is_carried_without_a_not_done_notice(engine):
+    a = turns(engine, Reply("", [call("create_invoice", customer="Hooli", items=[{"item": "copper wire", "quantity": 5}])]))
     ev = a.turn("c1", "invoice Hooli for 5 copper wire at 25 each")
-    assert kinds(ev) == ["ask"] and ev[0]["code"] == "rate_choice_missing", ev  # asked first
-    ev = a.turn("c1", "Use the list price")
-    assert kinds(ev) == ["not_done", "card"], ev
-    assert ev[0]["part"] == "rate" and ev[0]["capability"] == "planned.invoice_fields"
+    assert kinds(ev) == ["card"], ev
+    assert any("@ 25.00 = 125.00" in v for k, v in ev[0]["card"]["lines"] if k == "Item")
 
 
 # ---------- every id the step names is in the catalogue ----------
@@ -219,10 +218,10 @@ def test_a_currency_request_finds_multi_currency_and_a_rates_import_finds_the_cs
 
     assert first_planned("record a payment in another currency") == "planned.multi_currency"
     assert first_planned("can I bill in a foreign currency") == "planned.multi_currency"
-    assert first_planned("import exchange rates from a csv") == "planned.connector.csv"
+    assert first_planned("import exchange rates from a csv") == "planned.connector.csv_import"
     with engine.connect() as conn:  # an exchange-rate question surfaces the currency entries before invoice fields
         ids = [e.id for e in cat.find_capability(conn, "what's the exchange rate for GBP") if e.state == "planned"]
-    assert ids[:2] == ["planned.connector.csv", "planned.multi_currency"], ids
+    assert ids[:2] == ["planned.multi_currency"], ids
 
 
 def test_a_name_the_owner_wrote_that_is_no_record_is_unknown_quoting_only_the_owner_s_words(engine):
@@ -709,8 +708,7 @@ def test_a_figure_no_field_took_is_asked_never_dropped(engine):
 def test_figures_in_a_date_or_a_rate_are_answered_by_their_rows_not_asked(engine):
     ev = turns(engine, Reply("", [_invoice("Hooli", ("copper wire", 5))])).turn(
         "crate", "invoice Hooli for 5 copper wire at 30 each")
-    # a rate or a date the engine cannot set yet is its own question, never a figure question about its "30" or "15"
-    assert kinds(ev) == ["ask"] and ev[0]["code"] == "rate_choice_missing", ev
+    assert kinds(ev) == ["card"] and any("@ 30.00 = 150.00" in v for k, v in ev[0]["card"]["lines"] if k == "Item"), ev
     ev = turns(engine, Reply("", [_invoice("Hooli", ("copper wire", 5))])).turn(
         "cdate", "invoice Hooli for 5 copper wire on 15 November")
     assert kinds(ev) == ["ask"] and ev[0]["code"] == "date_choice_missing", ev
@@ -740,9 +738,9 @@ def test_either_of_two_invoice_numbers_asks_whatever_the_model_passed(engine):
     assert clean()
 
 
-def test_payments_cancelling_and_reversing_stay_off_until_their_own_task(as_released):
+def test_payments_cancelling_and_reversing_are_switched_on(as_released):
     for name in SWITCHED_ON:
-        assert REGISTRY.contracts[name].planned, name
+        assert REGISTRY.contracts[name].planned is None, name
 
 
 # ---------- occurrence accounting: every recognised occurrence claimed or asked ----------
@@ -794,7 +792,9 @@ def test_the_accounting_carries_the_weight(engine, monkeypatch):
     case rule, is what asks."""
     from erpclaw_assistant import resolve
 
-    monkeypatch.setattr(resolve, "_unclaimed", lambda *a, **k: None)
+    _replacement = (lambda *a, **k: None)
+    for _module in (resolve, resolve_inventory):
+        monkeypatch.setattr(_module, '_unclaimed', _replacement)
     carded = [said for said, calls in ROUND_9[3:9]
               if "card" in kinds(turns(engine, Reply("", calls)).turn(f"w{len(said)}", said))]
     assert len(carded) >= 3, carded

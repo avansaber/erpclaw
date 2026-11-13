@@ -64,7 +64,7 @@ NO_MONEY = sorted(c.name for c in REGISTRY.contracts.values() if c.effect != "re
 
 
 def test_every_write_that_moves_no_money_has_its_scenario():
-    assert set(NO_MONEY) <= set(_scenarios()), "a write that says it moves no money needs NO_MONEY_SCENARIOS"
+    assert set(NO_MONEY) == set(_scenarios()), "a write that says it moves no money needs NO_MONEY_SCENARIOS"
 
 
 @pytest.mark.parametrize("name", NO_MONEY)

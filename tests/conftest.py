@@ -1,10 +1,10 @@
+import atexit
 import os
+import re
 import secrets
+import sys
 
 import pytest
-
-from erpclaw_core.db import make_engine, metadata
-from erpclaw_core.plugins import load_plugins
 
 PG_URL = os.environ.get("ERPCLAW_PG_TEST_URL")
 if not PG_URL:
@@ -25,19 +25,84 @@ def _check_pg_test_url(raw: str) -> None:
 _check_pg_test_url(PG_URL)
 
 
+def _per_run_database_name(base: str) -> str:
+    """An ASCII identifier with the entire unique suffix inside PostgreSQL's byte limit."""
+    suffix = f"_r{os.getpid()}_{secrets.token_hex(4)}_test"
+    prefix = re.sub(r"[^a-zA-Z0-9_]", "_", base.removesuffix("_test"))
+    if prefix[:1].isdigit():
+        prefix = "_" + prefix
+    return prefix[:63 - len(suffix)] + suffix
+
+
+_PER_RUN_BASE_URL = PG_URL
+_PER_RUN_DATABASE = None
+
+
+def _cleanup_per_run_database() -> None:
+    """Drop only the database this process successfully created; retry at exit on failure."""
+    global _PER_RUN_DATABASE
+    if _PER_RUN_DATABASE is None:
+        return
+    try:
+        from sqlalchemy import create_engine
+        from sqlalchemy.pool import NullPool
+
+        admin = create_engine(_PER_RUN_BASE_URL, isolation_level="AUTOCOMMIT", poolclass=NullPool)
+        try:
+            with admin.connect() as conn:
+                name = conn.dialect.identifier_preparer.quote_identifier(_PER_RUN_DATABASE)
+                conn.exec_driver_sql(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)")
+        finally:
+            admin.dispose()
+    except Exception as exc:  # cleanup must not change the test outcome
+        print(f"Warning: could not drop per-run test database {_PER_RUN_DATABASE!r} "
+              f"({type(exc).__name__})", file=sys.stderr)
+    else:
+        _PER_RUN_DATABASE = None
+
+
+if os.environ.get("ERPCLAW_TEST_DB_PER_RUN") == "1":
+    from sqlalchemy import create_engine
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.pool import NullPool
+
+    base_url = make_url(PG_URL)
+    database = _per_run_database_name(base_url.database)
+    admin = create_engine(base_url, isolation_level="AUTOCOMMIT", poolclass=NullPool)
+    try:
+        with admin.connect() as conn:
+            name = conn.dialect.identifier_preparer.quote_identifier(database)
+            conn.exec_driver_sql(f"CREATE DATABASE {name}")
+            _PER_RUN_DATABASE = database
+            atexit.register(_cleanup_per_run_database)
+    finally:
+        admin.dispose()
+    PG_URL = base_url.set(database=database).render_as_string(hide_password=False)
+    os.environ["ERPCLAW_PG_TEST_URL"] = PG_URL
+
+
+def pytest_sessionfinish(session, exitstatus):
+    _cleanup_per_run_database()
+
+
 def _shared_database_allowed() -> bool:
     """The test database is shared by every lane of the workspace, and a run drops its tables: the suite opens it only
     while the workspace's suite lock is held (ERPCLAW_LOCKS_HELD names its .lock-suite file), in CI, or when the run
-    says its database is its own (ERPCLAW_TEST_DB_PRIVATE=1, a review clone's container database)."""
+    says its database is its own (ERPCLAW_TEST_DB_PRIVATE=1, a review clone's container database), or creates one
+    for this run (ERPCLAW_TEST_DB_PER_RUN=1)."""
     held = [p for p in os.environ.get("ERPCLAW_LOCKS_HELD", "").split(os.pathsep) if p]
     return (any(os.path.basename(p) == ".lock-suite" for p in held) or os.environ.get("GITHUB_ACTIONS") == "true"
-            or os.environ.get("ERPCLAW_TEST_DB_PRIVATE") == "1")
+            or os.environ.get("ERPCLAW_TEST_DB_PRIVATE") == "1" or _PER_RUN_DATABASE is not None)
 
 
 if not _shared_database_allowed():
     raise RuntimeError("The test database is shared: run the suite while holding the workspace's suite lock "
                        "(ERPCLAW_LOCKS_HELD names its .lock-suite file), in CI, or with ERPCLAW_TEST_DB_PRIVATE=1 "
                        "for a database of the run's own.")
+
+
+from erpclaw_core.db import make_engine, metadata
+from erpclaw_core.plugins import load_plugins
 
 
 def drop_everything(eng) -> None:

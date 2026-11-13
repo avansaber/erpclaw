@@ -393,5 +393,5 @@ def test_durable_outcome_readback_does_not_recompute_later_outstanding(world,mon
     assert r.find_reversal_by_key(world.ctx,"missing") is None
 
 
-def test_public_reversal_remains_absent():
-    assert r.NAME not in core_contracts.MANIFEST.contracts
+def test_public_reversal_is_registered():
+    assert core_contracts.MANIFEST.contracts[r.NAME] == "write"

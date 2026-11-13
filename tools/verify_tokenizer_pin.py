@@ -1,23 +1,30 @@
 #!/usr/bin/env python3
-"""verify_tokenizer_pin: the named step of the token-admission row 0.
+"""Offline pin, receipt and structural-bound verification.
 
-It does three things, and nothing else:
+Commands:
   fetch   download the pinned tokenizer files (data only) at the recorded revision into an EMPTY folder, with the
           standard library, and refuse on any SHA-256 mismatch;
-  build   compute the reference fixture from a folder of verified tokenizer files;
-  check   hash the files in a folder against the manifest, recompute every fixture count, and refuse on any
-          difference (hashes or counts), so a re-run reproduces the committed fixture bit for bit; then check that the
-          profile's measured bound (count * factor + constant) covers every model-received count in the fixture.
+  structural  prove the pipeline, exhaust Unicode, verify special delimiting and
+              print exact fixed counts and manifest values using pinned files;
+  build   compute the reference fixture and structural bounds; discard all receipts;
+  check   reproduce the proof and fixture, compare the measured manifest values,
+          require request-bound serving receipts and stop on any received count above the bound;
+  wheel   verify a downloaded counting-package wheel before installation.
 
 The tokenizer is loaded as data through the `tokenizers` package (Tokenizer.from_file on tokenizer.json). No
 remote code, no pickle, no transformers, and nothing from the model repository is executed.
 
-The counted representation is the frozen one (ERPCLAW-COUNT-v1, see render_count_input).
+The counted representation is manifest-pinned; v1 remains available for historical fixtures.
+V2 wraps system blocks and individual schemas in measured special-token delimiters.
 
     verify_tokenizer_pin.py fetch --profile P --dest EMPTY_DIR [--manifest M]
     verify_tokenizer_pin.py build --profile P --files DIR --fixture F [--manifest M]
     verify_tokenizer_pin.py check --profile P --files DIR --fixture F [--manifest M]
     verify_tokenizer_pin.py wheel --file DOWNLOADED_WHEEL [--manifest M]   (before installing the counting package)
+    verify_tokenizer_pin.py structural --profile P --files DIR [--manifest M] [--emit-nfd-table [PATH]]
+
+The dispatcher's structural run uses --emit-nfd-table to write the proved sparse
+table into the assistant package (or PATH). Other commands never write it.
 """
 from __future__ import annotations
 
@@ -31,8 +38,433 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_MANIFEST = HERE.parent / "packages" / "erpclaw-assistant" / "src" / "erpclaw_assistant" / "tokenizer_pins.toml"
+DEFAULT_NFD_TABLE = DEFAULT_MANIFEST.with_name("nfd_bytes.json")
 FIXTURE_VERSION = 1
-REFERENCE_BUDGET = 8000  # the budget the boundary inputs are cut to; the recommendation of the spec, not a setting
+REFERENCE_BUDGET = 8000
+RENDERER = "ERPCLAW-COUNT-v1"
+RENDERER_V2 = "ERPCLAW-COUNT-v2"
+UNMEASURED = "unmeasured"
+
+
+class StructuralError(ValueError):
+    """A missing premise of the structural bound; never substitute a measurement."""
+
+
+def _require(condition, message):
+    if not condition:
+        raise StructuralError(message)
+
+
+def byte_alphabet() -> tuple[str, ...]:
+    """ByteLevel's bijection, indexed by ORIGINAL byte value, not escaped UTF-8 length."""
+    visible = list(range(33, 127)) + list(range(161, 173)) + list(range(174, 256))
+    mapping = dict(zip(visible, visible))
+    for b in range(256):
+        if b not in mapping:
+            mapping[b] = 256 + sum(x >= 256 for x in mapping.values())
+    return tuple(chr(mapping[b]) for b in range(256))
+
+
+def _bytelevel(component, label):
+    _require(isinstance(component, dict) and component.get("type") == "ByteLevel", label)
+    _require(set(component) <= {"type", "add_prefix_space", "trim_offsets", "use_regex"}, label)
+    _require(all(type(value) is bool for key, value in component.items() if key != "type"), label)
+
+
+def prove_descriptor(data: dict, normalize) -> int:
+    """Prove the non-Unicode premises using only parsed data and an injected normalizer.
+
+    Counting always uses add_special_tokens=False. ByteLevel processing changes offsets,
+    not ids; decoding emits no ids. No padding, truncation, model affix or template
+    injection is permitted. Added-token extraction consumes disjoint nonempty spans
+    and replaces each with its one integer id (including matches of special tokens).
+    """
+    _require(isinstance(data, dict), "tokenizer descriptor")
+    _require(set(data) <= {"version", "truncation", "padding", "added_tokens", "normalizer",
+                           "pre_tokenizer", "post_processor", "decoder", "model"}, "unknown counting configuration")
+    model = data.get("model")
+    _require(isinstance(model, dict) and model.get("type") == "BPE", "model must be BPE")
+    _require(set(model) <= {"type", "dropout", "unk_token", "continuing_subword_prefix",
+                           "end_of_word_suffix", "fuse_unk", "byte_fallback", "ignore_merges",
+                           "vocab", "merges"}, "unknown model configuration")
+    for key in ("byte_fallback", "fuse_unk", "ignore_merges"):
+        _require(model.get(key) is False, key)
+    _require("unk_token" in model and model["unk_token"] is None, "unk_token")
+    for key in ("continuing_subword_prefix", "end_of_word_suffix"):
+        _require(model.get(key) in (None, ""), f"model affix: {key}")
+    _require(model.get("dropout") in (None, 0), "model dropout")
+    vocab = model.get("vocab")
+    _require(isinstance(vocab, dict) and set(byte_alphabet()) <= set(vocab), "missing ByteLevel byte alphabet")
+    _require(all(isinstance(s, str) and s and type(i) is int and i >= 0 for s, i in vocab.items()), "vocab ids")
+    _require(len(set(vocab.values())) == len(vocab), "duplicate vocab id")
+    merges = model.get("merges")
+    _require(isinstance(merges, list), "merges")
+    for merge in merges:
+        pair = merge.split(" ") if isinstance(merge, str) else merge
+        _require(isinstance(pair, list) and len(pair) == 2 and all(isinstance(s, str) and s in vocab for s in pair),
+                 "merge must join two vocabulary symbols")
+        _require("".join(pair) in vocab, "merge must only join")
+    _require(data.get("normalizer") == {"type": "NFC"}, "normalizer must be exactly one NFC step")
+    pre = data.get("pre_tokenizer")
+    _require(isinstance(pre, dict) and set(pre) == {"type", "pretokenizers"}
+             and pre["type"] == "Sequence", "pre-tokenizer sequence")
+    steps = pre["pretokenizers"]
+    _require(isinstance(steps, list) and len(steps) == 2, "pre-tokenizer needs exactly two steps")
+    split = steps[0]
+    _require(isinstance(split, dict) and set(split) == {"type", "pattern", "behavior", "invert"}
+             and split["type"] == "Split" and split["behavior"] == "Isolated" and split["invert"] is False,
+             "Split must isolate without inserting or removing")
+    pattern = split["pattern"]
+    _require(isinstance(pattern, dict) and set(pattern) == {"Regex"}
+             and isinstance(pattern["Regex"], str) and bool(pattern["Regex"]), "Split regex")
+    _require(steps[1] == {"type": "ByteLevel", "add_prefix_space": False,
+                          "trim_offsets": False, "use_regex": False}, "ByteLevel parameters")
+    added = data.get("added_tokens")
+    _require(isinstance(added, list), "added_tokens")
+    ids, contents = set(), set()
+    for token in added:
+        _require(isinstance(token, dict) and set(token) == {
+            "id", "content", "special", "normalized", "single_word", "lstrip", "rstrip"}, "added-token configuration")
+        _require(type(token["id"]) is int and token["id"] >= 0 and token["id"] not in ids, "one added-token id")
+        _require(all(type(token[k]) is bool for k in ("special", "normalized", "single_word", "lstrip", "rstrip")),
+                 "added-token matching flags")
+        content = token["content"]
+        _require(isinstance(content, str) and bool(content) and content not in contents, "nonempty unique added token")
+        effective = normalize("NFC", content) if token["normalized"] else content
+        _require(isinstance(effective, str) and bool(effective), "nonempty effective added-token match")
+        ids.add(token["id"])
+        contents.add(content)
+    _require(data.get("padding") is None, "padding emits ids")
+    _require(data.get("truncation") is None, "truncation invalidates exact fixed counts")
+    _bytelevel(data.get("post_processor"), "post-processor must emit no injected ids")
+    _bytelevel(data.get("decoder"), "decoder must be ByteLevel")
+    # Independently derived from all possible id-producing stages above.
+    return 0
+
+
+def _utf8_length(text: str) -> int:
+    # Admission renderings must be valid UTF-8; refuse lone surrogates.
+    return len(text.encode("utf-8", errors="strict"))
+
+
+def _unicode_scalars():
+    yield from range(0xD800)
+    yield from range(0xE000, 0x110000)
+
+
+def derive_nfd_table(normalize):
+    """Use the SAME library/version as the pinned NFC, never a platform Unicode table.
+
+    normalize(form, text) is supplied by the caller. Tests supply a stand-in;
+    the dispatcher supplies NFC/NFD from the pinned counting package.
+    """
+    from array import array
+    # Surrogate slots stay zero sentinels, not byte lengths: valid UTF-8 admission
+    # text cannot contain them, and nfd_sum refuses such text before any lookup.
+    table = array("I", [0]) * 0x110000
+    for cp in _unicode_scalars():
+        table[cp] = _utf8_length(normalize("NFD", chr(cp)))
+    return table
+
+
+def emit_nfd_table(table, path: Path) -> None:
+    """Serialize only scalar byte-length exceptions, in code-point order.
+
+    The structural dispatcher passes the very table used by its proof and hash.
+    This contains no Unicode-version fallback and no hash-bearing object keys.
+    """
+    sparse = [[cp, table[cp]] for cp in _unicode_scalars()
+              if table[cp] != _utf8_length(chr(cp))]
+    path.write_text(json.dumps(sparse, separators=(",", ":")) + "\n", encoding="utf-8")
+
+
+def check_nfd_table(table, normalize) -> None:
+    _require(len(table) == 0x110000, "NFD table must cover every code point")
+    for cp in range(0xD800, 0xE000):
+        _require(type(table[cp]) is int and table[cp] == 0, f"NFD surrogate slot differs at U+{cp:04X}")
+    for cp in _unicode_scalars():
+        value = table[cp]
+        _require(type(value) is int and value == _utf8_length(normalize("NFD", chr(cp))),
+                 f"NFD table differs at U+{cp:04X}")
+
+
+def nfd_sum(text: str, table) -> int:
+    text.encode("utf-8")  # reject non-renderable surrogate text
+    return sum(table[ord(c)] for c in text)
+
+
+def prove_compositions(normalize) -> set[tuple[str, str, str]]:
+    """Enumerate the canonical composition set, including algorithmic Hangul.
+
+    Each canonically decomposable scalar whose NFC is itself must be obtainable
+    from a pair. Try every partition of its full decomposition; NFC of each
+    side recovers the pair, including intermediate precomposed starters. Also
+    verify exclusions/singletons, round trips and every discovered pair.
+    Canonical reordering permutes code points and preserves the NFD byte sum.
+    """
+    pairs = set()
+    for cp in _unicode_scalars():
+        char = chr(cp)
+        decomposed = normalize("NFD", char)
+        _require(isinstance(decomposed, str) and bool(decomposed), f"empty NFD U+{cp:04X}")
+        normalized = normalize("NFC", char)
+        _require(normalize("NFD", normalized) == decomposed, f"canonical agreement U+{cp:04X}")
+        _require(_utf8_length(normalized) <= _utf8_length(decomposed), f"lengthening NFC U+{cp:04X}")
+        if decomposed == char:
+            _require(normalized == char, f"undecomposed NFC U+{cp:04X}")
+            continue
+        composed = normalize("NFC", decomposed)
+        _require(normalize("NFD", composed) == decomposed, f"canonical round trip U+{cp:04X}")
+        _require(_utf8_length(composed) <= _utf8_length(decomposed), f"lengthening composition U+{cp:04X}")
+        _require(normalize("NFC", char) == composed, f"inconsistent NFC U+{cp:04X}")
+        if composed != char or len(decomposed) < 2:
+            continue
+        found = False
+        for cut in range(1, len(decomposed)):
+            left = normalize("NFC", decomposed[:cut])
+            right = normalize("NFC", decomposed[cut:])
+            if len(left) == len(right) == 1 and normalize("NFC", left + right) == char:
+                _require(_utf8_length(char) <= _utf8_length(left + right), f"lengthening pair U+{cp:04X}")
+                pairs.add((left, right, char))
+                found = True
+        _require(found, f"composition set incomplete at U+{cp:04X}")
+    return pairs
+
+
+def structural_bound(fixed_exact: int, variable: str, table, constant: int) -> int:
+    _require(type(constant) is int and constant == 0, "structural constant must equal the proved zero")
+    _require(type(fixed_exact) is int and fixed_exact >= 0, "fixed exact count")
+    return fixed_exact + nfd_sum(variable, table) + constant
+
+
+def _special_boundaries(text: str, added: list[dict]) -> set[int]:
+    """Literal extraction boundaries, before normalization or pre-tokenization."""
+    safe = set()
+    literals = sorted(added, key=lambda t: len(t["content"]), reverse=True)
+    _require(all(t.get("content") for t in literals), "empty delimiter")
+    # Whitespace-eating or normalized matches could shadow an apparent literal.
+    uncertain = any(t.get("lstrip") or t.get("rstrip") or t.get("normalized") for t in literals)
+    i = 0
+    while i < len(text) and not uncertain:
+        token = next((t for t in literals if text.startswith(t["content"], i)), None)
+        if token is None:
+            i += 1
+            continue
+        end = i + len(token["content"])
+        if token.get("special") and not token.get("single_word"):
+            safe.update((i, end))
+        i = end
+    return safe
+
+
+def delimited_parts(parts: list[tuple[str, str]], added: list[dict]) -> list[tuple[str, str]]:
+    """Coalesce boundaries that cannot be proved special-delimited in the full text.
+
+    Only unconditional, unnormalized special literals establish a boundary.
+    Longest-match scanning includes ordinary added tokens so a shadowed literal
+    cannot manufacture an exact span. Uncertain matching flags force coalescing.
+    No empirical count equality is used to justify an otherwise unsafe split.
+    """
+    _require(all(kind in ("fixed", "variable") and isinstance(s, str) for kind, s in parts), "rendering parts")
+    safe = _special_boundaries("".join(s for _, s in parts), added)
+    out, offset = [], 0
+    for kind, part in parts:
+        if not part:
+            continue
+        if out and (out[-1][0] == kind or offset not in safe):
+            previous_kind, previous = out.pop()
+            out.append(("fixed" if previous_kind == kind == "fixed" else "variable", previous + part))
+        else:
+            out.append((kind, part))
+        offset += len(part)
+    return out
+
+
+def rendering_parts(messages: list[dict], tools: list[dict]) -> list[tuple[str, str]]:
+    """Enumerate the fixed framing, system rules and schemas of the frozen rendering.
+
+    All owner/history/card/call/result text is variable. The original renderer
+    currently has no guaranteed special delimiters, so these proposed spans
+    usually coalesce into one variable span before any exact counting occurs.
+    """
+    parts = [("fixed", RENDERER + "\n")]
+    for i, m in enumerate(messages):
+        parts.append(("fixed", f"msg={i}\nrole={m.get('role')}\n"))
+        if m.get("role") == "tool":
+            parts.append(("variable", f"tool_call_id={m.get('tool_call_id')}\n"))
+        parts.append(("fixed", "content="))
+        parts.append(("fixed" if m.get("role") == "system" else "variable",
+                      "" if m.get("content") is None else str(m.get("content"))))
+        parts.append(("fixed", "\n"))
+        for call in m.get("tool_calls") or []:
+            fn = call.get("function") or {}
+            parts.append(("variable", f"call={call.get('id')}\nname={fn.get('name')}\narguments={fn.get('arguments')}\n"))
+    parts.append(("fixed", f"tools={len(tools)}\n"))
+    parts.extend(("fixed", "tool=" + J(t) + "\n") for t in tools)
+    _require("".join(s for _, s in parts) == render_count_input(messages, tools), "renderer drift")
+    return parts
+
+
+def renderer_settings(structural: dict) -> str:
+    renderer = structural.get("renderer")
+    _require(renderer in (RENDERER, RENDERER_V2), "structural method/renderer")
+    if renderer == RENDERER_V2:
+        for key in ("segment_open", "segment_close"):
+            value = structural.get(key)
+            _require(isinstance(value, str) and bool(value.strip()) and value != UNMEASURED,
+                     f"delimiter {key} is unmeasured; fill it from the pinned tokenizer")
+    return renderer
+
+
+def prove_v2_delimiters(data: dict, structural: dict) -> None:
+    """Pure descriptor proof of unconditional, one-id extraction before NFC/Split.
+
+    The supported added-token pipeline extracts unnormalized literals first.
+    Special=True with normalized=False and no matching flags gives a literal
+    split before either normalization or pre-tokenization can join its sides.
+    Full-rendering scanning also checks for longer tokens shadowing boundaries.
+    """
+    _require(renderer_settings(structural) == RENDERER_V2, "v2 delimiter renderer")
+    added = data.get("added_tokens")
+    _require(isinstance(added, list), "delimiter added tokens")
+    for key in ("segment_open", "segment_close"):
+        matches = [t for t in added if isinstance(t, dict) and t.get("content") == structural[key]]
+        _require(len(matches) == 1, f"delimiter {key} must be exactly one added token")
+        token = matches[0]
+        _require(type(token.get("id")) is int and token["id"] >= 0
+                 and token.get("special") is True
+                 and all(token.get(flag) is False for flag in ("normalized", "single_word", "lstrip", "rstrip")),
+                 f"delimiter {key} must be an unconditional unnormalized special added token")
+
+
+def rendering_parts_v2(messages: list[dict], tools: list[dict], structural: dict) -> list[tuple[str, str]]:
+    """One wrapped FIXED system block or schema; all other text is variable."""
+    _require(renderer_settings(structural) == RENDERER_V2, "v2 renderer required")
+    opened, closed = structural["segment_open"], structural["segment_close"]
+    parts = [("variable", RENDERER_V2 + "\n")]
+
+    def append(kind, text):
+        if kind == "variable" and parts[-1][0] == "variable":
+            parts[-1] = (kind, parts[-1][1] + text)
+        else:
+            parts.append((kind, text))
+
+    for i, message in enumerate(messages):
+        role = message.get("role")
+        block = f"msg={i}\nrole={role}\n"
+        if role == "tool":
+            block += f"tool_call_id={message.get('tool_call_id')}\n"
+        block += "content=" + ("" if message.get("content") is None else str(message["content"])) + "\n"
+        append("fixed" if role == "system" else "variable",
+               opened + block + closed if role == "system" else block)
+        for call in message.get("tool_calls") or []:
+            fn = call.get("function") or {}
+            append("variable", f"call={call.get('id')}\nname={fn.get('name')}\narguments={fn.get('arguments')}\n")
+    append("variable", f"tools={len(tools)}\n")
+    parts.extend(("fixed", opened + "tool=" + J(tool) + "\n" + closed) for tool in tools)
+    return parts
+
+
+def render_count_input_v2(messages: list[dict], tools: list[dict], structural: dict) -> str:
+    """ERPCLAW-COUNT-v2, using only the manifest's delimiter strings."""
+    return "".join(text for _, text in rendering_parts_v2(messages, tools, structural))
+
+
+def render_for(structural: dict | None, messages: list[dict], tools: list[dict]) -> str:
+    if structural is None or renderer_settings(structural) == RENDERER:
+        return render_count_input(messages, tools)
+    return render_count_input_v2(messages, tools, structural)
+
+
+def proved_parts_v2(messages, tools, structural, data) -> list[tuple[str, str]]:
+    parts = rendering_parts_v2(messages, tools, structural)
+    rendered = "".join(text for _, text in parts)
+    try:
+        prove_v2_delimiters(data, structural)
+        safe = _special_boundaries(rendered, data["added_tokens"])
+        offset = 0
+        for _, text in parts[:-1]:
+            offset += len(text)
+            _require(offset in safe, "v2 delimiter is shadowed at a segment boundary")
+    except StructuralError:
+        # No exact fixed credit survives a failed delimiter proof.
+        return [("variable", rendered)]
+    return parts
+
+
+def structural_report(data, tokenizer, normalize, cases, structural, *, emit_nfd: Path | None = None) -> dict:
+    injected = prove_descriptor(data, normalize)
+    renderer = renderer_settings(structural)
+    _require(structural.get("method") == "structural-v1", "structural method/renderer")
+    _require(type(structural.get("constant")) is int and structural["constant"] == injected,
+             "manifest constant differs from derived injected-token count")
+    table = derive_nfd_table(normalize)
+    check_nfd_table(table, normalize)
+    pairs = prove_compositions(normalize)
+    for text in ("\u00e9\u0323", "\u01d5\u0323", "\u0344", "\u0958"):
+        _require(_utf8_length(normalize("NFC", text)) <= nfd_sum(text, table), "named NFD configuration check")
+    _require(count_tokens(tokenizer, "") == 0, "empty encoding cross-check")
+    fixed_counts, report = {}, []
+    _require(len(cases) == 12 and len({c["id"] for c in cases}) == 12, "twelve distinct fixture cases required")
+    for case in cases:
+        rendered = render_for(structural, case["messages"], case["tools"])
+        if renderer == RENDERER_V2:
+            parts = proved_parts_v2(case["messages"], case["tools"], structural, data)
+        else:
+            parts = delimited_parts(rendering_parts(case["messages"], case["tools"]), data["added_tokens"])
+        counts = [count_tokens(tokenizer, text) for _, text in parts]
+        count = count_tokens(tokenizer, rendered)
+        _require(count == sum(counts), f"nonadditive special delimiting: {case['id']}")
+        fixed_exact, variable, keys = 0, [], []
+        for (kind, text), n in zip(parts, counts):
+            if kind == "fixed":
+                key = hashlib.sha256(text.encode()).hexdigest()
+                fixed_counts[key] = n
+                keys.append(key)
+                fixed_exact += n
+            else:
+                variable.append(text)
+        bound = structural_bound(fixed_exact, "".join(variable), table, injected)
+        _require(count <= bound, f"count above structural bound: {case['id']}")
+        report.append({"id": case["id"], "tokens": count, "bound": bound, "fixed_exact": fixed_exact,
+                       "fixed_segments": keys, "variable_nfd": bound - fixed_exact - injected,
+                       "additive": True, "admits": bound <= REFERENCE_BUDGET})
+    digest = hashlib.sha256(b"".join(int(n).to_bytes(4, "big") for n in table)).hexdigest()
+    if emit_nfd is not None:
+        emit_nfd_table(table, emit_nfd)
+    return {"structural": {"method": "structural-v1", "constant": injected, "renderer": renderer,
+                           **({k: structural[k] for k in ("segment_open", "segment_close")}
+                              if renderer == RENDERER_V2 else {}),
+                           "fixed_counts_status": "measured", "fixed_counts": fixed_counts,
+                           "nfd_table_sha256": digest, "composition_pairs": len(pairs)}, "cases": report}
+
+
+def _digest(value) -> str:
+    return hashlib.sha256(J(value).encode()).hexdigest()
+
+
+def make_receipt(request: dict, identity: dict, n: int, received: int) -> dict:
+    """Dispatcher measurement of this actual request at this N, never a reference substitute."""
+    _require(type(n) is int and n > 0 and type(received) is int and received >= 0, "receipt numbers")
+    return {"request": _digest(request), "identity": _digest(identity), "n": n, "received": received}
+
+
+def check_receipt(receipt, request, identity, n, bound) -> str | None:
+    if not isinstance(receipt, dict) or set(receipt) != {"request", "identity", "n", "received"}:
+        return "missing bound receipt"
+    got = receipt["received"]
+    if type(got) is not int or got < 0 or type(receipt["n"]) is not int:
+        return "invalid receipt numbers"
+    if receipt != make_receipt(request, identity, n, got):
+        return "receipt request, N or serving identity differs"
+    if got > bound:
+        return "received count above structural bound; re-examine and re-measure"
+    return None
+
+
+def rebuild_receipts(built: dict, old: dict) -> dict:
+    """A rebuild always needs fresh dispatcher measurements, even on unchanged pins."""
+    return {k: value for k, value in built.items() if k not in ("received", "received_note", "receipts")}
 
 
 # ---------- the frozen counting representation ----------
@@ -209,7 +641,7 @@ RESULT = '{"found":["Acme Corporation"],"note":"one customer matches"}'
 MULTIBYTE = "Rechnung für Müller GmbH: 12,50 € – Größe «Ärmel» 你好，世界 ₹1,200 ✓"
 
 
-def _padded(tokenizer, target_tokens: int) -> list[dict]:
+def _padded(tokenizer, target_tokens: int, structural: dict | None = None) -> list[dict]:
     """A request whose rendering is EXACTLY target_tokens tokens: a system message plus a user message padded with
     a fixed word until the count hits the target, then trimmed by single words. Deterministic."""
     base = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": ""}]
@@ -217,7 +649,7 @@ def _padded(tokenizer, target_tokens: int) -> list[dict]:
     n = 0
     def count(k: int) -> int:
         m = [base[0], {"role": "user", "content": USER + word * k}]
-        return len(tokenizer.encode(render_count_input(m, []), add_special_tokens=False).ids)
+        return len(tokenizer.encode(render_for(structural, m, []), add_special_tokens=False).ids)
     lo, hi = 0, 1
     while count(hi) < target_tokens:
         hi *= 2
@@ -232,7 +664,7 @@ def _padded(tokenizer, target_tokens: int) -> list[dict]:
     return [base[0], {"role": "user", "content": USER + word * lo}]
 
 
-def fixture_inputs(tokenizer) -> list[dict]:
+def fixture_inputs(tokenizer, structural: dict | None = None) -> list[dict]:
     follow = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": USER},
               {"role": "assistant", "content": None, "tool_calls": [CALL]}]
     return [
@@ -245,9 +677,9 @@ def fixture_inputs(tokenizer) -> list[dict]:
         {"id": "07_follow_up_native_tool_call", "messages": follow, "tools": _tools(1)},
         {"id": "08_follow_up_with_tool_result", "messages": follow + [{"role": "tool", "tool_call_id": CALL["id"], "content": RESULT}], "tools": _tools(1)},
         {"id": "09_multibyte_text", "messages": [{"role": "user", "content": MULTIBYTE}], "tools": []},
-        {"id": "10_budget_minus_1", "messages": _padded(tokenizer, REFERENCE_BUDGET - 1), "tools": []},
-        {"id": "11_budget_exact", "messages": _padded(tokenizer, REFERENCE_BUDGET), "tools": []},
-        {"id": "12_budget_plus_1", "messages": _padded(tokenizer, REFERENCE_BUDGET + 1), "tools": []},
+        {"id": "10_budget_minus_1", "messages": _padded(tokenizer, REFERENCE_BUDGET - 1, structural), "tools": []},
+        {"id": "11_budget_exact", "messages": _padded(tokenizer, REFERENCE_BUDGET, structural), "tools": []},
+        {"id": "12_budget_plus_1", "messages": _padded(tokenizer, REFERENCE_BUDGET + 1, structural), "tools": []},
     ]
 
 
@@ -324,29 +756,101 @@ def count_tokens(tokenizer, text: str) -> int:
     return len(tokenizer.encode(text, add_special_tokens=False).ids)
 
 
+def pinned_normalize(manifest):
+    """NFC and NFD from the same pinned binary, with no platform Unicode dependency."""
+    normalizers = require_tokenizers(manifest).normalizers
+    operations = {"NFC": normalizers.NFC(), "NFD": normalizers.NFD()}
+    return lambda form, text: operations[form].normalize_str(text)
+
+
+def measurement_identity(pin, profile, manifest) -> dict:
+    # Model, server URL and provider settings are part of the serving identity.
+    with open(DEFAULT_MANIFEST.with_name("profiles.toml"), "rb") as source:
+        serving = tomllib.load(source).get(profile, {})
+    # profile_pin's filename-keyed lookup is for verification only. Serialize
+    # the manifest's list form so tokenizer filenames never become hash keys.
+    written_pin = {key: value for key, value in pin.items() if key != "files"}
+    if "file" in pin:
+        written_pin["file"] = [{"name": entry["name"], "sha256": entry["sha256"]}
+                               for entry in sorted(pin["file"], key=lambda entry: entry["name"])]
+    return {"pins": written_pin, "profile": profile, "serving": serving,
+            "routes": manifest.get("route", {}), "tool": manifest.get("tool"),
+            "structural": manifest.get("structural"), "renderer": manifest.get("structural", {}).get("renderer"),
+            "proof_sha256": sha256_file(Path(__file__))}
+
+
 def build_fixture(folder: Path, pin: dict, profile: str, manifest: dict) -> dict:
+    structural = manifest.get("structural", {})
+    _require(renderer_settings(structural) == RENDERER_V2, "build requires ERPCLAW-COUNT-v2")
     tok = load_tokenizer(folder, manifest)
+    inputs = fixture_inputs(tok, structural)
+    descriptor = json.loads((folder / "tokenizer.json").read_text(encoding="utf-8"))
+    proof = structural_report(descriptor, tok, pinned_normalize(manifest), inputs, manifest.get("structural", {}))
     cases = []
-    for c in fixture_inputs(tok):
-        rendered = render_count_input(c["messages"], c["tools"])
-        cases.append({**c, "rendered": rendered, "tokens": count_tokens(tok, rendered)})
-    import tokenizers
-    return {"version": FIXTURE_VERSION, "format": "ERPCLAW-COUNT-v1",
+    for c, evidence in zip(inputs, proof["cases"]):
+        rendered = render_for(structural, c["messages"], c["tools"])
+        cases.append({**c, **evidence, "rendered": rendered})
+    return {"version": FIXTURE_VERSION, "format": RENDERER_V2,
             "vocab_repo": pin["vocab_repo"], "vocab_revision": pin["vocab_revision"],
-            "counting_package": tokenizers.__version__, "add_special_tokens": False,
+            "identity": measurement_identity(pin, profile, manifest), "structural": proof["structural"],
+            "counting_package": manifest["tool"]["version"], "add_special_tokens": False,
             "reference_budget": REFERENCE_BUDGET, "cases": cases}
 
 
-def main(argv=None) -> int:
+def check_fixture_receipts(fixture: dict, manifest: dict) -> str | None:
+    """Static reference receipts only; experiment requests use check_receipt separately."""
+    if fixture.get("format") == RENDERER:
+        return "STALE: v1 fixture must be rebuilt with ERPCLAW-COUNT-v2; fresh receipts required"
+    receipts = fixture.get("receipts")
+    if not isinstance(receipts, dict) or not receipts:
+        return "fresh dispatcher receipts required"
+    identity = fixture.get("identity")
+    if not isinstance(identity, dict):
+        return "missing receipt identity"
+    routes = manifest.get("route", {})
+    if set(receipts) != set(routes):
+        return "fresh dispatcher receipts required for every serving route"
+    for route, route_receipts in receipts.items():
+        if not isinstance(route_receipts, dict):
+            return "invalid route receipts"
+        expected = {c["id"] for c in fixture["cases"] if c["messages"]}
+        if set(route_receipts) != expected:
+            return "fresh dispatcher receipt required for every nonempty reference case"
+        serving_identity = {**identity, "route": route, "serving_route": routes[route]}
+        for case in fixture["cases"]:
+            if not case["messages"]:
+                continue
+            request = {"case": case["id"], "format": fixture["format"],
+                       "messages": case["messages"], "tools": case["tools"], "rendered": case["rendered"]}
+            why = check_receipt(route_receipts[case["id"]], request, serving_identity, 1, case["bound"])
+            if why:
+                return f"{route}/{case['id']}: {why}"
+    return None
+
+
+def check_structural_manifest(proof: dict, declared: dict) -> str | None:
+    if declared.get("fixed_counts_status") != "measured":
+        return "structural proof/fixed counts remain unmeasured; run structural and commit its values"
+    for key, value in proof.items():
+        if declared.get(key) != value:
+            return f"structural manifest differs from independently derived {key}"
+    return None
+
+
+def main(argv=None, *, tokenizer=None, normalize=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=("fetch", "build", "check", "wheel"))
+    ap.add_argument("mode", choices=("fetch", "build", "check", "wheel", "structural"))
     ap.add_argument("--profile")
     ap.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
     ap.add_argument("--dest")
     ap.add_argument("--files")
     ap.add_argument("--fixture")
     ap.add_argument("--file")
+    ap.add_argument("--emit-nfd-table", nargs="?", const=str(DEFAULT_NFD_TABLE), metavar="PATH",
+                    help="structural only: write the proved sparse NFD table; defaults to assistant package data")
     a = ap.parse_args(argv)
+    if a.emit_nfd_table is not None and a.mode != "structural":
+        ap.error("--emit-nfd-table is only supported by structural")
     if a.mode == "wheel":  # a downloaded wheel is checked against the pinned hashes before it is installed
         if not a.file:
             raise SystemExit("refused: --file is required")
@@ -363,49 +867,65 @@ def main(argv=None) -> int:
         print(f"fetched and verified {len(pin['files'])} files into {a.dest}")
         print(_wheel_note(mf))
         return 0
+    if a.mode == "structural":
+        if not a.files:
+            raise SystemExit("refused: --files is required")
+        folder = Path(a.files)
+        verify_files(folder, pin)
+        manifest = load_manifest(Path(a.manifest))
+        data = json.loads((folder / "tokenizer.json").read_text(encoding="utf-8"))
+        tok = tokenizer if tokenizer is not None else load_tokenizer(folder, manifest)
+        normalizer = normalize if normalize is not None else pinned_normalize(manifest)
+        structural = manifest.get("structural", {})
+        report = structural_report(data, tok, normalizer, fixture_inputs(tok, structural), structural,
+                                   emit_nfd=Path(a.emit_nfd_table) if a.emit_nfd_table is not None else None)
+        report["identity"] = measurement_identity(pin, a.profile, manifest)
+        report["profiles"] = {a.profile: {"fixed_segments": sorted(report["structural"]["fixed_counts"])}}
+        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
     if not a.files or not a.fixture:
         raise SystemExit("refused: --files and --fixture are required")
+    fx = Path(a.fixture)
+    if a.mode == "check":
+        committed = json.loads(fx.read_text(encoding="utf-8"))
+        if committed.get("format") == RENDERER:
+            # V1 measurements cannot be used for v2 admission, even while the
+            # new manifest's delimiters are still unmeasured.
+            cleaned = rebuild_receipts(committed, committed)
+            if cleaned != committed:
+                fx.write_text(json.dumps(cleaned, ensure_ascii=False, indent=1, sort_keys=True) + "\n",
+                              encoding="utf-8")
+            print("STALE: v1 fixture must be rebuilt with ERPCLAW-COUNT-v2; old received tables and receipts dropped")
+            return 1
     verify_files(Path(a.files), pin)
     manifest = load_manifest(Path(a.manifest))
     built = build_fixture(Path(a.files), pin, a.profile, manifest)
-    fx = Path(a.fixture)
-    if a.mode == "build" and fx.exists():  # measured data is kept: it cannot be recomputed offline
+    if a.mode == "build" and fx.exists():
         old = json.loads(fx.read_text(encoding="utf-8"))
-        for k in ("received", "received_note"):
-            if k in old:
-                built[k] = old[k]
+        built = rebuild_receipts(built, old)
     if a.mode == "build":
         Path(a.fixture).write_text(json.dumps(built, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
         print(f"wrote {a.fixture}: {len(built['cases'])} cases")
         return 0
     committed = json.loads(Path(a.fixture).read_text(encoding="utf-8"))
-    measured = {k: committed.pop(k) for k in ("received", "received_note") if k in committed}
+    measured = {k: committed.pop(k) for k in ("received", "received_note", "receipts") if k in committed}
     if committed != json.loads(json.dumps(built, ensure_ascii=False)):
         a_ = {c["id"]: c["tokens"] for c in committed.get("cases", [])}
         b_ = {c["id"]: c["tokens"] for c in built["cases"]}
         diff = {k: (a_.get(k), b_.get(k)) for k in sorted(set(a_) | set(b_)) if a_.get(k) != b_.get(k)}
         print("REFUSED: the recomputed fixture differs from the committed one" + (f"; counts (committed, recomputed): {diff}" if diff else " (not in the counts)"))
         return 1
-    margin = route_margin(manifest, pin)
-    if margin is None:
-        print(f"ok: hashes and counts reproduce; [{a.profile}] has no measured margin (conservative bound only)")
-        print(_wheel_note(manifest))
-        return 0
-    why = missing_measurements({**committed, **measured}, pin["margin_route"], margin)
+    if "structural" in built:
+        why = check_structural_manifest(built["structural"], manifest.get("structural", {}))
+        if why:
+            print(f"REFUSED: {why}")
+            return 1
+    why = check_fixture_receipts({**committed, **measured}, manifest)
     if why:
         print(f"REFUSED: {why}")
         return 1
-    derived = derive_margin({**committed, **measured}, pin["margin_route"])
-    if (margin["factor"], margin["constant"]) != (derived["factor"], derived["constant"]):
-        print(f"REFUSED: the manifest margin {margin['factor']}/{margin['constant']} differs from the one derived from the "
-              f"stored received counts {derived['factor']}/{derived['constant']}")
-        return 1
-    short = check_margin({**committed, **measured}, pin["margin_route"], margin)
-    if short:
-        print(f"REFUSED: the bound count*{margin['factor']}+{margin['constant']} underestimates the received count for {short}")
-        return 1
-    print(f"ok: hashes match the manifest, all {len(built['cases'])} fixture cases reproduce exactly, and the bound "
-          f"count*{margin['factor']}+{margin['constant']} covers every received count of route {pin['margin_route']}")
+    print(f"ok: hashes, structural proof and all {len(built['cases'])} fixture cases reproduce; "
+          "fresh request-bound serving receipts stay within every structural bound")
     print(_wheel_note(manifest))
     return 0
 

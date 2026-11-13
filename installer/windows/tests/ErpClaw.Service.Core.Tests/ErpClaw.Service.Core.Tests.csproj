@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>ErpClaw.Service.Core.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- xunit 2.9.3 (Apache-2.0), xunit.runner.visualstudio 3.1.5 (Apache-2.0), Microsoft.NET.Test.Sdk 18.11.0 (MIT). -->
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/ErpClaw.Service.Core/ErpClaw.Service.Core.csproj" />
+  </ItemGroup>
+</Project>

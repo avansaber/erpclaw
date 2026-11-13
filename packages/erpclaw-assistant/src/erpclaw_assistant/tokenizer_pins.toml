@@ -1,16 +1,35 @@
-# Pins for token admission (row 0 of the token-admission spec). Read by nothing in the engine until the admission rows
-# teach the loader these fields; profiles.toml and the profile loader are untouched by this file.
-# vocab_* name the vocabulary artifact the count loads as data (tokenizer.json); the other files are pinned so a changed
-# template, vocabulary or merges list is noticed. chat_template.jinja is not part of the counted representation.
-# The SHA-256 of tokenizer.json equals the LFS object id the model repository reports for it at this revision.
+# Structural admission uses fixed_exact + variable_nfd + structural.constant.
+# The engine reads these numbers; only the offline verifier loads vocabulary data.
+# V2 delimiters and fixed counts remain unmeasured. The dispatcher fills the
+# delimiter strings from pinned data, then runs `structural` on hash-verified
+# files with the pinned counting package and normalizer version.
+# An empty fixed_segments list claims no exact fixed treatment. Any required
+# segment must have a measured count; the loader refuses unmeasured requirements.
+# Undelimited fixed/variable spans use the NFD byte bound for the entire span.
+# A missing context_window or an unmeasured route keeps the conservative fallback.
+# No vocabulary, counting package or runtime counter is added to the engine.
 #
-# Admission is BOUNDED, not exact (ruling of dispatcher 1, 7 Nov): the count (ERPCLAW-COUNT-v1) is an upper estimate of
-# what the model receives when  count * factor + constant  is used, with factor and constant measured per serving route
-# (method envelope-v1): factor = 1.1 x the largest received/counted ratio among the fixture cases with at least 10 tools
-# (rounded up to two places); constant = the largest residual (received - factor x counted) over ALL cases, plus 10
-# percent, rounded up. The check re-derives both from the stored received counts and refuses on any difference.
-# A profile whose margin_route is "unmeasured" is not admitted for exact-sized requests: it falls back to the
-# conservative bound, as Muse does.
+# History: the earlier admission proposal used count * factor + constant with
+# per-route envelope-v1 measurements: factor = 1.1 x the largest received/counted
+# ratio among fixture cases with at least 10 tools, rounded up to two places;
+# constant = the largest residual (received - factor x counted) over all cases,
+# plus 10 percent, rounded up. The earlier check re-derived both from receipts.
+# The route tables below retain that serving
+# evidence. Those margins do not prove a structural bound. Fresh receipts bind
+# each actual request and N to the renderer, proof, pins and serving identity.
+# Builds discard receipts; checks require fresh measurements after any change.
+# vocab_* and file hashes identify the data and notice template/vocabulary changes.
+
+[structural]
+method = "structural-v1"
+constant = 0
+renderer = "ERPCLAW-COUNT-v2"
+segment_open = "<|im_start|>" # the pinned chat template's own special added token (read from tokenizer.json, 9 Nov 2026)
+segment_close = "<|im_end|>" # the pinned chat template's own special added token (read from tokenizer.json, 9 Nov 2026)
+fixed_counts_status = "measured" # the offline proof on the pinned files with renderer v2, 9 Nov 2026
+fixed_counts = { "0224090770a866104cd542736b78cb1316addfbd00773e5c1f7ef3b88bf8bce2" = 215, "05937d977c309474143292ee1b9da792599d19dc4f7fd14e3227346889c8b7f6" = 131, "17b92c8b0cfb301deefd9ca1ca84dc8054e47e3583b8986f00b42695ccbaf4e0" = 187, "333df3971b7528d16fb07ce25ca09eae64f8b164c7bb1b1107fa3c7b9ac90ed1" = 187, "35425f720b6d4257ccc8db4d90c2f2238c7bcc28067658f102739eadc4811565" = 159, "35d111e71388dadf04ae99557b4b545396cb6301090557f1f3dab965c17d630f" = 159, "38625a0c4ecf7c66abc5debe2a9eea49cc5b630ae631bfdb77408fd899aeda21" = 215, "3895f830fdb4fb59e94786f55285709a5d25ed5e7f9a318ffb5f51e212d3f433" = 159, "3cd00677bbbc1fc404b6ed805c001ecf9b48bf55d87aca66e179b97c472577c8" = 214, "462df58e2d5042da3f947973696d5332ffa4ef6d607e275c9cfcc10304ef1695" = 215, "4af0eb45c2884ed553fe11d07090ae736bad11ca5520189a23c7c9781b522377" = 159, "51d6374f760fa07ae36fad95a947928b48599e3a2e207c70a2c5857526de6aab" = 159, "60987719373ee5651e9e7cafd948a872c271ee7ca684b096983c0114f2ae4eab" = 187, "6a89092dd00139e6e244f35c89c666ea28b826fc8a54980066274745e4a3b874" = 215, "6b8d9ad742570d9acaffc3e75202bde06d8063e4edc6adc7808bbde2cc71aaa5" = 131, "729636565b60a61681f5776082bf552992ff938989a3f3452e23cb5bda8cecca" = 187, "9022ec7e78a36205c235fa03fa83d4834b837b99f52d17cb25b96ac8a31afeb0" = 159, "93bbf5b226328c505b2faa0bdf79c84363788ca9b298c74955bc2794ebd31a11" = 159, "997a02b146b70e01254c48024546e688d3232a989fed6f73007e3a6a4c0e3aab" = 187, "9b5c726f3a7b266f63e30dd1b475c06153e3cc6e9b4b1b9d6a46809dc64f301e" = 131, "9f48530565fe30392cc5c3d029b538ff99c24e3aacc186845261bafd6adba984" = 131, "b252181738996ffd737d232d3f5353927a6cf5db5810ff62a3d7a92eff45619c" = 215, "bd964908dc5936dc5fef25f28b71e5fcd55e4ca485c972e2ff76f626631b3561" = 131, "bf4d1d316ad8bae84f2790768f01b482e783221bdd6b8af6afa1e5baa2c5693c" = 187, "c4f82fbed1c23015c5968c769e6f18872a209bf823bed5e4cb3cd501d0c4f0cc" = 215, "d88ce12cb7cc383fbf01bbf6216a8a04c2aab1e57674114879db24e6b0ad0a10" = 131, "d99b3a73d3758006e1a95db1ff9f14a527ce4ec6d2d929617292f4ef4aab11d0" = 131, "d9ac5df47a69f977e4e108384ee722a6724da98c23e9666c6d7dabe20f5f738d" = 159, "e5f65e9dffa2cce7523d2a2ae80225c897c86654c474a13e0b545bfb1fd2b098" = 215, "ed0e186a0c1030345d42e1e16e5946c4b22f7f8441cd7a8f13a1c66b92e71c5f" = 131, "fc84f9d7e25cb9b2e8e211786fd74e91c5484b5f2917e536dbe8c8e937975c6a" = 187 }
+nfd_table_sha256 = "a652fde4567927da5f6187a1cf4a2cf3a081d987fd55e246bf43e0d27a670e92"
+composition_pairs = 12112
 
 # The counting package is pinned as strictly as the vocabulary files, but NOT locked in uv.lock (a decision of the
 # dispatcher: six more packages, one a native binary, for a tool a dispatcher with network runs rarely). It is installed
@@ -38,6 +57,39 @@ sha256 = "8d4e484f7b0827021ac5f9f71d4794aaef62b979ab7608593da22b1d2e3c4edc"
 
 [qwen3_5_9b_lmstudio]  # the local route (LM Studio): not measured. The only local server measured is Ollama, which has its own template
 admission = "bounded"
+fixed_segments = [
+  "0224090770a866104cd542736b78cb1316addfbd00773e5c1f7ef3b88bf8bce2",
+  "05937d977c309474143292ee1b9da792599d19dc4f7fd14e3227346889c8b7f6",
+  "17b92c8b0cfb301deefd9ca1ca84dc8054e47e3583b8986f00b42695ccbaf4e0",
+  "333df3971b7528d16fb07ce25ca09eae64f8b164c7bb1b1107fa3c7b9ac90ed1",
+  "35425f720b6d4257ccc8db4d90c2f2238c7bcc28067658f102739eadc4811565",
+  "35d111e71388dadf04ae99557b4b545396cb6301090557f1f3dab965c17d630f",
+  "38625a0c4ecf7c66abc5debe2a9eea49cc5b630ae631bfdb77408fd899aeda21",
+  "3895f830fdb4fb59e94786f55285709a5d25ed5e7f9a318ffb5f51e212d3f433",
+  "3cd00677bbbc1fc404b6ed805c001ecf9b48bf55d87aca66e179b97c472577c8",
+  "462df58e2d5042da3f947973696d5332ffa4ef6d607e275c9cfcc10304ef1695",
+  "4af0eb45c2884ed553fe11d07090ae736bad11ca5520189a23c7c9781b522377",
+  "51d6374f760fa07ae36fad95a947928b48599e3a2e207c70a2c5857526de6aab",
+  "60987719373ee5651e9e7cafd948a872c271ee7ca684b096983c0114f2ae4eab",
+  "6a89092dd00139e6e244f35c89c666ea28b826fc8a54980066274745e4a3b874",
+  "6b8d9ad742570d9acaffc3e75202bde06d8063e4edc6adc7808bbde2cc71aaa5",
+  "729636565b60a61681f5776082bf552992ff938989a3f3452e23cb5bda8cecca",
+  "9022ec7e78a36205c235fa03fa83d4834b837b99f52d17cb25b96ac8a31afeb0",
+  "93bbf5b226328c505b2faa0bdf79c84363788ca9b298c74955bc2794ebd31a11",
+  "997a02b146b70e01254c48024546e688d3232a989fed6f73007e3a6a4c0e3aab",
+  "9b5c726f3a7b266f63e30dd1b475c06153e3cc6e9b4b1b9d6a46809dc64f301e",
+  "9f48530565fe30392cc5c3d029b538ff99c24e3aacc186845261bafd6adba984",
+  "b252181738996ffd737d232d3f5353927a6cf5db5810ff62a3d7a92eff45619c",
+  "bd964908dc5936dc5fef25f28b71e5fcd55e4ca485c972e2ff76f626631b3561",
+  "bf4d1d316ad8bae84f2790768f01b482e783221bdd6b8af6afa1e5baa2c5693c",
+  "c4f82fbed1c23015c5968c769e6f18872a209bf823bed5e4cb3cd501d0c4f0cc",
+  "d88ce12cb7cc383fbf01bbf6216a8a04c2aab1e57674114879db24e6b0ad0a10",
+  "d99b3a73d3758006e1a95db1ff9f14a527ce4ec6d2d929617292f4ef4aab11d0",
+  "d9ac5df47a69f977e4e108384ee722a6724da98c23e9666c6d7dabe20f5f738d",
+  "e5f65e9dffa2cce7523d2a2ae80225c897c86654c474a13e0b545bfb1fd2b098",
+  "ed0e186a0c1030345d42e1e16e5946c4b22f7f8441cd7a8f13a1c66b92e71c5f",
+  "fc84f9d7e25cb9b2e8e211786fd74e91c5484b5f2917e536dbe8c8e937975c6a",
+]
 vocab_repo = "Qwen/Qwen3.5-9B"
 vocab_revision = "c202236235762e1c871ad0ccb60c8ee5ba337b9a"
 margin_route = "unmeasured"
@@ -59,6 +111,39 @@ sha256 = "ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003"
 
 [qwen3_5_9b_openrouter_primeintellect]  # same model, same vocabulary artifact
 admission = "bounded"
+fixed_segments = [
+  "0224090770a866104cd542736b78cb1316addfbd00773e5c1f7ef3b88bf8bce2",
+  "05937d977c309474143292ee1b9da792599d19dc4f7fd14e3227346889c8b7f6",
+  "17b92c8b0cfb301deefd9ca1ca84dc8054e47e3583b8986f00b42695ccbaf4e0",
+  "333df3971b7528d16fb07ce25ca09eae64f8b164c7bb1b1107fa3c7b9ac90ed1",
+  "35425f720b6d4257ccc8db4d90c2f2238c7bcc28067658f102739eadc4811565",
+  "35d111e71388dadf04ae99557b4b545396cb6301090557f1f3dab965c17d630f",
+  "38625a0c4ecf7c66abc5debe2a9eea49cc5b630ae631bfdb77408fd899aeda21",
+  "3895f830fdb4fb59e94786f55285709a5d25ed5e7f9a318ffb5f51e212d3f433",
+  "3cd00677bbbc1fc404b6ed805c001ecf9b48bf55d87aca66e179b97c472577c8",
+  "462df58e2d5042da3f947973696d5332ffa4ef6d607e275c9cfcc10304ef1695",
+  "4af0eb45c2884ed553fe11d07090ae736bad11ca5520189a23c7c9781b522377",
+  "51d6374f760fa07ae36fad95a947928b48599e3a2e207c70a2c5857526de6aab",
+  "60987719373ee5651e9e7cafd948a872c271ee7ca684b096983c0114f2ae4eab",
+  "6a89092dd00139e6e244f35c89c666ea28b826fc8a54980066274745e4a3b874",
+  "6b8d9ad742570d9acaffc3e75202bde06d8063e4edc6adc7808bbde2cc71aaa5",
+  "729636565b60a61681f5776082bf552992ff938989a3f3452e23cb5bda8cecca",
+  "9022ec7e78a36205c235fa03fa83d4834b837b99f52d17cb25b96ac8a31afeb0",
+  "93bbf5b226328c505b2faa0bdf79c84363788ca9b298c74955bc2794ebd31a11",
+  "997a02b146b70e01254c48024546e688d3232a989fed6f73007e3a6a4c0e3aab",
+  "9b5c726f3a7b266f63e30dd1b475c06153e3cc6e9b4b1b9d6a46809dc64f301e",
+  "9f48530565fe30392cc5c3d029b538ff99c24e3aacc186845261bafd6adba984",
+  "b252181738996ffd737d232d3f5353927a6cf5db5810ff62a3d7a92eff45619c",
+  "bd964908dc5936dc5fef25f28b71e5fcd55e4ca485c972e2ff76f626631b3561",
+  "bf4d1d316ad8bae84f2790768f01b482e783221bdd6b8af6afa1e5baa2c5693c",
+  "c4f82fbed1c23015c5968c769e6f18872a209bf823bed5e4cb3cd501d0c4f0cc",
+  "d88ce12cb7cc383fbf01bbf6216a8a04c2aab1e57674114879db24e6b0ad0a10",
+  "d99b3a73d3758006e1a95db1ff9f14a527ce4ec6d2d929617292f4ef4aab11d0",
+  "d9ac5df47a69f977e4e108384ee722a6724da98c23e9666c6d7dabe20f5f738d",
+  "e5f65e9dffa2cce7523d2a2ae80225c897c86654c474a13e0b545bfb1fd2b098",
+  "ed0e186a0c1030345d42e1e16e5946c4b22f7f8441cd7a8f13a1c66b92e71c5f",
+  "fc84f9d7e25cb9b2e8e211786fd74e91c5484b5f2917e536dbe8c8e937975c6a",
+]
 vocab_repo = "Qwen/Qwen3.5-9B"
 vocab_revision = "c202236235762e1c871ad0ccb60c8ee5ba337b9a"
 margin_route = "openrouter_primeintellect"
@@ -80,6 +165,39 @@ sha256 = "ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003"
 
 [qwen3_5_9b_openrouter_deepinfra]  # same model, same vocabulary artifact
 admission = "bounded"
+fixed_segments = [
+  "0224090770a866104cd542736b78cb1316addfbd00773e5c1f7ef3b88bf8bce2",
+  "05937d977c309474143292ee1b9da792599d19dc4f7fd14e3227346889c8b7f6",
+  "17b92c8b0cfb301deefd9ca1ca84dc8054e47e3583b8986f00b42695ccbaf4e0",
+  "333df3971b7528d16fb07ce25ca09eae64f8b164c7bb1b1107fa3c7b9ac90ed1",
+  "35425f720b6d4257ccc8db4d90c2f2238c7bcc28067658f102739eadc4811565",
+  "35d111e71388dadf04ae99557b4b545396cb6301090557f1f3dab965c17d630f",
+  "38625a0c4ecf7c66abc5debe2a9eea49cc5b630ae631bfdb77408fd899aeda21",
+  "3895f830fdb4fb59e94786f55285709a5d25ed5e7f9a318ffb5f51e212d3f433",
+  "3cd00677bbbc1fc404b6ed805c001ecf9b48bf55d87aca66e179b97c472577c8",
+  "462df58e2d5042da3f947973696d5332ffa4ef6d607e275c9cfcc10304ef1695",
+  "4af0eb45c2884ed553fe11d07090ae736bad11ca5520189a23c7c9781b522377",
+  "51d6374f760fa07ae36fad95a947928b48599e3a2e207c70a2c5857526de6aab",
+  "60987719373ee5651e9e7cafd948a872c271ee7ca684b096983c0114f2ae4eab",
+  "6a89092dd00139e6e244f35c89c666ea28b826fc8a54980066274745e4a3b874",
+  "6b8d9ad742570d9acaffc3e75202bde06d8063e4edc6adc7808bbde2cc71aaa5",
+  "729636565b60a61681f5776082bf552992ff938989a3f3452e23cb5bda8cecca",
+  "9022ec7e78a36205c235fa03fa83d4834b837b99f52d17cb25b96ac8a31afeb0",
+  "93bbf5b226328c505b2faa0bdf79c84363788ca9b298c74955bc2794ebd31a11",
+  "997a02b146b70e01254c48024546e688d3232a989fed6f73007e3a6a4c0e3aab",
+  "9b5c726f3a7b266f63e30dd1b475c06153e3cc6e9b4b1b9d6a46809dc64f301e",
+  "9f48530565fe30392cc5c3d029b538ff99c24e3aacc186845261bafd6adba984",
+  "b252181738996ffd737d232d3f5353927a6cf5db5810ff62a3d7a92eff45619c",
+  "bd964908dc5936dc5fef25f28b71e5fcd55e4ca485c972e2ff76f626631b3561",
+  "bf4d1d316ad8bae84f2790768f01b482e783221bdd6b8af6afa1e5baa2c5693c",
+  "c4f82fbed1c23015c5968c769e6f18872a209bf823bed5e4cb3cd501d0c4f0cc",
+  "d88ce12cb7cc383fbf01bbf6216a8a04c2aab1e57674114879db24e6b0ad0a10",
+  "d99b3a73d3758006e1a95db1ff9f14a527ce4ec6d2d929617292f4ef4aab11d0",
+  "d9ac5df47a69f977e4e108384ee722a6724da98c23e9666c6d7dabe20f5f738d",
+  "e5f65e9dffa2cce7523d2a2ae80225c897c86654c474a13e0b545bfb1fd2b098",
+  "ed0e186a0c1030345d42e1e16e5946c4b22f7f8441cd7a8f13a1c66b92e71c5f",
+  "fc84f9d7e25cb9b2e8e211786fd74e91c5484b5f2917e536dbe8c8e937975c6a",
+]
 vocab_repo = "Qwen/Qwen3.5-9B"
 vocab_revision = "c202236235762e1c871ad0ccb60c8ee5ba337b9a"
 margin_route = "openrouter_deepinfra"

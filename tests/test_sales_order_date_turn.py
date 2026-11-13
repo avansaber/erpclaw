@@ -58,7 +58,7 @@ def test_invoice_tomorrow_keeps_the_date_question_and_notice(engine):
     question = events[0]
     notice = "Invoices are dated today; choosing an invoice date isn't available yet."
     assert question["code"] == "date_choice_missing", question
-    assert question["text"] == f"{notice} Shall I date it today, or leave it?", question
+    assert question["text"] == "An invoice can't be dated in the future. Shall I date it today, or leave it?", question
     assert question["options"] == ["Date it today", "Leave it"], question
     assert [c["label"] for c in question["choices"]] == ["Date it today", "Leave it"], question
 

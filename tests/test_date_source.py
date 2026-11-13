@@ -15,7 +15,7 @@ from erpclaw_assistant.model import Reply, ScriptedModel, ToolCall, call
 from erpclaw_core import approvals
 from erpclaw_core import models as m
 from erpclaw_core.common import Refusal
-from erpclaw_core.plugins import REGISTRY
+from erpclaw_core.plugins import REGISTRY, disable_plugin, install_plugin
 
 DEFAULT_LINE = ["Date source", "No date was read from your words; the card uses its default date."]
 DRAFT_LINE = ["Date source", "No date applies: cancelling a draft changes no books."]
@@ -62,11 +62,10 @@ def test_an_invoice_with_a_date_written_is_stated_as_its_default_beside_its_noti
     invoice = Reply("", [call("create_invoice", customer="Hooli", items=[{"item": "copper wire", "quantity": 5}])])
     a = Assistant(engine, ScriptedModel([invoice, invoice]))
     ask = a.turn("inv", "tomorrow invoice Hooli for 5 copper wire")
-    assert [e["code"] for e in ask] == ["date_choice_missing"], ask  # asked first, never dated otherwise unasked
-    ev = a.turn("inv", "Date it today")
-    assert any(e["type"] == "not_done" and e.get("part") == "date" for e in ev), ev
-    card = next(e for e in ev if e["type"] == "card")
-    assert card["card"]["date_source"] == {"default": True} and card["card"]["lines"][-1] == DEFAULT_LINE
+    assert [e["code"] for e in ask] == ["date_choice_missing"], ask
+    assert ask[0]["type"] == "ask" and ask[0]["text"] == (
+        "An invoice can't be dated in the future. Shall I date it today, or leave it?")
+    assert [c["label"] for c in ask[0]["choices"]] == ["Date it today", "Leave it"]
 
 
 def test_cancelling_a_posted_invoice_states_its_reversal_date_and_source(engine):
@@ -96,13 +95,32 @@ def test_every_switched_on_write_drafted_by_the_assistant_states_its_date_source
     from erpclaw_sales import tables as t
 
     with engine.begin() as conn:
+        disable_plugin(conn, "email_folder")
+    install_plugin(engine, "email")
+    with engine.begin() as conn:
         ctx = company_ctx(conn)
         cust = dict(conn.execute(select(m.party).where(m.party.c.name == "Hooli")).mappings().one())
         r = s.record_payment(ctx, s.plan_payment(ctx, cust, Decimal("100"), ctx.today, oldest_first=True))
         number = conn.execute(select(t.payment.c.number).where(t.payment.c.id == r["id"])).scalar_one()
+    from test_supplier_payment_reversal_contract import supplier_reversal_scenario, delivery_reversal_scenario
+
+    supplier_args = {"payment": "SPAY-2026-00001"}
+    delivery_args = {"delivery": "GR-2026-00001"}
+    reversal_scenarios = {"reverse_supplier_payment": supplier_reversal_scenario,
+                          "reverse_goods_received": delivery_reversal_scenario}
     drafted = {
+        "update_email_sender": ("Update email sender settings for Company Books",
+                                call("update_email_sender", from_address="books@example.test",
+                                     display_name="Company Books", smtp_host="smtp.example.test", port=587,
+                                     security="starttls", username="books", reply_to="reply@example.test")),
         "add_customer": ("add a customer called Lakeside Cafe",
                          ToolCall("customer", "add_customer", {"name": "Lakeside Cafe"})),
+        "add_supplier": ("add a supplier called Copperline Metals",
+                         ToolCall("supplier", "add_supplier", {"name": "Copperline Metals"})),
+        "add_cash_account": ("add a cash account",
+                             ToolCall("cash", "add_cash_account", {})),
+        "record_opening_position": ("Record an opening position with 5.00 in Bank",
+                                    call("record_opening_position", bank_lines=[{"account": "Bank", "amount": "5.00"}])),
         "add_item": ("add an item called Bookkeeping, sold by the hour at 80",
                      ToolCall("item", "add_item", {"name": "Bookkeeping", "unit": "hour", "price": "80"})),
         "create_invoice": ("invoice Hooli for 5 copper wire",
@@ -111,7 +129,13 @@ def test_every_switched_on_write_drafted_by_the_assistant_states_its_date_source
         "record_payment": ("Hooli paid 100", call("record_payment", customer="Hooli", amount=100)),
         "cancel_invoice": ("cancel INV-2026-00003", call("cancel_invoice", invoice="INV-2026-00003")),
         "reverse_payment": (f"reverse {number}", call("reverse_payment", payment=number)),
+        "reverse_supplier_payment": ("reverse supplier payment SPAY-2026-00001", call("reverse_supplier_payment", **supplier_args)),
+        "reverse_goods_received": ("reverse goods received GR-2026-00001", call("reverse_goods_received", **delivery_args)),
     }
+    from core_writes.scenarios import resend_message
+
+    resend_args, resend_words = resend_message(None, engine)
+    drafted["resend_message"] = (resend_words, call("resend_message", **resend_args))
     # These sales and stock writes ship switched off; the step that switches them on adds them to
     # `drafted`, drafted by the assistant, rather than pinning them here.
     for name in ("create_sales_order", "deliver_order", "create_credit_note", "record_opening_stock",
@@ -120,8 +144,10 @@ def test_every_switched_on_write_drafted_by_the_assistant_states_its_date_source
     writes = {n for n, c in REGISTRY.contracts.items() if c.effect != "read" and not c.planned}
     # Setup refuses these ready demo books; its date source is checked on pending books in
     # test_company_setup_drafted_on_pending_books_states_that_no_date_applies below.
-    assert writes <= set(drafted) | {"set_up_company"}, writes - set(drafted) - {"set_up_company"}
+    assert writes == set(drafted) | {"set_up_company"}, writes ^ (set(drafted) | {"set_up_company"})
     for name in sorted(writes - {"set_up_company"}):
+        if name in reversal_scenarios:
+            reversal_scenarios[name](engine)
         said, model_call = drafted[name]
         c = card_of(engine, said, model_call, answers=("A service I sell",) if name == "add_item" else ())
         assert c["card"].get("date_source") and c["card"]["lines"][-1][0] == "Date source", (name, c["card"])
@@ -129,6 +155,10 @@ def test_every_switched_on_write_drafted_by_the_assistant_states_its_date_source
             reason = "adding a customer" if name == "add_customer" else "adding an item"
             assert c["card"]["date_source"] == {"not_applicable": True}
             assert c["card"]["lines"][-1] == ["Date source", f"No date applies: {reason} posts nothing."]
+        elif name in {"add_supplier", "update_email_sender", "add_cash_account", "resend_message"}:
+            reason = REGISTRY.contracts[name].no_date_reason["en"]
+            assert c["card"]["date_source"] == {"not_applicable": True}
+            assert c["card"]["lines"][-1] == ["Date source", f"No date applies: {reason}"]
 
 
 def test_company_setup_drafted_on_pending_books_states_that_no_date_applies(engine):

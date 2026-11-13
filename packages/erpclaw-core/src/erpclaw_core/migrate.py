@@ -41,7 +41,9 @@ CORE_TABLES = ("currency", "company", "fiscal_year", "fiscal_period", "account",
                # revision 0015: supplier payables
                "supplier_payable", "supplier_payment", "supplier_payment_allocation",
                # revision 0016: principal sign-in and session history
-               "principal_sign_in", "principal_session")
+               "principal_sign_in", "principal_session",
+               # revision 0017: hosted model consent
+               "hosted_books_consent")
 
 
 def config(connection: Connection | None = None, *, plugins: bool = True,

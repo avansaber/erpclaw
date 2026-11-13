@@ -1,18 +1,23 @@
-"""Emailing, the invoice list and the reports are switched off in this release, refused with the planned reply;
-payments, cancelling and reversing are on, and are switched off here to test the same path on them.
+"""Emailing, the invoice list, reports and supplier and goods reversals are switched off in this release;
+customer payments, cancelling and reversing are on, and are switched off here to test the same path on them.
 
-Each is refused as planned for the core release wherever it is asked for, and the books do not change: a book diff
+Each is refused as planned for its release wherever it is asked for, and the books do not change: a book diff
 of every table is empty. Each comes back on through its own specification, review and build.
 """
 from __future__ import annotations
 
+import json
 import re
+from decimal import Decimal
+
+from sqlalchemy import select
 
 import pytest
 from fastapi.testclient import TestClient
 
 from bookdiff import assert_changes, snapshot
 from erpclaw_api.app import create_app
+from erpclaw_assistant.graph import Assistant
 from erpclaw_assistant.model import Reply, ScriptedModel, call
 from erpclaw_core import approvals
 from erpclaw_core.common import Refusal
@@ -24,8 +29,12 @@ OFF = {  # each switched-off operation, called as the model would call its tool
     "invoice list": call("list_invoices"),
     "figures": call("get_metric", metric="receivables"),
 }
-PLANNED = "is not in ERPClaw yet: it is planned for the core release"
+PLANNED = "not in ERPClaw yet."
 PAYMENTS = ("record_payment", "cancel_invoice", "reverse_payment")
+REVERSALS = [
+    ("reverse_supplier_payment", {"payment": "SPAY-2026-00001"}, "later"),
+    ("reverse_goods_received", {"delivery": "GR-2026-00001"}, "v3.0"),
+]
 
 
 @pytest.fixture
@@ -39,7 +48,8 @@ def payments_off(as_released, monkeypatch):
 
 def planned(text: str) -> bool:
     """A planned reply, whether it names one thing or figures and reports."""
-    return re.search(r"(is|are) not in ERPClaw yet: (it is|they are) planned for the core release", text) is not None
+    assert "planned for" not in text
+    return re.search(r"not in ERPClaw yet\.", text) is not None
 
 
 def chat(engine, replies, said="do it"):
@@ -51,6 +61,7 @@ def chat(engine, replies, said="do it"):
 @pytest.mark.parametrize("what", sorted(OFF))
 def test_a_switched_off_operation_called_directly_is_refused_as_planned_and_changes_nothing(engine, payments_off,
                                                                                              what):
+    Assistant(engine, ScriptedModel([]))
     before = snapshot(engine)
     events = chat(engine, [Reply("", [OFF[what]])])
     assert [e.get("outcome") for e in events] == ["c"] and planned(events[0]["text"]), events
@@ -71,6 +82,7 @@ def test_a_switched_off_operation_chosen_through_the_catalogue_is_planned_and_ch
     with engine.connect() as conn:
         found = {e.id: e for e in cat.find_capability(conn, request_)}
     assert found[entry].state == "planned" and found[entry].wave == "Core"
+    Assistant(engine, ScriptedModel([]))
     before = snapshot(engine)
     events = chat(engine, [Reply("", [call("find_capability", request=request_)]),
                            Reply("", [call("choose_capability", pick=entry)])], request_)
@@ -86,9 +98,137 @@ def test_a_switched_off_operation_chosen_through_the_catalogue_is_planned_and_ch
 def test_no_card_is_made_for_a_switched_off_write(engine, monkeypatch, contract, args):
     monkeypatch.setattr(REGISTRY.contracts[contract], "planned", "Core")  # switched off for the test
     before = snapshot(engine)
-    with pytest.raises(Refusal, match=PLANNED):
+    with pytest.raises(Refusal, match=re.escape(PLANNED)):
         approvals.propose(engine, REGISTRY.contracts[contract], args)
     assert snapshot(engine) == before
+
+
+@pytest.mark.parametrize("name, args, wave", REVERSALS)
+@pytest.mark.parametrize("where", ["tool", "catalogue", "propose"])
+def test_reversals_are_planned_wherever_asked_and_change_nothing(engine, as_released, name, args, wave, where):
+    from erpclaw_core import catalogue as cat
+
+    contract = REGISTRY.contracts[name]
+    assert contract.planned == wave
+    expected = f"{name.replace('_', ' ').capitalize()} is not in ERPClaw yet."
+    entry = f"op.{name}"
+    request_ = name.replace("_", " ")
+    with engine.connect() as conn:
+        entries = {e.id: e for e in cat.catalogue(conn)}
+        assert (entries[entry].state, entries[entry].wave, entries[entry].target) == ("planned", wave, name)
+    Assistant(engine, ScriptedModel([]))
+    before = snapshot(engine)
+    if where == "propose":
+        with pytest.raises(Refusal) as err:
+            approvals.propose(engine, contract, args)
+        assert err.value.code == "planned" and str(err.value) == expected
+    else:
+        replies = ([Reply("", [call(name, **args)])] if where == "tool" else [
+            Reply("", [call("find_capability", request=request_)]),
+            Reply("", [call("choose_capability", pick=entry)]),
+        ])
+        model = ScriptedModel(replies)
+        client = TestClient(create_app(engine, model, embedded_owner=True))
+        cid = client.post("/v1/conversations").json()["id"]
+        events = client.post(f"/v1/conversations/{cid}/messages", json={"text": request_}).json()["events"]
+        assert len(events) == 1 and events[0]["outcome"] == "c", events
+        assert events[0]["text"] == expected and events[0]["capability"] == f"planned.{entry}"
+        assert model.tools_seen and all(name not in tools for tools in model.tools_seen)
+    assert_changes(before, snapshot(engine), {})
+
+
+@pytest.mark.parametrize("request_", ["reverse a supplier payment", "undo the payment to Acme Supplies"])
+def test_supplier_reversal_words_get_the_supplier_reversal_reply(engine, as_released, request_):
+    from erpclaw_core import catalogue as cat
+
+    with engine.connect() as conn:
+        candidates = cat.find_capability(conn, request_)
+        named = cat.named_by_synonym(conn, request_)
+        decision = cat.decide(candidates, "op.reverse_supplier_payment", named=named)
+    assert decision.text == "Reverse supplier payment is not in ERPClaw yet."
+    events = chat(engine, [Reply("", [call("find_capability", request=request_)]),
+                           Reply("", [call("choose_capability", pick="op.reverse_supplier_payment")])], request_)
+    assert len(events) == 1 and events[0]["text"] == decision.text
+    assert events[0]["capability"] == "planned.op.reverse_supplier_payment"
+
+
+@pytest.mark.parametrize("request_", ["reverse a supplier payment", "undo the payment to Acme Supplies"])
+def test_direct_customer_reversal_call_answers_supplier_reversal_as_planned(engine, as_released, request_):
+    from erpclaw_core import models as m
+    from erpclaw_core.common import company_ctx
+    from erpclaw_sales import service, tables
+
+    with engine.begin() as conn:
+        ctx = company_ctx(conn)
+        customer = dict(conn.execute(select(m.party).where(m.party.c.name == "Hooli")).mappings().one())
+        payment = service.record_payment(ctx, service.plan_payment(ctx, customer, Decimal("100"), ctx.today,
+                                                                   oldest_first=True))
+        number = conn.execute(select(tables.payment.c.number).where(tables.payment.c.id == payment["id"])).scalar_one()
+    Assistant(engine, ScriptedModel([]))
+    before = snapshot(engine)
+    events = chat(engine, [Reply("", [call("reverse_payment", payment=number)])], request_)
+    assert len(events) == 1 and events[0].get("outcome") == "c", events
+    assert events[0]["text"] == "Reverse supplier payment is not in ERPClaw yet."
+    assert events[0]["capability"] == "planned.op.reverse_supplier_payment"
+    assert all(e["type"] != "card" for e in events)
+    assert_changes(before, snapshot(engine), {})
+
+
+@pytest.mark.parametrize("request_", ["reverse the payment from Hooli", "reverse a payment"])
+def test_direct_customer_reversal_call_keeps_normal_resolution(engine, as_released, request_):
+    events = chat(engine, [Reply("", [call("reverse_payment", payment="PAY-2026-09999")])], request_)
+    assert len(events) == 1 and events[0]["type"] == "ask", events
+    assert events[0].get("capability") != "planned.op.reverse_supplier_payment"
+
+
+@pytest.mark.parametrize("request_", ["reverse the payment from Hooli", "reverse a payment"])
+def test_customer_reversal_words_reach_the_customer_operation(engine, as_released, request_):
+    from erpclaw_core import catalogue as cat
+
+    with engine.connect() as conn:
+        candidates = cat.find_capability(conn, request_)
+        named = cat.named_by_synonym(conn, request_)
+        decision = cat.decide(candidates, "op.reverse_payment", named=named)
+    assert decision.outcome == "a" and decision.entry.target == "reverse_payment"
+
+
+@pytest.mark.parametrize("request_", ["reverse a supplier payment", "undo the payment to Acme Supplies"])
+def test_supplier_reversal_binding_comes_from_override_data(engine, as_released, tmp_path, monkeypatch, request_):
+    from erpclaw_core import catalogue as cat
+
+    with engine.connect() as conn:
+        named = cat.named_by_synonym(conn, request_)
+        assert any(e.id == "op.reverse_supplier_payment" and "op.reverse_payment" in e.overrides for e, _ in named)
+        records = json.loads(cat.OVERRIDES.read_text())
+        records = [r for r in records if r["target"] != "op.reverse_supplier_payment"]
+        overrides = tmp_path / "overrides.json"
+        overrides.write_text(json.dumps(records))
+        monkeypatch.setattr(cat, "OVERRIDES", overrides)
+        named = cat.named_by_synonym(conn, request_)
+        assert not any(e.id == "op.reverse_supplier_payment" and e.overrides for e, _ in named)
+
+
+@pytest.mark.parametrize("request_", ["reverse a supplier payment", "undo the payment to Acme Supplies"])
+def test_direct_reversal_guard_uses_override_data(engine, as_released, tmp_path, monkeypatch, request_):
+    from erpclaw_core import catalogue as cat
+
+    with engine.connect() as conn:
+        decision = cat.planned_instead(conn, "reverse_payment", request_)
+        assert decision.capability == "planned.op.reverse_supplier_payment"
+        records = [r for r in json.loads(cat.OVERRIDES.read_text()) if r["target"] != "op.reverse_supplier_payment"]
+        overrides = tmp_path / "overrides.json"
+        overrides.write_text(json.dumps(records))
+        monkeypatch.setattr(cat, "OVERRIDES", overrides)
+        assert cat.planned_instead(conn, "reverse_payment", request_) is None
+
+
+@pytest.mark.parametrize("request_", ["undo the payment to", "reverse the supplier invoice"])
+def test_supplier_reversal_binding_requires_complete_trigger_and_payment(engine, as_released, request_):
+    from erpclaw_core import catalogue as cat
+
+    with engine.connect() as conn:
+        named = cat.named_by_synonym(conn, request_)
+    assert not any(e.id == "op.reverse_supplier_payment" and e.overrides for e, _ in named)
 
 
 def test_a_card_made_before_its_operation_was_switched_off_does_not_commit(engine, monkeypatch):
@@ -115,12 +255,13 @@ def test_the_model_is_not_offered_the_switched_off_tools(engine, payments_off):
         enabled = enabled_plugins(conn)
     offered = {c.name for c in REGISTRY.contracts.values() if REGISTRY.contract_plugin[c.name] in enabled
                and not c.planned}
-    assert offered == {"set_up_company", "add_customer", "add_item", "create_invoice", "submit_invoice"}
+    assert offered == {"set_up_company", "add_customer", "add_supplier", "add_cash_account", "add_item", "list_customers", "list_suppliers", "list_items", "create_invoice", "submit_invoice"}
 
 
 def test_an_invoice_the_owner_asks_to_email_is_drafted_without_the_email_and_says_so(engine, as_released):
     """Through chat the resolution step removes the switched-off option and says so beside the card:
     the card is made, nothing is queued, and an API caller sending email=true is still refused whole (below)."""
+    Assistant(engine, ScriptedModel([]))
     before = snapshot(engine)
     events = chat(engine, [Reply("", [call("create_invoice", customer="Wayne Enterprises", items=[
         {"item": "circuit board", "quantity": 2}], email=True)])],
@@ -132,7 +273,7 @@ def test_an_invoice_the_owner_asks_to_email_is_drafted_without_the_email_and_say
 
 def test_an_api_caller_asking_to_email_an_invoice_is_refused_whole_and_saves_nothing(engine, as_released):
     before = snapshot(engine)
-    with pytest.raises(Refusal, match="Emailing an invoice " + PLANNED):
+    with pytest.raises(Refusal, match=re.escape("Emailing an invoice is not in ERPClaw yet.")):
         approvals.propose(engine, REGISTRY.contracts["create_invoice"], {
             "customer": "Wayne Enterprises", "items": [{"item": "circuit board", "quantity": 2}], "email": True})
     assert snapshot(engine) == before

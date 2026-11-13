@@ -1,6 +1,8 @@
 """Measures, periods, email through the outbox."""
 from datetime import date
+from email.message import EmailMessage
 from pathlib import Path
+import re
 
 import pytest
 from sqlalchemy import select
@@ -9,9 +11,37 @@ from erpclaw_core import approvals
 from erpclaw_core import models as m
 from erpclaw_core.common import Refusal, company_ctx
 from erpclaw_core.core_contracts import GetMetric, get_metric
-from erpclaw_core.outbox import deliver_pending
+from erpclaw_core.outbox import SendOutcome, SenderSnapshot, deliver_pending
 from erpclaw_core.periods import resolve
-from erpclaw_core.plugins import REGISTRY
+from erpclaw_core.plugins import REGISTRY, disable_plugin, install_plugin
+from slot_support import replace_filler
+
+
+@pytest.fixture
+def email_delivery(engine, monkeypatch, tmp_path):
+    """Capture the email transport's message locally, keeping the real outbox path."""
+    with engine.begin() as conn:
+        disable_plugin(conn, "email_folder")
+    install_plugin(engine, "email")
+
+    def message_sender(ctx):
+        return SenderSnapshot("books@stark.example", "Stark Books", None, None)
+
+    def send_message(settings, msg, mark_data):
+        if not mark_data():
+            return SendOutcome("before_data", "lost_ownership", None, "")
+        message = EmailMessage()
+        message["To"] = msg.recipient
+        message["From"] = msg.from_address
+        message["Subject"] = msg.subject
+        message["Message-ID"] = msg.message_id
+        message.set_content(msg.body)
+        path = tmp_path / f"{msg.id}.eml"
+        path.write_bytes(bytes(message))
+        return SendOutcome("after_data", "accepted", 250, str(path))
+
+    replace_filler(monkeypatch, "message_sender", message_sender)
+    replace_filler(monkeypatch, "send_message", send_message)
 
 
 def metric(engine, **kw):
@@ -56,7 +86,7 @@ def test_20b_unknown_phrase_refused():
     assert (p.start, p.end) == (date(2024, 4, 1), date(2025, 3, 31))
 
 
-def test_21_email_queued_then_written_to_the_folder(engine):
+def test_21_email_queued_then_handed_to_the_mail_server(engine, email_delivery):
     card = approvals.propose(engine, REGISTRY.contracts["create_invoice"],
                              {"customer": "Wayne Enterprises", "items": [{"item": "circuit boards", "quantity": 2}],
                               "email": True})
@@ -66,8 +96,12 @@ def test_21_email_queued_then_written_to_the_folder(engine):
     with engine.connect() as conn:
         assert conn.execute(select(m.outbox.c.status)).scalar_one() == "queued"
     done = deliver_pending(engine)
-    assert [d["status"] for d in done] == ["accepted"]  # the folder took it; "delivered" is never claimed
-    assert done[0]["text"].startswith("Written to the mail folder at ")
+    assert [d["status"] for d in done] == ["accepted"]  # the mail server took it; "delivered" is never claimed
+    assert re.fullmatch(
+        r"Handed to the mail server at [0-9]{2}:[0-9]{2} on [0-9]{2} [A-Z][a-z]{2} [0-9]{4}\. "
+        r"Delivery to the inbox is not confirmed\.",
+        done[0]["text"],
+    )
     with engine.connect() as conn:
         path = conn.execute(select(m.outbox_attempt.c.text)).scalar_one()
     eml = Path(path).read_text()

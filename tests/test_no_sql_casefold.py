@@ -2,6 +2,8 @@
 ilike, notilike, icontains, istartswith and iendswith, which compile to ILIKE or to lower()), no case-blind regular
 expression match and no COLLATE: a comparison without regard to case goes through the stored key
 (erpclaw_core.textkey), compared by equality, because the database's case rules are not Python's.
+Engine-issued document numbers instead normalise the owner's input in Python to their fixed issued form,
+then compare the stored column by plain equality.
 
 Every text column of the books can hold the owner's words, so the calls themselves are refused, on any column. It
 reads source: SQL assembled at run time from pieces is not found here, and code review covers that."""

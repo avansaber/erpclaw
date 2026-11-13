@@ -25,6 +25,16 @@ from typing_extensions import Annotated
 from .common import Ctx
 from .money import MINOR_UNITS, fmt, fmt_rate, quantize, to_decimal
 
+
+def __getattr__(name: str):
+    # Core contracts imports these types; resolve its text binding after initialization.
+    if name == "say":
+        from .core_contracts import say
+        globals()[name] = say
+        return say
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 Effect = Literal["read", "draft", "write", "destructive"]  # unclassified fails closed
 
 
@@ -273,9 +283,18 @@ def check_answer(contract: "Contract", result: Result) -> list[dict]:
     from .common import Refusal
 
     check_amount_names(contract, result.amounts)
-    shown = [_shown(a.kind, a.value, a.currency) for a in result.amounts]
-    if None in shown or not _in_order(result.text, shown):
-        raise Refusal("That answer's amounts do not match its text; nothing was shown.", "answer_amounts")
+    at = 0
+    for a in result.amounts:
+        shown = _shown(a.kind, a.value, a.currency)
+        # A stored unit price may retain trailing zeros and omit grouping. Both
+        # representations carry precisely the same value, without rounding.
+        variants = [shown] if shown is not None else []
+        if shown is not None and a.kind == "unit_price":
+            variants.append(a.value)
+        hits = [hit for value in variants if (hit := _figure(value).search(result.text, at))]
+        if not hits:
+            raise Refusal("That answer's amounts do not match its text; nothing was shown.", "answer_amounts")
+        at = min(hits, key=lambda hit: hit.start()).end()
     return amount_dicts(result.amounts)
 
 
@@ -416,9 +435,8 @@ def _inline_refs(schema: dict) -> dict:
 
 def planned_text(name: str, wave: str, plural: bool = False) -> str:
     """The plain reply for something planned and not yet in ERPClaw; no figure can appear in it."""
-    when = "the core release" if wave == "Core" else f"release {wave}"
-    verb, it = ("are", "they are") if plural else ("is", "it is")
-    return f"{name[0].upper()}{name[1:]} {verb} not in ERPClaw yet: {it} planned for {when}."
+    say = __getattr__("say")
+    return say("planned_plural" if plural else "planned_singular", name=f"{name[0].upper()}{name[1:]}")
 
 
 # How a planned reply names figures and reports, whichever measure was asked for: never by a measure's own title,

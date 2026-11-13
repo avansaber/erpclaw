@@ -237,10 +237,13 @@ CONFIRM_WAYNE = dict(expect=["Wayne Enterprises"], ask_code="customer_ambiguous"
                                             why="invoicing is switched on, and the resolution step confirms 'Wayne' "
                                                 "first; after the answer the card comes with a notice that emailing "
                                                 "is not available yet"))
-PAYMENTS_OFF = RESOLVED.format(old="planned", new="planned", why="unchanged: payments stay switched off until their "
-                               "own release, when these ask which open invoice")
+ASK_PAYMENT_INVOICE = dict(expect=["INV-2026-00003", "INV-2026-00006", "oldest first"],
+                           ask_code="invoice_ambiguous",
+                           reason=RESOLVED.format(old="planned", new="ask",
+                                                  why="payments are switched on, and with two open invoices and none "
+                                                      "named the engine asks which, or oldest first"))
 
-# Switched off in this release (payments, the figures, emailing an invoice): the owner is told plainly that it is
+# Switched off in this release (the figures, emailing an invoice): the owner is told plainly that it is
 # planned, nothing changes in the books, and no figure appears. Each case returns to its working form when its
 # operation comes back on through its own specification and review.
 PLANNED = dict(expect=["not in ERPClaw yet"], forbid_regex=[MONEY.pattern])
@@ -256,7 +259,7 @@ CASES = [
     Case("W2", "invoice ABC for 3 circuit boards", "ask", expect=["ABC"]),
     Case("W3", "invoice Hooli for 500 copper wire", "write",
          card_must=["Hooli", "500 x Copper Wire", "14,000.00"], added=INVOICE, check=_check_w3),
-    Case("W4", "record a payment of 500 from Pied Piper by bank transfer", "planned", **PLANNED, reason=PAYMENTS_OFF),
+    Case("W4", "record a payment of 500 from Pied Piper by bank transfer", "ask", **ASK_PAYMENT_INVOICE),
     Case("W5", "invoice Wayne for 2 circuit boards and email it", "confirm", **CONFIRM_WAYNE),
 ]
 
@@ -266,7 +269,7 @@ CASES += [
     Case("P1", "Acme took 5 copper wire, bill them please", "confirm", **CONFIRM_ACME),
     Case("P2", "what's still outstanding from customers?", "planned", **PLANNED),
     Case("P3", "total revenue for calendar 2025", "planned", **PLANNED),
-    Case("P4", "Pied Piper paid us 500 via wire", "planned", **PLANNED, reason=PAYMENTS_OFF),
+    Case("P4", "Pied Piper paid us 500 via wire", "ask", **ASK_PAYMENT_INVOICE),
     Case("P5", "bill hooli five hundred copper wire", "write",
          card_must=["Hooli", "500 x Copper Wire", "14,000.00"], added=INVOICE, check=_check_w3),
     Case("P6", "send Wayne an invoice for 2 circuit boards", "confirm", **CONFIRM_WAYNE),

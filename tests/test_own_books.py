@@ -357,7 +357,9 @@ def test_a_bootstrap_that_stops_after_its_schema_leaves_nothing_and_the_next_run
     ("Invoice Acme Corporation for 5 copper wire",
      Reply("", [tool("create_invoice", customer="Acme Corporation", items=[{"item": "copper wire", "quantity": 5}])])),
     ("Add a customer called Acme Corp", Reply("", [tool("add_customer", name="Acme Corp")])),
-], ids=["greeting", "invoice", "customer"])
+    ("Add a supplier called Copperline Metals", Reply("", [tool("add_supplier", name="Copperline Metals")])),
+    ("Add a cash account", Reply("", [tool("add_cash_account")])),
+], ids=["greeting", "invoice", "customer", "supplier", "cash account"])
 def test_while_pending_every_request_gets_the_setup_question_once_and_no_card(engine, words, reply):
     own_books(engine)
     c, cid, model = client(engine, lambda _: reply)
@@ -383,6 +385,8 @@ def test_while_pending_a_read_answers_that_the_books_are_not_set_up(engine):
     ("create_invoice", {"customer": "Acme Corporation", "items": [{"item": "copper wire", "quantity": 5}]}),
     ("record_payment", {"customer": "Acme Corporation", "amount": "100.00", "oldest_first": True, "method": "check"}),
     ("add_customer", {"name": "Acme Corp"}),
+    ("add_supplier", {"name": "Copperline Metals"}),
+    ("add_cash_account", {}),
     ("add_item", {"name": "Consulting", "unit": "hour", "price": "80.00"}),
 ])
 def test_while_pending_propose_refuses_every_operation_but_set_up_company_and_writes_nothing(engine, name, args):

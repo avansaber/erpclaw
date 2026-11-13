@@ -233,7 +233,7 @@ def test_bad_tool_name_refused_before_sending():
 def test_unmatched_call_id_refused_before_sending():
     fake = FakeMuse()
     convo = CONVO[:2] + [{"role": "tool", "tool_call_id": "call_never_made", "content": "x"}]
-    with pytest.raises(Refusal, match="tool result without its call"):
+    with pytest.raises(Refusal, match="^The assistant asked for something it can't do, so nothing was saved[.]$"):
         make(fake).complete(convo, TOOLS)
     assert fake.requests == []
 
@@ -263,8 +263,9 @@ def test_retry_after_as_an_http_date_is_honoured_and_a_long_wait_is_not_retried(
     assert len(fake.posts()) == 2 and 1.9 <= sleeps[0] <= 2.1
     sleeps = []
     fake = FakeMuse((429, {"retry-after": formatdate(t0 + 60, usegmt=True)}), resp([text("ok")]))
-    with pytest.raises(Refusal, match="unavailable"):
+    with pytest.raises(Refusal, match=r"^The model service is busy right now\.$") as e:
         make(fake, sleeps, now=lambda: t0).complete(CONVO[:2], TOOLS)
+    assert e.value.code == "model_rate_limited"
     assert len(fake.posts()) == 1 and sleeps == []  # longer than the cap: no retry inside the owner's turn
 
 

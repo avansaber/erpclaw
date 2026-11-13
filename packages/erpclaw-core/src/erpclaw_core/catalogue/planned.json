@@ -1,4 +1,6 @@
-[
+{
+ "none_refusal": {"min_gap": 3, "min_ratio": 2},
+ "entries": [
  {
   "id": "planned.advanced_accounting",
   "installed_as": [],
@@ -37,7 +39,7 @@
    "depreciation",
    "fixed asset"
   ],
-  "wave": "v3.0"
+  "wave": "later"
  },
  {
   "id": "planned.budgets",
@@ -50,33 +52,77 @@
    "forecast",
    "budget vs actual"
   ],
-  "wave": "v3.0"
+  "wave": "later"
+ },
+ {
+  "id": "planned.connector.bank_statements",
+  "installed_as": [],
+  "kind": "area",
+  "name": "bank statement import",
+  "synonyms": [
+   "bank statement",
+   "bank feed",
+   "import statement"
+  ],
+  "wave": "later"
  },
  {
   "id": "planned.connector.csv",
   "installed_as": [],
   "kind": "area",
-  "name": "CSV import, bank statements, exchange rates and CSV journals",
+  "name": "CSV export",
   "synonyms": [
    "csv",
-   "import",
    "spreadsheet",
-   "exchange rate",
-   "exchange rates",
-   "fx rates",
-   "upload"
+   "export",
+   "csv export",
+   "export csv"
   ],
   "wave": "v3.0"
+ },
+ {
+  "id": "planned.connector.csv_import",
+  "installed_as": [],
+  "kind": "area",
+  "name": "full CSV import",
+  "synonyms": [
+   "import",
+   "upload",
+   "csv import",
+   "import csv"
+  ],
+  "wave": "v3.1"
+ },
+ {
+  "id": "planned.connector.csv_journals",
+  "installed_as": [],
+  "kind": "area",
+  "name": "CSV journal import",
+  "synonyms": [
+   "csv journal",
+   "csv journals",
+   "import journals"
+  ],
+  "wave": "v3.1"
+ },
+ {
+  "id": "planned.connector.netsuite",
+  "installed_as": [],
+  "kind": "area",
+  "name": "NetSuite connector",
+  "synonyms": [
+   "netsuite"
+  ],
+  "wave": "later"
  },
  {
   "id": "planned.connector.quickbooks",
   "installed_as": [],
   "kind": "area",
-  "name": "QuickBooks Online and NetSuite connectors",
+  "name": "QuickBooks Online connector",
   "synonyms": [
    "quickbooks",
    "qbo",
-   "netsuite",
    "sync"
   ],
   "wave": "v3.1"
@@ -119,18 +165,15 @@
    "card payments",
    "online payments"
   ],
-  "wave": "v3.0"
+  "wave": "later"
  },
  {
   "id": "planned.connector.xero",
   "installed_as": [],
   "kind": "area",
-  "name": "Xero connector and bank statement import",
+  "name": "Xero connector",
   "synonyms": [
-   "xero",
-   "bank statement",
-   "bank feed",
-   "import statement"
+   "xero"
   ],
   "wave": "v3.1"
  },
@@ -143,8 +186,6 @@
    "country",
    "localisation",
    "localization",
-   "vat",
-   "gst",
    "compliance",
    "canada",
    "uk",
@@ -152,7 +193,7 @@
    "india",
    "us"
   ],
-  "wave": "v3.0"
+  "wave": "later"
  },
  {
   "id": "planned.crm",
@@ -167,7 +208,7 @@
    "pipeline",
    "contact"
   ],
-  "wave": "v3.0"
+  "wave": "later"
  },
  {
   "id": "planned.discounts",
@@ -180,7 +221,7 @@
    "percent off",
    "off list"
   ],
-  "wave": "v3.0"
+  "wave": "later"
  },
  {
   "id": "planned.documents",
@@ -204,8 +245,7 @@
   "synonyms": [
    "e-sign",
    "esign",
-   "signature",
-   "sign"
+   "signature"
   ],
   "wave": "v3.1"
  },
@@ -221,7 +261,7 @@
    "leave",
    "staff"
   ],
-  "wave": "v3.1"
+  "wave": "later"
  },
  {
   "id": "planned.invoice_fields",
@@ -250,7 +290,7 @@
    "segment",
    "tag"
   ],
-  "wave": "v3.0"
+  "wave": "later"
  },
  {
   "id": "planned.lending",
@@ -275,7 +315,7 @@
    "service visit",
    "repair"
   ],
-  "wave": "v3.0"
+  "wave": "later"
  },
  {
   "id": "planned.manufacturing",
@@ -289,13 +329,13 @@
    "work order",
    "production"
   ],
-  "wave": "v3.0"
+  "wave": "later"
  },
  {
   "id": "planned.messaging",
   "installed_as": [],
   "kind": "area",
-  "name": "messaging and email",
+  "name": "plain-text email",
   "synonyms": [
    "email",
    "message",
@@ -314,7 +354,9 @@
    "another currency",
    "in euros",
    "in pounds",
-   "exchange rate"
+   "exchange rate",
+   "exchange rates",
+   "fx rates"
   ],
   "wave": "v3.1"
  },
@@ -329,21 +371,24 @@
    "due date",
    "due in 30 days"
   ],
-  "wave": "v3.0"
+  "wave": "later"
  },
  {
   "id": "planned.payments_banking",
   "installed_as": [],
   "kind": "area",
-  "name": "payments and banking: bank accounts, reconciliation, payment runs",
+  "name": "bank accounts, reconciliation and payment runs",
   "synonyms": [
    "bank",
    "reconcile",
    "reconciliation",
-   "pay suppliers",
    "payment run"
   ],
-  "wave": "v3.0"
+  "wave": "later",
+  "except_phrases": [
+   "opening bank balance",
+   "starting bank balance"
+  ]
  },
  {
   "id": "planned.payroll",
@@ -357,7 +402,7 @@
    "payslip",
    "wages"
   ],
-  "wave": "v3.1"
+  "wave": "later"
  },
  {
   "id": "planned.period_close",
@@ -371,7 +416,7 @@
    "period close",
    "lock period"
   ],
-  "wave": "v3.0"
+  "wave": "v3.1"
  },
  {
   "id": "planned.projects",
@@ -385,7 +430,7 @@
    "timesheets",
    "hours"
   ],
-  "wave": "v3.0"
+  "wave": "later"
  },
  {
   "id": "planned.purchasing",
@@ -413,7 +458,7 @@
    "inspection",
    "qc"
   ],
-  "wave": "v3.0"
+  "wave": "later"
  },
  {
   "id": "planned.sales",
@@ -457,7 +502,7 @@
    "both at once",
    "several changes at once"
   ],
-  "wave": "v3.1"
+  "wave": "later"
  },
  {
   "id": "planned.stock",
@@ -468,7 +513,15 @@
    "stock",
    "inventory",
    "warehouse",
-   "stock level"
+   "stock level",
+   "receive the delivery into stock",
+   "receive stock",
+   "goods received",
+   "stock receipt",
+   "goods receipt",
+   "delivery of goods",
+   "goods delivered",
+   "undo the delivery"
   ],
   "wave": "v3.0"
  },
@@ -501,7 +554,7 @@
    "usage billing",
    "mrr"
   ],
-  "wave": "v3.0"
+  "wave": "later"
  },
  {
   "id": "planned.support",
@@ -515,7 +568,7 @@
    "sla",
    "helpdesk"
   ],
-  "wave": "v3.0"
+  "wave": "later"
  },
  {
   "id": "planned.tax_engine",
@@ -544,6 +597,8 @@
    "access",
    "invite"
   ],
-  "wave": "Core"
+  "wave": "Core",
+  "reply": "These books have a named owner and message authors. Second-person screens and roles are not in ERPClaw yet."
  }
 ]
+}

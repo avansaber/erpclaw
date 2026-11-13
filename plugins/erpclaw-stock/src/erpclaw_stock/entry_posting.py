@@ -97,7 +97,7 @@ def entry_posting_lines(kind: str, moves: Sequence[Move], currency: str,
                 raise EntryPostingError(str(exc)) from None
             zero = canonical(Decimal(0), currency)
             return {"account": account, "debit": canonical(checked, currency) if side == "debit" else zero,
-                    "credit": canonical(checked, currency) if side == "credit" else zero}
+                    "credit": canonical(checked, currency) if side == "credit" else zero, "currency": currency}
 
         result = [line(account, "debit", value) for account, value in gains.items()]
         if gains:

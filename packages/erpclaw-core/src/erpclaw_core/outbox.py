@@ -4,16 +4,20 @@ data mark has committed; nothing is accepted without that mark; no plugin writes
 from __future__ import annotations
 
 import datetime as dt
+import logging
+import math
+import os
 import re
 import unicodedata
+from contextlib import contextmanager
 from dataclasses import dataclass
-from threading import Condition
+from threading import TIMEOUT_MAX, Condition, Event, Lock, Thread
 from typing import Callable
 
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 from sqlalchemy.engine import Connection, Engine
 
-from . import files, ledger, models as m
+from . import credentials, files, ledger, models as m
 from .common import Ctx, Refusal, company_ctx, new_id
 from .db import DEMO_MARK, EVAL_MARK, owner, read_only
 from .plugins import REGISTRY, EmptySlot, enabled_plugins
@@ -194,6 +198,8 @@ def enqueue(ctx: Ctx, slot: str, recipient: str, subject: str, body: str, operat
             sender: SenderSnapshot | None = None, attachments: tuple = ()) -> str:
     """Queue the approved message, refusing a header that could inject, anything but one plain recipient, and an
     attachment that is not the caller's approved stored file."""
+    credentials.refuse([recipient, subject, body,
+                        [sender.from_address, sender.from_name, sender.reply_to] if sender else []])
     for value, what in ((recipient, "recipient"), (subject, "subject")):
         _header(value, what)
     domain = _one_address(recipient, "recipient")
@@ -516,16 +522,21 @@ def _adapt(engine: Engine, r: dict, fn: Callable) -> None:
     fault("after_result")
 
 
+def due_rows(conn: Connection) -> list[dict]:
+    """Queued messages whose next attempt is due; claim still decides ownership under the row lock."""
+    return [dict(r) for r in conn.execute(select(m.outbox).where(
+        m.outbox.c.status == "queued",
+        or_(m.outbox.c.next_try_at.is_(None), m.outbox.c.next_try_at <= clock()))).mappings()]
+
+
 def deliver_pending(engine: Engine) -> list[dict]:
     """Recover first, then send each due queued message through the connector these books have now: the enabled
     send_message filler, else the folder connector in demo or eval books; otherwise it stays queued with the reason."""
     if PLANNED:
         return []
     recover(engine)
-    now = clock()
     with engine.connect() as conn:
-        rows = [dict(r) for r in conn.execute(select(m.outbox).where(m.outbox.c.status == "queued")).mappings()
-                if r["next_try_at"] is None or r["next_try_at"] <= now]
+        rows = due_rows(conn)
         enabled = enabled_plugins(conn)
         folder_ok = _marked_for_folder(conn)
     results = []
@@ -546,6 +557,75 @@ def deliver_pending(engine: Engine) -> list[dict]:
                 _adapt(engine, r, fn)
         results.append(_result(engine, r["id"]))
     return results
+
+
+DEFAULT_SWEEP_SECONDS = 60
+
+
+class OutboxSweeper:
+    """Recover and catch up on start, then run periodic delivery passes in-process.
+
+    ERPCLAW_OUTBOX_SWEEP_SECONDS is a host environment setting (default 60 seconds),
+    never a company setting or chat capability. Each pass uses deliver_pending's
+    existing due checks and attempt ownership, including its PLANNED switch.
+    stop() wakes the timer and joins any in-flight pass before returning; the host
+    must stop the sweeper before disposing its engine.
+    """
+
+    def __init__(self, engine: Engine):
+        try:
+            interval = float(os.environ.get("ERPCLAW_OUTBOX_SWEEP_SECONDS", str(DEFAULT_SWEEP_SECONDS)))
+            if not math.isfinite(interval) or not 0 < interval <= TIMEOUT_MAX:
+                raise ValueError
+        except ValueError:
+            raise ValueError("ERPCLAW_OUTBOX_SWEEP_SECONDS must be a positive finite number of seconds "
+                             f"no greater than {TIMEOUT_MAX}.") from None
+        self.interval = interval
+        self._engine = engine
+        self._stopping = Event()
+        self._lifecycle = Lock()
+        self._worker: Thread | None = None
+
+    def _sweep(self) -> None:
+        try:
+            deliver_pending(self._engine)  # includes recovery before looking for due rows
+        except BaseException:
+            # A failed pass must not end retries or disclose connector/DB credentials.
+            # This includes a controlled crash at a fault hook; recover handles its lease.
+            logging.getLogger(__name__).warning("Outbox delivery pass did not finish; it will retry.")
+
+    def _run(self) -> None:
+        while not self._stopping.wait(self.interval):
+            self._sweep()
+
+    def start(self) -> None:
+        """Best-effort synchronous catch-up, then a worker; repeated starts are harmless."""
+        with self._lifecycle:
+            if PLANNED or (self._worker is not None and self._worker.is_alive()):
+                return
+            self._stopping.clear()
+            self._sweep()
+            self._worker = Thread(target=self._run, name="erpclaw-outbox")
+            self._worker.start()
+
+    def stop(self) -> None:
+        """Wake the worker and wait for its current pass; safe before start and on repeated calls."""
+        with self._lifecycle:
+            self._stopping.set()
+            if self._worker is not None:
+                self._worker.join()
+                self._worker = None
+
+
+@contextmanager
+def delivery_driver(engine: Engine):
+    """Host lifetime adapter for the sweeper: catch up on entry and stop on every exit."""
+    sweeper = OutboxSweeper(engine)
+    sweeper.start()
+    try:
+        yield
+    finally:
+        sweeper.stop()
 
 
 def _set_detail(engine: Engine, oid: str, detail: str) -> None:

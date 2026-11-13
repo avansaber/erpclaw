@@ -16,6 +16,7 @@ from erpclaw_core import models as m
 from erpclaw_core.common import company_ctx
 from erpclaw_core.masters import create_item
 from erpclaw_sales import tables as t
+from erpclaw_assistant import resolve_text
 
 
 def assistant(engine, *replies):
@@ -50,7 +51,7 @@ RATE = "Invoice Acme Corporation for 5 copper wire at 30 each"
 MEMO = "Invoice Acme Corporation for 5 copper wire, memo PO 4471"
 # part -> (what the owner wrote, the question's code, the choice that makes the card, how its notice begins)
 PARTS = {
-    "rate": (RATE, "rate_choice_missing", "Use the list price", "You said 30.00 each for copper wire"),
+    "rate": (RATE, None, None, None),
     "memo": (MEMO, "memo_choice_missing", "Leave out the PO number", "A customer's PO number cannot be recorded yet"),
 }
 
@@ -64,6 +65,11 @@ def _question(engine, part, *more):
 @pytest.mark.parametrize("part", PARTS)
 def test_a_part_the_engine_cannot_set_is_asked_about_with_two_coded_choices_and_no_card(engine, part):
     cards = count(engine, m.approval)
+    if part == "rate":
+        ev = assistant(engine, Reply("", [inv("Acme Corporation", 5)])).turn("c1", RATE)
+        assert "@ 30.00 = 150.00" in str(card_of(ev)["card"]["lines"]), ev
+        assert not any(e["type"] == "ask" or (e["type"] == "not_done" and e["part"] == "rate") for e in ev), ev
+        return
     _, q = _question(engine, part)
     _, _, go, notice = PARTS[part]
     assert q["options"] == [go, "Leave it"] and len(q["choices"]) == 2, q
@@ -75,6 +81,11 @@ def test_a_part_the_engine_cannot_set_is_asked_about_with_two_coded_choices_and_
 @pytest.mark.parametrize("by", ["label", "code"])
 @pytest.mark.parametrize("part", PARTS)
 def test_the_owner_s_choice_makes_the_card_with_the_notice_beside_it(engine, part, by):
+    if part == "rate":
+        ev = assistant(engine, Reply("", [inv("Acme Corporation", 5)])).turn("c1", RATE)
+        assert "@ 30.00 = 150.00" in str(card_of(ev)["card"]["lines"]), ev
+        assert not any(e["type"] == "ask" or (e["type"] == "not_done" and e["part"] == "rate") for e in ev), ev
+        return
     a, q = _question(engine, part, Reply("", [inv("Acme Corporation", 5)]))
     _, _, go, notice = PARTS[part]
     code = next(c["code"] for c in q["choices"] if c["label"] == go)
@@ -88,6 +99,11 @@ def test_the_owner_s_choice_makes_the_card_with_the_notice_beside_it(engine, par
 @pytest.mark.parametrize("part", PARTS)
 def test_leave_it_ends_the_request_and_saves_nothing(engine, part):
     cards, invoices = count(engine, m.approval), count(engine, t.invoice)
+    if part == "rate":
+        ev = assistant(engine, Reply("", [inv("Acme Corporation", 5)])).turn("c1", RATE)
+        assert "@ 30.00 = 150.00" in str(card_of(ev)["card"]["lines"]), ev
+        assert not any(e["type"] == "ask" or (e["type"] == "not_done" and e["part"] == "rate") for e in ev), ev
+        return
     a, _ = _question(engine, part, Reply("", [inv("Acme Corporation", 5)]))
     ev = a.turn("c1", "Leave it")
     assert ev == [{"currency": "USD", "type": "answer", "text": "Cancelled; nothing was saved.", "checked": "engine"}], ev
@@ -95,33 +111,19 @@ def test_leave_it_ends_the_request_and_saves_nothing(engine, part):
     assert store.open_request("c1") is None
 
 
-def test_the_choice_continues_the_request_across_a_restart(engine):
-    _question(engine, "rate")
-    a = assistant(engine, Reply("", [inv("Acme Corporation", 5)]))  # a new process: the store and the books only
-    assert "140.00" in str(card_of(a.turn("c1", "Use the list price"))["card"]["lines"])
-
-
 def test_a_date_a_rate_and_a_memo_are_asked_one_at_a_time_then_one_card(engine):
     cards = count(engine, m.approval)
     a = assistant(engine, *[Reply("", [inv("Acme Corporation", 5)])] * 4)
     first = asked(a.turn("c1", "Invoice Acme Corporation for 5 copper wire at 30 each dated 05/10/2026, memo PO 4471"),
                   "date_choice_missing")
-    second = asked(a.turn("c1", "Date it today"), "rate_choice_missing")
-    third = asked(a.turn("c1", "Use the list price"), "memo_choice_missing")
-    assert len({first["question_id"], second["question_id"], third["question_id"]}) == 3
-    assert count(engine, m.approval) == cards  # nothing carded while a part is unanswered
+    second = asked(a.turn("c1", "Date it today"), "memo_choice_missing")
+    assert first["question_id"] != second["question_id"]
+    assert count(engine, m.approval) == cards
     ev = a.turn("c1", "Leave out the PO number")
-    card_of(ev)
-    assert {e["part"] for e in ev if e["type"] == "not_done"} == {"date", "rate", "memo"}, ev
+    card = card_of(ev)
+    assert "@ 30.00 = 150.00" in str(card["card"]["lines"])
+    assert {e["part"] for e in ev if e["type"] == "not_done"} == {"date", "memo"}, ev
     assert count(engine, m.approval) == cards + 1
-
-
-def test_a_later_rate_clears_the_earlier_choice_and_is_asked_about(engine):
-    a = assistant(engine, *[Reply("", [inv("Acme Corporation", 5)])] * 3)
-    asked(a.turn("c1", "Invoice Acme Corporation for 5 copper wire at 30 each, memo PO 4471"), "rate_choice_missing")
-    asked(a.turn("c1", "Use the list price"), "memo_choice_missing")
-    again = asked(a.turn("c1", "actually 35 each"), "rate_choice_missing")  # never the list price chosen for 30
-    assert "You said 35.00 each for copper wire" in again["text"], again  # the earlier 30 is still said beside it
 
 
 def test_a_rate_at_the_list_price_is_no_question(engine):
@@ -147,14 +149,20 @@ def test_the_books_refuse_an_item_without_a_positive_list_price(engine, rate):
 
 
 @pytest.mark.parametrize("part, correction, go", [
-    ("rate", "actually at 30 each", "Use the list price"),
     ("memo", "add memo PO 4471", "Leave out the PO number"),
+    ("rate", "actually at 30 each", "Use the list price"),
 ])
 def test_unchanged_reproposal_asks_about_the_correction_and_sets_aside_the_card(engine, part, correction, go):
     a = assistant(engine, Reply("", [inv("Acme Corporation", 5)]), Reply("Okay."))
     first = card_of(a.turn("c1", "Invoice Acme Corporation for 5 copper wire"))
     before = [count(engine, table) for table in (m.approval, t.invoice, m.posting)]
     ev = a.turn("c1", correction)
+    if part == "rate":
+        assert ev[0]["code"] == "card_set_aside", ev
+        assert "@ 30.00 = 150.00" in str(card_of(ev)["card"]["lines"]), ev
+        with engine.connect() as conn:
+            assert conn.execute(select(m.approval.c.status).where(m.approval.c.id == first["approval_id"])).scalar_one() == "superseded"
+        return
     assert kinds(ev) == ["notice", "ask"] and ev[0]["code"] == "card_set_aside", ev
     q = ev[1]
     assert q["code"] == f"{part}_choice_missing" and q["options"] == [go, "Leave it"], q
@@ -241,7 +249,8 @@ def test_memo_qualifier_wording_comes_from_the_active_language_table(engine, mon
                        toy_reference="The reference tag cannot be recorded.",
                        memo_none_or_leave="Omit {qualifier}, or leave it?", memo_none="Omit {qualifier}")
     monkeypatch.setitem(resolve.TABLES, "toy", toy)
-    monkeypatch.setattr(resolve, "LANGUAGE", "toy")
+    for _module in (resolve, resolve_text):
+        monkeypatch.setattr(_module, 'LANGUAGE', 'toy')
     a = assistant(engine, *[Reply("", [inv("Acme Corporation", 5)])] * 2)
     q = asked(a.turn("c1", f"Invoice Acme Corporation for 5 copper wire, {said}"), "memo_choice_missing")
     assert q["text"] == f"{notice} Omit {label}, or leave it?", q
@@ -249,3 +258,109 @@ def test_memo_qualifier_wording_comes_from_the_active_language_table(engine, mon
     ev = a.turn("c1", q["choices"][0]["label"], choice=q["choices"][0]["code"])
     card_of(ev)
     assert [e["text"] for e in ev if e["type"] == "not_done" and e["part"] == "memo"] == [notice], ev
+
+
+def test_rate_correction_replaces_the_earlier_card(engine):
+    a = assistant(engine, Reply("", [inv("Acme Corporation", 5)]), Reply("Okay."))
+    first = card_of(a.turn("c1", "Invoice Acme Corporation for 5 copper wire"))
+    events = a.turn("c1", "actually at 30 each")
+    assert events[0]["type"] == "notice" and events[0]["code"] == "card_set_aside", events
+    updated = card_of(events)
+    assert "@ 30.00 = 150.00" in str(updated["card"]["lines"]), events
+    with engine.connect() as conn:
+        assert conn.execute(select(m.approval.c.status).where(
+            m.approval.c.id == first["approval_id"])).scalar_one() == "superseded"
+
+
+def test_the_choice_continues_the_request_across_a_restart(engine):
+    a = assistant(engine, Reply("", [inv("Acme Corporation", 5)]))
+    q = asked(a.turn("c1", RATE + ", memo PO 4471"), "memo_choice_missing")
+    a = assistant(engine, Reply("", [inv("Acme Corporation", 5)]))
+    ev = a.turn("c1", q["choices"][0]["label"], choice=q["choices"][0]["code"])
+    assert "@ 30.00 = 150.00" in str(card_of(ev)["card"]["lines"]), ev
+    assert any(e["type"] == "not_done" and e["part"] == "memo" for e in ev), ev
+
+
+@pytest.mark.parametrize("correction", ["actually 35 each", "make it 35 each", "no, 35 each",
+                                        "make it $35", "make it USD 35", "make it 35 a unit",
+                                        "make it 35 per piece"])
+def test_a_later_rate_clears_the_earlier_choice_and_is_asked_about(engine, correction):
+    a = assistant(engine, Reply("", [inv("Acme Corporation", 5)]), Reply("Okay."))
+    first = card_of(a.turn("c1", RATE))
+    before = count(engine, t.invoice)
+    ev = a.turn("c1", correction)
+    assert ev[0]["type"] == "notice" and ev[0]["code"] == "card_set_aside", ev
+    assert "@ 35.00 = 175.00" in str(card_of(ev)["card"]["lines"]), ev
+    with engine.connect() as conn:
+        import json
+        row = conn.execute(select(m.approval.c.args_json).where(m.approval.c.id == card_of(ev)["approval_id"])).scalar_one()
+        assert Decimal(str(json.loads(row)["items"][0]["rate"])) == Decimal("35")
+        assert conn.execute(select(m.approval.c.status).where(m.approval.c.id == first["approval_id"])).scalar_one() == "superseded"
+    assert count(engine, t.invoice) == before
+
+
+@pytest.mark.parametrize("correction", ["actually $35", "no, $35", "$35 each", "actually USD 35",
+                                        "actually 35 USD", "no, 35 USD", "35 USD each", "actually 35 $"])
+def test_currency_marked_correction_replaces_the_card(engine, correction):
+    from bookdiff import changes, snapshot
+
+    a = assistant(engine, Reply("", [inv("Acme Corporation", 5)]), Reply("Okay."))
+    books_before = snapshot(engine)
+    first = card_of(a.turn("c1", RATE))
+    assert "@ 30.00 = 150.00" in str(first["card"]["lines"])
+    events = a.turn("c1", correction)
+    assert [event["type"] for event in events] == ["notice", "card"], events
+    assert events[0]["code"] == "card_set_aside", events
+    assert "@ 35.00 = 175.00" in str(events[1]["card"]["lines"]), events
+    assert set(changes(books_before, snapshot(engine))) == {"approval"}, events
+    with engine.connect() as conn:
+        assert conn.execute(select(m.approval.c.status).where(
+            m.approval.c.id == first["approval_id"])).scalar_one() == "superseded"
+
+
+def test_foreign_suffix_currency_correction_is_not_priced_in_company_currency(engine):
+    from bookdiff import changes, snapshot
+
+    a = assistant(engine, Reply("", [inv("Acme Corporation", 5)]), Reply("Okay."))
+    before = snapshot(engine)
+    card_of(a.turn("c1", RATE))
+    events = a.turn("c1", "no, 35 EUR")
+    assert [e["type"] for e in events] == ["notice", "refused"], events
+    assert events[1]["code"] == "foreign_currency", events
+    assert set(changes(before, snapshot(engine))) == {"approval"}, events
+
+
+def test_code_word_suffix_asks_one_question(engine):
+    from bookdiff import changes, snapshot
+
+    a = assistant(engine, Reply("", [inv("Acme Corporation", 5)]), Reply("Okay."))
+    before = snapshot(engine)
+    card_of(a.turn("c1", RATE))
+    events = a.turn("c1", "actually 35 ALL")
+    assert [e["type"] for e in events] == ["notice", "ask"], events
+    assert events[1]["code"] == "rate_choice_missing", events
+    assert set(changes(before, snapshot(engine))) == {"approval"}, events
+
+
+def test_filling_rate_pattern_does_not_change_language_table():
+    raw = resolve_text.TABLES["en"]["rate"]
+    assert "<currency_mark>" in raw
+    assert "<currency_mark>" not in resolve_text.table("en")["rate"]
+    assert resolve_text.TABLES["en"]["rate"] == raw
+
+
+def test_per_unit_correction_replaces_the_card_at_the_new_rate(engine):
+    from bookdiff import changes, snapshot
+
+    a = assistant(engine, Reply("", [inv("Acme Corporation", 5)]), Reply("Okay."))
+    books_before = snapshot(engine)
+    before = count(engine, t.invoice)
+    card_of(a.turn("c1", RATE))
+    events = a.turn("c1", "make it 35 per unit")
+    assert count(engine, t.invoice) == before, events
+    assert [event["type"] for event in events] == ["notice", "card"], events
+    assert events[0]["code"] == "card_set_aside", events
+    card = card_of(events)["card"]
+    assert any("@ 35.00 = 175.00" in value for key, value in card["lines"] if key == "Item"), events
+    assert "Accounts Receivable (Acme Corporation) +175.00" in card["books"], events
+    assert set(changes(books_before, snapshot(engine))) == {"approval"}, events

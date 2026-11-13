@@ -394,7 +394,8 @@ def test_06d_postgresql_truncate_is_refused(engine):
         conn.rollback()
         assert min(before) > 0
         # The second names every table that references posting, so no foreign key refuses it first.
-        for sql in ("TRUNCATE ledger_entry", "TRUNCATE posting, ledger_entry, fiscal_year_close",
+        for sql in ("TRUNCATE ledger_entry, supplier_payable, supplier_payment_allocation",
+                    "TRUNCATE posting, ledger_entry, fiscal_year_close, supplier_payable, supplier_payment_allocation",
                     "TRUNCATE posting CASCADE"):
             with pytest.raises(DBAPIError, match="TRUNCATE refused"):
                 with conn.begin():

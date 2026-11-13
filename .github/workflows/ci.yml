@@ -1,28 +1,104 @@
 name: ci
 
-# The test suite runs on main only, on the oldest supported Python; every
-# supported Python runs weekly and by hand. Branches run the suite locally.
+# Tests run only by workflow_dispatch, using the shipped Python 3.12.
+# Pushes and the weekly schedule keep the scan jobs.
 on:
   push:
+    branches: [main]
   schedule:
     - cron: "17 6 * * 1"
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
 
 env:
-  SHARDS: "5"
+  SHARDS: "10"
   SHA: ${{ github.sha }}
 
 jobs:
+  reuse:
+    name: reuse dispatched tests
+    runs-on: [self-hosted, erpclaw-ci]
+    timeout-minutes: 5
+    outputs:
+      skip: ${{ steps.decide.outputs.skip }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: find a successful dispatch for this commit
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != push ] || [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo 'skip=false' | tee -a "$GITHUB_OUTPUT"
+            echo 'reason=not a push to main; run the suite' | tee -a "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          dir="$RUNNER_TEMP/ci-reuse"
+          mkdir -p "$dir"
+          # Error responses stay invalid, so the offline decision falls back to testing.
+          echo '{}' > "$dir/jobs.json"
+          if gh api --method GET "repos/$GH_REPO/actions/workflows/ci.yml/runs" \
+              -f event=workflow_dispatch -f head_sha="$SHA" -f per_page=100 \
+              --paginate --slurp > "$dir/runs.json"; then
+            if jq -r '.[].workflow_runs[] | select(.status == "completed" and .conclusion == "success") | .id' \
+                "$dir/runs.json" > "$dir/run-ids"; then
+              complete=true
+              : > "$dir/job-pages.jsonl"
+              while IFS= read -r run_id; do
+                if ! gh api "repos/$GH_REPO/actions/runs/$run_id/jobs?filter=latest&per_page=100" \
+                    --paginate >> "$dir/job-pages.jsonl"; then
+                  complete=false
+                  break
+                fi
+              done < "$dir/run-ids"
+              if [ "$complete" = true ]; then
+                jq -s . "$dir/job-pages.jsonl" > "$dir/jobs.json" || echo '{}' > "$dir/jobs.json"
+              fi
+            fi
+          fi
+          python3 tools/ci_reuse.py --runs "$dir/runs.json" --jobs "$dir/jobs.json" --sha "$SHA" \
+            | tee -a "$GITHUB_OUTPUT"
+
+  seed-gitleaks-cache:
+    name: seed gitleaks cache
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: [self-hosted, erpclaw-ci]
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: restore the pinned gitleaks archive
+        id: gitleaks-cache
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684  # v4.2.3
+        with:
+          path: ${{ runner.temp }}/gitleaks.tgz
+          key: gitleaks-8.30.1-linux-x64-551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+      - name: download gitleaks on a cache miss
+        if: steps.gitleaks-cache.outputs.cache-hit != 'true'
+        run: curl -fsSLo "$RUNNER_TEMP/gitleaks.tgz" https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+      - name: verify the restored or downloaded gitleaks archive
+        run: |
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $RUNNER_TEMP/gitleaks.tgz" | sha256sum -c -
+      - name: save the verified gitleaks archive
+        if: steps.gitleaks-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684  # v4.2.3
+        with:
+          path: ${{ runner.temp }}/gitleaks.tgz
+          key: gitleaks-8.30.1-linux-x64-551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+
   lock:
     name: lock and licences
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, erpclaw-ci]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e  # v10.3.2
-      - run: uv sync --locked --all-extras --python 3.14
+      - run: uv sync --locked --all-extras --python 3.12
+      - name: check plugin release versions
+        run: uv run python tools/release_rule.py
       - name: no Elastic, AGPL, SSPL or BUSL package
         run: uv run python tools/check_lock.py uv.lock --licenses
       - name: third-party notices are current
@@ -30,13 +106,15 @@ jobs:
 
   collect:
     name: collect and plan (Python ${{ matrix.python }})
-    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    needs: reuse
+    # A failed reuse check must not prevent the suite from running.
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && (github.event_name != 'push' || github.ref == 'refs/heads/main') && (github.event_name != 'push' || needs.reuse.outputs.skip != 'true') }}
+    runs-on: [self-hosted, erpclaw-ci]
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        python: ${{ fromJSON(github.event_name == 'push' && '["3.12"]' || '["3.12", "3.14"]') }}
+        python: ["3.12"]
     # the same service and env as the shards, so the collected set is what the shards' environment collects
     services:
       postgres:
@@ -45,7 +123,7 @@ jobs:
           POSTGRES_USER: erpclaw
           POSTGRES_PASSWORD: ci-only
           POSTGRES_DB: erpclaw_test
-        ports: ["5432:5432"]
+        ports: ["5432"]
         options: >-
           --health-cmd "pg_isready -U erpclaw"
           --health-interval 5s --health-timeout 5s --health-retries 10
@@ -53,15 +131,31 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e  # v10.3.2
       - run: uv sync --locked --all-extras --python ${{ matrix.python }}
+      - name: restore the pinned gitleaks archive
+        id: gitleaks-cache
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684  # v4.2.3
+        with:
+          path: ${{ runner.temp }}/gitleaks.tgz
+          key: gitleaks-8.30.1-linux-x64-551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+      - name: download gitleaks on a cache miss
+        if: steps.gitleaks-cache.outputs.cache-hit != 'true'
+        run: curl -fsSLo "$RUNNER_TEMP/gitleaks.tgz" https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+      - name: verify the restored or downloaded gitleaks archive
+        run: |
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $RUNNER_TEMP/gitleaks.tgz" | sha256sum -c -
+      - name: save the verified gitleaks archive
+        if: steps.gitleaks-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684  # v4.2.3
+        with:
+          path: ${{ runner.temp }}/gitleaks.tgz
+          key: gitleaks-8.30.1-linux-x64-551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
       - name: gitleaks 8.30.1, pinned by checksum (the push scanner's secrets engine)
         run: |
-          curl -fsSLo /tmp/gitleaks.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
-          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tgz" | sha256sum -c -
-          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
-          echo "ERPCLAW_GITLEAKS=/tmp/gitleaks" >> "$GITHUB_ENV"
+          tar -xzf "$RUNNER_TEMP/gitleaks.tgz" -C "$RUNNER_TEMP" gitleaks
+          echo "ERPCLAW_GITLEAKS=$RUNNER_TEMP/gitleaks" >> "$GITHUB_ENV"
       - name: collect the node ids (pytest --collect-only -q)
         env:
-          ERPCLAW_PG_TEST_URL: postgresql+psycopg://erpclaw:ci-only@127.0.0.1:5432/erpclaw_test
+          ERPCLAW_PG_TEST_URL: postgresql+psycopg://erpclaw:ci-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/erpclaw_test
         run: uv run python tools/shard_suite.py collect --out "$RUNNER_TEMP/shard-plan/nodeids.txt"
       - name: plan shards (by durations when available, else by test count)
         run: |
@@ -78,16 +172,16 @@ jobs:
 
   shard:
     name: shard ${{ matrix.index }} (postgresql, Python ${{ matrix.python }})
-    needs: collect
+    needs: [reuse, collect]
     # Cancellation may skip shards; the final job uses always() and rejects skipped prerequisites.
-    if: ${{ !cancelled() && (github.event_name != 'push' || github.ref == 'refs/heads/main') }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && (github.event_name != 'push' || github.ref == 'refs/heads/main') && (github.event_name != 'push' || needs.reuse.outputs.skip != 'true') }}
+    runs-on: [self-hosted, erpclaw-ci]
+    timeout-minutes: 180
     strategy:
       fail-fast: false  # every shard reports, so the union shows every failure at once
       matrix:
-        python: ${{ fromJSON(github.event_name == 'push' && '["3.12"]' || '["3.12", "3.14"]') }}
-        index: [0, 1, 2, 3, 4]
+        python: ["3.12"]
+        index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
     services:
       postgres:  # each shard runs with its own PostgreSQL service
         image: postgres:18.6-trixie@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
@@ -95,7 +189,7 @@ jobs:
           POSTGRES_USER: erpclaw
           POSTGRES_PASSWORD: ci-only
           POSTGRES_DB: erpclaw_test
-        ports: ["5432:5432"]
+        ports: ["5432"]
         options: >-
           --health-cmd "pg_isready -U erpclaw"
           --health-interval 5s --health-timeout 5s --health-retries 10
@@ -103,12 +197,28 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e  # v10.3.2
       - run: uv sync --locked --all-extras --python ${{ matrix.python }}
+      - name: restore the pinned gitleaks archive
+        id: gitleaks-cache
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684  # v4.2.3
+        with:
+          path: ${{ runner.temp }}/gitleaks.tgz
+          key: gitleaks-8.30.1-linux-x64-551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+      - name: download gitleaks on a cache miss
+        if: steps.gitleaks-cache.outputs.cache-hit != 'true'
+        run: curl -fsSLo "$RUNNER_TEMP/gitleaks.tgz" https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+      - name: verify the restored or downloaded gitleaks archive
+        run: |
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $RUNNER_TEMP/gitleaks.tgz" | sha256sum -c -
+      - name: save the verified gitleaks archive
+        if: steps.gitleaks-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684  # v4.2.3
+        with:
+          path: ${{ runner.temp }}/gitleaks.tgz
+          key: gitleaks-8.30.1-linux-x64-551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
       - name: gitleaks 8.30.1, pinned by checksum (the push scanner's secrets engine)
         run: |
-          curl -fsSLo /tmp/gitleaks.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
-          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tgz" | sha256sum -c -
-          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
-          echo "ERPCLAW_GITLEAKS=/tmp/gitleaks" >> "$GITHUB_ENV"
+          tar -xzf "$RUNNER_TEMP/gitleaks.tgz" -C "$RUNNER_TEMP" gitleaks
+          echo "ERPCLAW_GITLEAKS=$RUNNER_TEMP/gitleaks" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         with:
           name: shard-plan-${{ matrix.python }}
@@ -123,12 +233,13 @@ jobs:
       - name: tests in this shard
         env:
           INDEX: ${{ matrix.index }}
-          ERPCLAW_PG_TEST_URL: postgresql+psycopg://erpclaw:ci-only@127.0.0.1:5432/erpclaw_test
+          PYTHONPATH: ${{ github.workspace }}/tools
+          ERPCLAW_PG_TEST_URL: postgresql+psycopg://erpclaw:ci-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/erpclaw_test
         run: |
           mapfile -t files < "$RUNNER_TEMP/shard-files.txt"
           # never run pytest without paths: that would be the whole suite
           (( ${#files[@]} > 0 )) || { echo "::error::shard $INDEX has no files"; exit 1; }
-          uv run pytest -q --junitxml="$RUNNER_TEMP/junit/shard-$INDEX.xml" "${files[@]}"
+          uv run pytest -q -p shard_suite --junitxml="$RUNNER_TEMP/junit/shard-$INDEX.xml" "${files[@]}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         if: always()
         with:
@@ -139,14 +250,14 @@ jobs:
 
   test:
     name: tests (postgresql, Python ${{ matrix.python }})
-    needs: [collect, shard]
-    if: ${{ always() && (github.event_name != 'push' || github.ref == 'refs/heads/main') }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    needs: [reuse, collect, shard]
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && (github.event_name != 'push' || github.ref == 'refs/heads/main') && (github.event_name != 'push' || needs.reuse.outputs.skip != 'true') }}
+    runs-on: [self-hosted, light]
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        python: ${{ fromJSON(github.event_name == 'push' && '["3.12"]' || '["3.12", "3.14"]') }}
+        python: ["3.12"]
     steps:
       - name: collection and shard jobs must succeed
         if: always()

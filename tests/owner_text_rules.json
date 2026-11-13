@@ -1,0 +1,400 @@
+{
+ "about": [
+  "The owner-facing text rules: what a text the owner reads must never hold (no ids, codes, field names or other technical text).",
+  "One file, two readers: the engine's tests/owner_text.py and the host's C# test helper. Reviewed like code.",
+  "Patterns are regular expressions in the common subset of Python `re` and .NET Regex. `flags` is \"\" or \"i\".",
+  "A rule whose names come from the engine (`registry`) is resolved at test time, never copied here.",
+  "The fix for a failing text is plain words, never a new `allow` entry, unless the owner must read that text."
+ ],
+ "version": 1,
+ "identifier_form": {
+  "what": "how a registered identifier (rules 3, 4, 5) is matched",
+  "snake_case": "a name holding an underscore is matched as a whole word, case-sensitive, anywhere in the text",
+  "dotted": "a dotted token (2 or 3 parts) whose every part is a registered identifier is matched whole",
+  "single_word": "a one-word name (`invoice`, `customer`, `busy`, `planned`) is an ordinary English word, so it is matched only where it is shown as a name: in backticks, quotes or brackets, or after `code`, `field`, `column` or `table` and a `:` or `=`",
+  "presented": "(?:`{w}`|'{w}'|\"{w}\"|\\[{w}\\]|\\({w}\\)|<{w}>|\\b(?:code|field|column|table)\\s*[:=]\\s*{w}\\b)",
+  "whole_word": "(?<![A-Za-z0-9_]){w}(?![A-Za-z0-9_])"
+ },
+ "rules": [
+  {
+   "rule": 1,
+   "name": "traceback or source location",
+   "patterns": [
+    {
+     "id": "traceback",
+     "regex": "\\bTraceback\\b",
+     "flags": ""
+    },
+    {
+     "id": "file_quote",
+     "regex": "\\bFile \"",
+     "flags": ""
+    },
+    {
+     "id": "line_number",
+     "regex": "\\bline \\d+\\b",
+     "flags": ""
+    },
+    {
+     "id": "source_file",
+     "regex": "\\b[\\w.-]+\\.(?:py|pyc|cs|dll)\\b",
+     "flags": "i"
+    }
+   ]
+  },
+  {
+   "rule": 2,
+   "name": "exception or library name",
+   "patterns": [
+    {
+     "id": "exception_name",
+     "regex": "\\b\\w+(?:Error|Exception)\\b",
+     "flags": ""
+    },
+    {
+     "id": "library",
+     "regex": "\\b(?:{libraries})\\b",
+     "flags": ""
+    },
+    {
+     "id": "dotnet_namespace",
+     "regex": "\\b(?:System|Microsoft)\\.[A-Z]\\w*",
+     "flags": ""
+    }
+   ],
+   "libraries": [
+    "sqlalchemy",
+    "psycopg",
+    "psycopg2",
+    "alembic",
+    "pydantic",
+    "fastapi",
+    "starlette",
+    "uvicorn",
+    "httpx",
+    "openai",
+    "asyncio",
+    "tomllib",
+    "langgraph"
+   ],
+   "libraries_note": "module names as they are spelled in code (lower case, case-sensitive): \"OpenAI\" the company can be named on purpose; `openai`, the module, cannot. langgraph is the engine's own turn library, added to the list."
+  },
+  {
+   "rule": 3,
+   "name": "SQL, a SQLSTATE, or a table or constraint name",
+   "patterns": [
+    {
+     "id": "sql_select",
+     "regex": "\\bSELECT\\b[^.?!]*?\\bFROM\\b",
+     "flags": ""
+    },
+    {
+     "id": "sql_insert",
+     "regex": "\\bINSERT\\s+INTO\\b",
+     "flags": ""
+    },
+    {
+     "id": "sql_update",
+     "regex": "\\bUPDATE\\s+\"?\\w+\"?\\s+SET\\b",
+     "flags": ""
+    },
+    {
+     "id": "sql_delete",
+     "regex": "\\bDELETE\\s+FROM\\b",
+     "flags": ""
+    },
+    {
+     "id": "sql_create",
+     "regex": "\\bCREATE\\s+(?:OR\\s+REPLACE\\s+)?(?:TABLE|INDEX|UNIQUE\\s+INDEX|FUNCTION|TRIGGER|ROLE|DATABASE|SCHEMA|VIEW|SEQUENCE|EXTENSION)\\b",
+     "flags": ""
+    },
+    {
+     "id": "sql_alter",
+     "regex": "\\bALTER\\s+(?:TABLE|ROLE|DATABASE|SCHEMA|INDEX|FUNCTION|SEQUENCE|VIEW)\\b",
+     "flags": ""
+    },
+    {
+     "id": "sqlstate",
+     "regex": "\\bSQLSTATE\\b",
+     "flags": "i"
+    }
+   ],
+   "sql_note": "SQL keywords are matched in upper case only, as SQL is written in code and in the driver's errors: \"select an account from the list\" is ordinary words.",
+   "registry": [
+    "tables",
+    "constraints"
+   ],
+   "registry_note": "every table and every named constraint and index in the engine's SQLAlchemy metadata, with every plugin loaded; matched by `identifier_form`"
+  },
+  {
+   "rule": 4,
+   "name": "a code",
+   "patterns": [
+    {
+     "id": "question_code",
+     "regex": "\\b[a-z][a-z0-9]*(?:_[a-z0-9]+)*_(?:unknown|ambiguous|missing)\\b",
+     "flags": ""
+    }
+   ],
+   "question_code_note": "the engine's question codes by shape (common.QUESTION_SUFFIXES), resolved at test time too",
+   "registry": [
+    "refusal_codes",
+    "event_codes",
+    "api_error_codes",
+    "own_code"
+   ],
+   "registry_note": "every Refusal code the engine's source constructs (a literal, or an f-string read as a pattern), every event `code` it writes, the codes below, and the response's own `code`; matched by `identifier_form`",
+   "api_error_codes": [
+    "unauthenticated",
+    "forbidden",
+    "no_card",
+    "no_conversation",
+    "not_found",
+    "method_not_allowed",
+    "internal_error",
+    "digest",
+    "fenced",
+    "replaces_mismatch",
+    "client_message_id_reused",
+    "invalid_request",
+    "busy",
+    "message_overtaken",
+    "too_many_streams",
+    "no_file",
+    "sign_in_code_invalid",
+    "too_many_attempts",
+    "tls_required",
+    "wrong_host",
+    "bad_origin",
+    "already_signed_in",
+    "model_rate_limited",
+    "turn_timeout",
+    "answer_interrupted",
+    "turn_stopped"
+   ],
+   "error_codes_from": "the API error body's codes, the codes the API's frozen fixture pins, and the turn's planned event codes"
+  },
+  {
+   "rule": 5,
+   "name": "an internal id or a registered name",
+   "patterns": [
+    {
+     "id": "uuid",
+     "regex": "\\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\b",
+     "flags": ""
+    },
+    {
+     "id": "hex_run",
+     "regex": "(?<![0-9A-Za-z])(?=[0-9a-fA-F]*[a-fA-F])(?=[0-9a-fA-F]*[0-9])[0-9a-fA-F]{16,}(?![0-9A-Za-z])",
+     "flags": ""
+    },
+    {
+     "id": "id_pair",
+     "regex": "\\b(?:[a-z][a-z0-9]*_)*id\\s*=|[\"']id[\"']\\s*:|\\b[a-z][a-z0-9]*(?:_[a-z0-9]+)*_id\\b",
+     "flags": ""
+    },
+    {
+     "id": "capability_id",
+     "regex": "\\b(?:planned|unsupported|available|op|metric)\\.[a-z0-9_]+(?:\\.[a-z0-9_]+)*\\b",
+     "flags": ""
+    }
+   ],
+   "hex_run_note": "a run of 16 or more hex digits holding at least one letter and one digit: a long number alone (an owner's bank account number) is the owner's own figure",
+   "registry": [
+    "contracts",
+    "tools",
+    "metrics",
+    "voucher_types",
+    "services",
+    "contract_fields",
+    "columns",
+    "plugins"
+   ],
+   "registry_note": "contract, tool, metric, voucher type and service names from the plugin registry, every contract's input field names (nested models too), every table's column names and the plugin names (dotted form only); matched by `identifier_form`"
+  },
+  {
+   "rule": 6,
+   "name": "a path, address, port or URL",
+   "patterns": [
+    {
+     "id": "drive_letter",
+     "regex": "(?<![A-Za-z])[A-Za-z]:[\\\\/]",
+     "flags": ""
+    },
+    {
+     "id": "backslash_path",
+     "regex": "\\w\\\\\\w|\\\\\\\\",
+     "flags": ""
+    },
+    {
+     "id": "unix_path",
+     "regex": "/(?:home|tmp|Users|var|etc|opt|usr)/",
+     "flags": ""
+    },
+    {
+     "id": "loopback",
+     "regex": "\\b127\\.0\\.0\\.1\\b|\\blocalhost\\b|\\[::1\\]|\\b0\\.0\\.0\\.0\\b",
+     "flags": "i"
+    },
+    {
+     "id": "host_port",
+     "regex": "\\b(?:[a-z][\\w-]*(?:\\.[\\w-]+)*|\\d{1,3}(?:\\.\\d{1,3}){3}):\\d{2,5}\\b",
+     "flags": ""
+    },
+    {
+     "id": "pipe_name",
+     "regex": "\\bpipe[\\\\/]|\\.\\\\pipe\\b",
+     "flags": "i"
+    },
+    {
+     "id": "url",
+     "regex": "\\b[a-z][a-z0-9+.-]*://\\S+",
+     "flags": "i"
+    }
+   ],
+   "host_port_note": "a host that starts with a lower-case letter or is an IPv4 address: \"10:30\" is a time",
+   "url_note": "a URL fails unless the allow list names it (allow id `allowed_url`)"
+  },
+  {
+   "rule": 7,
+   "name": "a secret's shape",
+   "patterns": [
+    {
+     "id": "private_key",
+     "regex": "-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----",
+     "flags": ""
+    },
+    {
+     "id": "openrouter_key",
+     "regex": "\\bsk-or-v1-[0-9a-f]{32,}",
+     "flags": ""
+    },
+    {
+     "id": "openai_key",
+     "regex": "\\bsk-(?!or-v1-)(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}",
+     "flags": ""
+    },
+    {
+     "id": "aws_access_key",
+     "regex": "\\b(?:AKIA|ASIA)[A-Z2-7]{16}\\b",
+     "flags": ""
+    },
+    {
+     "id": "github_token",
+     "regex": "\\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})",
+     "flags": ""
+    },
+    {
+     "id": "slack_token",
+     "regex": "\\bxox[abposr]-[A-Za-z0-9-]{10,}",
+     "flags": ""
+    },
+    {
+     "id": "bearer_token",
+     "regex": "\\bbearer\\s+\\S{16,}",
+     "flags": "i"
+    },
+    {
+     "id": "jwt",
+     "regex": "\\beyJ[A-Za-z0-9_-]{8,}\\.eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}",
+     "flags": ""
+    },
+    {
+     "id": "database_url_password",
+     "regex": "\\b[a-z][a-z0-9+.-]*://[^\\s:/@]+:[^\\s@/]+@[^\\s/]+",
+     "flags": ""
+    },
+    {
+     "id": "password_assignment",
+     "regex": "(?<![A-Za-z0-9])(?:\\\\?['\"])?(?:password|passwd|pwd|secret|api[_-]?key|token|access[_-]?key|authorization)(?:\\\\?['\"])?\\s*[:=]\\s*(?=\\S)",
+     "flags": "i"
+    },
+    {
+     "id": "muse_test_key",
+     "regex": "\\bLLM_\\d+_[0-9a-f]{32}\\b",
+     "flags": ""
+    },
+    {
+     "id": "planted_test_key",
+     "regex": "erpclaw-planted-secret-[0-9a-f]{8,}",
+     "flags": "i"
+    }
+   ],
+   "shapes_note": "the hosted-model guard's CREDENTIAL_SHAPES (erpclaw_assistant.hosted, not yet in this engine), copied by label; when the engine defines CREDENTIAL_SHAPES the checker reads those too. `muse_test_key` is the Muse key shape the suite plants (tests/test_muse.py synthetic_key); `planted_test_key` the marker a sweep plants. A test may also plant exact values.",
+   "registry": [
+    "credential_shapes"
+   ]
+  }
+ ],
+ "allow": [
+  {
+   "id": "resend_message_id",
+   "exact": "Message-ID",
+   "card_title": "Send this message again",
+   "rules": [5],
+   "reason": "Only the canonical outbox UUID within the Message-ID value on this exact resend card line is owner data: the owner must see that sending again keeps the same mail identity. This is no general identifier or prose allowance."
+  },
+  {
+   "id": "document_number",
+   "regex": "\\b[A-Z]{2,5}-\\d{4}-\\d{3,}\\b",
+   "flags": "",
+   "examples": [
+    "GR-2026-00001",
+    "SINV-2026-00012",
+    "SPAY-2026-00003",
+    "INV-2026-00008"
+   ],
+   "reason": "a document's number is how the owner finds the document; the owner must read it"
+  },
+  {
+   "id": "document_line_number",
+   "regex": "\\bon line \\d+(?= can still come back into stock\\.)",
+   "flags": "",
+   "examples": [
+    "Only 2 of Copper Wire on line 3 can still come back into stock."
+   ],
+   "reason": "a document line number the owner must read"
+  },
+  {
+   "id": "card_preview_line_number",
+   "regex": "^line \\d+:",
+   "flags": "",
+   "rules": [1],
+   "context": "card_preview_line",
+   "question": {"type": "ask", "code": "invoice_line_ambiguous"},
+   "examples": [
+    "line 1: 40 x Copper Wire @ 28.00 = 1,120.00"
+   ],
+   "reason": "a document line number the owner must read in a card preview or the invoice-line question's rendered message segments and choice labels; only each leading prefix is exempt from rule 1"
+  },
+  {
+   "id": "account_number",
+   "regex": "(?<=[A-Za-z)] )\\(\\d{3,6}\\)",
+   "flags": "",
+   "examples": [
+    "Bank (1100)",
+    "Accounts Receivable (1200)"
+   ],
+   "reason": "an account's number in parentheses after its name is the owner's own chart of accounts"
+  },
+  {
+   "id": "version_number",
+   "regex": "(?<![\\d.])\\d+\\.\\d+\\.\\d+(?!\\.?\\d)",
+   "flags": "",
+   "examples": [
+    "3.0.3"
+   ],
+   "reason": "an update text names the version the owner is moving to (three parts: an IPv4 address is not one)"
+  },
+  {
+   "id": "allowed_url",
+   "urls": [],
+   "reason": "the help and key pages the product names on purpose; none is a constant in the engine today (the model key page's address is a constant of the desktop host), so the list is empty and every URL fails until one is added here with its review"
+  },
+  {
+   "id": "owner_data",
+   "regex": null,
+   "reason": "the owner's own names and figures: no rule matches a plain name or a number, and identifiers are matched only as the engine registers them, so a customer's name or an amount never fails"
+  }
+ ]
+}

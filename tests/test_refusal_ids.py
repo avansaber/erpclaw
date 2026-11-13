@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from bookdiff import snapshot
 from erpclaw_api.app import create_app
+from erpclaw_assistant.graph import Assistant
 from erpclaw_assistant.model import Reply, ScriptedModel, call
 from erpclaw_core import approvals, catalogue as cat, common, contracts
 from erpclaw_core.common import Refusal
@@ -76,6 +77,7 @@ def only(events):
     ("Invoice Initech for 2 hours of consulting and add 8% sales tax.", "planned.tax_engine"),
 ], ids=["emailing", "stock", "sales tax"])
 def test_a_planned_area_chosen_through_the_catalogue_names_its_id(engine, as_released, said, pick):
+    Assistant(engine, ScriptedModel([]))
     before = snapshot(engine)
     with engine.connect() as conn:
         entry = next(e for e in cat.catalogue(conn) if e.id == pick)
@@ -159,6 +161,7 @@ H035 = "Change the posted invoice INV-2026-00007 from 2 training days to 3. Leav
 
 def test_editing_a_posted_document_in_place_is_unsupported_and_points_to_cancelling_and_reissuing(engine,
                                                                                                 payments_off):
+    Assistant(engine, ScriptedModel([]))
     before = snapshot(engine)
     e = only(through_catalogue(engine, H035, "unsupported.edit_posted"))
     assert e["outcome"] == "d" and e["capability"] == "unsupported.edit_posted"
@@ -212,7 +215,7 @@ def test_the_api_refuses_to_send_a_refusal_of_something_not_offered_without_its_
     """The check sits where events leave the engine, so it covers every route, those added later included."""
     from erpclaw_assistant.graph import Assistant
 
-    monkeypatch.setattr(Assistant, "turn", lambda self, cid, text, principal=None, choice=None: [dict(event)])
+    monkeypatch.setattr(Assistant, "turn", lambda self, cid, text, principal=None, choice=None, *, create=True, client_message_id=None: [dict(event)])
     c, cid = client(engine, [])
     with pytest.raises(ValueError, match="catalogue id"):
         c.post(f"/v1/conversations/{cid}/messages", json={"text": "anything"})
@@ -250,7 +253,7 @@ def switched_on_names(conn) -> set[str]:
 def test_a_revenue_request_on_the_demo_books_does_not_deny_invoicing(engine, as_released):
     said = "tell me my revenue in yr 2025"
     e = only(through_catalogue(engine, said, "metric.sales"))
-    assert e["text"] == "Figures and reports like revenue are not in ERPClaw yet: they are planned for the core release."
+    assert e["text"] == "Figures and reports like revenue are not in ERPClaw yet."
     assert "Sales is not" not in e["text"]
     with engine.connect() as conn:  # the plugins an owner switches on: the kernel is not one ("the core release")
         plugins = {p for p in enabled_plugins(conn) if REGISTRY.plugins[p].kind != "core"}
@@ -288,7 +291,8 @@ def test_the_ids_a_refusal_can_carry_never_collide_with_the_planned_areas():
 def test_the_no_match_reply_lists_what_is_switched_on_and_holds_no_number(engine, as_released):
     e = only(chat(engine, [Reply("", [call("find_capability", request="fly me to the moon")]),
                            Reply("", [call("choose_capability", pick="none")])], "fly me to the moon"))
-    assert e["text"].endswith(" Right now I can add customers, add items, draft invoices, and submit a draft invoice.")
+    with engine.connect() as conn:
+        assert e["text"].endswith(" " + cat.switched_on(conn))
     assert not re.search(r"\d", e["text"])
 
 
@@ -299,21 +303,21 @@ def test_the_list_changes_when_a_contract_is_switched_off(engine, payments_off, 
     with engine.connect() as conn:
         after = cat.switched_on(conn)
     assert "submit a draft invoice" in before and "submit a draft invoice" not in after
-    assert after == "Right now I can add customers, add items, and draft invoices."
+    assert after == "Right now I can add customers, add suppliers, add cash accounts, add items, list customers, list suppliers, list items, and draft invoices."
     with engine.begin() as conn:
         disable_plugin(conn, "sales")
     with engine.connect() as conn:
-        assert cat.switched_on(conn) == "Right now I can add customers and add items."
+        assert cat.switched_on(conn) == "Right now I can add customers, add suppliers, add cash accounts, add items, list customers, list suppliers, and list items."
 
 
 def test_with_every_operation_on_the_list_names_each_once_in_plain_words(engine):
     with engine.connect() as conn:
         text = cat.switched_on(conn)
-    assert text == ("Right now I can give figures and reports, add customers, add items, draft invoices, "
+    assert text == ("Right now I can give figures and reports, add customers, add suppliers, add cash accounts, add items, list customers, list suppliers, list items, send a message again, reverse supplier payments, record an opening position, draft invoices, "
                     "submit a draft invoice, record "
                     "payments, cancel an invoice, reverse a payment, take sales orders, deliver sales orders, issue "
                     "credit notes, list invoices, record opening stock, write off stock, record stock counts, "
-                    "and cancel stock movement.")
+                    "cancel stock movement, and reverse goods received.")
     assert not re.search(r"\d", text)
 
 

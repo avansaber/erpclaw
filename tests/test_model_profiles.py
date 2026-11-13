@@ -31,7 +31,17 @@ base_url = "https://models.test/v1"
 max_tokens = 1024
 timeout_s = 30
 temperature = 0
+max_input_tokens = 8000  # max_input_tokens (proposed)
+context_window = 12000  # context_window (proposed): synthetic test window
+admission = "conservative_bound"
 """
+
+
+@pytest.fixture
+def hosted_profile_text():
+    """Valid synthetic admission settings for the unrelated books-policy check."""
+    return ('[p]\nbackend = "openrouter"\nmodel = "m"\nbase_url = "https://x.test/v1"\n'
+            'max_input_tokens = 8000\ncontext_window = 12000\nadmission = "conservative_bound"\n')
 
 
 def synthetic_key() -> str:
@@ -100,9 +110,11 @@ MSGS = [{"role": "system", "content": "You are the bookkeeper."},
 
 def test_each_shipped_profile_loads():
     shipped = profiles.load()
-    assert {OPENROUTER, LMSTUDIO} <= set(shipped)
+    assert {OPENROUTER, DEEPINFRA, LMSTUDIO} <= set(shipped)
     assert shipped[OPENROUTER].backend == "openrouter" and shipped[OPENROUTER].hosted is True
     assert shipped[LMSTUDIO].backend == "lmstudio" and shipped[LMSTUDIO].hosted is False
+    assert shipped[OPENROUTER].context_window == shipped[DEEPINFRA].context_window == 262144
+    assert shipped[LMSTUDIO].context_window is None
 
 
 def test_a_second_dummy_profile_loads_through_the_same_path_and_sends_neither_extension():
@@ -128,8 +140,8 @@ def test_a_profile_the_engine_cannot_honour_is_refused_at_load(bad, says):
         profiles.load(bad)
 
 
-def test_a_hosted_profile_with_no_books_policy_runs_as_seeded_only():
-    p = profiles.load('[p]\nbackend = "openrouter"\nmodel = "m"\nbase_url = "https://x.test/v1"\n')["p"]
+def test_a_hosted_profile_with_no_books_policy_runs_as_seeded_only(hosted_profile_text):
+    p = profiles.load(hosted_profile_text)["p"]
     assert p.hosted_books == "seeded_only"
     assert profiles.load()[OPENROUTER].hosted_books == "seeded_only"
 

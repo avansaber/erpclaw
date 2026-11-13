@@ -3,7 +3,7 @@ name = "erpclaw-core"
 version = "0.0.2"
 description = "ERPClaw core: ledger, money, periods, approvals, operation keys, outbox, plugin loader"
 license = "GPL-3.0-only"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "sqlalchemy>=2.0",
     "pydantic>=2.7",

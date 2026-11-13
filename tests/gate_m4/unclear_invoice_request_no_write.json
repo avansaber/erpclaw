@@ -1,0 +1,4116 @@
+{
+  "case": "unclear_invoice_request_no_write",
+  "window": [
+    "2026-11-12T22:32:11.602767+00:00",
+    "2026-11-12T22:32:14.005652+00:00"
+  ],
+  "steps": [
+    {
+      "owner": "invoice ABC",
+      "events": [
+        {
+          "currency": "USD",
+          "type": "ask",
+          "text": "I can't find a customer called 'ABC'. Which customer is it for?",
+          "code": "customer_unknown",
+          "options": [],
+          "data": {
+            "field": "create_invoice#0:customer",
+            "question_id": "q1",
+            "choices": []
+          },
+          "question_id": "q1",
+          "kind": "free",
+          "choices": [
+            {
+              "code": "q1-cancel",
+              "label": "Cancel",
+              "control": true
+            }
+          ]
+        }
+      ],
+      "books": {
+        "books_identity": [
+          {
+            "id": "1",
+            "books_id": "<uuid:1>"
+          }
+        ],
+        "currency": [
+          {
+            "code": "EUR",
+            "name": "Euro",
+            "minor_units": "2"
+          },
+          {
+            "code": "GBP",
+            "name": "Pound Sterling",
+            "minor_units": "2"
+          },
+          {
+            "code": "INR",
+            "name": "Indian Rupee",
+            "minor_units": "2"
+          },
+          {
+            "code": "JPY",
+            "name": "Yen",
+            "minor_units": "0"
+          },
+          {
+            "code": "KWD",
+            "name": "Kuwaiti Dinar",
+            "minor_units": "3"
+          },
+          {
+            "code": "USD",
+            "name": "US Dollar",
+            "minor_units": "2"
+          }
+        ],
+        "erpclaw_books": [
+          {
+            "mark": "erpclaw-engine-books-v1"
+          },
+          {
+            "mark": "erpclaw-eval-books"
+          }
+        ],
+        "plugin_install": [
+          {
+            "name": "email_folder",
+            "version": "0.0.1",
+            "kind": "connector",
+            "installed_at": "2026-11-12 22:32:12.261422+00:00",
+            "manifest_digest": "<hex64:1>",
+            "artifact_digest": "<hex64:2>",
+            "after_core_revision": "0001",
+            "status": "installed"
+          },
+          {
+            "name": "sales",
+            "version": "0.0.4",
+            "kind": "business-module",
+            "installed_at": "2026-11-12 22:32:12.483173+00:00",
+            "manifest_digest": "<hex64:3>",
+            "artifact_digest": "<hex64:4>",
+            "after_core_revision": "0013",
+            "status": "installed"
+          },
+          {
+            "name": "stock",
+            "version": "0.1.1",
+            "kind": "business-module",
+            "installed_at": "2026-11-12 22:32:12.581022+00:00",
+            "manifest_digest": "<hex64:5>",
+            "artifact_digest": "<hex64:6>",
+            "after_core_revision": "0015",
+            "status": "installed"
+          }
+        ],
+        "principal": [
+          {
+            "id": "<uuid:2>",
+            "name": "owner",
+            "kind": "person",
+            "disabled": "False",
+            "grants_version": "1",
+            "token_sha256": null,
+            "created_at": "2026-11-12 22:32:12.212752+00:00"
+          }
+        ],
+        "company": [
+          {
+            "id": "<uuid:3>",
+            "name": "Stark Manufacturing Inc.",
+            "functional_currency": "USD",
+            "fiscal_year_start_month": "1",
+            "created_at": "2026-11-12 22:32:12.171103+00:00",
+            "date_order": null,
+            "status": "ready"
+          }
+        ],
+        "principal_session": [],
+        "principal_sign_in": [],
+        "account": [
+          {
+            "id": "<uuid:4>",
+            "company_id": "<uuid:3>",
+            "number": "1000",
+            "name": "Assets",
+            "root_type": "asset",
+            "account_type": null,
+            "is_group": "True",
+            "parent_id": null,
+            "frozen": "False",
+            "normal_side": "debit"
+          },
+          {
+            "id": "<uuid:5>",
+            "company_id": "<uuid:3>",
+            "number": "1100",
+            "name": "Bank",
+            "root_type": "asset",
+            "account_type": "bank",
+            "is_group": "False",
+            "parent_id": "<uuid:4>",
+            "frozen": "False",
+            "normal_side": "debit"
+          },
+          {
+            "id": "<uuid:6>",
+            "company_id": "<uuid:3>",
+            "number": "1300",
+            "name": "Inventory",
+            "root_type": "asset",
+            "account_type": "stock",
+            "is_group": "False",
+            "parent_id": "<uuid:4>",
+            "frozen": "False",
+            "normal_side": "debit"
+          },
+          {
+            "id": "<uuid:7>",
+            "company_id": "<uuid:3>",
+            "number": "2000",
+            "name": "Liabilities",
+            "root_type": "liability",
+            "account_type": null,
+            "is_group": "True",
+            "parent_id": null,
+            "frozen": "False",
+            "normal_side": "credit"
+          },
+          {
+            "id": "<uuid:8>",
+            "company_id": "<uuid:3>",
+            "number": "2100",
+            "name": "Accounts Payable",
+            "root_type": "liability",
+            "account_type": "payable",
+            "is_group": "False",
+            "parent_id": "<uuid:7>",
+            "frozen": "False",
+            "normal_side": "credit"
+          },
+          {
+            "id": "<uuid:9>",
+            "company_id": "<uuid:3>",
+            "number": "2300",
+            "name": "Stock Received Not Billed",
+            "root_type": "liability",
+            "account_type": "stock_received_not_billed",
+            "is_group": "False",
+            "parent_id": "<uuid:7>",
+            "frozen": "False",
+            "normal_side": "credit"
+          },
+          {
+            "id": "<uuid:10>",
+            "company_id": "<uuid:3>",
+            "number": "2310",
+            "name": "Asset Received Not Billed",
+            "root_type": "liability",
+            "account_type": null,
+            "is_group": "False",
+            "parent_id": "<uuid:7>",
+            "frozen": "False",
+            "normal_side": "credit"
+          },
+          {
+            "id": "<uuid:11>",
+            "company_id": "<uuid:3>",
+            "number": "3000",
+            "name": "Equity",
+            "root_type": "equity",
+            "account_type": null,
+            "is_group": "True",
+            "parent_id": null,
+            "frozen": "False",
+            "normal_side": "credit"
+          },
+          {
+            "id": "<uuid:12>",
+            "company_id": "<uuid:3>",
+            "number": "3100",
+            "name": "Retained Earnings",
+            "root_type": "equity",
+            "account_type": "retained_earnings",
+            "is_group": "False",
+            "parent_id": "<uuid:11>",
+            "frozen": "False",
+            "normal_side": "credit"
+          },
+          {
+            "id": "<uuid:13>",
+            "company_id": "<uuid:3>",
+            "number": "3900",
+            "name": "Opening Balance Equity",
+            "root_type": "equity",
+            "account_type": "opening_balance",
+            "is_group": "False",
+            "parent_id": "<uuid:11>",
+            "frozen": "False",
+            "normal_side": "credit"
+          },
+          {
+            "id": "<uuid:14>",
+            "company_id": "<uuid:3>",
+            "number": "4000",
+            "name": "Income",
+            "root_type": "income",
+            "account_type": null,
+            "is_group": "True",
+            "parent_id": null,
+            "frozen": "False",
+            "normal_side": "credit"
+          },
+          {
+            "id": "<uuid:15>",
+            "company_id": "<uuid:3>",
+            "number": "4130",
+            "name": "Sales Returns",
+            "root_type": "income",
+            "account_type": "sales_returns",
+            "is_group": "False",
+            "parent_id": "<uuid:14>",
+            "frozen": "False",
+            "normal_side": "debit"
+          },
+          {
+            "id": "<uuid:16>",
+            "company_id": "<uuid:3>",
+            "number": "5000",
+            "name": "Cost of Goods Sold",
+            "root_type": "expense",
+            "account_type": null,
+            "is_group": "True",
+            "parent_id": null,
+            "frozen": "False",
+            "normal_side": "debit"
+          },
+          {
+            "id": "<uuid:17>",
+            "company_id": "<uuid:3>",
+            "number": "5200",
+            "name": "Stock Adjustment",
+            "root_type": "expense",
+            "account_type": "stock_adjustment",
+            "is_group": "False",
+            "parent_id": "<uuid:16>",
+            "frozen": "False",
+            "normal_side": "debit"
+          },
+          {
+            "id": "<uuid:18>",
+            "company_id": "<uuid:3>",
+            "number": "5210",
+            "name": "Inventory Write-offs",
+            "root_type": "expense",
+            "account_type": "stock_write_off",
+            "is_group": "False",
+            "parent_id": "<uuid:16>",
+            "frozen": "False",
+            "normal_side": "debit"
+          },
+          {
+            "id": "<uuid:19>",
+            "company_id": "<uuid:3>",
+            "number": "6000",
+            "name": "Expenses",
+            "root_type": "expense",
+            "account_type": null,
+            "is_group": "True",
+            "parent_id": null,
+            "frozen": "False",
+            "normal_side": "debit"
+          },
+          {
+            "id": "<uuid:20>",
+            "company_id": "<uuid:3>",
+            "number": "6810",
+            "name": "Realized Exchange Gain/Loss",
+            "root_type": "expense",
+            "account_type": "exchange_gain_loss_realised",
+            "is_group": "False",
+            "parent_id": "<uuid:19>",
+            "frozen": "False",
+            "normal_side": "debit"
+          },
+          {
+            "id": "<uuid:21>",
+            "company_id": "<uuid:3>",
+            "number": "6820",
+            "name": "Unrealized Exchange Gain/Loss",
+            "root_type": "expense",
+            "account_type": "exchange_gain_loss_unrealised",
+            "is_group": "False",
+            "parent_id": "<uuid:19>",
+            "frozen": "False",
+            "normal_side": "debit"
+          },
+          {
+            "id": "<uuid:22>",
+            "company_id": "<uuid:3>",
+            "number": "6900",
+            "name": "Rounding",
+            "root_type": "expense",
+            "account_type": "rounding",
+            "is_group": "False",
+            "parent_id": "<uuid:19>",
+            "frozen": "False",
+            "normal_side": "debit"
+          },
+          {
+            "id": "<uuid:23>",
+            "company_id": "<uuid:3>",
+            "number": "1200",
+            "name": "Trade Receivables",
+            "root_type": "asset",
+            "account_type": "receivable",
+            "is_group": "False",
+            "parent_id": "<uuid:4>",
+            "frozen": "False",
+            "normal_side": "debit"
+          },
+          {
+            "id": "<uuid:24>",
+            "company_id": "<uuid:3>",
+            "number": "4100",
+            "name": "Sales Revenue",
+            "root_type": "income",
+            "account_type": "income",
+            "is_group": "False",
+            "parent_id": "<uuid:14>",
+            "frozen": "False",
+            "normal_side": "credit"
+          },
+          {
+            "id": "<uuid:25>",
+            "company_id": "<uuid:3>",
+            "number": "5100",
+            "name": "COGS - Materials",
+            "root_type": "expense",
+            "account_type": "cost_of_goods_sold",
+            "is_group": "False",
+            "parent_id": "<uuid:16>",
+            "frozen": "False",
+            "normal_side": "debit"
+          },
+          {
+            "id": "<uuid:26>",
+            "company_id": "<uuid:3>",
+            "number": "1131",
+            "name": "Raw Materials",
+            "root_type": "asset",
+            "account_type": "stock",
+            "is_group": "False",
+            "parent_id": "<uuid:4>",
+            "frozen": "False",
+            "normal_side": "debit"
+          },
+          {
+            "id": "<uuid:27>",
+            "company_id": "<uuid:3>",
+            "number": "1133",
+            "name": "Finished Goods",
+            "root_type": "asset",
+            "account_type": "stock",
+            "is_group": "False",
+            "parent_id": "<uuid:4>",
+            "frozen": "False",
+            "normal_side": "debit"
+          }
+        ],
+        "approval": [
+          {
+            "id": "<uuid:28>",
+            "principal_id": "<uuid:2>",
+            "company_id": "<uuid:3>",
+            "conversation_id": null,
+            "contract": "create_invoice",
+            "contract_version": "0.0.4",
+            "policy_version": "1",
+            "impl_version": "0.0.2+<hex64:4:prefix16>",
+            "args_json": "{\"customer\":\"Initech\",\"email\":false,\"items\":[{\"item\":\"Copper Wire\",\"quantity\":\"2\",\"rate\":null,\"warehouse\":null}],\"order\":null,\"submit\":false}",
+            "read_set_json": "[[\"company\",\"<uuid:3>\",\"<hex64:7>\"],[\"fiscal_period\",\"<uuid:29>\",\"<hex64:8>\"],[\"item\",\"<uuid:30>\",\"<hex64:9>\"],[\"party\",\"<uuid:31>\",\"<hex64:10>\"]]",
+            "card_json": "{\"amounts\":[{\"currency\":\"USD\",\"index\":2,\"kind\":\"unit_price\",\"label\":\"Item\",\"value\":\"28.00\",\"where\":\"lines\"},{\"currency\":\"USD\",\"index\":2,\"kind\":\"amount\",\"label\":\"Item\",\"value\":\"56.00\",\"where\":\"lines\"},{\"currency\":\"USD\",\"index\":3,\"kind\":\"amount\",\"label\":\"Total\",\"value\":\"56.00\",\"where\":\"lines\"}],\"books\":[\"Nothing posts to the books until the draft is submitted.\"],\"currency\":\"USD\",\"footer\":\"Valid 10 minutes. Rechecked before saving.\",\"lines\":[[\"Company\",\"Stark Manufacturing Inc.\"],[\"Customer\",\"Initech\"],[\"Item\",\"2 x Copper Wire @ 28.00 = 56.00\"],[\"Total\",\"56.00 USD\"],[\"Date\",\"26 Oct 2026\"],[\"Due\",\"25 Nov 2026\"],[\"Tax\",\"No tax calculated: no tax template is set. That is not a statement that no tax is owed.\"]],\"title\":\"Save a draft sales invoice\",\"warnings\":[]}",
+            "nonce": "<hex32:1>",
+            "digest": "<hex64:11>",
+            "status": "consumed",
+            "operation_key": "<uuid:32>",
+            "created_at": "2026-11-12 22:32:12.675868+00:00",
+            "expires_at": "2026-11-12 22:42:12.675751+00:00",
+            "decided_at": "2026-11-12 22:32:12.686594+00:00",
+            "approved_by": "<uuid:2>",
+            "approver_grants_version": "1",
+            "decision_json": null,
+            "request_card_token": null
+          }
+        ],
+        "audit_log": [
+          {
+            "id": "<uuid:33>",
+            "company_id": "<uuid:3>",
+            "at": "2026-11-12 22:32:12.715713+00:00",
+            "actor": "owner",
+            "action": "save_draft_invoice",
+            "document_type": "sales_invoice",
+            "document_id": "<uuid:34>",
+            "approval_id": null,
+            "detail": "{\"number\":\"INV-2026-00001\",\"total\":\"56.00\"}"
+          },
+          {
+            "id": "<uuid:35>",
+            "company_id": "<uuid:3>",
+            "at": "2026-11-12 22:32:12.716958+00:00",
+            "actor": "owner",
+            "action": "commit:create_invoice",
+            "document_type": null,
+            "document_id": null,
+            "approval_id": "<uuid:28>",
+            "detail": "{\"number\":\"INV-2026-00001\",\"operation_key\":\"<uuid:32>\",\"total\":\"56.00\"}"
+          }
+        ],
+        "conversation_fence": [
+          {
+            "conversation_id": "<uuid:95>",
+            "company_id": "<uuid:3>",
+            "generation": "1",
+            "live_token": "<hex32:2>",
+            "updated_at": "2026-11-12 22:32:13.882342+00:00"
+          }
+        ],
+        "dimension_set": [],
+        "external_ref": [],
+        "file_object": [],
+        "fiscal_year": [
+          {
+            "id": "<uuid:36>",
+            "company_id": "<uuid:3>",
+            "label": "2025",
+            "start_date": "2025-01-01",
+            "end_date": "2025-12-31",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:37>",
+            "company_id": "<uuid:3>",
+            "label": "2026",
+            "start_date": "2026-01-01",
+            "end_date": "2026-12-31",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:38>",
+            "company_id": "<uuid:3>",
+            "label": "2027",
+            "start_date": "2027-01-01",
+            "end_date": "2027-12-31",
+            "status": "open"
+          }
+        ],
+        "hosted_books_consent": [],
+        "item": [
+          {
+            "id": "<uuid:30>",
+            "company_id": "<uuid:3>",
+            "name": "Copper Wire",
+            "unit": "Meter",
+            "standard_rate": "28.00",
+            "kind": "stock"
+          }
+        ],
+        "number_series": [
+          {
+            "company_id": "<uuid:3>",
+            "series": "INV",
+            "fiscal_year": "2026",
+            "next_value": "2"
+          }
+        ],
+        "outbox": [],
+        "party": [
+          {
+            "id": "<uuid:39>",
+            "company_id": "<uuid:3>",
+            "kind": "customer",
+            "name": "Acme Corporation",
+            "email": null,
+            "city": null,
+            "city_key": null
+          },
+          {
+            "id": "<uuid:40>",
+            "company_id": "<uuid:3>",
+            "kind": "customer",
+            "name": "Wayne Industries",
+            "email": null,
+            "city": null,
+            "city_key": null
+          },
+          {
+            "id": "<uuid:41>",
+            "company_id": "<uuid:3>",
+            "kind": "customer",
+            "name": "Oscorp Industries",
+            "email": null,
+            "city": null,
+            "city_key": null
+          },
+          {
+            "id": "<uuid:42>",
+            "company_id": "<uuid:3>",
+            "kind": "customer",
+            "name": "Pied Piper Inc",
+            "email": null,
+            "city": null,
+            "city_key": null
+          },
+          {
+            "id": "<uuid:43>",
+            "company_id": "<uuid:3>",
+            "kind": "customer",
+            "name": "Hooli Technologies",
+            "email": null,
+            "city": null,
+            "city_key": null
+          },
+          {
+            "id": "<uuid:44>",
+            "company_id": "<uuid:3>",
+            "kind": "customer",
+            "name": "Stark Retail Outlets",
+            "email": null,
+            "city": null,
+            "city_key": null
+          },
+          {
+            "id": "<uuid:45>",
+            "company_id": "<uuid:3>",
+            "kind": "customer",
+            "name": "Parker Electronics",
+            "email": null,
+            "city": null,
+            "city_key": null
+          },
+          {
+            "id": "<uuid:46>",
+            "company_id": "<uuid:3>",
+            "kind": "customer",
+            "name": "Xavier Laboratories",
+            "email": null,
+            "city": null,
+            "city_key": null
+          },
+          {
+            "id": "<uuid:47>",
+            "company_id": "<uuid:3>",
+            "kind": "customer",
+            "name": "LexCorp",
+            "email": null,
+            "city": null,
+            "city_key": null
+          },
+          {
+            "id": "<uuid:48>",
+            "company_id": "<uuid:3>",
+            "kind": "customer",
+            "name": "Daily Planet Media",
+            "email": null,
+            "city": null,
+            "city_key": null
+          },
+          {
+            "id": "<uuid:31>",
+            "company_id": "<uuid:3>",
+            "kind": "customer",
+            "name": "Initech",
+            "email": null,
+            "city": null,
+            "city_key": null
+          }
+        ],
+        "posting": [
+          {
+            "id": "<uuid:49>",
+            "company_id": "<uuid:3>",
+            "seq": "1",
+            "posting_date": "2026-01-01",
+            "voucher_type": "stock_receipt",
+            "voucher_id": "<uuid:50>",
+            "memo": null,
+            "reverses_posting_id": null,
+            "operation_key": null,
+            "created_at": "2026-11-12 22:32:12.646195+00:00",
+            "created_by": "owner",
+            "prev_hash": "<chain-origin>",
+            "hash": "<hex64:12>",
+            "hash_format": "2",
+            "ledger": "general"
+          }
+        ],
+        "posting_chain_head": [
+          {
+            "company_id": "<uuid:3>",
+            "last_seq": "1",
+            "last_hash": "<hex64:12>"
+          }
+        ],
+        "principal_grant": [
+          {
+            "principal_id": "<uuid:2>",
+            "company_id": "<uuid:3>",
+            "permission": "view"
+          },
+          {
+            "principal_id": "<uuid:2>",
+            "company_id": "<uuid:3>",
+            "permission": "draft"
+          },
+          {
+            "principal_id": "<uuid:2>",
+            "company_id": "<uuid:3>",
+            "permission": "approve"
+          },
+          {
+            "principal_id": "<uuid:2>",
+            "company_id": "<uuid:3>",
+            "permission": "post"
+          },
+          {
+            "principal_id": "<uuid:2>",
+            "company_id": "<uuid:3>",
+            "permission": "reverse"
+          },
+          {
+            "principal_id": "<uuid:2>",
+            "company_id": "<uuid:3>",
+            "permission": "close_period"
+          },
+          {
+            "principal_id": "<uuid:2>",
+            "company_id": "<uuid:3>",
+            "permission": "export"
+          },
+          {
+            "principal_id": "<uuid:2>",
+            "company_id": "<uuid:3>",
+            "permission": "administer_users"
+          },
+          {
+            "principal_id": "<uuid:2>",
+            "company_id": "<uuid:3>",
+            "permission": "install_plugins"
+          },
+          {
+            "principal_id": "<uuid:2>",
+            "company_id": "<uuid:3>",
+            "permission": "manage_secrets"
+          }
+        ],
+        "stock_voucher": [],
+        "sync_payload": [],
+        "system_of_record": [],
+        "account_map": [],
+        "fiscal_period": [
+          {
+            "id": "<uuid:51>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:36>",
+            "period_no": "1",
+            "start_date": "2025-01-01",
+            "end_date": "2025-01-31",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:52>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:36>",
+            "period_no": "2",
+            "start_date": "2025-02-01",
+            "end_date": "2025-02-28",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:53>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:36>",
+            "period_no": "3",
+            "start_date": "2025-03-01",
+            "end_date": "2025-03-31",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:54>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:36>",
+            "period_no": "4",
+            "start_date": "2025-04-01",
+            "end_date": "2025-04-30",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:55>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:36>",
+            "period_no": "5",
+            "start_date": "2025-05-01",
+            "end_date": "2025-05-31",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:56>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:36>",
+            "period_no": "6",
+            "start_date": "2025-06-01",
+            "end_date": "2025-06-30",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:57>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:36>",
+            "period_no": "7",
+            "start_date": "2025-07-01",
+            "end_date": "2025-07-31",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:58>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:36>",
+            "period_no": "8",
+            "start_date": "2025-08-01",
+            "end_date": "2025-08-31",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:59>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:36>",
+            "period_no": "9",
+            "start_date": "2025-09-01",
+            "end_date": "2025-09-30",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:60>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:36>",
+            "period_no": "10",
+            "start_date": "2025-10-01",
+            "end_date": "2025-10-31",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:61>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:36>",
+            "period_no": "11",
+            "start_date": "2025-11-01",
+            "end_date": "2025-11-30",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:62>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:36>",
+            "period_no": "12",
+            "start_date": "2025-12-01",
+            "end_date": "2025-12-31",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:63>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:37>",
+            "period_no": "1",
+            "start_date": "2026-01-01",
+            "end_date": "2026-01-31",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:64>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:37>",
+            "period_no": "2",
+            "start_date": "2026-02-01",
+            "end_date": "2026-02-28",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:65>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:37>",
+            "period_no": "3",
+            "start_date": "2026-03-01",
+            "end_date": "2026-03-31",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:66>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:37>",
+            "period_no": "4",
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-30",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:67>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:37>",
+            "period_no": "5",
+            "start_date": "2026-05-01",
+            "end_date": "2026-05-31",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:68>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:37>",
+            "period_no": "6",
+            "start_date": "2026-06-01",
+            "end_date": "2026-06-30",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:69>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:37>",
+            "period_no": "7",
+            "start_date": "2026-07-01",
+            "end_date": "2026-07-31",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:70>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:37>",
+            "period_no": "8",
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-31",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:71>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:37>",
+            "period_no": "9",
+            "start_date": "2026-09-01",
+            "end_date": "2026-09-30",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:29>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:37>",
+            "period_no": "10",
+            "start_date": "2026-10-01",
+            "end_date": "2026-10-31",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:72>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:37>",
+            "period_no": "11",
+            "start_date": "2026-11-01",
+            "end_date": "2026-11-30",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:73>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:37>",
+            "period_no": "12",
+            "start_date": "2026-12-01",
+            "end_date": "2026-12-31",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:74>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:38>",
+            "period_no": "1",
+            "start_date": "2027-01-01",
+            "end_date": "2027-01-31",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:75>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:38>",
+            "period_no": "2",
+            "start_date": "2027-02-01",
+            "end_date": "2027-02-28",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:76>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:38>",
+            "period_no": "3",
+            "start_date": "2027-03-01",
+            "end_date": "2027-03-31",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:77>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:38>",
+            "period_no": "4",
+            "start_date": "2027-04-01",
+            "end_date": "2027-04-30",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:78>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:38>",
+            "period_no": "5",
+            "start_date": "2027-05-01",
+            "end_date": "2027-05-31",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:79>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:38>",
+            "period_no": "6",
+            "start_date": "2027-06-01",
+            "end_date": "2027-06-30",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:80>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:38>",
+            "period_no": "7",
+            "start_date": "2027-07-01",
+            "end_date": "2027-07-31",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:81>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:38>",
+            "period_no": "8",
+            "start_date": "2027-08-01",
+            "end_date": "2027-08-31",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:82>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:38>",
+            "period_no": "9",
+            "start_date": "2027-09-01",
+            "end_date": "2027-09-30",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:83>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:38>",
+            "period_no": "10",
+            "start_date": "2027-10-01",
+            "end_date": "2027-10-31",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:84>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:38>",
+            "period_no": "11",
+            "start_date": "2027-11-01",
+            "end_date": "2027-11-30",
+            "status": "open"
+          },
+          {
+            "id": "<uuid:85>",
+            "company_id": "<uuid:3>",
+            "fiscal_year_id": "<uuid:38>",
+            "period_no": "12",
+            "start_date": "2027-12-01",
+            "end_date": "2027-12-31",
+            "status": "open"
+          }
+        ],
+        "fiscal_year_close": [],
+        "ledger_entry": [
+          {
+            "id": "<uuid:86>",
+            "company_id": "<uuid:3>",
+            "posting_id": "<uuid:49>",
+            "line_no": "1",
+            "account_id": "<uuid:26>",
+            "party_id": null,
+            "debit": "5600.00",
+            "credit": "0.00",
+            "currency": "USD",
+            "rate": "1",
+            "functional_currency": "USD",
+            "functional_debit": "5600.00",
+            "functional_credit": "0.00",
+            "kind": "measured",
+            "dimension_set_id": null
+          },
+          {
+            "id": "<uuid:87>",
+            "company_id": "<uuid:3>",
+            "posting_id": "<uuid:49>",
+            "line_no": "2",
+            "account_id": "<uuid:9>",
+            "party_id": null,
+            "debit": "0.00",
+            "credit": "5600.00",
+            "currency": "USD",
+            "rate": "1",
+            "functional_currency": "USD",
+            "functional_debit": "0.00",
+            "functional_credit": "5600.00",
+            "kind": "measured",
+            "dimension_set_id": null
+          }
+        ],
+        "operation_outcome": [
+          {
+            "key": "<uuid:32>",
+            "company_id": "<uuid:3>",
+            "approval_id": "<uuid:28>",
+            "card_digest": "<hex64:11>",
+            "status": "committed",
+            "result_json": "{\"amounts\":[{\"currency\":\"USD\",\"of\":\"INV-2026-00001\",\"value\":\"56.00\",\"what\":\"total\"}],\"data\":{\"number\":\"INV-2026-00001\",\"total\":\"56.00\"},\"figures\":[\"56.00 USD\"],\"text\":\"Saved draft invoice INV-2026-00001 for Initech: 56.00 USD, due 25 Nov 2026.\"}",
+            "committed_at": "2026-11-12 22:32:12.717850+00:00"
+          }
+        ],
+        "outbox_attachment": [],
+        "outbox_attempt": [],
+        "sales_invoice": [
+          {
+            "id": "<uuid:34>",
+            "company_id": "<uuid:3>",
+            "number": "INV-2026-00001",
+            "customer_id": "<uuid:31>",
+            "posting_date": "2026-10-26",
+            "due_date": "2026-11-25",
+            "currency": "USD",
+            "total": "56.00",
+            "outstanding": "0.00",
+            "status": "draft",
+            "operation_key": "<uuid:32>",
+            "submit_operation_key": null,
+            "cancel_operation_key": null,
+            "created_at": "2026-11-12 22:32:12.711529+00:00"
+          }
+        ],
+        "sales_order": [],
+        "sales_payment": [],
+        "stock_goods_received": [],
+        "stock_warehouse": [
+          {
+            "id": "<uuid:88>",
+            "company_id": "<uuid:3>",
+            "name": "Stark Manufacturing Inc. - Main Warehouse",
+            "account_id": "<uuid:26>",
+            "is_default": "True",
+            "position": "1",
+            "created_at": "2026-11-12 22:32:12.602214+00:00"
+          },
+          {
+            "id": "<uuid:89>",
+            "company_id": "<uuid:3>",
+            "name": "Raw Materials Store",
+            "account_id": "<uuid:26>",
+            "is_default": "False",
+            "position": "2",
+            "created_at": "2026-11-12 22:32:12.606098+00:00"
+          },
+          {
+            "id": "<uuid:90>",
+            "company_id": "<uuid:3>",
+            "name": "Finished Goods Store",
+            "account_id": "<uuid:27>",
+            "is_default": "False",
+            "position": "3",
+            "created_at": "2026-11-12 22:32:12.610054+00:00"
+          }
+        ],
+        "supplier_payment": [],
+        "sync_journal": [],
+        "sales_credit_note": [],
+        "sales_delivery": [],
+        "sales_invoice_line": [
+          {
+            "id": "<uuid:91>",
+            "company_id": "<uuid:3>",
+            "invoice_id": "<uuid:34>",
+            "currency": "USD",
+            "item_id": "<uuid:30>",
+            "quantity": "2",
+            "rate": "28.00",
+            "amount": "56.00",
+            "line_no": "1",
+            "named_warehouse_id": null,
+            "item_kind": "stock"
+          }
+        ],
+        "sales_order_line": [],
+        "sales_payment_allocation": [],
+        "stock_head": [
+          {
+            "id": "<uuid:92>",
+            "company_id": "<uuid:3>",
+            "item_id": "<uuid:30>",
+            "warehouse_id": "<uuid:89>",
+            "currency": "USD",
+            "last_seq": "1",
+            "qty": "200",
+            "value": "5600.00",
+            "last_date": "2026-01-01"
+          }
+        ],
+        "stock_item": [
+          {
+            "id": "<uuid:93>",
+            "company_id": "<uuid:3>",
+            "item_id": "<uuid:30>",
+            "method": "moving_average",
+            "default_warehouse_id": "<uuid:88>",
+            "created_at": "2026-11-12 22:32:12.614924+00:00"
+          }
+        ],
+        "stock_ledger_entry": [
+          {
+            "id": "<uuid:94>",
+            "company_id": "<uuid:3>",
+            "item_id": "<uuid:30>",
+            "warehouse_id": "<uuid:89>",
+            "currency": "USD",
+            "posting_date": "2026-01-01",
+            "seq": "1",
+            "direction": "in",
+            "qty": "200",
+            "value": "5600.00",
+            "qty_after": "200",
+            "value_after": "5600.00",
+            "voucher_type": "stock_receipt",
+            "voucher_id": "<uuid:50>",
+            "line_no": "1",
+            "against_entry_id": null,
+            "reverses_entry_id": null,
+            "created_at": "2026-11-12 22:32:12.631259+00:00"
+          }
+        ],
+        "stock_voucher_line": [],
+        "supplier_payable": [],
+        "sales_credit_note_line": [],
+        "sales_delivery_line": [],
+        "sales_invoice_issue": [],
+        "stock_layer": [],
+        "supplier_payment_allocation": [],
+        "sales_credit_note_return": [],
+        "sales_invoice_delivery": [],
+        "stock_layer_take": []
+      }
+    }
+  ],
+  "rules": {
+    "books_identity.id": "literal",
+    "books_identity.books_id": "uuid",
+    "currency.code": "literal",
+    "currency.name": "literal",
+    "currency.minor_units": "literal",
+    "erpclaw_books.mark": "literal",
+    "plugin_install.name": "literal",
+    "plugin_install.version": "literal",
+    "plugin_install.kind": "literal",
+    "plugin_install.installed_at": "timestamp",
+    "plugin_install.manifest_digest": "literal",
+    "plugin_install.artifact_digest": "literal",
+    "plugin_install.after_core_revision": "literal",
+    "plugin_install.status": "literal",
+    "principal.id": "uuid",
+    "principal.name": "literal",
+    "principal.kind": "literal",
+    "principal.disabled": "literal",
+    "principal.grants_version": "literal",
+    "principal.token_sha256": "literal",
+    "principal.created_at": "timestamp",
+    "company.id": "uuid",
+    "company.name": "literal",
+    "company.functional_currency": "literal",
+    "company.fiscal_year_start_month": "literal",
+    "company.created_at": "timestamp",
+    "company.date_order": "literal",
+    "company.status": "literal",
+    "principal_session.id": "uuid",
+    "principal_session.secret_sha256": "literal",
+    "principal_session.principal_id": "uuid",
+    "principal_session.created_at": "timestamp",
+    "principal_session.last_seen_at": "timestamp",
+    "principal_session.idle_expires_at": "timestamp",
+    "principal_session.expires_at": "timestamp+600s",
+    "principal_session.ended_at": "timestamp",
+    "principal_session.ended_why": "literal",
+    "principal_session.user_agent": "literal",
+    "principal_sign_in.code_sha256": "literal",
+    "principal_sign_in.principal_id": "uuid",
+    "principal_sign_in.created_at": "timestamp",
+    "principal_sign_in.expires_at": "timestamp+600s",
+    "principal_sign_in.used_at": "timestamp",
+    "principal_sign_in.created_by": "literal",
+    "principal_sign_in.run_id": "literal",
+    "account.id": "uuid",
+    "account.company_id": "uuid",
+    "account.number": "literal",
+    "account.name": "literal",
+    "account.root_type": "literal",
+    "account.account_type": "literal",
+    "account.is_group": "literal",
+    "account.parent_id": "uuid",
+    "account.frozen": "literal",
+    "account.normal_side": "literal",
+    "approval.id": "uuid",
+    "approval.principal_id": "uuid",
+    "approval.company_id": "uuid",
+    "approval.conversation_id": "uuid",
+    "approval.contract": "literal",
+    "approval.contract_version": "literal",
+    "approval.policy_version": "literal",
+    "approval.impl_version": "literal",
+    "approval.args_json": "json-bound-tokens",
+    "approval.read_set_json": "json-bound-tokens",
+    "approval.card_json": "json-bound-tokens",
+    "approval.nonce": "hex32",
+    "approval.digest": "hex64",
+    "approval.status": "literal",
+    "approval.operation_key": "uuid",
+    "approval.created_at": "timestamp",
+    "approval.expires_at": "timestamp+600s",
+    "approval.decided_at": "timestamp",
+    "approval.approved_by": "uuid",
+    "approval.approver_grants_version": "literal",
+    "approval.decision_json": "json-bound-tokens",
+    "approval.request_card_token": "hex64",
+    "audit_log.id": "uuid",
+    "audit_log.company_id": "uuid",
+    "audit_log.at": "timestamp",
+    "audit_log.actor": "literal",
+    "audit_log.action": "literal",
+    "audit_log.document_type": "literal",
+    "audit_log.document_id": "uuid",
+    "audit_log.approval_id": "uuid",
+    "audit_log.detail": "literal",
+    "conversation_fence.conversation_id": "uuid",
+    "conversation_fence.company_id": "uuid",
+    "conversation_fence.generation": "literal",
+    "conversation_fence.live_token": "hex64",
+    "conversation_fence.updated_at": "timestamp",
+    "dimension_set.id": "uuid",
+    "dimension_set.company_id": "uuid",
+    "dimension_set.content": "literal",
+    "dimension_set.digest": "hex64",
+    "dimension_set.created_at": "timestamp",
+    "external_ref.id": "uuid",
+    "external_ref.company_id": "uuid",
+    "external_ref.external_system": "literal",
+    "external_ref.object_type": "literal",
+    "external_ref.local_id": "uuid",
+    "external_ref.external_id": "literal",
+    "external_ref.last_synced_at": "timestamp",
+    "file_object.id": "uuid",
+    "file_object.company_id": "uuid",
+    "file_object.sha256": "literal",
+    "file_object.size": "literal",
+    "file_object.media_type": "literal",
+    "file_object.voucher_type": "literal",
+    "file_object.voucher_id": "uuid",
+    "file_object.created_at": "timestamp",
+    "file_object.retention_until": "literal",
+    "file_object.render_inputs": "literal",
+    "fiscal_year.id": "uuid",
+    "fiscal_year.company_id": "uuid",
+    "fiscal_year.label": "literal",
+    "fiscal_year.start_date": "literal",
+    "fiscal_year.end_date": "literal",
+    "fiscal_year.status": "literal",
+    "hosted_books_consent.company_id": "uuid",
+    "hosted_books_consent.profile_name": "literal",
+    "hosted_books_consent.provider": "literal",
+    "hosted_books_consent.model_id": "literal",
+    "hosted_books_consent.endpoint_host": "literal",
+    "hosted_books_consent.route_digest": "literal",
+    "hosted_books_consent.route_version": "literal",
+    "hosted_books_consent.retention_version": "literal",
+    "hosted_books_consent.wording_version": "literal",
+    "hosted_books_consent.consented_at": "timestamp",
+    "hosted_books_consent.consented_by": "literal",
+    "hosted_books_consent.status": "literal",
+    "hosted_books_consent.approval_id": "uuid",
+    "hosted_books_consent.operation_key": "uuid",
+    "item.id": "uuid",
+    "item.company_id": "uuid",
+    "item.name": "literal",
+    "item.unit": "literal",
+    "item.standard_rate": "literal",
+    "item.kind": "literal",
+    "number_series.company_id": "uuid",
+    "number_series.series": "literal",
+    "number_series.fiscal_year": "literal",
+    "number_series.next_value": "literal",
+    "outbox.id": "uuid",
+    "outbox.company_id": "uuid",
+    "outbox.operation_key": "uuid",
+    "outbox.slot": "literal",
+    "outbox.recipient": "literal",
+    "outbox.subject": "literal",
+    "outbox.body": "literal",
+    "outbox.status": "literal",
+    "outbox.created_at": "timestamp",
+    "outbox.delivered_at": "timestamp",
+    "outbox.detail": "literal",
+    "outbox.message_id": "literal",
+    "outbox.from_address": "literal",
+    "outbox.from_name": "literal",
+    "outbox.reply_to": "literal",
+    "outbox.current_attempt_id": "uuid",
+    "outbox.next_try_at": "timestamp",
+    "outbox.tries": "literal",
+    "outbox.first_failed_at": "timestamp",
+    "outbox.accepted_at": "timestamp",
+    "party.id": "uuid",
+    "party.company_id": "uuid",
+    "party.kind": "literal",
+    "party.name": "literal",
+    "party.email": "literal",
+    "party.city": "literal",
+    "party.city_key": "literal",
+    "posting.id": "uuid",
+    "posting.company_id": "uuid",
+    "posting.seq": "literal",
+    "posting.posting_date": "literal",
+    "posting.voucher_type": "literal",
+    "posting.voucher_id": "uuid",
+    "posting.memo": "literal",
+    "posting.reverses_posting_id": "uuid",
+    "posting.operation_key": "uuid",
+    "posting.created_at": "timestamp",
+    "posting.created_by": "literal",
+    "posting.prev_hash": "hex64",
+    "posting.hash": "hex64",
+    "posting.hash_format": "literal",
+    "posting.ledger": "literal",
+    "posting_chain_head.company_id": "uuid",
+    "posting_chain_head.last_seq": "literal",
+    "posting_chain_head.last_hash": "hex64",
+    "principal_grant.principal_id": "uuid",
+    "principal_grant.company_id": "uuid",
+    "principal_grant.permission": "literal",
+    "stock_voucher.id": "uuid",
+    "stock_voucher.company_id": "uuid",
+    "stock_voucher.kind": "literal",
+    "stock_voucher.number": "literal",
+    "stock_voucher.posting_date": "literal",
+    "stock_voucher.reason": "literal",
+    "stock_voucher.created_at": "timestamp",
+    "sync_payload.company_id": "uuid",
+    "sync_payload.digest": "hex64",
+    "sync_payload.body": "literal",
+    "system_of_record.company_id": "uuid",
+    "system_of_record.area": "literal",
+    "system_of_record.mode": "literal",
+    "system_of_record.external_system": "literal",
+    "system_of_record.set_at": "timestamp",
+    "system_of_record.set_by": "literal",
+    "account_map.id": "uuid",
+    "account_map.company_id": "uuid",
+    "account_map.external_system": "literal",
+    "account_map.account_id": "uuid",
+    "account_map.external_code": "literal",
+    "fiscal_period.id": "uuid",
+    "fiscal_period.company_id": "uuid",
+    "fiscal_period.fiscal_year_id": "uuid",
+    "fiscal_period.period_no": "literal",
+    "fiscal_period.start_date": "literal",
+    "fiscal_period.end_date": "literal",
+    "fiscal_period.status": "literal",
+    "fiscal_year_close.company_id": "uuid",
+    "fiscal_year_close.fiscal_year_id": "uuid",
+    "fiscal_year_close.closing_posting_id": "uuid",
+    "fiscal_year_close.closed_by": "literal",
+    "fiscal_year_close.closed_at": "timestamp",
+    "ledger_entry.id": "uuid",
+    "ledger_entry.company_id": "uuid",
+    "ledger_entry.posting_id": "uuid",
+    "ledger_entry.line_no": "literal",
+    "ledger_entry.account_id": "uuid",
+    "ledger_entry.party_id": "uuid",
+    "ledger_entry.debit": "literal",
+    "ledger_entry.credit": "literal",
+    "ledger_entry.currency": "literal",
+    "ledger_entry.rate": "literal",
+    "ledger_entry.functional_currency": "literal",
+    "ledger_entry.functional_debit": "literal",
+    "ledger_entry.functional_credit": "literal",
+    "ledger_entry.kind": "literal",
+    "ledger_entry.dimension_set_id": "uuid",
+    "operation_outcome.key": "uuid",
+    "operation_outcome.company_id": "uuid",
+    "operation_outcome.approval_id": "uuid",
+    "operation_outcome.card_digest": "hex64",
+    "operation_outcome.status": "literal",
+    "operation_outcome.result_json": "json-bound-tokens",
+    "operation_outcome.committed_at": "timestamp",
+    "outbox_attachment.id": "uuid",
+    "outbox_attachment.outbox_id": "uuid",
+    "outbox_attachment.name": "literal",
+    "outbox_attachment.media_type": "literal",
+    "outbox_attachment.sha256": "literal",
+    "outbox_attachment.file_id": "uuid",
+    "outbox_attempt.id": "uuid",
+    "outbox_attempt.outbox_id": "uuid",
+    "outbox_attempt.started_at": "timestamp",
+    "outbox_attempt.lease_until": "timestamp",
+    "outbox_attempt.data_at": "timestamp",
+    "outbox_attempt.finished_at": "timestamp",
+    "outbox_attempt.code": "literal",
+    "outbox_attempt.result": "literal",
+    "outbox_attempt.text": "literal",
+    "sales_invoice.id": "uuid",
+    "sales_invoice.company_id": "uuid",
+    "sales_invoice.number": "literal",
+    "sales_invoice.customer_id": "uuid",
+    "sales_invoice.posting_date": "literal",
+    "sales_invoice.due_date": "literal",
+    "sales_invoice.currency": "literal",
+    "sales_invoice.total": "literal",
+    "sales_invoice.outstanding": "literal",
+    "sales_invoice.status": "literal",
+    "sales_invoice.operation_key": "uuid",
+    "sales_invoice.submit_operation_key": "uuid",
+    "sales_invoice.cancel_operation_key": "uuid",
+    "sales_invoice.created_at": "timestamp",
+    "sales_order.id": "uuid",
+    "sales_order.company_id": "uuid",
+    "sales_order.number": "literal",
+    "sales_order.customer_id": "uuid",
+    "sales_order.posting_date": "literal",
+    "sales_order.delivery_date": "literal",
+    "sales_order.currency": "literal",
+    "sales_order.total": "literal",
+    "sales_order.status": "literal",
+    "sales_order.operation_key": "uuid",
+    "sales_order.created_at": "timestamp",
+    "sales_payment.id": "uuid",
+    "sales_payment.company_id": "uuid",
+    "sales_payment.number": "literal",
+    "sales_payment.customer_id": "uuid",
+    "sales_payment.posting_date": "literal",
+    "sales_payment.currency": "literal",
+    "sales_payment.amount": "literal",
+    "sales_payment.unallocated": "literal",
+    "sales_payment.method": "literal",
+    "sales_payment.reference": "literal",
+    "sales_payment.status": "literal",
+    "sales_payment.operation_key": "uuid",
+    "sales_payment.created_at": "timestamp",
+    "sales_payment.cancel_operation_key": "uuid",
+    "stock_goods_received.id": "uuid",
+    "stock_goods_received.company_id": "uuid",
+    "stock_goods_received.voucher_id": "uuid",
+    "stock_goods_received.supplier_id": "uuid",
+    "stock_goods_received.settlement": "literal",
+    "stock_goods_received.account_id": "uuid",
+    "stock_goods_received.number": "literal",
+    "stock_warehouse.id": "uuid",
+    "stock_warehouse.company_id": "uuid",
+    "stock_warehouse.name": "literal",
+    "stock_warehouse.account_id": "uuid",
+    "stock_warehouse.is_default": "literal",
+    "stock_warehouse.position": "literal",
+    "stock_warehouse.created_at": "timestamp",
+    "supplier_payment.id": "uuid",
+    "supplier_payment.company_id": "uuid",
+    "supplier_payment.number": "literal",
+    "supplier_payment.supplier_id": "uuid",
+    "supplier_payment.posting_date": "literal",
+    "supplier_payment.currency": "literal",
+    "supplier_payment.amount": "literal",
+    "supplier_payment.unallocated": "literal",
+    "supplier_payment.account_id": "uuid",
+    "supplier_payment.status": "literal",
+    "supplier_payment.operation_key": "uuid",
+    "supplier_payment.reverse_operation_key": "uuid",
+    "supplier_payment.created_at": "timestamp",
+    "sync_journal.id": "uuid",
+    "sync_journal.company_id": "uuid",
+    "sync_journal.external_system": "literal",
+    "sync_journal.direction": "literal",
+    "sync_journal.object_type": "literal",
+    "sync_journal.local_id": "uuid",
+    "sync_journal.external_id": "literal",
+    "sync_journal.operation_key": "literal",
+    "sync_journal.record_identity": "literal",
+    "sync_journal.payload_digest": "literal",
+    "sync_journal.status": "literal",
+    "sync_journal.attempt_id": "uuid",
+    "sync_journal.at": "timestamp",
+    "sales_credit_note.id": "uuid",
+    "sales_credit_note.company_id": "uuid",
+    "sales_credit_note.number": "literal",
+    "sales_credit_note.invoice_id": "uuid",
+    "sales_credit_note.customer_id": "uuid",
+    "sales_credit_note.posting_date": "literal",
+    "sales_credit_note.currency": "literal",
+    "sales_credit_note.total": "literal",
+    "sales_credit_note.operation_key": "uuid",
+    "sales_credit_note.created_at": "timestamp",
+    "sales_delivery.id": "uuid",
+    "sales_delivery.company_id": "uuid",
+    "sales_delivery.number": "literal",
+    "sales_delivery.order_id": "uuid",
+    "sales_delivery.posting_date": "literal",
+    "sales_delivery.operation_key": "uuid",
+    "sales_delivery.created_at": "timestamp",
+    "sales_invoice_line.id": "uuid",
+    "sales_invoice_line.company_id": "uuid",
+    "sales_invoice_line.invoice_id": "uuid",
+    "sales_invoice_line.currency": "literal",
+    "sales_invoice_line.item_id": "uuid",
+    "sales_invoice_line.quantity": "literal",
+    "sales_invoice_line.rate": "literal",
+    "sales_invoice_line.amount": "literal",
+    "sales_invoice_line.line_no": "literal",
+    "sales_invoice_line.named_warehouse_id": "uuid",
+    "sales_invoice_line.item_kind": "literal",
+    "sales_order_line.id": "uuid",
+    "sales_order_line.company_id": "uuid",
+    "sales_order_line.order_id": "uuid",
+    "sales_order_line.currency": "literal",
+    "sales_order_line.line_no": "literal",
+    "sales_order_line.item_id": "uuid",
+    "sales_order_line.quantity": "literal",
+    "sales_order_line.rate": "literal",
+    "sales_order_line.amount": "literal",
+    "sales_payment_allocation.id": "uuid",
+    "sales_payment_allocation.company_id": "uuid",
+    "sales_payment_allocation.payment_id": "uuid",
+    "sales_payment_allocation.invoice_id": "uuid",
+    "sales_payment_allocation.currency": "literal",
+    "sales_payment_allocation.amount": "literal",
+    "stock_head.id": "uuid",
+    "stock_head.company_id": "uuid",
+    "stock_head.item_id": "uuid",
+    "stock_head.warehouse_id": "uuid",
+    "stock_head.currency": "literal",
+    "stock_head.last_seq": "literal",
+    "stock_head.qty": "literal",
+    "stock_head.value": "literal",
+    "stock_head.last_date": "literal",
+    "stock_item.id": "uuid",
+    "stock_item.company_id": "uuid",
+    "stock_item.item_id": "uuid",
+    "stock_item.method": "literal",
+    "stock_item.default_warehouse_id": "uuid",
+    "stock_item.created_at": "timestamp",
+    "stock_ledger_entry.id": "uuid",
+    "stock_ledger_entry.company_id": "uuid",
+    "stock_ledger_entry.item_id": "uuid",
+    "stock_ledger_entry.warehouse_id": "uuid",
+    "stock_ledger_entry.currency": "literal",
+    "stock_ledger_entry.posting_date": "literal",
+    "stock_ledger_entry.seq": "literal",
+    "stock_ledger_entry.direction": "literal",
+    "stock_ledger_entry.qty": "literal",
+    "stock_ledger_entry.value": "literal",
+    "stock_ledger_entry.qty_after": "literal",
+    "stock_ledger_entry.value_after": "literal",
+    "stock_ledger_entry.voucher_type": "literal",
+    "stock_ledger_entry.voucher_id": "uuid",
+    "stock_ledger_entry.line_no": "literal",
+    "stock_ledger_entry.against_entry_id": "uuid",
+    "stock_ledger_entry.reverses_entry_id": "uuid",
+    "stock_ledger_entry.created_at": "timestamp",
+    "stock_voucher_line.id": "uuid",
+    "stock_voucher_line.company_id": "uuid",
+    "stock_voucher_line.voucher_id": "uuid",
+    "stock_voucher_line.line_no": "literal",
+    "stock_voucher_line.item_id": "uuid",
+    "stock_voucher_line.warehouse_id": "uuid",
+    "stock_voucher_line.currency": "literal",
+    "stock_voucher_line.qty_moved": "literal",
+    "stock_voucher_line.counted_qty": "literal",
+    "stock_voucher_line.books_qty": "literal",
+    "stock_voucher_line.rate": "literal",
+    "stock_voucher_line.direction": "literal",
+    "stock_voucher_line.value": "literal",
+    "supplier_payable.id": "uuid",
+    "supplier_payable.company_id": "uuid",
+    "supplier_payable.supplier_id": "uuid",
+    "supplier_payable.source_type": "literal",
+    "supplier_payable.source_id": "uuid",
+    "supplier_payable.source_number": "literal",
+    "supplier_payable.posting_date": "literal",
+    "supplier_payable.currency": "literal",
+    "supplier_payable.amount": "literal",
+    "supplier_payable.outstanding": "literal",
+    "supplier_payable.status": "literal",
+    "supplier_payable.created_at": "timestamp",
+    "supplier_payable.posting_id": "uuid",
+    "supplier_payable.control_line_no": "literal",
+    "supplier_payable.source_voucher_id": "uuid",
+    "supplier_payable.opening_sequence": "literal",
+    "supplier_payable.old_reference": "literal",
+    "supplier_payable.due_date": "literal",
+    "sales_credit_note_line.id": "uuid",
+    "sales_credit_note_line.company_id": "uuid",
+    "sales_credit_note_line.credit_note_id": "uuid",
+    "sales_credit_note_line.currency": "literal",
+    "sales_credit_note_line.line_no": "literal",
+    "sales_credit_note_line.invoice_line_id": "uuid",
+    "sales_credit_note_line.item_id": "uuid",
+    "sales_credit_note_line.quantity": "literal",
+    "sales_credit_note_line.rate": "literal",
+    "sales_credit_note_line.amount": "literal",
+    "sales_delivery_line.id": "uuid",
+    "sales_delivery_line.company_id": "uuid",
+    "sales_delivery_line.delivery_id": "uuid",
+    "sales_delivery_line.order_line_id": "uuid",
+    "sales_delivery_line.currency": "literal",
+    "sales_delivery_line.warehouse_id": "uuid",
+    "sales_delivery_line.quantity": "literal",
+    "sales_delivery_line.cost": "literal",
+    "sales_delivery_line.stock_entry_id": "uuid",
+    "sales_delivery_line.stock_line": "literal",
+    "sales_invoice_issue.id": "uuid",
+    "sales_invoice_issue.company_id": "uuid",
+    "sales_invoice_issue.invoice_line_id": "uuid",
+    "sales_invoice_issue.currency": "literal",
+    "sales_invoice_issue.warehouse_id": "uuid",
+    "sales_invoice_issue.quantity": "literal",
+    "sales_invoice_issue.cost": "literal",
+    "sales_invoice_issue.stock_entry_id": "uuid",
+    "sales_invoice_issue.stock_line": "literal",
+    "stock_layer.id": "uuid",
+    "stock_layer.company_id": "uuid",
+    "stock_layer.entry_id": "uuid",
+    "stock_layer.item_id": "uuid",
+    "stock_layer.warehouse_id": "uuid",
+    "stock_layer.currency": "literal",
+    "stock_layer.qty": "literal",
+    "stock_layer.value": "literal",
+    "stock_layer.group_id": "uuid",
+    "supplier_payment_allocation.id": "uuid",
+    "supplier_payment_allocation.company_id": "uuid",
+    "supplier_payment_allocation.payment_id": "uuid",
+    "supplier_payment_allocation.payable_id": "uuid",
+    "supplier_payment_allocation.currency": "literal",
+    "supplier_payment_allocation.amount": "literal",
+    "sales_credit_note_return.id": "uuid",
+    "sales_credit_note_return.company_id": "uuid",
+    "sales_credit_note_return.credit_note_line_id": "uuid",
+    "sales_credit_note_return.currency": "literal",
+    "sales_credit_note_return.original_voucher_type": "literal",
+    "sales_credit_note_return.original_voucher_id": "uuid",
+    "sales_credit_note_return.original_line": "literal",
+    "sales_credit_note_return.warehouse_id": "uuid",
+    "sales_credit_note_return.quantity": "literal",
+    "sales_credit_note_return.cost": "literal",
+    "sales_credit_note_return.stock_entry_id": "uuid",
+    "sales_invoice_delivery.id": "uuid",
+    "sales_invoice_delivery.company_id": "uuid",
+    "sales_invoice_delivery.invoice_line_id": "uuid",
+    "sales_invoice_delivery.delivery_line_id": "uuid",
+    "sales_invoice_delivery.quantity": "literal",
+    "stock_layer_take.id": "uuid",
+    "stock_layer_take.company_id": "uuid",
+    "stock_layer_take.entry_id": "uuid",
+    "stock_layer_take.group_id": "uuid",
+    "stock_layer_take.layer_id": "uuid",
+    "stock_layer_take.currency": "literal",
+    "stock_layer_take.qty": "literal",
+    "stock_layer_take.value": "literal",
+    "stock_layer_take.kind": "literal"
+  },
+  "before": {
+    "books_identity": [
+      {
+        "id": "1",
+        "books_id": "<uuid:1>"
+      }
+    ],
+    "currency": [
+      {
+        "code": "EUR",
+        "name": "Euro",
+        "minor_units": "2"
+      },
+      {
+        "code": "GBP",
+        "name": "Pound Sterling",
+        "minor_units": "2"
+      },
+      {
+        "code": "INR",
+        "name": "Indian Rupee",
+        "minor_units": "2"
+      },
+      {
+        "code": "JPY",
+        "name": "Yen",
+        "minor_units": "0"
+      },
+      {
+        "code": "KWD",
+        "name": "Kuwaiti Dinar",
+        "minor_units": "3"
+      },
+      {
+        "code": "USD",
+        "name": "US Dollar",
+        "minor_units": "2"
+      }
+    ],
+    "erpclaw_books": [
+      {
+        "mark": "erpclaw-engine-books-v1"
+      },
+      {
+        "mark": "erpclaw-eval-books"
+      }
+    ],
+    "plugin_install": [
+      {
+        "name": "email_folder",
+        "version": "0.0.1",
+        "kind": "connector",
+        "installed_at": "2026-11-12 22:32:12.261422+00:00",
+        "manifest_digest": "<hex64:1>",
+        "artifact_digest": "<hex64:2>",
+        "after_core_revision": "0001",
+        "status": "installed"
+      },
+      {
+        "name": "sales",
+        "version": "0.0.4",
+        "kind": "business-module",
+        "installed_at": "2026-11-12 22:32:12.483173+00:00",
+        "manifest_digest": "<hex64:3>",
+        "artifact_digest": "<hex64:4>",
+        "after_core_revision": "0013",
+        "status": "installed"
+      },
+      {
+        "name": "stock",
+        "version": "0.1.1",
+        "kind": "business-module",
+        "installed_at": "2026-11-12 22:32:12.581022+00:00",
+        "manifest_digest": "<hex64:5>",
+        "artifact_digest": "<hex64:6>",
+        "after_core_revision": "0015",
+        "status": "installed"
+      }
+    ],
+    "principal": [
+      {
+        "id": "<uuid:2>",
+        "name": "owner",
+        "kind": "person",
+        "disabled": "False",
+        "grants_version": "1",
+        "token_sha256": null,
+        "created_at": "2026-11-12 22:32:12.212752+00:00"
+      }
+    ],
+    "company": [
+      {
+        "id": "<uuid:3>",
+        "name": "Stark Manufacturing Inc.",
+        "functional_currency": "USD",
+        "fiscal_year_start_month": "1",
+        "created_at": "2026-11-12 22:32:12.171103+00:00",
+        "date_order": null,
+        "status": "ready"
+      }
+    ],
+    "principal_session": [],
+    "principal_sign_in": [],
+    "account": [
+      {
+        "id": "<uuid:4>",
+        "company_id": "<uuid:3>",
+        "number": "1000",
+        "name": "Assets",
+        "root_type": "asset",
+        "account_type": null,
+        "is_group": "True",
+        "parent_id": null,
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:5>",
+        "company_id": "<uuid:3>",
+        "number": "1100",
+        "name": "Bank",
+        "root_type": "asset",
+        "account_type": "bank",
+        "is_group": "False",
+        "parent_id": "<uuid:4>",
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:6>",
+        "company_id": "<uuid:3>",
+        "number": "1300",
+        "name": "Inventory",
+        "root_type": "asset",
+        "account_type": "stock",
+        "is_group": "False",
+        "parent_id": "<uuid:4>",
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:7>",
+        "company_id": "<uuid:3>",
+        "number": "2000",
+        "name": "Liabilities",
+        "root_type": "liability",
+        "account_type": null,
+        "is_group": "True",
+        "parent_id": null,
+        "frozen": "False",
+        "normal_side": "credit"
+      },
+      {
+        "id": "<uuid:8>",
+        "company_id": "<uuid:3>",
+        "number": "2100",
+        "name": "Accounts Payable",
+        "root_type": "liability",
+        "account_type": "payable",
+        "is_group": "False",
+        "parent_id": "<uuid:7>",
+        "frozen": "False",
+        "normal_side": "credit"
+      },
+      {
+        "id": "<uuid:9>",
+        "company_id": "<uuid:3>",
+        "number": "2300",
+        "name": "Stock Received Not Billed",
+        "root_type": "liability",
+        "account_type": "stock_received_not_billed",
+        "is_group": "False",
+        "parent_id": "<uuid:7>",
+        "frozen": "False",
+        "normal_side": "credit"
+      },
+      {
+        "id": "<uuid:10>",
+        "company_id": "<uuid:3>",
+        "number": "2310",
+        "name": "Asset Received Not Billed",
+        "root_type": "liability",
+        "account_type": null,
+        "is_group": "False",
+        "parent_id": "<uuid:7>",
+        "frozen": "False",
+        "normal_side": "credit"
+      },
+      {
+        "id": "<uuid:11>",
+        "company_id": "<uuid:3>",
+        "number": "3000",
+        "name": "Equity",
+        "root_type": "equity",
+        "account_type": null,
+        "is_group": "True",
+        "parent_id": null,
+        "frozen": "False",
+        "normal_side": "credit"
+      },
+      {
+        "id": "<uuid:12>",
+        "company_id": "<uuid:3>",
+        "number": "3100",
+        "name": "Retained Earnings",
+        "root_type": "equity",
+        "account_type": "retained_earnings",
+        "is_group": "False",
+        "parent_id": "<uuid:11>",
+        "frozen": "False",
+        "normal_side": "credit"
+      },
+      {
+        "id": "<uuid:13>",
+        "company_id": "<uuid:3>",
+        "number": "3900",
+        "name": "Opening Balance Equity",
+        "root_type": "equity",
+        "account_type": "opening_balance",
+        "is_group": "False",
+        "parent_id": "<uuid:11>",
+        "frozen": "False",
+        "normal_side": "credit"
+      },
+      {
+        "id": "<uuid:14>",
+        "company_id": "<uuid:3>",
+        "number": "4000",
+        "name": "Income",
+        "root_type": "income",
+        "account_type": null,
+        "is_group": "True",
+        "parent_id": null,
+        "frozen": "False",
+        "normal_side": "credit"
+      },
+      {
+        "id": "<uuid:15>",
+        "company_id": "<uuid:3>",
+        "number": "4130",
+        "name": "Sales Returns",
+        "root_type": "income",
+        "account_type": "sales_returns",
+        "is_group": "False",
+        "parent_id": "<uuid:14>",
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:16>",
+        "company_id": "<uuid:3>",
+        "number": "5000",
+        "name": "Cost of Goods Sold",
+        "root_type": "expense",
+        "account_type": null,
+        "is_group": "True",
+        "parent_id": null,
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:17>",
+        "company_id": "<uuid:3>",
+        "number": "5200",
+        "name": "Stock Adjustment",
+        "root_type": "expense",
+        "account_type": "stock_adjustment",
+        "is_group": "False",
+        "parent_id": "<uuid:16>",
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:18>",
+        "company_id": "<uuid:3>",
+        "number": "5210",
+        "name": "Inventory Write-offs",
+        "root_type": "expense",
+        "account_type": "stock_write_off",
+        "is_group": "False",
+        "parent_id": "<uuid:16>",
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:19>",
+        "company_id": "<uuid:3>",
+        "number": "6000",
+        "name": "Expenses",
+        "root_type": "expense",
+        "account_type": null,
+        "is_group": "True",
+        "parent_id": null,
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:20>",
+        "company_id": "<uuid:3>",
+        "number": "6810",
+        "name": "Realized Exchange Gain/Loss",
+        "root_type": "expense",
+        "account_type": "exchange_gain_loss_realised",
+        "is_group": "False",
+        "parent_id": "<uuid:19>",
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:21>",
+        "company_id": "<uuid:3>",
+        "number": "6820",
+        "name": "Unrealized Exchange Gain/Loss",
+        "root_type": "expense",
+        "account_type": "exchange_gain_loss_unrealised",
+        "is_group": "False",
+        "parent_id": "<uuid:19>",
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:22>",
+        "company_id": "<uuid:3>",
+        "number": "6900",
+        "name": "Rounding",
+        "root_type": "expense",
+        "account_type": "rounding",
+        "is_group": "False",
+        "parent_id": "<uuid:19>",
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:23>",
+        "company_id": "<uuid:3>",
+        "number": "1200",
+        "name": "Trade Receivables",
+        "root_type": "asset",
+        "account_type": "receivable",
+        "is_group": "False",
+        "parent_id": "<uuid:4>",
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:24>",
+        "company_id": "<uuid:3>",
+        "number": "4100",
+        "name": "Sales Revenue",
+        "root_type": "income",
+        "account_type": "income",
+        "is_group": "False",
+        "parent_id": "<uuid:14>",
+        "frozen": "False",
+        "normal_side": "credit"
+      },
+      {
+        "id": "<uuid:25>",
+        "company_id": "<uuid:3>",
+        "number": "5100",
+        "name": "COGS - Materials",
+        "root_type": "expense",
+        "account_type": "cost_of_goods_sold",
+        "is_group": "False",
+        "parent_id": "<uuid:16>",
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:26>",
+        "company_id": "<uuid:3>",
+        "number": "1131",
+        "name": "Raw Materials",
+        "root_type": "asset",
+        "account_type": "stock",
+        "is_group": "False",
+        "parent_id": "<uuid:4>",
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:27>",
+        "company_id": "<uuid:3>",
+        "number": "1133",
+        "name": "Finished Goods",
+        "root_type": "asset",
+        "account_type": "stock",
+        "is_group": "False",
+        "parent_id": "<uuid:4>",
+        "frozen": "False",
+        "normal_side": "debit"
+      }
+    ],
+    "approval": [
+      {
+        "id": "<uuid:28>",
+        "principal_id": "<uuid:2>",
+        "company_id": "<uuid:3>",
+        "conversation_id": null,
+        "contract": "create_invoice",
+        "contract_version": "0.0.4",
+        "policy_version": "1",
+        "impl_version": "0.0.2+<hex64:4:prefix16>",
+        "args_json": "{\"customer\":\"Initech\",\"email\":false,\"items\":[{\"item\":\"Copper Wire\",\"quantity\":\"2\",\"rate\":null,\"warehouse\":null}],\"order\":null,\"submit\":false}",
+        "read_set_json": "[[\"company\",\"<uuid:3>\",\"<hex64:7>\"],[\"fiscal_period\",\"<uuid:29>\",\"<hex64:8>\"],[\"item\",\"<uuid:30>\",\"<hex64:9>\"],[\"party\",\"<uuid:31>\",\"<hex64:10>\"]]",
+        "card_json": "{\"amounts\":[{\"currency\":\"USD\",\"index\":2,\"kind\":\"unit_price\",\"label\":\"Item\",\"value\":\"28.00\",\"where\":\"lines\"},{\"currency\":\"USD\",\"index\":2,\"kind\":\"amount\",\"label\":\"Item\",\"value\":\"56.00\",\"where\":\"lines\"},{\"currency\":\"USD\",\"index\":3,\"kind\":\"amount\",\"label\":\"Total\",\"value\":\"56.00\",\"where\":\"lines\"}],\"books\":[\"Nothing posts to the books until the draft is submitted.\"],\"currency\":\"USD\",\"footer\":\"Valid 10 minutes. Rechecked before saving.\",\"lines\":[[\"Company\",\"Stark Manufacturing Inc.\"],[\"Customer\",\"Initech\"],[\"Item\",\"2 x Copper Wire @ 28.00 = 56.00\"],[\"Total\",\"56.00 USD\"],[\"Date\",\"26 Oct 2026\"],[\"Due\",\"25 Nov 2026\"],[\"Tax\",\"No tax calculated: no tax template is set. That is not a statement that no tax is owed.\"]],\"title\":\"Save a draft sales invoice\",\"warnings\":[]}",
+        "nonce": "<hex32:1>",
+        "digest": "<hex64:11>",
+        "status": "consumed",
+        "operation_key": "<uuid:32>",
+        "created_at": "2026-11-12 22:32:12.675868+00:00",
+        "expires_at": "2026-11-12 22:42:12.675751+00:00",
+        "decided_at": "2026-11-12 22:32:12.686594+00:00",
+        "approved_by": "<uuid:2>",
+        "approver_grants_version": "1",
+        "decision_json": null,
+        "request_card_token": null
+      }
+    ],
+    "audit_log": [
+      {
+        "id": "<uuid:33>",
+        "company_id": "<uuid:3>",
+        "at": "2026-11-12 22:32:12.715713+00:00",
+        "actor": "owner",
+        "action": "save_draft_invoice",
+        "document_type": "sales_invoice",
+        "document_id": "<uuid:34>",
+        "approval_id": null,
+        "detail": "{\"number\":\"INV-2026-00001\",\"total\":\"56.00\"}"
+      },
+      {
+        "id": "<uuid:35>",
+        "company_id": "<uuid:3>",
+        "at": "2026-11-12 22:32:12.716958+00:00",
+        "actor": "owner",
+        "action": "commit:create_invoice",
+        "document_type": null,
+        "document_id": null,
+        "approval_id": "<uuid:28>",
+        "detail": "{\"number\":\"INV-2026-00001\",\"operation_key\":\"<uuid:32>\",\"total\":\"56.00\"}"
+      }
+    ],
+    "conversation_fence": [],
+    "dimension_set": [],
+    "external_ref": [],
+    "file_object": [],
+    "fiscal_year": [
+      {
+        "id": "<uuid:36>",
+        "company_id": "<uuid:3>",
+        "label": "2025",
+        "start_date": "2025-01-01",
+        "end_date": "2025-12-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:37>",
+        "company_id": "<uuid:3>",
+        "label": "2026",
+        "start_date": "2026-01-01",
+        "end_date": "2026-12-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:38>",
+        "company_id": "<uuid:3>",
+        "label": "2027",
+        "start_date": "2027-01-01",
+        "end_date": "2027-12-31",
+        "status": "open"
+      }
+    ],
+    "hosted_books_consent": [],
+    "item": [
+      {
+        "id": "<uuid:30>",
+        "company_id": "<uuid:3>",
+        "name": "Copper Wire",
+        "unit": "Meter",
+        "standard_rate": "28.00",
+        "kind": "stock"
+      }
+    ],
+    "number_series": [
+      {
+        "company_id": "<uuid:3>",
+        "series": "INV",
+        "fiscal_year": "2026",
+        "next_value": "2"
+      }
+    ],
+    "outbox": [],
+    "party": [
+      {
+        "id": "<uuid:39>",
+        "company_id": "<uuid:3>",
+        "kind": "customer",
+        "name": "Acme Corporation",
+        "email": null,
+        "city": null,
+        "city_key": null
+      },
+      {
+        "id": "<uuid:40>",
+        "company_id": "<uuid:3>",
+        "kind": "customer",
+        "name": "Wayne Industries",
+        "email": null,
+        "city": null,
+        "city_key": null
+      },
+      {
+        "id": "<uuid:41>",
+        "company_id": "<uuid:3>",
+        "kind": "customer",
+        "name": "Oscorp Industries",
+        "email": null,
+        "city": null,
+        "city_key": null
+      },
+      {
+        "id": "<uuid:42>",
+        "company_id": "<uuid:3>",
+        "kind": "customer",
+        "name": "Pied Piper Inc",
+        "email": null,
+        "city": null,
+        "city_key": null
+      },
+      {
+        "id": "<uuid:43>",
+        "company_id": "<uuid:3>",
+        "kind": "customer",
+        "name": "Hooli Technologies",
+        "email": null,
+        "city": null,
+        "city_key": null
+      },
+      {
+        "id": "<uuid:44>",
+        "company_id": "<uuid:3>",
+        "kind": "customer",
+        "name": "Stark Retail Outlets",
+        "email": null,
+        "city": null,
+        "city_key": null
+      },
+      {
+        "id": "<uuid:45>",
+        "company_id": "<uuid:3>",
+        "kind": "customer",
+        "name": "Parker Electronics",
+        "email": null,
+        "city": null,
+        "city_key": null
+      },
+      {
+        "id": "<uuid:46>",
+        "company_id": "<uuid:3>",
+        "kind": "customer",
+        "name": "Xavier Laboratories",
+        "email": null,
+        "city": null,
+        "city_key": null
+      },
+      {
+        "id": "<uuid:47>",
+        "company_id": "<uuid:3>",
+        "kind": "customer",
+        "name": "LexCorp",
+        "email": null,
+        "city": null,
+        "city_key": null
+      },
+      {
+        "id": "<uuid:48>",
+        "company_id": "<uuid:3>",
+        "kind": "customer",
+        "name": "Daily Planet Media",
+        "email": null,
+        "city": null,
+        "city_key": null
+      },
+      {
+        "id": "<uuid:31>",
+        "company_id": "<uuid:3>",
+        "kind": "customer",
+        "name": "Initech",
+        "email": null,
+        "city": null,
+        "city_key": null
+      }
+    ],
+    "posting": [
+      {
+        "id": "<uuid:49>",
+        "company_id": "<uuid:3>",
+        "seq": "1",
+        "posting_date": "2026-01-01",
+        "voucher_type": "stock_receipt",
+        "voucher_id": "<uuid:50>",
+        "memo": null,
+        "reverses_posting_id": null,
+        "operation_key": null,
+        "created_at": "2026-11-12 22:32:12.646195+00:00",
+        "created_by": "owner",
+        "prev_hash": "<chain-origin>",
+        "hash": "<hex64:12>",
+        "hash_format": "2",
+        "ledger": "general"
+      }
+    ],
+    "posting_chain_head": [
+      {
+        "company_id": "<uuid:3>",
+        "last_seq": "1",
+        "last_hash": "<hex64:12>"
+      }
+    ],
+    "principal_grant": [
+      {
+        "principal_id": "<uuid:2>",
+        "company_id": "<uuid:3>",
+        "permission": "view"
+      },
+      {
+        "principal_id": "<uuid:2>",
+        "company_id": "<uuid:3>",
+        "permission": "draft"
+      },
+      {
+        "principal_id": "<uuid:2>",
+        "company_id": "<uuid:3>",
+        "permission": "approve"
+      },
+      {
+        "principal_id": "<uuid:2>",
+        "company_id": "<uuid:3>",
+        "permission": "post"
+      },
+      {
+        "principal_id": "<uuid:2>",
+        "company_id": "<uuid:3>",
+        "permission": "reverse"
+      },
+      {
+        "principal_id": "<uuid:2>",
+        "company_id": "<uuid:3>",
+        "permission": "close_period"
+      },
+      {
+        "principal_id": "<uuid:2>",
+        "company_id": "<uuid:3>",
+        "permission": "export"
+      },
+      {
+        "principal_id": "<uuid:2>",
+        "company_id": "<uuid:3>",
+        "permission": "administer_users"
+      },
+      {
+        "principal_id": "<uuid:2>",
+        "company_id": "<uuid:3>",
+        "permission": "install_plugins"
+      },
+      {
+        "principal_id": "<uuid:2>",
+        "company_id": "<uuid:3>",
+        "permission": "manage_secrets"
+      }
+    ],
+    "stock_voucher": [],
+    "sync_payload": [],
+    "system_of_record": [],
+    "account_map": [],
+    "fiscal_period": [
+      {
+        "id": "<uuid:51>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:36>",
+        "period_no": "1",
+        "start_date": "2025-01-01",
+        "end_date": "2025-01-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:52>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:36>",
+        "period_no": "2",
+        "start_date": "2025-02-01",
+        "end_date": "2025-02-28",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:53>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:36>",
+        "period_no": "3",
+        "start_date": "2025-03-01",
+        "end_date": "2025-03-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:54>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:36>",
+        "period_no": "4",
+        "start_date": "2025-04-01",
+        "end_date": "2025-04-30",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:55>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:36>",
+        "period_no": "5",
+        "start_date": "2025-05-01",
+        "end_date": "2025-05-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:56>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:36>",
+        "period_no": "6",
+        "start_date": "2025-06-01",
+        "end_date": "2025-06-30",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:57>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:36>",
+        "period_no": "7",
+        "start_date": "2025-07-01",
+        "end_date": "2025-07-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:58>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:36>",
+        "period_no": "8",
+        "start_date": "2025-08-01",
+        "end_date": "2025-08-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:59>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:36>",
+        "period_no": "9",
+        "start_date": "2025-09-01",
+        "end_date": "2025-09-30",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:60>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:36>",
+        "period_no": "10",
+        "start_date": "2025-10-01",
+        "end_date": "2025-10-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:61>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:36>",
+        "period_no": "11",
+        "start_date": "2025-11-01",
+        "end_date": "2025-11-30",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:62>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:36>",
+        "period_no": "12",
+        "start_date": "2025-12-01",
+        "end_date": "2025-12-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:63>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:37>",
+        "period_no": "1",
+        "start_date": "2026-01-01",
+        "end_date": "2026-01-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:64>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:37>",
+        "period_no": "2",
+        "start_date": "2026-02-01",
+        "end_date": "2026-02-28",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:65>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:37>",
+        "period_no": "3",
+        "start_date": "2026-03-01",
+        "end_date": "2026-03-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:66>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:37>",
+        "period_no": "4",
+        "start_date": "2026-04-01",
+        "end_date": "2026-04-30",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:67>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:37>",
+        "period_no": "5",
+        "start_date": "2026-05-01",
+        "end_date": "2026-05-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:68>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:37>",
+        "period_no": "6",
+        "start_date": "2026-06-01",
+        "end_date": "2026-06-30",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:69>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:37>",
+        "period_no": "7",
+        "start_date": "2026-07-01",
+        "end_date": "2026-07-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:70>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:37>",
+        "period_no": "8",
+        "start_date": "2026-08-01",
+        "end_date": "2026-08-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:71>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:37>",
+        "period_no": "9",
+        "start_date": "2026-09-01",
+        "end_date": "2026-09-30",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:29>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:37>",
+        "period_no": "10",
+        "start_date": "2026-10-01",
+        "end_date": "2026-10-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:72>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:37>",
+        "period_no": "11",
+        "start_date": "2026-11-01",
+        "end_date": "2026-11-30",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:73>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:37>",
+        "period_no": "12",
+        "start_date": "2026-12-01",
+        "end_date": "2026-12-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:74>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:38>",
+        "period_no": "1",
+        "start_date": "2027-01-01",
+        "end_date": "2027-01-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:75>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:38>",
+        "period_no": "2",
+        "start_date": "2027-02-01",
+        "end_date": "2027-02-28",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:76>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:38>",
+        "period_no": "3",
+        "start_date": "2027-03-01",
+        "end_date": "2027-03-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:77>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:38>",
+        "period_no": "4",
+        "start_date": "2027-04-01",
+        "end_date": "2027-04-30",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:78>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:38>",
+        "period_no": "5",
+        "start_date": "2027-05-01",
+        "end_date": "2027-05-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:79>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:38>",
+        "period_no": "6",
+        "start_date": "2027-06-01",
+        "end_date": "2027-06-30",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:80>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:38>",
+        "period_no": "7",
+        "start_date": "2027-07-01",
+        "end_date": "2027-07-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:81>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:38>",
+        "period_no": "8",
+        "start_date": "2027-08-01",
+        "end_date": "2027-08-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:82>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:38>",
+        "period_no": "9",
+        "start_date": "2027-09-01",
+        "end_date": "2027-09-30",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:83>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:38>",
+        "period_no": "10",
+        "start_date": "2027-10-01",
+        "end_date": "2027-10-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:84>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:38>",
+        "period_no": "11",
+        "start_date": "2027-11-01",
+        "end_date": "2027-11-30",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:85>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:38>",
+        "period_no": "12",
+        "start_date": "2027-12-01",
+        "end_date": "2027-12-31",
+        "status": "open"
+      }
+    ],
+    "fiscal_year_close": [],
+    "ledger_entry": [
+      {
+        "id": "<uuid:86>",
+        "company_id": "<uuid:3>",
+        "posting_id": "<uuid:49>",
+        "line_no": "1",
+        "account_id": "<uuid:26>",
+        "party_id": null,
+        "debit": "5600.00",
+        "credit": "0.00",
+        "currency": "USD",
+        "rate": "1",
+        "functional_currency": "USD",
+        "functional_debit": "5600.00",
+        "functional_credit": "0.00",
+        "kind": "measured",
+        "dimension_set_id": null
+      },
+      {
+        "id": "<uuid:87>",
+        "company_id": "<uuid:3>",
+        "posting_id": "<uuid:49>",
+        "line_no": "2",
+        "account_id": "<uuid:9>",
+        "party_id": null,
+        "debit": "0.00",
+        "credit": "5600.00",
+        "currency": "USD",
+        "rate": "1",
+        "functional_currency": "USD",
+        "functional_debit": "0.00",
+        "functional_credit": "5600.00",
+        "kind": "measured",
+        "dimension_set_id": null
+      }
+    ],
+    "operation_outcome": [
+      {
+        "key": "<uuid:32>",
+        "company_id": "<uuid:3>",
+        "approval_id": "<uuid:28>",
+        "card_digest": "<hex64:11>",
+        "status": "committed",
+        "result_json": "{\"amounts\":[{\"currency\":\"USD\",\"of\":\"INV-2026-00001\",\"value\":\"56.00\",\"what\":\"total\"}],\"data\":{\"number\":\"INV-2026-00001\",\"total\":\"56.00\"},\"figures\":[\"56.00 USD\"],\"text\":\"Saved draft invoice INV-2026-00001 for Initech: 56.00 USD, due 25 Nov 2026.\"}",
+        "committed_at": "2026-11-12 22:32:12.717850+00:00"
+      }
+    ],
+    "outbox_attachment": [],
+    "outbox_attempt": [],
+    "sales_invoice": [
+      {
+        "id": "<uuid:34>",
+        "company_id": "<uuid:3>",
+        "number": "INV-2026-00001",
+        "customer_id": "<uuid:31>",
+        "posting_date": "2026-10-26",
+        "due_date": "2026-11-25",
+        "currency": "USD",
+        "total": "56.00",
+        "outstanding": "0.00",
+        "status": "draft",
+        "operation_key": "<uuid:32>",
+        "submit_operation_key": null,
+        "cancel_operation_key": null,
+        "created_at": "2026-11-12 22:32:12.711529+00:00"
+      }
+    ],
+    "sales_order": [],
+    "sales_payment": [],
+    "stock_goods_received": [],
+    "stock_warehouse": [
+      {
+        "id": "<uuid:88>",
+        "company_id": "<uuid:3>",
+        "name": "Stark Manufacturing Inc. - Main Warehouse",
+        "account_id": "<uuid:26>",
+        "is_default": "True",
+        "position": "1",
+        "created_at": "2026-11-12 22:32:12.602214+00:00"
+      },
+      {
+        "id": "<uuid:89>",
+        "company_id": "<uuid:3>",
+        "name": "Raw Materials Store",
+        "account_id": "<uuid:26>",
+        "is_default": "False",
+        "position": "2",
+        "created_at": "2026-11-12 22:32:12.606098+00:00"
+      },
+      {
+        "id": "<uuid:90>",
+        "company_id": "<uuid:3>",
+        "name": "Finished Goods Store",
+        "account_id": "<uuid:27>",
+        "is_default": "False",
+        "position": "3",
+        "created_at": "2026-11-12 22:32:12.610054+00:00"
+      }
+    ],
+    "supplier_payment": [],
+    "sync_journal": [],
+    "sales_credit_note": [],
+    "sales_delivery": [],
+    "sales_invoice_line": [
+      {
+        "id": "<uuid:91>",
+        "company_id": "<uuid:3>",
+        "invoice_id": "<uuid:34>",
+        "currency": "USD",
+        "item_id": "<uuid:30>",
+        "quantity": "2",
+        "rate": "28.00",
+        "amount": "56.00",
+        "line_no": "1",
+        "named_warehouse_id": null,
+        "item_kind": "stock"
+      }
+    ],
+    "sales_order_line": [],
+    "sales_payment_allocation": [],
+    "stock_head": [
+      {
+        "id": "<uuid:92>",
+        "company_id": "<uuid:3>",
+        "item_id": "<uuid:30>",
+        "warehouse_id": "<uuid:89>",
+        "currency": "USD",
+        "last_seq": "1",
+        "qty": "200",
+        "value": "5600.00",
+        "last_date": "2026-01-01"
+      }
+    ],
+    "stock_item": [
+      {
+        "id": "<uuid:93>",
+        "company_id": "<uuid:3>",
+        "item_id": "<uuid:30>",
+        "method": "moving_average",
+        "default_warehouse_id": "<uuid:88>",
+        "created_at": "2026-11-12 22:32:12.614924+00:00"
+      }
+    ],
+    "stock_ledger_entry": [
+      {
+        "id": "<uuid:94>",
+        "company_id": "<uuid:3>",
+        "item_id": "<uuid:30>",
+        "warehouse_id": "<uuid:89>",
+        "currency": "USD",
+        "posting_date": "2026-01-01",
+        "seq": "1",
+        "direction": "in",
+        "qty": "200",
+        "value": "5600.00",
+        "qty_after": "200",
+        "value_after": "5600.00",
+        "voucher_type": "stock_receipt",
+        "voucher_id": "<uuid:50>",
+        "line_no": "1",
+        "against_entry_id": null,
+        "reverses_entry_id": null,
+        "created_at": "2026-11-12 22:32:12.631259+00:00"
+      }
+    ],
+    "stock_voucher_line": [],
+    "supplier_payable": [],
+    "sales_credit_note_line": [],
+    "sales_delivery_line": [],
+    "sales_invoice_issue": [],
+    "stock_layer": [],
+    "supplier_payment_allocation": [],
+    "sales_credit_note_return": [],
+    "sales_invoice_delivery": [],
+    "stock_layer_take": []
+  },
+  "trial_started": "2026-11-12T22:32:13.758537+00:00",
+  "after": {
+    "books_identity": [
+      {
+        "id": "1",
+        "books_id": "<uuid:1>"
+      }
+    ],
+    "currency": [
+      {
+        "code": "EUR",
+        "name": "Euro",
+        "minor_units": "2"
+      },
+      {
+        "code": "GBP",
+        "name": "Pound Sterling",
+        "minor_units": "2"
+      },
+      {
+        "code": "INR",
+        "name": "Indian Rupee",
+        "minor_units": "2"
+      },
+      {
+        "code": "JPY",
+        "name": "Yen",
+        "minor_units": "0"
+      },
+      {
+        "code": "KWD",
+        "name": "Kuwaiti Dinar",
+        "minor_units": "3"
+      },
+      {
+        "code": "USD",
+        "name": "US Dollar",
+        "minor_units": "2"
+      }
+    ],
+    "erpclaw_books": [
+      {
+        "mark": "erpclaw-engine-books-v1"
+      },
+      {
+        "mark": "erpclaw-eval-books"
+      }
+    ],
+    "plugin_install": [
+      {
+        "name": "email_folder",
+        "version": "0.0.1",
+        "kind": "connector",
+        "installed_at": "2026-11-12 22:32:12.261422+00:00",
+        "manifest_digest": "<hex64:1>",
+        "artifact_digest": "<hex64:2>",
+        "after_core_revision": "0001",
+        "status": "installed"
+      },
+      {
+        "name": "sales",
+        "version": "0.0.4",
+        "kind": "business-module",
+        "installed_at": "2026-11-12 22:32:12.483173+00:00",
+        "manifest_digest": "<hex64:3>",
+        "artifact_digest": "<hex64:4>",
+        "after_core_revision": "0013",
+        "status": "installed"
+      },
+      {
+        "name": "stock",
+        "version": "0.1.1",
+        "kind": "business-module",
+        "installed_at": "2026-11-12 22:32:12.581022+00:00",
+        "manifest_digest": "<hex64:5>",
+        "artifact_digest": "<hex64:6>",
+        "after_core_revision": "0015",
+        "status": "installed"
+      }
+    ],
+    "principal": [
+      {
+        "id": "<uuid:2>",
+        "name": "owner",
+        "kind": "person",
+        "disabled": "False",
+        "grants_version": "1",
+        "token_sha256": null,
+        "created_at": "2026-11-12 22:32:12.212752+00:00"
+      }
+    ],
+    "company": [
+      {
+        "id": "<uuid:3>",
+        "name": "Stark Manufacturing Inc.",
+        "functional_currency": "USD",
+        "fiscal_year_start_month": "1",
+        "created_at": "2026-11-12 22:32:12.171103+00:00",
+        "date_order": null,
+        "status": "ready"
+      }
+    ],
+    "principal_session": [],
+    "principal_sign_in": [],
+    "account": [
+      {
+        "id": "<uuid:4>",
+        "company_id": "<uuid:3>",
+        "number": "1000",
+        "name": "Assets",
+        "root_type": "asset",
+        "account_type": null,
+        "is_group": "True",
+        "parent_id": null,
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:5>",
+        "company_id": "<uuid:3>",
+        "number": "1100",
+        "name": "Bank",
+        "root_type": "asset",
+        "account_type": "bank",
+        "is_group": "False",
+        "parent_id": "<uuid:4>",
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:6>",
+        "company_id": "<uuid:3>",
+        "number": "1300",
+        "name": "Inventory",
+        "root_type": "asset",
+        "account_type": "stock",
+        "is_group": "False",
+        "parent_id": "<uuid:4>",
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:7>",
+        "company_id": "<uuid:3>",
+        "number": "2000",
+        "name": "Liabilities",
+        "root_type": "liability",
+        "account_type": null,
+        "is_group": "True",
+        "parent_id": null,
+        "frozen": "False",
+        "normal_side": "credit"
+      },
+      {
+        "id": "<uuid:8>",
+        "company_id": "<uuid:3>",
+        "number": "2100",
+        "name": "Accounts Payable",
+        "root_type": "liability",
+        "account_type": "payable",
+        "is_group": "False",
+        "parent_id": "<uuid:7>",
+        "frozen": "False",
+        "normal_side": "credit"
+      },
+      {
+        "id": "<uuid:9>",
+        "company_id": "<uuid:3>",
+        "number": "2300",
+        "name": "Stock Received Not Billed",
+        "root_type": "liability",
+        "account_type": "stock_received_not_billed",
+        "is_group": "False",
+        "parent_id": "<uuid:7>",
+        "frozen": "False",
+        "normal_side": "credit"
+      },
+      {
+        "id": "<uuid:10>",
+        "company_id": "<uuid:3>",
+        "number": "2310",
+        "name": "Asset Received Not Billed",
+        "root_type": "liability",
+        "account_type": null,
+        "is_group": "False",
+        "parent_id": "<uuid:7>",
+        "frozen": "False",
+        "normal_side": "credit"
+      },
+      {
+        "id": "<uuid:11>",
+        "company_id": "<uuid:3>",
+        "number": "3000",
+        "name": "Equity",
+        "root_type": "equity",
+        "account_type": null,
+        "is_group": "True",
+        "parent_id": null,
+        "frozen": "False",
+        "normal_side": "credit"
+      },
+      {
+        "id": "<uuid:12>",
+        "company_id": "<uuid:3>",
+        "number": "3100",
+        "name": "Retained Earnings",
+        "root_type": "equity",
+        "account_type": "retained_earnings",
+        "is_group": "False",
+        "parent_id": "<uuid:11>",
+        "frozen": "False",
+        "normal_side": "credit"
+      },
+      {
+        "id": "<uuid:13>",
+        "company_id": "<uuid:3>",
+        "number": "3900",
+        "name": "Opening Balance Equity",
+        "root_type": "equity",
+        "account_type": "opening_balance",
+        "is_group": "False",
+        "parent_id": "<uuid:11>",
+        "frozen": "False",
+        "normal_side": "credit"
+      },
+      {
+        "id": "<uuid:14>",
+        "company_id": "<uuid:3>",
+        "number": "4000",
+        "name": "Income",
+        "root_type": "income",
+        "account_type": null,
+        "is_group": "True",
+        "parent_id": null,
+        "frozen": "False",
+        "normal_side": "credit"
+      },
+      {
+        "id": "<uuid:15>",
+        "company_id": "<uuid:3>",
+        "number": "4130",
+        "name": "Sales Returns",
+        "root_type": "income",
+        "account_type": "sales_returns",
+        "is_group": "False",
+        "parent_id": "<uuid:14>",
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:16>",
+        "company_id": "<uuid:3>",
+        "number": "5000",
+        "name": "Cost of Goods Sold",
+        "root_type": "expense",
+        "account_type": null,
+        "is_group": "True",
+        "parent_id": null,
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:17>",
+        "company_id": "<uuid:3>",
+        "number": "5200",
+        "name": "Stock Adjustment",
+        "root_type": "expense",
+        "account_type": "stock_adjustment",
+        "is_group": "False",
+        "parent_id": "<uuid:16>",
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:18>",
+        "company_id": "<uuid:3>",
+        "number": "5210",
+        "name": "Inventory Write-offs",
+        "root_type": "expense",
+        "account_type": "stock_write_off",
+        "is_group": "False",
+        "parent_id": "<uuid:16>",
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:19>",
+        "company_id": "<uuid:3>",
+        "number": "6000",
+        "name": "Expenses",
+        "root_type": "expense",
+        "account_type": null,
+        "is_group": "True",
+        "parent_id": null,
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:20>",
+        "company_id": "<uuid:3>",
+        "number": "6810",
+        "name": "Realized Exchange Gain/Loss",
+        "root_type": "expense",
+        "account_type": "exchange_gain_loss_realised",
+        "is_group": "False",
+        "parent_id": "<uuid:19>",
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:21>",
+        "company_id": "<uuid:3>",
+        "number": "6820",
+        "name": "Unrealized Exchange Gain/Loss",
+        "root_type": "expense",
+        "account_type": "exchange_gain_loss_unrealised",
+        "is_group": "False",
+        "parent_id": "<uuid:19>",
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:22>",
+        "company_id": "<uuid:3>",
+        "number": "6900",
+        "name": "Rounding",
+        "root_type": "expense",
+        "account_type": "rounding",
+        "is_group": "False",
+        "parent_id": "<uuid:19>",
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:23>",
+        "company_id": "<uuid:3>",
+        "number": "1200",
+        "name": "Trade Receivables",
+        "root_type": "asset",
+        "account_type": "receivable",
+        "is_group": "False",
+        "parent_id": "<uuid:4>",
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:24>",
+        "company_id": "<uuid:3>",
+        "number": "4100",
+        "name": "Sales Revenue",
+        "root_type": "income",
+        "account_type": "income",
+        "is_group": "False",
+        "parent_id": "<uuid:14>",
+        "frozen": "False",
+        "normal_side": "credit"
+      },
+      {
+        "id": "<uuid:25>",
+        "company_id": "<uuid:3>",
+        "number": "5100",
+        "name": "COGS - Materials",
+        "root_type": "expense",
+        "account_type": "cost_of_goods_sold",
+        "is_group": "False",
+        "parent_id": "<uuid:16>",
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:26>",
+        "company_id": "<uuid:3>",
+        "number": "1131",
+        "name": "Raw Materials",
+        "root_type": "asset",
+        "account_type": "stock",
+        "is_group": "False",
+        "parent_id": "<uuid:4>",
+        "frozen": "False",
+        "normal_side": "debit"
+      },
+      {
+        "id": "<uuid:27>",
+        "company_id": "<uuid:3>",
+        "number": "1133",
+        "name": "Finished Goods",
+        "root_type": "asset",
+        "account_type": "stock",
+        "is_group": "False",
+        "parent_id": "<uuid:4>",
+        "frozen": "False",
+        "normal_side": "debit"
+      }
+    ],
+    "approval": [
+      {
+        "id": "<uuid:28>",
+        "principal_id": "<uuid:2>",
+        "company_id": "<uuid:3>",
+        "conversation_id": null,
+        "contract": "create_invoice",
+        "contract_version": "0.0.4",
+        "policy_version": "1",
+        "impl_version": "0.0.2+<hex64:4:prefix16>",
+        "args_json": "{\"customer\":\"Initech\",\"email\":false,\"items\":[{\"item\":\"Copper Wire\",\"quantity\":\"2\",\"rate\":null,\"warehouse\":null}],\"order\":null,\"submit\":false}",
+        "read_set_json": "[[\"company\",\"<uuid:3>\",\"<hex64:7>\"],[\"fiscal_period\",\"<uuid:29>\",\"<hex64:8>\"],[\"item\",\"<uuid:30>\",\"<hex64:9>\"],[\"party\",\"<uuid:31>\",\"<hex64:10>\"]]",
+        "card_json": "{\"amounts\":[{\"currency\":\"USD\",\"index\":2,\"kind\":\"unit_price\",\"label\":\"Item\",\"value\":\"28.00\",\"where\":\"lines\"},{\"currency\":\"USD\",\"index\":2,\"kind\":\"amount\",\"label\":\"Item\",\"value\":\"56.00\",\"where\":\"lines\"},{\"currency\":\"USD\",\"index\":3,\"kind\":\"amount\",\"label\":\"Total\",\"value\":\"56.00\",\"where\":\"lines\"}],\"books\":[\"Nothing posts to the books until the draft is submitted.\"],\"currency\":\"USD\",\"footer\":\"Valid 10 minutes. Rechecked before saving.\",\"lines\":[[\"Company\",\"Stark Manufacturing Inc.\"],[\"Customer\",\"Initech\"],[\"Item\",\"2 x Copper Wire @ 28.00 = 56.00\"],[\"Total\",\"56.00 USD\"],[\"Date\",\"26 Oct 2026\"],[\"Due\",\"25 Nov 2026\"],[\"Tax\",\"No tax calculated: no tax template is set. That is not a statement that no tax is owed.\"]],\"title\":\"Save a draft sales invoice\",\"warnings\":[]}",
+        "nonce": "<hex32:1>",
+        "digest": "<hex64:11>",
+        "status": "consumed",
+        "operation_key": "<uuid:32>",
+        "created_at": "2026-11-12 22:32:12.675868+00:00",
+        "expires_at": "2026-11-12 22:42:12.675751+00:00",
+        "decided_at": "2026-11-12 22:32:12.686594+00:00",
+        "approved_by": "<uuid:2>",
+        "approver_grants_version": "1",
+        "decision_json": null,
+        "request_card_token": null
+      }
+    ],
+    "audit_log": [
+      {
+        "id": "<uuid:33>",
+        "company_id": "<uuid:3>",
+        "at": "2026-11-12 22:32:12.715713+00:00",
+        "actor": "owner",
+        "action": "save_draft_invoice",
+        "document_type": "sales_invoice",
+        "document_id": "<uuid:34>",
+        "approval_id": null,
+        "detail": "{\"number\":\"INV-2026-00001\",\"total\":\"56.00\"}"
+      },
+      {
+        "id": "<uuid:35>",
+        "company_id": "<uuid:3>",
+        "at": "2026-11-12 22:32:12.716958+00:00",
+        "actor": "owner",
+        "action": "commit:create_invoice",
+        "document_type": null,
+        "document_id": null,
+        "approval_id": "<uuid:28>",
+        "detail": "{\"number\":\"INV-2026-00001\",\"operation_key\":\"<uuid:32>\",\"total\":\"56.00\"}"
+      }
+    ],
+    "conversation_fence": [
+      {
+        "conversation_id": "<uuid:95>",
+        "company_id": "<uuid:3>",
+        "generation": "1",
+        "live_token": "<hex32:2>",
+        "updated_at": "2026-11-12 22:32:13.882342+00:00"
+      }
+    ],
+    "dimension_set": [],
+    "external_ref": [],
+    "file_object": [],
+    "fiscal_year": [
+      {
+        "id": "<uuid:36>",
+        "company_id": "<uuid:3>",
+        "label": "2025",
+        "start_date": "2025-01-01",
+        "end_date": "2025-12-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:37>",
+        "company_id": "<uuid:3>",
+        "label": "2026",
+        "start_date": "2026-01-01",
+        "end_date": "2026-12-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:38>",
+        "company_id": "<uuid:3>",
+        "label": "2027",
+        "start_date": "2027-01-01",
+        "end_date": "2027-12-31",
+        "status": "open"
+      }
+    ],
+    "hosted_books_consent": [],
+    "item": [
+      {
+        "id": "<uuid:30>",
+        "company_id": "<uuid:3>",
+        "name": "Copper Wire",
+        "unit": "Meter",
+        "standard_rate": "28.00",
+        "kind": "stock"
+      }
+    ],
+    "number_series": [
+      {
+        "company_id": "<uuid:3>",
+        "series": "INV",
+        "fiscal_year": "2026",
+        "next_value": "2"
+      }
+    ],
+    "outbox": [],
+    "party": [
+      {
+        "id": "<uuid:39>",
+        "company_id": "<uuid:3>",
+        "kind": "customer",
+        "name": "Acme Corporation",
+        "email": null,
+        "city": null,
+        "city_key": null
+      },
+      {
+        "id": "<uuid:40>",
+        "company_id": "<uuid:3>",
+        "kind": "customer",
+        "name": "Wayne Industries",
+        "email": null,
+        "city": null,
+        "city_key": null
+      },
+      {
+        "id": "<uuid:41>",
+        "company_id": "<uuid:3>",
+        "kind": "customer",
+        "name": "Oscorp Industries",
+        "email": null,
+        "city": null,
+        "city_key": null
+      },
+      {
+        "id": "<uuid:42>",
+        "company_id": "<uuid:3>",
+        "kind": "customer",
+        "name": "Pied Piper Inc",
+        "email": null,
+        "city": null,
+        "city_key": null
+      },
+      {
+        "id": "<uuid:43>",
+        "company_id": "<uuid:3>",
+        "kind": "customer",
+        "name": "Hooli Technologies",
+        "email": null,
+        "city": null,
+        "city_key": null
+      },
+      {
+        "id": "<uuid:44>",
+        "company_id": "<uuid:3>",
+        "kind": "customer",
+        "name": "Stark Retail Outlets",
+        "email": null,
+        "city": null,
+        "city_key": null
+      },
+      {
+        "id": "<uuid:45>",
+        "company_id": "<uuid:3>",
+        "kind": "customer",
+        "name": "Parker Electronics",
+        "email": null,
+        "city": null,
+        "city_key": null
+      },
+      {
+        "id": "<uuid:46>",
+        "company_id": "<uuid:3>",
+        "kind": "customer",
+        "name": "Xavier Laboratories",
+        "email": null,
+        "city": null,
+        "city_key": null
+      },
+      {
+        "id": "<uuid:47>",
+        "company_id": "<uuid:3>",
+        "kind": "customer",
+        "name": "LexCorp",
+        "email": null,
+        "city": null,
+        "city_key": null
+      },
+      {
+        "id": "<uuid:48>",
+        "company_id": "<uuid:3>",
+        "kind": "customer",
+        "name": "Daily Planet Media",
+        "email": null,
+        "city": null,
+        "city_key": null
+      },
+      {
+        "id": "<uuid:31>",
+        "company_id": "<uuid:3>",
+        "kind": "customer",
+        "name": "Initech",
+        "email": null,
+        "city": null,
+        "city_key": null
+      }
+    ],
+    "posting": [
+      {
+        "id": "<uuid:49>",
+        "company_id": "<uuid:3>",
+        "seq": "1",
+        "posting_date": "2026-01-01",
+        "voucher_type": "stock_receipt",
+        "voucher_id": "<uuid:50>",
+        "memo": null,
+        "reverses_posting_id": null,
+        "operation_key": null,
+        "created_at": "2026-11-12 22:32:12.646195+00:00",
+        "created_by": "owner",
+        "prev_hash": "<chain-origin>",
+        "hash": "<hex64:12>",
+        "hash_format": "2",
+        "ledger": "general"
+      }
+    ],
+    "posting_chain_head": [
+      {
+        "company_id": "<uuid:3>",
+        "last_seq": "1",
+        "last_hash": "<hex64:12>"
+      }
+    ],
+    "principal_grant": [
+      {
+        "principal_id": "<uuid:2>",
+        "company_id": "<uuid:3>",
+        "permission": "view"
+      },
+      {
+        "principal_id": "<uuid:2>",
+        "company_id": "<uuid:3>",
+        "permission": "draft"
+      },
+      {
+        "principal_id": "<uuid:2>",
+        "company_id": "<uuid:3>",
+        "permission": "approve"
+      },
+      {
+        "principal_id": "<uuid:2>",
+        "company_id": "<uuid:3>",
+        "permission": "post"
+      },
+      {
+        "principal_id": "<uuid:2>",
+        "company_id": "<uuid:3>",
+        "permission": "reverse"
+      },
+      {
+        "principal_id": "<uuid:2>",
+        "company_id": "<uuid:3>",
+        "permission": "close_period"
+      },
+      {
+        "principal_id": "<uuid:2>",
+        "company_id": "<uuid:3>",
+        "permission": "export"
+      },
+      {
+        "principal_id": "<uuid:2>",
+        "company_id": "<uuid:3>",
+        "permission": "administer_users"
+      },
+      {
+        "principal_id": "<uuid:2>",
+        "company_id": "<uuid:3>",
+        "permission": "install_plugins"
+      },
+      {
+        "principal_id": "<uuid:2>",
+        "company_id": "<uuid:3>",
+        "permission": "manage_secrets"
+      }
+    ],
+    "stock_voucher": [],
+    "sync_payload": [],
+    "system_of_record": [],
+    "account_map": [],
+    "fiscal_period": [
+      {
+        "id": "<uuid:51>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:36>",
+        "period_no": "1",
+        "start_date": "2025-01-01",
+        "end_date": "2025-01-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:52>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:36>",
+        "period_no": "2",
+        "start_date": "2025-02-01",
+        "end_date": "2025-02-28",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:53>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:36>",
+        "period_no": "3",
+        "start_date": "2025-03-01",
+        "end_date": "2025-03-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:54>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:36>",
+        "period_no": "4",
+        "start_date": "2025-04-01",
+        "end_date": "2025-04-30",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:55>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:36>",
+        "period_no": "5",
+        "start_date": "2025-05-01",
+        "end_date": "2025-05-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:56>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:36>",
+        "period_no": "6",
+        "start_date": "2025-06-01",
+        "end_date": "2025-06-30",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:57>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:36>",
+        "period_no": "7",
+        "start_date": "2025-07-01",
+        "end_date": "2025-07-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:58>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:36>",
+        "period_no": "8",
+        "start_date": "2025-08-01",
+        "end_date": "2025-08-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:59>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:36>",
+        "period_no": "9",
+        "start_date": "2025-09-01",
+        "end_date": "2025-09-30",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:60>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:36>",
+        "period_no": "10",
+        "start_date": "2025-10-01",
+        "end_date": "2025-10-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:61>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:36>",
+        "period_no": "11",
+        "start_date": "2025-11-01",
+        "end_date": "2025-11-30",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:62>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:36>",
+        "period_no": "12",
+        "start_date": "2025-12-01",
+        "end_date": "2025-12-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:63>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:37>",
+        "period_no": "1",
+        "start_date": "2026-01-01",
+        "end_date": "2026-01-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:64>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:37>",
+        "period_no": "2",
+        "start_date": "2026-02-01",
+        "end_date": "2026-02-28",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:65>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:37>",
+        "period_no": "3",
+        "start_date": "2026-03-01",
+        "end_date": "2026-03-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:66>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:37>",
+        "period_no": "4",
+        "start_date": "2026-04-01",
+        "end_date": "2026-04-30",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:67>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:37>",
+        "period_no": "5",
+        "start_date": "2026-05-01",
+        "end_date": "2026-05-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:68>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:37>",
+        "period_no": "6",
+        "start_date": "2026-06-01",
+        "end_date": "2026-06-30",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:69>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:37>",
+        "period_no": "7",
+        "start_date": "2026-07-01",
+        "end_date": "2026-07-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:70>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:37>",
+        "period_no": "8",
+        "start_date": "2026-08-01",
+        "end_date": "2026-08-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:71>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:37>",
+        "period_no": "9",
+        "start_date": "2026-09-01",
+        "end_date": "2026-09-30",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:29>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:37>",
+        "period_no": "10",
+        "start_date": "2026-10-01",
+        "end_date": "2026-10-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:72>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:37>",
+        "period_no": "11",
+        "start_date": "2026-11-01",
+        "end_date": "2026-11-30",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:73>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:37>",
+        "period_no": "12",
+        "start_date": "2026-12-01",
+        "end_date": "2026-12-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:74>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:38>",
+        "period_no": "1",
+        "start_date": "2027-01-01",
+        "end_date": "2027-01-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:75>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:38>",
+        "period_no": "2",
+        "start_date": "2027-02-01",
+        "end_date": "2027-02-28",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:76>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:38>",
+        "period_no": "3",
+        "start_date": "2027-03-01",
+        "end_date": "2027-03-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:77>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:38>",
+        "period_no": "4",
+        "start_date": "2027-04-01",
+        "end_date": "2027-04-30",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:78>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:38>",
+        "period_no": "5",
+        "start_date": "2027-05-01",
+        "end_date": "2027-05-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:79>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:38>",
+        "period_no": "6",
+        "start_date": "2027-06-01",
+        "end_date": "2027-06-30",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:80>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:38>",
+        "period_no": "7",
+        "start_date": "2027-07-01",
+        "end_date": "2027-07-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:81>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:38>",
+        "period_no": "8",
+        "start_date": "2027-08-01",
+        "end_date": "2027-08-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:82>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:38>",
+        "period_no": "9",
+        "start_date": "2027-09-01",
+        "end_date": "2027-09-30",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:83>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:38>",
+        "period_no": "10",
+        "start_date": "2027-10-01",
+        "end_date": "2027-10-31",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:84>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:38>",
+        "period_no": "11",
+        "start_date": "2027-11-01",
+        "end_date": "2027-11-30",
+        "status": "open"
+      },
+      {
+        "id": "<uuid:85>",
+        "company_id": "<uuid:3>",
+        "fiscal_year_id": "<uuid:38>",
+        "period_no": "12",
+        "start_date": "2027-12-01",
+        "end_date": "2027-12-31",
+        "status": "open"
+      }
+    ],
+    "fiscal_year_close": [],
+    "ledger_entry": [
+      {
+        "id": "<uuid:86>",
+        "company_id": "<uuid:3>",
+        "posting_id": "<uuid:49>",
+        "line_no": "1",
+        "account_id": "<uuid:26>",
+        "party_id": null,
+        "debit": "5600.00",
+        "credit": "0.00",
+        "currency": "USD",
+        "rate": "1",
+        "functional_currency": "USD",
+        "functional_debit": "5600.00",
+        "functional_credit": "0.00",
+        "kind": "measured",
+        "dimension_set_id": null
+      },
+      {
+        "id": "<uuid:87>",
+        "company_id": "<uuid:3>",
+        "posting_id": "<uuid:49>",
+        "line_no": "2",
+        "account_id": "<uuid:9>",
+        "party_id": null,
+        "debit": "0.00",
+        "credit": "5600.00",
+        "currency": "USD",
+        "rate": "1",
+        "functional_currency": "USD",
+        "functional_debit": "0.00",
+        "functional_credit": "5600.00",
+        "kind": "measured",
+        "dimension_set_id": null
+      }
+    ],
+    "operation_outcome": [
+      {
+        "key": "<uuid:32>",
+        "company_id": "<uuid:3>",
+        "approval_id": "<uuid:28>",
+        "card_digest": "<hex64:11>",
+        "status": "committed",
+        "result_json": "{\"amounts\":[{\"currency\":\"USD\",\"of\":\"INV-2026-00001\",\"value\":\"56.00\",\"what\":\"total\"}],\"data\":{\"number\":\"INV-2026-00001\",\"total\":\"56.00\"},\"figures\":[\"56.00 USD\"],\"text\":\"Saved draft invoice INV-2026-00001 for Initech: 56.00 USD, due 25 Nov 2026.\"}",
+        "committed_at": "2026-11-12 22:32:12.717850+00:00"
+      }
+    ],
+    "outbox_attachment": [],
+    "outbox_attempt": [],
+    "sales_invoice": [
+      {
+        "id": "<uuid:34>",
+        "company_id": "<uuid:3>",
+        "number": "INV-2026-00001",
+        "customer_id": "<uuid:31>",
+        "posting_date": "2026-10-26",
+        "due_date": "2026-11-25",
+        "currency": "USD",
+        "total": "56.00",
+        "outstanding": "0.00",
+        "status": "draft",
+        "operation_key": "<uuid:32>",
+        "submit_operation_key": null,
+        "cancel_operation_key": null,
+        "created_at": "2026-11-12 22:32:12.711529+00:00"
+      }
+    ],
+    "sales_order": [],
+    "sales_payment": [],
+    "stock_goods_received": [],
+    "stock_warehouse": [
+      {
+        "id": "<uuid:88>",
+        "company_id": "<uuid:3>",
+        "name": "Stark Manufacturing Inc. - Main Warehouse",
+        "account_id": "<uuid:26>",
+        "is_default": "True",
+        "position": "1",
+        "created_at": "2026-11-12 22:32:12.602214+00:00"
+      },
+      {
+        "id": "<uuid:89>",
+        "company_id": "<uuid:3>",
+        "name": "Raw Materials Store",
+        "account_id": "<uuid:26>",
+        "is_default": "False",
+        "position": "2",
+        "created_at": "2026-11-12 22:32:12.606098+00:00"
+      },
+      {
+        "id": "<uuid:90>",
+        "company_id": "<uuid:3>",
+        "name": "Finished Goods Store",
+        "account_id": "<uuid:27>",
+        "is_default": "False",
+        "position": "3",
+        "created_at": "2026-11-12 22:32:12.610054+00:00"
+      }
+    ],
+    "supplier_payment": [],
+    "sync_journal": [],
+    "sales_credit_note": [],
+    "sales_delivery": [],
+    "sales_invoice_line": [
+      {
+        "id": "<uuid:91>",
+        "company_id": "<uuid:3>",
+        "invoice_id": "<uuid:34>",
+        "currency": "USD",
+        "item_id": "<uuid:30>",
+        "quantity": "2",
+        "rate": "28.00",
+        "amount": "56.00",
+        "line_no": "1",
+        "named_warehouse_id": null,
+        "item_kind": "stock"
+      }
+    ],
+    "sales_order_line": [],
+    "sales_payment_allocation": [],
+    "stock_head": [
+      {
+        "id": "<uuid:92>",
+        "company_id": "<uuid:3>",
+        "item_id": "<uuid:30>",
+        "warehouse_id": "<uuid:89>",
+        "currency": "USD",
+        "last_seq": "1",
+        "qty": "200",
+        "value": "5600.00",
+        "last_date": "2026-01-01"
+      }
+    ],
+    "stock_item": [
+      {
+        "id": "<uuid:93>",
+        "company_id": "<uuid:3>",
+        "item_id": "<uuid:30>",
+        "method": "moving_average",
+        "default_warehouse_id": "<uuid:88>",
+        "created_at": "2026-11-12 22:32:12.614924+00:00"
+      }
+    ],
+    "stock_ledger_entry": [
+      {
+        "id": "<uuid:94>",
+        "company_id": "<uuid:3>",
+        "item_id": "<uuid:30>",
+        "warehouse_id": "<uuid:89>",
+        "currency": "USD",
+        "posting_date": "2026-01-01",
+        "seq": "1",
+        "direction": "in",
+        "qty": "200",
+        "value": "5600.00",
+        "qty_after": "200",
+        "value_after": "5600.00",
+        "voucher_type": "stock_receipt",
+        "voucher_id": "<uuid:50>",
+        "line_no": "1",
+        "against_entry_id": null,
+        "reverses_entry_id": null,
+        "created_at": "2026-11-12 22:32:12.631259+00:00"
+      }
+    ],
+    "stock_voucher_line": [],
+    "supplier_payable": [],
+    "sales_credit_note_line": [],
+    "sales_delivery_line": [],
+    "sales_invoice_issue": [],
+    "stock_layer": [],
+    "supplier_payment_allocation": [],
+    "sales_credit_note_return": [],
+    "sales_invoice_delivery": [],
+    "stock_layer_take": []
+  },
+  "answers": [],
+  "public_keys": {
+    "CONVENTIONS.md": "# Expected books: how to read these keys\n\nEach file in this folder is one case: the starting books, the request in plain words, and the books\nthe engine must leave behind. The figures were worked out by hand from the rules below, with no\nengine involved, and checked by a separate Decimal-only calculation.\n\n## What a key compares\n\n- **Business rows**, exactly: documents and their lines (invoices, credit notes, orders, deliveries,\n  payments and their allocations), ledger postings and their entries, stock ledger rows, valuation\n  layers or balances, stock reservations, and the masters (customers, items, warehouses, accounts).\n  A test passes only if these match the key exactly. A business row the key does not list must not\n  be added, and an existing one the key does not change must stay as it is.\n- **Control rows**, by shared expectations rather than per-key figures. Every request the owner\n  approves leaves one consumed approval, one committed operation outcome and the audit rows of that\n  write. Each posting advances the company's posting chain by one, and each new numbered document\n  advances its number series by one. Nothing else in the control tables changes.\n- **A request the engine answers with a question** (an unclear request, a missing choice) makes no\n  card and leaves no row in any table, business or control.\n- **The conversation's approval fence** is the one control row any turn may change, question turns\n  included: the conversation has exactly one conversation_fence row, its generation never decreases,\n  its live token is opaque and is never compared to a figure in a key, and its values are as the\n  engine's own fence tests specify. No other control row changes on a question turn.\n- **A card that is not carried out**, whatever the approval service records for it (declined,\n  expired, superseded by a fresh card because the books changed under it, invalidated), adds no\n  business row, no operation outcome and no audit row. Its approval rows are not set by these keys:\n  they are as the engine's own card tests specify (a superseded card, for example, is replaced by\n  a fresh pending card).\n- Rows the assistant keeps in its own conversation store are outside the books.\n\n## Money and quantities\n\n- Every figure is an exact decimal string. Money has two decimal places (USD). Quantities are exact\n  and are never rounded to money precision.\n- A line amount is `qty x rate`, rounded half-up to 0.01.\n- Ledger debits equal credits exactly for every document. No tolerance, no rounding residue.\n\n## Accounts\n\nKeys name accounts by their role and name in the starting books' chart. The test maps each role to\nthe company's account, so a renumbered chart does not change the key.\n\n| Role | Account in the starting books | Normal balance |\n|---|---|---|\n| Receivable | Trade Receivables (1121), with the customer as party | debit |\n| Sales income | Sales Revenue (4110) | credit |\n| Cost of goods sold | COGS - Materials (5110) | debit |\n| Inventory, per warehouse | Raw Materials (1131) for Raw Materials Store and Main Warehouse; Finished Goods (1133) for Finished Goods Store | debit |\n| Stock received not billed | Stock Received Not Billed, a current liability | credit |\n| Bank | Operating Checking Account (1112) | debit |\n\nPerpetual inventory is on: every stock movement posts its value to the ledger in the same document.\nNegative stock is refused. No tax template is set in any case, so no tax line is expected, and the\ncard must say no tax was calculated (not that none is owed).\n\n## Stock valuation\n\nEach item's method is stated in its case.\n\n- **Moving average.** The item carries a quantity and a value. A receipt adds `qty x rate` to the\n  value. An issue takes out `round(value x qty_out / qty_on_hand, 0.01)`, and the value left is the\n  value before minus that figure, so the remaining value never drifts. The rate (`value / qty`) is\n  shown for reading only; tests check quantity and value. Rounding the rate to 0.01 first and\n  multiplying is wrong (the moving-average sequence shows the difference).\n- **FIFO.** Stock is a queue of layers, oldest first, each with a quantity and a value (its rate is\n  `value / qty`). A receipt adds a layer worth `qty x rate` at the end of the queue (merged into the\n  last layer if the rate is the same). An issue takes from the oldest layers first. A whole layer\n  gives its whole value; part of a layer gives `round(layer value x qty taken / layer qty, 0.01)`\n  and the rest of its value stays with the layer.\n- **Sales returns** (a credit note that brings stock back) come in at the cost the goods left at,\n  allocated cumulatively against the original issue. With the issue's quantity `Q` and value `V`,\n  and `R` the quantity returned against it so far, this return included, the return's cost is\n  `round(V x R / Q, 0.01)` less the cost of the earlier returns against the same issue. A single\n  return costs `round(V x qty / Q, 0.01)`. When everything has come back, the returns add up to `V`\n  exactly, so no residue stays in cost of goods sold. Under FIFO the returned stock is a new layer\n  at the end of the queue, worth the return's cost. This reverses the cost of goods sold the\n  original sale recognised, whatever the current cost is.\n\n## Documents\n\n- Document numbers are not part of a key, except that a new document takes the next number in its\n  series and a key refers to existing documents by number.\n- Statuses are checked by meaning: draft, submitted (open, nothing paid), partly paid, paid,\n  credited (settled by a credit note), cancelled; for orders: to deliver, partly delivered,\n  delivered, completed.\n- \"Today\" is the test clock's date, stated in each case.\n",
+    "invoice_stock_from_stocked_warehouse.md": "# Invoice a stocked item kept outside the default warehouse\n\nProvenance: adapted from the ERPClaw v2 demo books (Stark Manufacturing Inc.), with one request\nfrom its write pilot. Figures worked out from scratch under `CONVENTIONS.md`.\n\n## Starting books\n\nTest clock: 2026-10-26. Company Stark Manufacturing Inc., USD, perpetual inventory on.\n\n| Item | Unit | Method | Selling rate |\n|---|---|---|---|\n| Copper Wire | Meter | moving average | 28.00 |\n\n| Warehouse | Copper Wire on hand | Value |\n|---|---|---|\n| Stark Manufacturing Inc. - Main Warehouse (the company's default) | 0 | 0.00 |\n| Raw Materials Store | 200 | 5600.00 (rate 28.00) |\n| Finished Goods Store | 0 | 0.00 |\n\nCustomer Acme Corporation exists (one match for \"Acme\"). Other records in the demo books (an\nInitech draft invoice for 2 m of Copper Wire among them) must stay as they are.\n\n## Request\n\n\"Invoice Acme for 5 Copper Wire at the usual price and submit.\"\n\nThe owner asked for a submitted invoice, so after the one approval card no second confirmation is\nasked. The card names Raw Materials Store as the source (the only warehouse holding the stock) and\nshows no internal ids.\n\n## Expected books\n\nNew sales invoice, customer Acme Corporation, posting date 2026-10-26, status submitted, stock\nmoved by the invoice.\n\n| Line | Item | Qty | Rate | Amount | Warehouse |\n|---|---|---|---|---|---|\n| 1 | Copper Wire | 5 | 28.00 | 140.00 | Raw Materials Store |\n\nTotals: net 140.00, tax 0.00, grand total 140.00, outstanding 140.00.\n\nLedger (one document, balanced):\n\n| Account (role) | Party | Debit | Credit |\n|---|---|---|---|\n| Trade Receivables (receivable) | Acme Corporation | 140.00 | |\n| Sales Revenue (sales income) | | | 140.00 |\n| COGS - Materials (cost of goods sold) | | 140.00 | |\n| Raw Materials (inventory, Raw Materials Store) | | | 140.00 |\n\nStock ledger:\n\n| Item | Warehouse | Qty change | Value change | Qty after | Value after |\n|---|---|---|---|---|---|\n| Copper Wire | Raw Materials Store | -5 | -140.00 | 195 | 5460.00 |\n\n## Variant b: selling rate above cost\n\nSame books and request, except that Copper Wire's selling rate is 35.00 per metre (its cost stays\n28.00). This variant tells a price from a cost.\n\n| Line | Item | Qty | Rate | Amount | Warehouse |\n|---|---|---|---|---|---|\n| 1 | Copper Wire | 5 | 35.00 | 175.00 | Raw Materials Store |\n\nTotals: net 175.00, tax 0.00, grand total 175.00, outstanding 175.00.\n\n| Account (role) | Party | Debit | Credit |\n|---|---|---|---|\n| Trade Receivables (receivable) | Acme Corporation | 175.00 | |\n| Sales Revenue (sales income) | | | 175.00 |\n| COGS - Materials (cost of goods sold) | | 140.00 | |\n| Raw Materials (inventory, Raw Materials Store) | | | 140.00 |\n\nStock ledger as in the main case: -5, -140.00, leaving 195 worth 5460.00.\n\n## Must not happen\n\n- No stock transfer, no stock entry, no movement in any other warehouse.\n- No refusal for lack of stock in the default warehouse.\n- The Initech draft is not submitted or changed.\n",
+    "sales_order_above_available_stock.md": "# A sales order for more than the stock on hand\n\nProvenance: adapted from the ERPClaw v2 demo books (Stark Manufacturing Inc.), with one request\nfrom its write pilot. Worked out from scratch under `CONVENTIONS.md`.\n\n## Starting books\n\nTest clock: 2026-10-26.\n\n| Item | Unit | Method | Selling rate |\n|---|---|---|---|\n| Circuit Board | Nos | moving average | 15.00 |\n\n| Warehouse | Circuit Board on hand | Value |\n|---|---|---|\n| Raw Materials Store | 300 (200 opening on 2026-01-01, 100 received 2026-01-12, both at 15.00) | 4500.00 |\n| every other warehouse | 0 | 0.00 |\n\nNo open sales order, reservation or draft holds any Circuit Board. Customer Wayne Industries exists\n(one match for \"Wayne\").\n\n## Request\n\n\"Wayne wants 500 Circuit Board tomorrow; book the order.\"\n\nThe card states the shortfall before approval: 300 available, 200 short. The owner still decides;\non approval the order is submitted for the full 500.\n\n## Expected books\n\nNew sales order, customer Wayne Industries, order date 2026-10-26, delivery date 2026-10-27,\nstatus submitted (to deliver).\n\n| Line | Item | Qty | Rate | Amount |\n|---|---|---|---|---|\n| 1 | Circuit Board | 500 | 15.00 | 7500.00 |\n\nTotals: net 7500.00, tax 0.00, grand total 7500.00. Delivered 0, invoiced 0.\n\nLedger: no rows. Stock ledger: no rows. Stock reservations: none.\n\n## Variant b: selling rate above cost\n\nSame books and request, except that Circuit Board's selling rate is 22.00 (its cost stays 15.00).\nThe order line is 500 @ 22.00 = 11000.00, and the totals are net 11000.00, tax 0.00, grand total\n11000.00. The card shows the same shortfall (300 available, 200 short). There are still no ledger,\nstock or reservation rows.\n\n## Must not happen\n\n- The order quantity saved as anything but 500 (50 is the known wrong answer).\n- A refusal because stock is short, or an order cut down to 300 without the owner asking.\n- Any stock movement or reservation.\n",
+    "credit_note_full_return.md": "# A credit note for everything on an unpaid invoice, with the stock coming back\n\nProvenance: adapted from the ERPClaw v2 demo books (Stark Manufacturing Inc.), with one request\nfrom its write pilot. The demo books posted finished goods to the Raw Materials account; here the\nFinished Goods Store posts to Finished Goods (1133). Worked out from scratch under `CONVENTIONS.md`.\n\n## Starting books\n\nTest clock: 2026-10-26.\n\n| Item | Unit | Method |\n|---|---|---|\n| Motor Housing Unit | Nos | moving average |\n\nStock ledger for Motor Housing Unit, Finished Goods Store:\n\n| Date | Document | Qty change | Value change | Qty after | Value after |\n|---|---|---|---|---|---|\n| 2026-01-01 | opening stock | 15 | 3150.00 | 15 | 3150.00 |\n| 2026-01-20 | INV-2026-00005 | -8 | -1680.00 | 7 | 1470.00 |\n\n| Invoice | Customer | Posted | Lines | Grand total | Outstanding | Status |\n|---|---|---|---|---|---|---|\n| INV-2026-00005 | Hooli Technologies | 2026-01-20 | 8 Motor Housing Unit @ 349.00 = 2792.00 | 2792.00 | 2792.00 | submitted (nothing paid) |\n\nINV-2026-00005 is Hooli's latest (and only) invoice. Its ledger: Trade Receivables Dr 2792.00 (party\nHooli Technologies), Sales Revenue Cr 2792.00, COGS - Materials Dr 1680.00, Finished Goods Cr 1680.00.\n\n## Request\n\n\"Hooli returns everything on its last invoice; make the credit note.\"\n\nThe card states the invoice's real status (submitted, 2792.00 outstanding, nothing paid).\n\n## Expected books\n\nNew credit note against INV-2026-00005, customer Hooli Technologies, posting date 2026-10-26,\nstatus submitted, stock moved by the credit note.\n\n| Line | Item | Qty | Rate | Amount | Warehouse |\n|---|---|---|---|---|---|\n| 1 | Motor Housing Unit | -8 | 349.00 | -2792.00 | Finished Goods Store |\n\nGrand total -2792.00. Applied in full to INV-2026-00005.\n\nLedger (one document, balanced):\n\n| Account (role) | Party | Debit | Credit |\n|---|---|---|---|\n| Sales Revenue (sales income) | | 2792.00 | |\n| Trade Receivables (receivable) | Hooli Technologies | | 2792.00 |\n| Finished Goods (inventory, Finished Goods Store) | | 1680.00 | |\n| COGS - Materials (cost of goods sold) | | | 1680.00 |\n\nStock ledger (returned at the cost the goods left at: 1680.00 / 8 = 210.00):\n\n| Item | Warehouse | Qty change | Value change | Qty after | Value after |\n|---|---|---|---|---|---|\n| Motor Housing Unit | Finished Goods Store | 8 | 1680.00 | 15 | 3150.00 |\n\nINV-2026-00005: outstanding 0.00, status credited. Its own ledger and stock rows are unchanged.\n\n## Variant: returns posted to a sales returns account\n\nSame books and request, except that the company posts sales returns to Sales Returns & Allowances\n(4130), a contra-income account with a debit normal balance. Only the income leg changes:\n\n| Account (role) | Party | Debit | Credit |\n|---|---|---|---|\n| Sales Returns & Allowances (contra income) | | 2792.00 | |\n| Trade Receivables (receivable) | Hooli Technologies | | 2792.00 |\n| Finished Goods (inventory, Finished Goods Store) | | 1680.00 | |\n| COGS - Materials (cost of goods sold) | | | 1680.00 |\n\nSales Revenue gets no new row. Net sales (Sales Revenue less Sales Returns & Allowances) fall by\n2792.00, as in the main case. The stock ledger and the invoice's outstanding amount and status are\nas in the main case.\n\n## Must not happen\n\n- A refusal claiming the invoice is paid.\n- A refund or payment row: nothing was paid, so nothing is refunded.\n",
+    "unclear_invoice_request_no_write.md": "# An invoice request that names nothing known\n\nProvenance: adapted from the ERPClaw v2 demo books (Stark Manufacturing Inc.), with one request\nfrom its write pilot. Worked out from scratch under `CONVENTIONS.md`.\n\n## Starting books\n\nTest clock: 2026-10-26. The demo books as in `invoice_stock_from_stocked_warehouse.md`. No customer,\nitem, invoice or order is named or numbered \"ABC\" (customers: Acme Corporation, Wayne Industries,\nOscorp Industries, Pied Piper Inc, Hooli Technologies, Stark Retail Outlets, Parker Electronics,\nXavier Laboratories, LexCorp, Daily Planet Media, Initech).\n\n## Request\n\n\"invoice ABC\"\n\n## Expected books\n\nEmpty book diff: no row added or changed in any table. No approval card is made.\n\nThe reply is a question: there is no customer or invoice called ABC, and the engine asks who should\nbe invoiced (or which invoice was meant). It does not claim to have found one.\n",
+    "payment_clears_open_invoice.md": "# A customer pays its one open invoice by bank transfer\n\nProvenance: adapted from the ERPClaw v2 demo books (Stark Manufacturing Inc.), with one request\nfrom its write pilot. Worked out from scratch under `CONVENTIONS.md`.\n\n## Starting books\n\nTest clock: 2026-10-26. The company's default bank account is Operating Checking Account (1112);\nSavings Account (1113) also exists.\n\n| Invoice | Customer | Posted | Grand total | Outstanding | Status |\n|---|---|---|---|---|---|\n| INV-2026-00004 | Pied Piper Inc | 2026-01-20 | 2235.00 | 2235.00 | submitted |\n\nINV-2026-00004 is Pied Piper's only invoice with anything outstanding. Its ledger at posting: Trade\nReceivables Dr 2235.00 (party Pied Piper Inc), Sales Revenue Cr 2235.00, plus its cost of goods.\n\n## Request\n\n\"Pied Piper paid its open invoice today by bank transfer.\"\n\n## Expected books\n\nNew payment received, party Pied Piper Inc, date 2026-10-26, mode bank transfer, paid 2235.00 into\nOperating Checking Account, allocated 2235.00 to INV-2026-00004, unallocated 0.00.\n\n| Account (role) | Party | Debit | Credit |\n|---|---|---|---|\n| Operating Checking Account (bank) | | 2235.00 | |\n| Trade Receivables (receivable) | Pied Piper Inc | | 2235.00 |\n\nINV-2026-00004: outstanding 0.00, status paid. Its own ledger rows are unchanged.\n\nStock ledger: no rows.\n\n## Variant: no default bank account\n\nSame books, but the company has no default bank account. Expected: empty book diff, and the engine\nasks which bank account received the money (Operating Checking Account or Savings Account).\n"
+  }
+}

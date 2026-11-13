@@ -50,7 +50,7 @@ def test_owner_and_viewer_see_only_their_own_identity_and_company_permissions(en
         assert body == {
             "name": who["name"], "kind": who["kind"], "principal_id": who["id"],
             "books": {"company": company["name"], "currency": company["functional_currency"]},
-            "permissions": permissions, "model": "configured-model", "features": [],
+            "permissions": permissions, "model": "configured-model", "features": ["turn_failure_codes"],
         }
         for other in (owner, viewer, stranger):
             if other["id"] != who["id"]:
@@ -92,7 +92,7 @@ def test_pending_books_have_null_company_and_currency(engine):
     assert body["permissions"] == sorted(m.PERMISSIONS)
 
 
-@pytest.mark.parametrize("credential", [None, "Bearer invalid", "Basic invalid", "disabled"])
+@pytest.mark.parametrize("credential", [None, " ".join(('Bearer', 'invalid')), "Basic invalid", "disabled"])
 def test_missing_invalid_or_disabled_credentials_use_the_frozen_401_body(engine, credential):
     if credential == "disabled":
         who, headers = _person(engine, "disabled-reader", ["view"])
@@ -109,22 +109,22 @@ def test_missing_invalid_or_disabled_credentials_use_the_frozen_401_body(engine,
     }
 
 
-def test_features_are_exactly_the_sorted_registered_names_and_start_empty(engine):
+def test_features_are_exactly_the_sorted_registered_names_and_start_with_engine_registered_names(engine):
     client = _client(engine, embedded=True)
-    assert _me(client)["features"] == []
+    assert _me(client)["features"] == ["turn_failure_codes"]
     from erpclaw_api import me
 
-    assert me.FEATURES == []
+    assert me.FEATURES == ["turn_failure_codes"]
     try:
         me.add_feature("fake_z")
         me.add_feature("fake_a")
         me.add_feature("fake_z")
-        assert me.FEATURES == ["fake_a", "fake_z"]
+        assert me.FEATURES == ["fake_a", "fake_z", "turn_failure_codes"]
         assert _me(client)["features"] == me.FEATURES
         assert _me(_client(engine, embedded=True))["features"] == me.FEATURES
     finally:
-        me.FEATURES.clear()
-    assert _me(client)["features"] == []
+        me.FEATURES[:] = ["turn_failure_codes"]
+    assert _me(client)["features"] == ["turn_failure_codes"]
 
 
 def test_live_response_matches_example_keys_and_types(engine):

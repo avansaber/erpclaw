@@ -20,7 +20,7 @@ from erpclaw_core.plugins import REGISTRY, disable_plugin
 OFF_WORDS = ("sales", "money owed", "owes", "top customers", "invoice count", "list invoices", "record payments",
              "cancel an invoice", "reverse a payment", "figures and reports")
 PAYMENTS = ("record_payment", "cancel_invoice", "reverse_payment")
-ON_NOW = "Right now I can add customers, add items, draft invoices, and submit a draft invoice."
+ON_NOW = "Right now I can add customers, add suppliers, add cash accounts, add items, list customers, list suppliers, list items, draft invoices, submit a draft invoice, record payments, cancel an invoice, and reverse a payment."
 
 
 @pytest.fixture
@@ -67,19 +67,19 @@ def names_nothing_switched_off(text: str) -> None:
 def test_an_invented_figure_is_replaced_by_what_is_switched_on(engine, as_released):
     text = invented(engine)
     assert text == f"I can only give figures that come from your books, and no tool gave me one for that. {ON_NOW}"
-    names_nothing_switched_off(text)
+    names_nothing_switched_off(text.replace(ON_NOW, ""))
 
 
 def test_giving_up_suggests_only_what_is_switched_on(engine, as_released):
     text = gave_up(engine)
     assert text == f"I couldn't turn that into something I can do. {ON_NOW} Try asking for one of those."
-    names_nothing_switched_off(text)
+    names_nothing_switched_off(text.replace(ON_NOW, ""))
 
 
 def test_both_texts_change_when_a_contract_is_switched_off(engine, payments_off, monkeypatch):
     monkeypatch.setattr(REGISTRY.contracts["submit_invoice"], "planned", "Core")
     for text in (invented(engine), gave_up(engine)):
-        assert "Right now I can add customers, add items, and draft invoices." in text and "submit" not in text, text
+        assert "Right now I can add customers, add suppliers, add cash accounts, add items, list customers, list suppliers, list items, and draft invoices." in text and "submit" not in text, text
         assert not re.search(r"\d", text), text
 
 
@@ -87,6 +87,6 @@ def test_with_sales_switched_off_the_replies_still_suggest_core_operations(engin
     with engine.begin() as conn:
         disable_plugin(conn, "sales")
     assert gave_up(engine) == ("I couldn't turn that into something I can do. "
-                               "Right now I can add customers and add items. Try asking for one of those.")
+                               "Right now I can add customers, add suppliers, add cash accounts, add items, list customers, list suppliers, and list items. Try asking for one of those.")
     assert invented(engine) == ("I can only give figures that come from your books, and no tool gave me one for that. "
-                                "Right now I can add customers and add items.")
+                                "Right now I can add customers, add suppliers, add cash accounts, add items, list customers, list suppliers, and list items.")

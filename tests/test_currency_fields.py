@@ -17,6 +17,7 @@ from sqlalchemy import func, select, update
 import test_card_values as cv
 from erpclaw_api.app import create_app
 from erpclaw_assistant.model import Reply, ScriptedModel, call
+from erpclaw_core import principals as pr
 from erpclaw_core import approvals, contracts as ct, core_contracts, metrics, models as m
 from erpclaw_core.common import Refusal, company_ctx
 from erpclaw_core.contracts import AMOUNT_WHAT, Amount, Result, Shown, moves_money
@@ -79,6 +80,17 @@ ITEMS = {COPPER: [(P, "0.1234", "USD"), (A, "123.46", "USD")], BOARD: [(P, "45.0
 POSTED = {("books", "", "Accounts Receivable (Acme Corporation) +224.73"): [(A, "224.73", "USD")],
           ("books", "", "Sales +224.73"): [(A, "224.73", "USD")]}
 EXPECTED = {
+    "record_opening_position": {
+        ("lines", "Bank", "1,234.56 USD"): [(A, "1234.56", "USD")],
+        ("lines", "Cash on Hand", "78.91 USD"): [(A, "78.91", "USD")],
+        ("lines", "Total starting value", "1,313.47 USD"): [(A, "1313.47", "USD")],
+        ("lines", "Total owed to suppliers", "0.00 USD"): [(A, "0.00", "USD")],
+        ("lines", "Opening balance (owner's equity)",
+         "what the business owns minus what it owes, at the start: 1,313.47 USD"): [(A, "1313.47", "USD")],
+        ("books", "", "1100 Bank: debit 1,234.56 USD"): [(A, "1234.56", "USD")],
+        ("books", "", "1110 Cash on Hand: debit 78.91 USD"): [(A, "78.91", "USD")],
+        ("books", "", "3900 Opening balance (owner's equity): credit 1,313.47 USD"): [(A, "1313.47", "USD")],
+    },
     "create_invoice": {**ITEMS, **POSTED},
     "draft_invoice": ITEMS,
     "submit_invoice": {**ITEMS, **POSTED},
@@ -156,6 +168,27 @@ EXPECTED.update({
                                  "value 155.40 USD"): [(A, "77.74", "USD"), (A, "155.40", "USD")],
         ("books", "", "5210 Inventory Write-offs: credit 77.74 USD"): [(A, "77.74", "USD")],
         ("books", "", "1300 Inventory: debit 77.74 USD"): [(A, "77.74", "USD")]},
+})
+
+
+EXPECTED.update({
+    "reverse_supplier_payment": {
+        ("lines", "Amount paid", "1,600.00"): [(A, "1600.00", "USD")],
+        ("lines", "GR-2026-00001", "1,450.00 owed again: outstanding 0.00 to 1,450.00; paid to open."):
+            [(A, "1450.00", "USD"), (A, "0.00", "USD"), (A, "1450.00", "USD")],
+        ("lines", "GR-2026-00002", "150.00 owed again: outstanding 0.00 to 150.00; paid to open."):
+            [(A, "150.00", "USD"), (A, "0.00", "USD"), (A, "150.00", "USD")],
+        ("books", "", "2100 Accounts Payable (Copperline Metals): credit 1,600.00 USD"): [(A, "1600.00", "USD")],
+        ("books", "", "1100 Bank: debit 1,600.00 USD"): [(A, "1600.00", "USD")],
+    },
+    "reverse_goods_received": {
+        ("lines", "Reversal Copper Wire", "Remove 200 m from Main: 1,450.00 USD; 0 m remain."): [(A, "1450.00", "USD")],
+        ("lines", "Total reversed", "1,450.00 USD"): [(A, "1450.00", "USD")],
+        ("lines", "Delivery payable", "1,450.00 USD outstanding becomes 0.00 USD; status reversed."):
+            [(A, "1450.00", "USD"), (A, "0.00", "USD")],
+        ("books", "", "1300 Inventory: credit 1,450.00 USD"): [(A, "1450.00", "USD")],
+        ("books", "", "2100 Accounts Payable (Copperline Metals): debit 1,450.00 USD"): [(A, "1450.00", "USD")],
+    },
 })
 
 
@@ -508,6 +541,8 @@ def test_a_read_answer_whose_amounts_disagree_with_its_text_is_refused_and_not_s
 # ---- events and the read-back -------------------------------------------------------------------------------
 
 def test_every_event_names_the_books_currency_and_results_and_money_answers_carry_their_amounts(books):
+    with books.connect() as conn:
+        claimant = pr.owner(conn)
     c, cid = _client(books, Reply("", [call("create_invoice", customer="Acme Corporation",
                                             items=[{"item": "copper wire", "quantity": 5}])]),
                      Reply("", [call("get_metric", metric="receivables")]),
@@ -529,7 +564,8 @@ def test_every_event_names_the_books_currency_and_results_and_money_answers_carr
     assert ask["type"] == "ask" and ask["currency"] == "USD"
     from erpclaw_assistant import store
 
-    store.claim(cid, "an earlier message", turn_id="another-turn")  # a live turn holds the conversation: busy
+    store.claim(cid, "an earlier message", turn_id="another-turn",
+                principal_id=claimant["id"], principal_name=claimant["name"])  # a live turn holds the conversation: busy
     [refused] = c.post(f"/v1/conversations/{cid}/messages", json={"text": "x"}).json()["events"]
     assert refused["type"] == "refused" and refused["currency"] == "USD"
     rb = c.get(f"/v1/operations/{result['operation_key']}").json()

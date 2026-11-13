@@ -9,6 +9,7 @@ import pytest
 from erpclaw_assistant import store
 from erpclaw_assistant.graph import Assistant
 from erpclaw_assistant.model import Reply, ScriptedModel, call
+from erpclaw_core import principals as pr
 from erpclaw_core import approvals, models as m
 from erpclaw_core.common import company_ctx, public_data
 from erpclaw_core.masters import create_party
@@ -75,8 +76,10 @@ def test_existing_partial_marker_fails_closed(engine, monkeypatch):
 
 
 @pytest.mark.parametrize("action", ["question", "replaced", "ended", "restored"])
-def test_concurrent_reconciliation_records_the_outcome_once(action):
-    c = store.claim("parallel-reconcile", "first")
+def test_concurrent_reconciliation_records_the_outcome_once(engine, action):
+    with engine.connect() as conn:
+        claimant = pr.owner(conn)
+    c = store.claim("parallel-reconcile", "first", principal_id=claimant["id"], principal_name=claimant["name"])
     req = store.new_request(c)
     store.set_pending(req["id"], card="old")
     event = {"type": "notice", "text": "outcome"}
@@ -99,6 +102,8 @@ def test_concurrent_reconciliation_records_the_outcome_once(action):
 
 
 def test_crash_after_set_aside_preserves_private_question_choices(engine, monkeypatch):
+    with engine.connect() as conn:
+        claimant = pr.owner(conn)
     from erpclaw_assistant.resolve import Session
 
     clock = Clock()
@@ -108,7 +113,7 @@ def test_crash_after_set_aside_preserves_private_question_choices(engine, monkey
     card = a.turn("private-refs", "Invoice Acme Corporation for 2 copper wire")[-1]
     assert card["type"] == "card"
     req = store.open_request("private-refs")
-    c = store.claim("private-refs", "choose a warehouse")
+    c = store.claim("private-refs", "choose a warehouse", principal_id=claimant["id"], principal_name=claimant["name"])
     session = Session(store.serial("private-refs"))
     rf = session.ask("create_invoice#0:warehouse", "Which warehouse?", "warehouse_ambiguous",
                      ["Main (5 on hand)", "Back (2 on hand)"], ["Main", "Back"])

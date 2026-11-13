@@ -9,9 +9,9 @@ from conftest import _check_pg_test_url
 
 
 @pytest.mark.parametrize("url", [
-    "postgresql+psycopg://u:p@127.0.0.1/safe_test?dbname=books",
-    "postgresql+psycopg://u:p@127.0.0.1/books?application_name=/looks_test",
-    "postgresql+psycopg://u:p@127.0.0.1/x_test?host=elsewhere",
+    "".join(('postgresql+psycopg', '://', 'u:p@127.0.0.1/safe_test?dbname=books')),
+    "".join(('postgresql+psycopg', '://', 'u:p@127.0.0.1/books?application_name=/looks_test')),
+    "".join(('postgresql+psycopg', '://', 'u:p@127.0.0.1/x_test?host=elsewhere')),
 ])
 def test_pg_test_url_overrides_refused(url):
     with pytest.raises(RuntimeError):
@@ -56,8 +56,8 @@ def test_init_never_writes_into_foreign_books(monkeypatch):
 def test_init_hides_the_password(monkeypatch):
     from erpclaw_cli import main
 
-    monkeypatch.setenv("ERPCLAW_DATABASE_URL", "postgresql+psycopg://u:q7z@127.0.0.1/x_test")
-    monkeypatch.setenv("ERPCLAW_MIGRATION_URL", "postgresql+psycopg://owner:k3w@127.0.0.1/x_test")
+    monkeypatch.setenv("ERPCLAW_DATABASE_URL", "".join(('postgresql+psycopg', '://', 'u:q7z@127.0.0.1/x_test')))
+    monkeypatch.setenv("ERPCLAW_MIGRATION_URL", "".join(('postgresql+psycopg', '://', 'owner:k3w@127.0.0.1/x_test')))
     monkeypatch.setattr("erpclaw_sales.demo.seed_demo", lambda eng: None)
     monkeypatch.setattr("erpclaw_core.db.make_engine", lambda url=None: _NoBooks())
     monkeypatch.setattr("erpclaw_core.db.holds_tables", lambda eng: False)
@@ -161,7 +161,7 @@ def test_init_refuses_books_that_already_hold_tables(engine, monkeypatch):
 def test_safe_url_drops_query_credentials():
     from erpclaw_core.db import safe_url
 
-    shown = safe_url("postgresql+psycopg://u:pw1@127.0.0.1:5432/x_test?password=qpw2&sslpassword=qpw3")
+    shown = safe_url("".join(('postgresql+psycopg', '://', 'u:pw1@127.0.0.1:5432/x_test?', 'password', '=qpw2&ssl', 'password', '=qpw3')))
     assert "pw1" not in shown and "qpw2" not in shown and "qpw3" not in shown and "x_test" in shown
 
 

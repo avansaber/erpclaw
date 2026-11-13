@@ -3,7 +3,7 @@
 Only engine-resolved IDs enter here. The writer needs the original live Core
 commit context and its exact registered pay_supplier card; no public contract is
 registered by this module. Core owns the transaction, savepoint and outcome.
-Delivery payables only; source guessing and opening debts are not added here.
+Delivery and opening payables are verified against their actual original postings.
 """
 from __future__ import annotations
 
@@ -56,6 +56,8 @@ class Item:
     posting_id: str
     control_account_id: str
     prior_allocations: tuple[PriorAllocation, ...]
+    source_type: str = payables.DELIVERY
+    opening_sequence: int = 0
 
 
 @dataclass(frozen=True)
@@ -164,7 +166,8 @@ def _payment_membership(ctx: Ctx, payment: dict, supplier_id: str,
                                                      t.c.id == row["payable_id"])).mappings().first()
         if (target is None or target["id"] != row["payable_id"] or target["company_id"] != ctx.company_id
                 or target["supplier_id"] != supplier_id or target["currency"] != ctx.currency
-                or target["source_type"] != payables.DELIVERY
+                or target["source_type"] not in payables.ITEM_SOURCES
+                or (target["source_type"] == payables.OPENING and not _opening_link(target))
                 or target["status"] not in ("open", "paid", "reversed")
                 or (payment["status"] == "posted" and target["status"] == "reversed")
                 or _date(target["posting_date"]) > payment["posting_date"]
@@ -181,12 +184,18 @@ def _payment_membership(ctx: Ctx, payment: dict, supplier_id: str,
     return members
 
 
+def _opening_link(row: dict) -> bool:
+    return bool(row.get("posting_id") and row.get("source_voucher_id")
+                and isinstance(row.get("control_line_no"), int) and row["control_line_no"] > 0
+                and isinstance(row.get("opening_sequence"), int) and row["opening_sequence"] > 0)
+
+
 def _source(ctx: Ctx, row: dict, supplier_id: str, payable: dict,
             dependencies: set[tuple[str, str]], remaining_history: int,
             verified_payments: dict, verified_allocations: set) -> Item:
     if (row["company_id"] != ctx.company_id or row["supplier_id"] != supplier_id
             or row["currency"] != ctx.currency or row["status"] != "open"
-            or row["source_type"] != payables.DELIVERY):
+            or row["source_type"] not in payables.ITEM_SOURCES):
         raise Refusal("A payment can settle only this supplier's supported delivery debts in these books.",
                       "payment_source")
     key, source = _id(row["id"]), _id(row["source_id"])
@@ -197,9 +206,20 @@ def _source(ctx: Ctx, row: dict, supplier_id: str, payable: dict,
     number = row["source_number"]
     if not isinstance(number, str) or not number or len(number) > 30:
         raise Refusal("A delivery's stored identity is invalid.", "payment_source")
-    posting = ledger.posting_for_voucher(ctx, payables.DELIVERY, source)
-    if (posting["company_id"] != ctx.company_id or posting["voucher_type"] != payables.DELIVERY
-            or posting["voucher_id"] != source or posting["posting_date"] != when
+    opening = row["source_type"] == payables.OPENING
+    if opening:
+        if not _opening_link(row):
+            raise Refusal("A supplier starting figure needs its stored posting and payable line.", "payment_source")
+        posting = ctx.conn.execute(select(m.posting).where(m.posting.c.company_id == ctx.company_id,
+            m.posting.c.id == row.get("posting_id"))).mappings().first()
+        if (posting is None or row.get("source_voucher_id") != posting["voucher_id"]
+                or posting["memo"] != number or not isinstance(row.get("opening_sequence"), int)
+                or row["opening_sequence"] <= 0):
+            raise Refusal("A supplier starting figure does not match its stored opening posting.", "payment_source")
+    else:
+        posting = ledger.posting_for_voucher(ctx, payables.DELIVERY, source)
+    if (posting["company_id"] != ctx.company_id or posting["voucher_type"] != row["source_type"]
+            or posting["voucher_id"] != (row.get("source_voucher_id") if opening else source) or posting["posting_date"] != when
             or posting["reverses_posting_id"] is not None):
         raise Refusal("A delivery's payable does not match its original posting.", "payment_source")
     if ctx.conn.execute(select(m.posting.c.id).where(m.posting.c.company_id == ctx.company_id,
@@ -215,9 +235,13 @@ def _source(ctx: Ctx, row: dict, supplier_id: str, payable: dict,
                != _sum(ctx, (_amount(ctx, line["credit"], positive=False) for line in lines))):
         raise Refusal("A delivery's original posting is incomplete or inconsistent.", "payment_source")
     party_lines = [line for line in lines if line["party_id"] is not None]
+    if opening:
+        party_lines = [line for line in party_lines if line["party_id"] == supplier_id]
     if len(party_lines) != 1:
         raise Refusal("A delivery needs one original supplier payable line.", "payment_source")
     line = party_lines[0]
+    if opening and line["line_no"] != row.get("control_line_no"):
+        raise Refusal("A supplier starting figure names a different payable control line.", "payment_source")
     if (line["company_id"] != ctx.company_id or line["posting_id"] != posting["id"]
             or line["party_id"] != supplier_id or line["currency"] != ctx.currency
             or _amount(ctx, line["credit"], positive=False) != original
@@ -263,7 +287,8 @@ def _source(ctx: Ctx, row: dict, supplier_id: str, payable: dict,
                              ("supplier_payment", payment["id"])})
     if original - _sum(ctx, live) != outstanding:
         raise Refusal("A delivery's outstanding amount does not match its stored live allocations.", "payment_source")
-    return Item(key, source, number, when, original, outstanding, posting["id"], line["account_id"], tuple(prior))
+    return Item(key, source, number, when, original, outstanding, posting["id"], line["account_id"], tuple(prior),
+                row["source_type"], row.get("opening_sequence") or 0)
 
 
 def plan_payment(ctx: Ctx, request: PaySupplier) -> PaymentPlan:
@@ -279,7 +304,7 @@ def plan_payment(ctx: Ctx, request: PaySupplier) -> PaymentPlan:
     supplier = _supplier(ctx, supplier_id)
     t = supplier_payable
     rows = _rows(ctx, select(t).where(t.c.company_id == ctx.company_id, t.c.supplier_id == supplier_id,
-                 t.c.status == "open").order_by(t.c.posting_date, t.c.source_number, t.c.id),
+                 t.c.status == "open").order_by(t.c.posting_date, t.c.source_number, t.c.opening_sequence, t.c.id),
                  MAX_ITEMS, "open supplier items")
     if not rows:
         raise Refusal(f"You don't owe {supplier['name']} anything in these books.", "nothing_owed")
@@ -297,7 +322,7 @@ def plan_payment(ctx: Ctx, request: PaySupplier) -> PaymentPlan:
                        verified_payments, verified_allocations)
         history_count += len(item.prior_allocations)
         items.append(item)
-    items.sort(key=lambda item: (item.posting_date, item.source_number, item.id))
+    items.sort(key=lambda item: (item.posting_date, item.source_number, item.opening_sequence, item.id))
     eligible = [item for item in items if item.posting_date <= paid_on]
     if not eligible:
         raise Refusal(f"{supplier['name']}'s deliveries are all dated after {paid_on.isoformat()}, the payment's "
@@ -460,7 +485,7 @@ def commit_payment(ctx: Ctx, request: PaySupplier, operation_key: str) -> Result
         changed = ctx.conn.execute(supplier_payable.update().where(
             supplier_payable.c.company_id == ctx.company_id, supplier_payable.c.id == item.id,
             supplier_payable.c.supplier_id == plan.supplier["id"], supplier_payable.c.currency == ctx.currency,
-            supplier_payable.c.source_type == payables.DELIVERY, supplier_payable.c.source_id == item.source_id,
+            supplier_payable.c.source_type == item.source_type, supplier_payable.c.source_id == item.source_id,
             supplier_payable.c.status == "open", supplier_payable.c.amount == item.original_amount,
             supplier_payable.c.outstanding == item.outstanding).values(
                 outstanding=allocation.outstanding_after,

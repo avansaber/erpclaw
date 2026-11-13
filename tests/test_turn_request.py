@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import timedelta
+import pytest
 
 from sqlalchemy import func, select
 
 from erpclaw_assistant import store
 from erpclaw_assistant.graph import Assistant
 from erpclaw_assistant.model import Reply, ScriptedModel, call
+from erpclaw_core import principals as pr
 from erpclaw_core import approvals
 from erpclaw_core import models as m
 
@@ -57,23 +59,29 @@ def test_a_version_1_store_moves_to_the_current_version_keeping_its_demand():
     assert store.open_request("c1") is None
 
 
-def test_a_live_claim_refuses_a_second_message_and_writes_nothing():
-    first = store.claim("c1", "invoice Hooli")
+def test_a_live_claim_refuses_a_second_message_and_writes_nothing(engine):
+    with engine.connect() as conn:
+        claimant = pr.owner(conn)
+    first = store.claim("c1", "invoice Hooli", principal_id=claimant["id"], principal_name=claimant["name"])
     assert first is not None
-    assert store.claim("c1", "invoice Acme") is None
+    assert store.claim("c1", "invoice Acme", principal_id=claimant["id"], principal_name=claimant["name"]) is None
     assert [r["text"] for r in store.unassigned("c1")] == ["invoice Hooli"]
 
 
-def test_a_second_conversation_is_never_blocked_by_the_first():
-    assert store.claim("c1", "a") is not None
-    assert store.claim("c2", "b") is not None
+def test_a_second_conversation_is_never_blocked_by_the_first(engine):
+    with engine.connect() as conn:
+        claimant = pr.owner(conn)
+    assert store.claim("c1", "a", principal_id=claimant["id"], principal_name=claimant["name"]) is not None
+    assert store.claim("c2", "b", principal_id=claimant["id"], principal_name=claimant["name"]) is not None
 
 
-def test_a_lapsed_claim_is_taken_at_a_higher_generation_and_the_stalled_turn_stops(monkeypatch):
+def test_a_lapsed_claim_is_taken_at_a_higher_generation_and_the_stalled_turn_stops(engine, monkeypatch):
+    with engine.connect() as conn:
+        claimant = pr.owner(conn)
     monkeypatch.setattr(store, "LEASE", timedelta(0))
-    stalled = store.claim("c1", "a")
+    stalled = store.claim("c1", "a", principal_id=claimant["id"], principal_name=claimant["name"])
     monkeypatch.setattr(store, "LEASE", timedelta(seconds=300))
-    taker = store.claim("c1", "b")
+    taker = store.claim("c1", "b", principal_id=claimant["id"], principal_name=claimant["name"])
     assert taker is not None and taker.generation > stalled.generation
     assert not store.renew(stalled)
     r = store.new_request(taker)
@@ -81,8 +89,10 @@ def test_a_lapsed_claim_is_taken_at_a_higher_generation_and_the_stalled_turn_sto
                           serial_now=0, bindings_now={}, intent_state="unused") is False
 
 
-def test_finalise_needs_the_claim_and_an_unchanged_version():
-    c = store.claim("c1", "a")
+def test_finalise_needs_the_claim_and_an_unchanged_version(engine):
+    with engine.connect() as conn:
+        claimant = pr.owner(conn)
+    c = store.claim("c1", "a", principal_id=claimant["id"], principal_name=claimant["name"])
     r = store.new_request(c)
     assert store.finalise(c, r["id"], [{"type": "answer", "text": "x"}], pending_question=None, pending_card=None,
                           state="ended", why="answer", serial_now=0, bindings_now={}, intent_state="unused")
@@ -125,7 +135,10 @@ def test_a_planned_reply_in_between_ends_the_request(engine):
 
 
 def test_a_live_claim_on_the_conversation_refuses_the_turn_as_busy(engine):
-    store.claim("c1", "an earlier message", turn_id="another-turn")
+    with engine.connect() as conn:
+        claimant = pr.owner(conn)
+    store.claim("c1", "an earlier message", turn_id="another-turn",
+                principal_id=claimant["id"], principal_name=claimant["name"])
     before = count(engine, m.approval)
     ev = assistant(engine, Reply("", [inv("Acme Corporation", 5)])).turn("c1", "Invoice Acme Corporation for 5 copper wire")
     assert [(e["type"], e.get("code")) for e in ev] == [("refused", "busy")], ev
@@ -159,13 +172,13 @@ def test_a_message_after_an_out_of_band_approval_starts_a_new_request(engine):
 # ---------- the fence row is the turn's only write to the books ----------
 
 def test_a_turn_that_changes_nothing_writes_one_fence_row_and_nothing_else(engine):
-    from bookdiff import CONTROL, snapshot
+    from bookdiff import CONTROL, assert_changes, snapshot
 
     assert CONTROL == {"conversation_fence"}  # the one table a turn writes that is not a business table
     before = snapshot(engine)
     ev = assistant(engine, Reply("", [call("get_metric", metric="receivables")])).turn("c1", "who owes us money?")
     assert kinds(ev) == ["answer"], ev
-    assert snapshot(engine) == before
+    assert_changes(before, snapshot(engine), {})
     assert count(engine, m.conversation_fence) == 1
 
 
@@ -359,3 +372,137 @@ def test_the_request_and_its_question_survive_a_new_process(engine):
     ev = assistant(engine, Reply("", [inv("Wayne Enterprises", 5)])).turn("c1", "yes")
     assert kinds(ev) == ["card"], ev
     assert line(ev[0], "Customer").startswith("Wayne Enterprises")
+
+
+# ---------- retries of stopped and completed messages ----------
+
+
+def test_retry_after_a_card_stop_sets_it_aside_and_replays_the_new_turn(engine, monkeypatch):
+    import pytest
+    from erpclaw_assistant.resolve import _say as say
+    from test_message_retry import message, sqlite_snapshot
+
+    text = "Invoice Acme Corporation for 5 copper wire"
+    a = assistant(engine, *[Reply("", [inv("Acme Corporation", 5)]) for _ in range(3)])
+    finalise = store.finalise
+
+    def stopped(*args, **kwargs):
+        raise RuntimeError("stopped after propose")
+
+    monkeypatch.setattr(store, "finalise", stopped)
+    with pytest.raises(RuntimeError, match="stopped after propose"):
+        a.turn("c1", text, client_message_id="retry")
+    original = message()
+    previous = approvals.pending_card(engine, "c1")
+    # A re-run that itself stopped can be re-run again, once the new lease lapses.
+    for stop_again in (True, False):
+        _lapse("c1")
+        monkeypatch.setattr(store, "finalise", stopped if stop_again else finalise)
+        if stop_again:
+            with pytest.raises(RuntimeError, match="stopped after propose"):
+                a.turn("c1", text, client_message_id="retry")
+        else:
+            events = a.turn("c1", text, client_message_id="retry")
+            assert events[0] == {"type": "notice", "code": "card_set_aside", "text": say("turn_unfinished")}
+            assert kinds(events) == ["notice", "card"]
+        assert message()["id"] == original["id"] and message()["turn_id"] != original["turn_id"]
+        assert approvals.approve(engine, previous["id"], previous["digest"]).status == "superseded"
+        previous = approvals.pending_card(engine, "c1")
+    before = sqlite_snapshot()
+    assert a.turn("c1", text, client_message_id="retry") == events
+    assert sqlite_snapshot() == before
+    with store._tx() as conn:
+        assert conn.execute("SELECT count(*) FROM request_message").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("ended_at_api", [False, True])
+def test_retry_moves_its_message_when_approval_ended_the_old_request(engine, monkeypatch, ended_at_api):
+    from fastapi.testclient import TestClient
+    from erpclaw_api.app import create_app
+    from test_message_retry import message, sqlite_snapshot
+
+    text = "Invoice Acme Corporation for 5 copper wire"
+    a = assistant(engine, Reply("", [inv("Acme Corporation", 5)]), Reply("", [inv("Acme Corporation", 5)]))
+    finalise = store.finalise
+
+    def stopped(*args, **kwargs):
+        raise RuntimeError("stopped after propose")
+
+    monkeypatch.setattr(store, "finalise", stopped)
+    with pytest.raises(RuntimeError):
+        a.turn("c1", text, client_message_id="retry")
+    monkeypatch.setattr(store, "finalise", finalise)
+    card = approvals.pending_card(engine, "c1")
+    old = store.open_request("c1")
+    # Record the proposed card as pending, as if a later store checkpoint survived.
+    store.set_pending(old["id"], card=card["id"])
+    if ended_at_api:
+        client = TestClient(create_app(engine, ScriptedModel([]), embedded_owner=True))
+        response = client.post(f"/v1/cards/{card['id']}/approve", json={"digest": card["digest"]})
+        assert response.status_code == 200
+        assert any(e.get("status") == "committed" for e in response.json()["events"])
+        # Approval adds a note on this base; completed recovery may already have ended the request.
+        assert store.end_request(old["id"], "committed")
+    else:
+        assert approvals.approve(engine, card["id"], card["digest"]).status == "committed"
+    _lapse("c1")
+    events = a.turn("c1", text, client_message_id="retry")
+    assert events[-1]["type"] == "card"
+    new = store.open_request("c1")
+    assert new["id"] != old["id"] and message()["request_id"] == new["id"]
+    assert store.messages(old["id"]) == []
+    assert [x["id"] for x in store.messages(new["id"])] == [message()["id"]]
+    before = sqlite_snapshot()
+    assert a.turn("c1", text, client_message_id="retry") == events
+    assert sqlite_snapshot() == before
+
+
+@pytest.mark.parametrize("later", ["hello", "cancel", "ended"])
+def test_retry_of_an_overtaken_message_is_durable_and_never_calls_the_model(engine, monkeypatch, later):
+    from test_message_retry import message, sqlite_snapshot
+
+    later_reply = Reply("", [inv("Acme Corporation", 5)]) if later == "hello" else Reply("Later.")
+    a = assistant(engine, Reply("Hello."), later_reply)
+    finalise = store.finalise
+
+    def stopped(*args, **kwargs):
+        raise RuntimeError("stopped before finalise")
+
+    monkeypatch.setattr(store, "finalise", stopped)
+    with pytest.raises(RuntimeError):
+        a.turn("c1", "hello", client_message_id="retry")
+    monkeypatch.setattr(store, "finalise", finalise)
+    _lapse("c1")
+    a.turn("c1", "cancel" if later == "cancel" else "another message")
+    assert (store.open_request("c1") is not None) == (later == "hello")
+    calls = len(a.model.seen)
+    first = a.turn("c1", "hello", client_message_id="retry")
+    assert len(first) == 1 and first[0]["type"] == "refused" and first[0]["code"] == "message_overtaken"
+    assert first[0]["text"].strip() and first[0]["currency"] == "USD"
+    assert message()["outcome"] == "overtaken"
+    before = sqlite_snapshot()
+    assert a.turn("c1", "hello", client_message_id="retry") == first
+    assert sqlite_snapshot() == before and len(a.model.seen) == calls
+
+
+def test_retry_after_incomplete_reconciliation_releases_and_runs_again(engine, monkeypatch):
+    from erpclaw_assistant.graph import ReconciliationIncomplete
+    from test_message_retry import conversation, message
+
+    a = assistant(engine)
+    claims = []
+
+    def incomplete(c, req, retired=()):
+        claims.append(c)
+        raise ReconciliationIncomplete()
+
+    monkeypatch.setattr(a, "_reconcile", incomplete)
+    first = a.turn("c1", "hello", client_message_id="retry")
+    assert first[0]["code"] == "reconciliation_incomplete"
+    original = message()
+    assert conversation("c1")["claimed_by"] is None
+    assert a.turn("c1", "hello", client_message_id="retry") == first
+    assert len(claims) == 2 and claims[1].rerun and not claims[1].took_over
+    assert message()["id"] == original["id"] and message()["turn_id"] != original["turn_id"]
+    assert store.events(store.open_request("c1")["id"]) == []
+    assert not a.model.seen

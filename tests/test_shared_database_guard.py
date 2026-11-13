@@ -17,7 +17,7 @@ def _import_conftest(env: dict) -> subprocess.CompletedProcess:
 
 def _base() -> dict:
     env = {k: v for k, v in os.environ.items()
-           if k not in ("ERPCLAW_LOCKS_HELD", "GITHUB_ACTIONS", "ERPCLAW_TEST_DB_PRIVATE")}
+           if k not in ("ERPCLAW_LOCKS_HELD", "GITHUB_ACTIONS", "ERPCLAW_TEST_DB_PRIVATE", "ERPCLAW_TEST_DB_PER_RUN")}
     env["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)
     return env
 

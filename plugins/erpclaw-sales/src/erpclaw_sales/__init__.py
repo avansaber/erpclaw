@@ -8,17 +8,16 @@ from datetime import timedelta
 from decimal import Decimal
 from typing import Annotated, Literal
 
-from pydantic import BeforeValidator, Field, WithJsonSchema, model_validator
+from pydantic import BeforeValidator, Field, WithJsonSchema, field_validator, model_validator
 from sqlalchemy import select
 
-from erpclaw_core import ledger
+from erpclaw_core import ledger, outbox
 from erpclaw_core import models as m
 from erpclaw_core.common import Ctx, Refusal
 from erpclaw_core.contracts import Contract, Input, Preview, Result, Shown, WriteContract, _inline_refs, planned_text
 from erpclaw_core.masters import customer_label, find_customer, find_item
 from erpclaw_core.metrics import Metric, MetricResult, MetricRow
-from erpclaw_core.money import fmt, fmt_qty, to_decimal
-from erpclaw_core.outbox import slot_available
+from erpclaw_core.money import fmt, fmt_qty, fmt_rate, quantize, to_decimal
 from erpclaw_core.periods import Period
 from erpclaw_core.manifest import PUBLISHER, Capabilities, Events, Manifest, Source
 from erpclaw_core.plugins import Plugin
@@ -27,6 +26,14 @@ from erpclaw_core.textkey import text_key
 from . import service as s
 from . import stock_sales as ss
 from . import tables as t
+
+
+STATED_RATE_MAX_LIST_FACTOR = Decimal("10")
+STATED_RATE_CEILING = Decimal("1000000.00")
+RATE_TEXT = {"en": "The stated rate {stated} exceeds the permitted limit for the list rate {list_rate}.",
+             "ceiling": "The stated rate {stated} exceeds the permitted ceiling of {ceiling}; the list rate is {list_rate}."}
+
+NO_TAX_NOTICE = "No tax calculated: no tax template is set. That is not a statement that no tax is owed."
 
 
 def _label(ctx: Ctx, customer_id: str) -> str:
@@ -124,6 +131,15 @@ class OfferedInvoice(Input):
 
 
 class StockInvoiceItem(InvoiceItem):
+    rate: Number | None = Field(default=None, description="Stated unit rate in company currency.")
+
+    @field_validator("rate")
+    @classmethod
+    def _rate_scale(cls, value):
+        if value is not None and value.as_tuple().exponent < -4:
+            raise ValueError("a stated rate can have at most four decimal places")
+        return value
+
     warehouse: Annotated[str | None, _mark("warehouse", resolve=ss.named_warehouse)] = Field(
         default=None, max_length=140, description="The warehouse a stock item ships from, in the owner's words.")
 
@@ -186,7 +202,17 @@ def _resolve_invoice(ctx: Ctx, inp: CreateInvoice) -> InvoicePlan:
         return InvoicePlan(cust, lines, priced, total, order, [None] * len(lines), ss.StockPlan())
     lines = [(find_item(ctx, li.item), li.quantity) for li in inp.items]
     ss.guard(ctx, [item for item, _ in lines])
-    priced, total = s.price_lines(ctx, lines)
+    shown = Shown(ctx.currency)
+    for (item, _), li in zip(lines, inp.items):
+        list_rate = to_decimal(item["standard_rate"])
+        if li.rate is not None and li.rate > STATED_RATE_CEILING:
+            raise Refusal(RATE_TEXT["ceiling"].format(stated=shown.unit_price(li.rate),
+                                                       ceiling=shown.unit_price(STATED_RATE_CEILING),
+                                                       list_rate=shown.unit_price(list_rate)), "rate_excessive")
+        if li.rate is not None and li.rate > list_rate * STATED_RATE_MAX_LIST_FACTOR:
+            raise Refusal(RATE_TEXT["en"].format(stated=shown.unit_price(li.rate),
+                                                 list_rate=shown.unit_price(list_rate)), "rate_excessive")
+    priced, total = s.price_lines(ctx, lines, [li.rate for li in inp.items])
     named = [_invoice_warehouse(k, lambda: ss.named_warehouse(ctx, item, li.warehouse))
              if ss.is_stock(item) and li.warehouse else None
              for k, ((item, _), li) in enumerate(zip(lines, inp.items))]
@@ -215,6 +241,18 @@ def _stock_lines(sh: Shown, plan: ss.StockPlan) -> None:
         sh.line("Cost", f"{cost} ({i.note})" if i.note else cost)
 
 
+def _invoice_email_state(ctx: Ctx) -> tuple[bool, outbox.SenderSnapshot | None]:
+    """Resolve through core only; a missing sender switches off email, not the invoice."""
+    available = outbox.slot_available(ctx.conn, "send_message")
+    try:
+        sender = outbox.sender(ctx)
+    except Refusal as refusal:
+        if refusal.code != "no_email_sender":
+            raise
+        sender = None
+    return available, sender
+
+
 def preview_invoice(ctx: Ctx, inp: CreateInvoice) -> Preview:
     if inp.email and EMAIL_PLANNED:  # the whole request is refused, nothing saved
         raise Refusal(planned_text("emailing an invoice", EMAIL_PLANNED), "planned", capability="planned.messaging")
@@ -227,6 +265,12 @@ def preview_invoice(ctx: Ctx, inp: CreateInvoice) -> Preview:
     by_line = {i.key: i for i in plan.stock.issued}
     for k, p in enumerate(priced):
         sh.line("Item", f"{fmt_qty(p.quantity)} x {p.item['name']} @ {sh.unit_price(p.rate)} = {sh.amount(p.amount)}")
+        if not plan.order and inp.items[k].rate is not None:
+            list_rate = to_decimal(p.item["standard_rate"])
+            difference = p.amount - quantize(p.quantity * list_rate, ctx.currency)
+            sh.line("List price", f"{sh.unit_price(list_rate)} each; difference {sh.amount(difference)}")
+            if p.rate < list_rate * Decimal("0.5") or p.rate > list_rate * Decimal("1.5"):
+                sh.warning("The stated rate is below 50% or above 150% of the list price.")
         if k in by_line:
             _stock_lines(sh, ss.StockPlan([by_line[k]]))
         elif plan.named[k]:
@@ -234,15 +278,26 @@ def preview_invoice(ctx: Ctx, inp: CreateInvoice) -> Preview:
     sh.line("Total", _money(sh, total))
     sh.line("Date", f"{ctx.today:%d %b %Y}")
     sh.line("Due", f"{ctx.today + timedelta(days=s.PAYMENT_TERMS_DAYS):%d %b %Y}")
-    sh.line("Tax", "No tax calculated: no tax template is set. That is not a statement that no tax is owed.")
-    email_ok = slot_available(ctx.conn, "deliver_message")
+    sh.line("Tax", NO_TAX_NOTICE)
+    email_state = _invoice_email_state(ctx) if inp.email else (False, None)
+    email_ok, sender = email_state
+    # Approval recomputes this preview under its chain/read-set locks and compares
+    # the card digest before commit. Keep that snapshot for the final re-read.
+    ctx.extra["sales_invoice_email"] = email_state
     if inp.email:
         if not cust["email"]:
             sh.warning(f"{cust['name']} has no email address on file, so it can't be emailed.")
-        elif not email_ok:
+        elif not email_ok or sender is None:
             sh.warning("Email isn't set up, so it won't be sent. You can download it instead.")
         else:
             sh.line("Email to", cust["email"])
+            sh.line("Email from address", sender.from_address)
+            sh.line("Email from name", sender.from_name)
+            sh.line("Email reply-to", sender.reply_to or "None")
+            s.invoice_email(cust, "[invoice number]", priced, total,
+                            ctx.today + timedelta(days=s.PAYMENT_TERMS_DAYS), ctx, shown=sh)
+            sh.line("Email text", "The sent email will use this exact text with the invoice number filled in "
+                    "when the invoice is approved.")
     if inp.submit:
         # no card for a posting the books would refuse; the invoice does not exist yet, so no voucher id
         ledger.check_post(ctx, ctx.today, "sales_invoice", None,
@@ -256,7 +311,9 @@ def preview_invoice(ctx: Ctx, inp: CreateInvoice) -> Preview:
     else:
         sh.book("Nothing posts to the books until the draft is submitted.")
         sh.title("Save a draft sales invoice")
-    token = _token(cust["id"], cust["email"], ctx.today, email_ok, plan.order and plan.order["id"],
+    token = _token(cust["id"], cust["email"], ctx.today, "send_message", email_ok,
+                   sender and (sender.from_address, sender.from_name, sender.reply_to),
+                   plan.order and plan.order["id"],
                    *[(p.item["id"], p.rate, p.quantity) for p in priced],
                    *[(i.key, i.source.warehouse, i.cost) for i in plan.stock.issued],
                    *[n and n["warehouse"] for n in plan.named])
@@ -266,9 +323,21 @@ def preview_invoice(ctx: Ctx, inp: CreateInvoice) -> Preview:
 def commit_invoice(ctx: Ctx, inp: CreateInvoice, key: str) -> Result:
     plan = _resolve_invoice(ctx, inp)
     cust = plan.customer
-    send = inp.email and bool(cust["email"]) and slot_available(ctx.conn, "deliver_message")
+    approved = ctx.extra["sales_invoice_email"] if inp.email else (False, None)
+
+    def check_email() -> None:
+        if inp.email and _invoice_email_state(ctx) != approved:
+            # Core rolls back the entire approval and makes a fresh card for
+            # this exception, including drift after its initial digest check.
+            from erpclaw_core.approvals import _Changed
+            raise _Changed()
+
+    check_email()
+    email_ok, sender = approved
+    send = inp.email and bool(cust["email"]) and email_ok and sender is not None
     r = s.create_invoice(ctx, cust, plan.lines, ctx.today, submit=inp.submit, email=send, operation_key=key,
-                         warehouses=[n and n["warehouse"] for n in plan.named], order=plan.order)
+                         warehouses=[n and n["warehouse"] for n in plan.named], order=plan.order,
+                         sender=sender, email_check=check_email, rates=[li.rate for li in inp.items] if not plan.order else None)
     return _invoice_result(ctx, r["number"], cust["name"], r["total"], r["due"], r["submitted"], r["email_to"])
 
 
@@ -299,7 +368,13 @@ def _period(ctx: Ctx, d) -> tuple[str, str]:
 def read_set_invoice(ctx: Ctx, inp: CreateInvoice) -> list[tuple[str, str]]:
     plan = _resolve_invoice(ctx, inp)
     order = [("sales_order", plan.order["id"])] if plan.order else []
-    return [("company", ctx.company_id), ("party", plan.customer["id"]), _period(ctx, ctx.today), *order,
+    email_rows = []
+    if inp.email:
+        email_rows.append(("plugin_install", "email"))  # absence is bound too
+        _, sender = _invoice_email_state(ctx)
+        if sender is not None and sender.read_entry is not None:
+            email_rows.append(sender.read_entry)
+    return [("company", ctx.company_id), ("party", plan.customer["id"]), _period(ctx, ctx.today), *order, *email_rows,
             *[("item", item["id"]) for item, _ in plan.lines], *plan.stock.read_set]
 
 
@@ -352,7 +427,7 @@ def preview_submit(ctx: Ctx, inp: SubmitInvoice) -> Preview:
     sh.line("Total", _money(sh, inv["total"]))
     sh.line("Date", f"{inv['posting_date']:%d %b %Y}")
     sh.line("Due", f"{inv['due_date']:%d %b %Y}")
-    sh.line("Tax", "No tax calculated: no tax template is set. That is not a statement that no tax is owed.")
+    sh.line("Tax", NO_TAX_NOTICE)
     sh.book(f"Accounts Receivable ({name}) +{sh.amount(inv['total'])}")
     sh.book(f"Sales +{sh.amount(inv['total'])}")
     _stock_books(sh, ctx, stock.lines)
@@ -487,12 +562,21 @@ def _payment_text(ctx: Ctx, pay: dict) -> Result:
         """The invoice's status just after this payment, from the allocations of payments posted up to it, in the
         ledger's own order (its sequence, taken under the chain head: never tied, never out of order), so a later
         payment never changes this text."""
+        reversal = m.posting.alias("payment_reversal")
         upto = ctx.conn.execute(select(t.allocation.c.amount).join(
             t.payment, t.payment.c.id == t.allocation.c.payment_id).join(
             m.posting, (m.posting.c.voucher_type == "sales_payment") & (m.posting.c.voucher_id == t.payment.c.id)
             & (m.posting.c.company_id == t.payment.c.company_id)).where(
-            t.allocation.c.invoice_id == a.invoice_id, m.posting.c.seq <= seq_of(pay["id"]))).scalars()
-        left = to_decimal(a.total) - sum((to_decimal(x) for x in upto), Decimal(0))
+            t.allocation.c.invoice_id == a.invoice_id, m.posting.c.seq <= seq_of(pay["id"]),
+            ~select(reversal.c.id).where(reversal.c.reverses_posting_id == m.posting.c.id,
+                                         reversal.c.seq <= seq_of(pay["id"])).exists())).scalars()
+        credits = ctx.conn.execute(select(t.credit_note.c.total).join(
+            m.posting, (m.posting.c.voucher_type == "sales_credit_note") &
+            (m.posting.c.voucher_id == t.credit_note.c.id) &
+            (m.posting.c.company_id == t.credit_note.c.company_id)).where(
+            t.credit_note.c.invoice_id == a.invoice_id, m.posting.c.seq <= seq_of(pay["id"]))).scalars()
+        left = to_decimal(a.total) - sum((to_decimal(x) for x in upto), Decimal(0)) - \
+            sum((to_decimal(x) for x in credits), Decimal(0))
         return "paid" if left == 0 else "partly paid"
     name, amount = s.customer_name(ctx, pay["customer_id"]), to_decimal(pay["amount"])
     sh = Shown(ctx.currency)
@@ -570,6 +654,16 @@ def preview_cancel(ctx: Ctx, inp: CancelInvoice) -> Preview:
     else:
         sh.line("Reversal date", f"{plan.reversal_date:%d %b %Y}")
         _books(sh, ctx, plan.mirror)
+        for mv in plan.stock["mirror_entries"]:
+            item = ss.items_by_id(ctx, [mv["item"]])[mv["item"]]
+            warehouse = next(w for w in ss.holdings(ctx, item) if w["warehouse"] == mv["warehouse"])
+            action = "restore" if mv["direction"] == "in" else "remove"
+            sh.line(item["name"], f"{warehouse['name']}: {action} {fmt_qty(to_decimal(mv['qty']))} {item['unit']}, "
+                    f"value {sh.amount(to_decimal(mv['value']))} {ctx.currency}; afterward "
+                    f"{fmt_qty(to_decimal(mv['qty_after']))} {item['unit']}, "
+                    f"value {sh.amount(to_decimal(mv['value_after']))} {ctx.currency}")
+        if plan.stock["delivery_backed"]:
+            sh.book("The stock left through the delivery and stays there; this card reverses only the invoice's books.")
         sh.book(f"The original entries stay; reversing entries are added on {plan.reversal_date:%d %b %Y}.")
         for w in _period_warning(ctx, inv["number"], plan.original, plan.reversal_date):
             sh.warning(w)
@@ -580,7 +674,10 @@ def preview_cancel(ctx: Ctx, inp: CancelInvoice) -> Preview:
 def read_set_cancel(ctx: Ctx, inp) -> list[tuple[str, str]]:
     plan = _cancel_plan(ctx, inp)
     period = [] if plan.original is None else [_period(ctx, plan.reversal_date)]  # a draft posts nothing: no date
-    return [("company", ctx.company_id), *period, *_invoice_rows(ctx, plan.document)]
+    stock_rows = [] if plan.stock is None else [*plan.stock["read_set"],
+        *[("item", mv["item"]) for mv in plan.stock["mirror_entries"]],
+        *[("stock_warehouse", mv["warehouse"]) for mv in plan.stock["mirror_entries"]]]
+    return [("company", ctx.company_id), *period, *_invoice_rows(ctx, plan.document), *stock_rows]
 
 
 def _reversal_posting(ctx: Ctx, voucher_type: str, voucher_id: str) -> dict | None:
@@ -762,6 +859,7 @@ def preview_sales_order(ctx: Ctx, inp: CreateSalesOrder) -> Preview:
             sh.line("Stock", f"{fmt_qty(a)} available, {fmt_qty(gap)} short" if gap > 0 else f"{fmt_qty(a)} available")
     sh.line("Total", _money(sh, total))
     sh.line("Delivery date", f"{inp.delivery_date:%d %b %Y}")
+    sh.line("Tax", NO_TAX_NOTICE)
     sh.book("Nothing posts to the books: an order moves no stock and reserves none.")
     sh.title("Create a sales order")
     return Preview(sh.card(), _token(cust["id"], inp.delivery_date, *[(p.item["id"], p.rate, p.quantity, a)
@@ -924,6 +1022,7 @@ def preview_credit_note(ctx: Ctx, inp: CreateCreditNote) -> Preview:
     sh.line("Total credit", _money(sh, plan.total))
     sh.line("Outstanding after", _money(sh, plan.outstanding))
     sh.line("Date", f"{plan.when:%d %b %Y}")
+    sh.line("Tax", NO_TAX_NOTICE)
     sh.book(f"{plan.returns_account['name']} +{sh.amount(plan.total)}")
     sh.book(f"Accounts Receivable ({plan.customer['name']}) -{sh.amount(plan.total)}")
     _stock_books(sh, ctx, plan.stock_lines)
@@ -978,16 +1077,17 @@ def list_invoices(ctx: Ctx, inp: ListInvoices) -> Result:
     q = select(t.invoice, m.party.c.name.label("customer")).join(m.party, m.party.c.id == t.invoice.c.customer_id) \
         .where(t.invoice.c.company_id == ctx.company_id, t.invoice.c.status.in_(STATUS_SETS[inp.status])) \
         .order_by(t.invoice.c.posting_date, t.invoice.c.number)
-    who = ""
+    who, customer_name = "", None
     if inp.customer:
         cust = find_customer(ctx, inp.customer)
         q = q.where(t.invoice.c.customer_id == cust["id"])
+        customer_name = cust["name"]
         who = f" for {cust['name']}"
     rows = ctx.conn.execute(q.limit(51)).mappings().all()
     label = {"open": "Open invoices", "paid": "Paid invoices", "draft": "Draft invoices",
              "cancelled": "Cancelled invoices", "all": "All invoices"}[inp.status]
     if not rows:
-        return Result(f"{label}{who}: none.", {"count": 0})
+        return Result(f"{label}{who}: none.", {"count": 0, "customer_name": customer_name})
     shown = rows[:50]
     counted = [r for r in shown if r["status"] not in ("draft", "cancelled")]
     total = sum((r["total"] for r in counted), Decimal("0"))
@@ -1004,7 +1104,7 @@ def list_invoices(ctx: Ctx, inp: ListInvoices) -> Result:
         lines.append(f"  {r['number']}  {r['posting_date']:%d %b %Y}  {r['customer']:<18}  "
                      f"{sh.amount(r['total'], 'invoice_total', r['number']):>12}  "
                      f"outstanding {sh.amount(r['outstanding'], 'invoice_outstanding', r['number']):>10}  {r['status']}")
-    return Result("\n".join(lines), {"count": len(shown)}, figures, sh.amounts)
+    return Result("\n".join(lines), {"count": len(shown), "customer_name": customer_name}, figures, sh.amounts)
 
 
 # ---------- metrics ----------
@@ -1054,7 +1154,7 @@ def invoice_count_metric(ctx, period, customer, city) -> MetricResult:
 
 
 MANIFEST = Manifest(
-    name="sales", version="0.0.2", publisher=PUBLISHER, distribution="erpclaw-sales", licence="GPL-3.0-only",
+    name="sales", version="0.0.4", publisher=PUBLISHER, distribution="erpclaw-sales", licence="GPL-3.0-only",
     source=Source(repository="workspace", commit="workspace"), engine=">=0.0.2", after_core_revision="0013",
     depends={}, conflicts=[],
     owned_tables=["sales_invoice", "sales_invoice_line", "sales_payment", "sales_payment_allocation",
@@ -1094,13 +1194,13 @@ PLUGIN = Plugin(
                  RecordPayment, preview=preview_payment, commit=commit_payment, find_by_operation_key=payment_by_key,
                  read_set=read_set_payment, amounts=("amount", "applied", "credit"),
                  synonyms=("payment", "paid", "received", "receipt", "customer paid", "money in"),
-                 plain="record payments", planned_name="recording a payment", planned=PLANNED, moves_money=True),
+                 plain="record payments", planned_name="recording a payment", moves_money=True),
         WriteContract("cancel_invoice", "sales", "write",
                  "Cancel an invoice by its number. The owner approves a card first.", CancelInvoice,
                  preview=preview_cancel, commit=commit_cancel, find_by_operation_key=cancel_by_key,
                  read_set=read_set_cancel, amounts=("total",),
                  synonyms=("cancel", "void", "delete invoice", "undo invoice"),
-                 plain="cancel an invoice", planned_name="cancelling an invoice", planned=PLANNED,
+                 plain="cancel an invoice", planned_name="cancelling an invoice",
                  moves_money=True, no_date_reason={"en": "cancelling a draft changes no books."}),
         WriteContract("reverse_payment", "sales", "write",
                  "Reverse a customer payment that did not arrive or was recorded by mistake. The owner approves a "
@@ -1108,7 +1208,7 @@ PLUGIN = Plugin(
                  preview=preview_reverse_payment, commit=commit_reverse_payment, find_by_operation_key=reverse_by_key,
                  read_set=read_set_reverse_payment, amounts=("amount", "reopened", "credit_removed"),
                  synonyms=("reverse payment", "cancel payment", "undo payment", "bounced", "recorded twice"),
-                 plain="reverse a payment", planned_name="reversing a payment", planned=PLANNED, moves_money=True),
+                 plain="reverse a payment", planned_name="reversing a payment", moves_money=True),
         WriteContract("create_sales_order", "sales", "write",
                  "Take a customer's sales order for items, delivered later. The owner approves a card first.",
                  CreateSalesOrder, preview=preview_sales_order, commit=commit_sales_order,

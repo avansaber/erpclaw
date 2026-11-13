@@ -10,6 +10,7 @@ with the rule and the fix. There is no "load what you can" mode.
 from __future__ import annotations
 
 import importlib
+import logging
 import types
 import typing
 from dataclasses import dataclass, field
@@ -19,7 +20,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Callable
 
-from pydantic import BaseModel, ValidationError
+from pydantic import AliasChoices, AliasPath, BaseModel, ValidationError
 
 from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
@@ -32,12 +33,17 @@ from .common import Ctx
 from .contracts import Contract, Money, Service, WriteContract, no_date_reason_problem
 from .manifest import (EFFECTS, FIRST_PARTY_DISTRIBUTIONS, PUBLISHER, SERVICE_EFFECTS, Manifest, artifact_digest,
                        parse_use)
+from .plugin_text import say
+
+log = logging.getLogger(__name__)
 
 # The plugin interface this engine offers: the manifest schema (with services and uses), the loader's refusals,
 # Contract's fields, the service declaration and registration, call_service and Ctx.register_check. Its contract
 # fixtures are in the engine's tests/contracts/plugin/v1/; a change that breaks a plugin is a new version.
 PLUGIN_CONTRACT = "plugin/1"
 GROUP = "erpclaw.plugins"
+# Code-defined service consumers have no plugin installation lifecycle.
+SERVICE_CONSUMERS = {"assistant": ("stock.list_warehouses?",)}
 MESSAGE_SLOTS = {"deliver_message", "send_message"}
 # Core's slots and their cardinality; a plugin fills only these.
 SLOTS = {"deliver_message": "one",
@@ -138,6 +144,11 @@ _loaded = False
 
 def _refuse(plugin: str, rule: str, fix: str) -> PluginRefused:
     return PluginRefused(f"plugin {plugin}: {rule}. {fix}")
+
+
+def _check_consumer_name(name: str) -> None:
+    if name in SERVICE_CONSUMERS:
+        raise _refuse(name, "its name is reserved for a built-in service consumer", "Rename the plugin.")
 
 
 def _engine_version() -> Version:
@@ -296,6 +307,7 @@ def _check_services(p: Plugin) -> None:
 def _check_set(plugins: list[Plugin]) -> dict[str, Plugin]:
     by_name: dict[str, Plugin] = {}
     for p in plugins:
+        _check_consumer_name(p.name)
         if p.name in by_name:
             raise _refuse(p.name, "is loaded twice", "Remove the duplicate entry point.")
         by_name[p.name] = p
@@ -337,6 +349,12 @@ def _check_set(plugins: list[Plugin]) -> dict[str, Plugin]:
             if event not in emitted:
                 raise _refuse(p.name, f"consumes event {event}, which no declared dependency emits",
                               "Declare the dependency.")
+    for consumer, uses in SERVICE_CONSUMERS.items():
+        for use, optional in map(parse_use, uses):
+            dep, _, svc = use.partition(".")
+            if optional and dep in by_name and svc not in {d.name for d in by_name[dep].manifest.services}:
+                raise _refuse(consumer, f"optionally uses {use}, which {dep} does not declare",
+                              f"Use a service {dep} declares.")
     for slot, card in SLOTS.items():
         fillers = [p.name for p in plugins if slot in p.slots]
         if card == "one" and len(fillers) > 1:
@@ -491,8 +509,8 @@ def check_books(conn: Connection) -> None:
     present, applied = set(inspect(conn).get_table_names()), applied_revisions(conn)
     for name, p in sorted(REGISTRY.plugins.items()):
         if p.migrations is not None and present & set(p.manifest.owned_tables) and not applied & _branch_ids(p.migrations):
-            raise BooksRefused(f"These books hold {name} tables with no {name} migration history: a pre-release build "
-                               "made them, and they must be recreated (demo books: `init --force`).")
+            raise BooksRefused(f"These books have tables for plugin {name}, but their migration history for that "
+                               "plugin is missing. An update for existing books is not available yet. Nothing was changed.")
     rows = _install_rows(conn)
     for name, r in sorted(rows.items()):
         p = REGISTRY.plugins.get(name)
@@ -503,8 +521,8 @@ def check_books(conn: Connection) -> None:
                                                ("code", r["artifact_digest"], p.artifact_digest)) if rec != now]
         if differs:
             raise BooksRefused(f"These books were set up with plugin {name} {r['version']}; this engine has "
-                               f"{p.version} with a different {' and '.join(differs)}. Upgrading needs a backup "
-                               "first and is not available yet; demo books can be re-created with `init --force`.")
+                               f"{p.version} with a different {' and '.join(differs)}. An update for existing books is not available yet, "
+                               "so these books need the engine version they were set up with. Nothing was changed.")
         if r["status"] == "installed":
             for dep in p.manifest.depends:
                 if rows.get(dep, {}).get("status") != "installed":
@@ -536,7 +554,44 @@ def operation_enabled(enabled: set[str], operation: str) -> None:
 PLAIN_TYPES = (dict, list, str, int, bool, type(None), Decimal)  # by exact type: no subclass is plain
 
 
-def _not_plain(value, path: str = "") -> str | None:
+def _diagnostic_step(schemas: tuple, key) -> tuple[str | int, tuple]:
+    """Keep only fields at this schema location; mapping keys are always private."""
+    pending, children = list(schemas), []
+    field_name = list_index = dynamic_key = False
+    while pending:
+        schema = pending.pop()
+        origin, args = typing.get_origin(schema), typing.get_args(schema)
+        if origin is typing.Annotated:
+            pending.append(args[0])
+        elif origin in (typing.Union, types.UnionType):
+            pending.extend(args)
+        elif isinstance(schema, type) and issubclass(schema, BaseModel):
+            for name, info in schema.model_fields.items():
+                names = (name, info.alias, info.validation_alias, info.serialization_alias)
+                if type(key) is str and any(type(n) is str and key == n for n in names):
+                    field_name = True
+                    children.append(info.annotation)
+        elif origin is dict or schema is dict:
+            dynamic_key = True
+            if len(args) == 2:
+                children.append(args[1])
+        elif (origin in (list, tuple) or schema in (list, tuple)) and type(key) is int:
+            list_index = True
+            if args:
+                child = args[0] if origin is list or args[-1] is Ellipsis else (
+                    args[key] if 0 <= key < len(args) else None)
+                children.append(child)
+    safe = key if (field_name or list_index) and not dynamic_key else "<key>"
+    return safe, tuple(children)
+
+
+def _diagnostic_path(path: str, segment: str | int) -> str:
+    if type(segment) is int:
+        return f"{path}[{segment}]"
+    return f"{path}.{segment}" if path else segment
+
+
+def _not_plain(value, schemas: tuple = (), path: str = "") -> str | None:
     """Where a value is not plain JSON-shaped data; None when it is all plain. Plain is, by exact type: a dict whose
     keys are exactly text, a list, text, an integer, a bool, None and a Decimal. Anything else is not: a float, a
     tuple, a set, bytes, a model instance, an iterator, and every subclass (an enum member, an OrderedDict, a str
@@ -551,11 +606,13 @@ def _not_plain(value, path: str = "") -> str | None:
         for k, v in value.items():
             if type(k) is not str:
                 return f"{where} has a key that is not plain text"
-            if (found := _not_plain(v, f"{path}.{k}" if path else k)) is not None:
+            segment, child = _diagnostic_step(schemas, k)
+            if (found := _not_plain(v, child, _diagnostic_path(path, segment))) is not None:
                 return found
     elif kind is list:
         for i, v in enumerate(value):
-            if (found := _not_plain(v, f"{path}[{i}]")) is not None:
+            _, child = _diagnostic_step(schemas, i)
+            if (found := _not_plain(v, child, _diagnostic_path(path, i))) is not None:
                 return found
     return None
 
@@ -563,30 +620,110 @@ def _not_plain(value, path: str = "") -> str | None:
 _MISSING = object()
 
 
-def _bool_as_number(plain, validated: tuple, path: str = "") -> str | None:
+def _bool_as_number(plain, validated: tuple, schemas: tuple = (), path: str = "",
+                    chosen=_MISSING) -> str | None:
     """Where the model turned a bool into a number (an int field given true or false); None if nowhere.
-    `validated` is the validated model's python-mode dump by alias and by field name, walked beside the plain
-    data, which may use either name."""
+    Pair each field's accepted input alias with its serialization alias and field name in the python-mode
+    dumps. Keep the validated objects alongside them so union fields use only the variant Pydantic chose
+    (by discriminator or smart-union validation). Mapping keys stay private."""
     by_alias, by_name = validated
     if type(plain) is bool:
         value = by_alias if by_alias is not _MISSING else by_name
         return None if type(value) is bool else f"{path or 'the value'} is true or false where a number is required"
     if type(plain) is dict:
+        pending = [type(chosen)] if isinstance(chosen, BaseModel) else list(schemas)
+        containers = []
+        while pending:
+            schema = pending.pop()
+            origin, args = typing.get_origin(schema), typing.get_args(schema)
+            if origin is typing.Annotated:
+                pending.append(args[0])
+            elif origin in (typing.Union, types.UnionType):
+                pending.extend(args)
+            elif isinstance(schema, type) and issubclass(schema, BaseModel):
+                if not isinstance(chosen, schema):
+                    continue
+                for name, info in schema.model_fields.items():
+                    alias = info.validation_alias if info.validation_alias is not None else info.alias
+                    alias = name if alias is None else alias
+                    choices = (alias.convert_to_aliases() if isinstance(alias, AliasChoices) else
+                               [alias.path] if isinstance(alias, AliasPath) else [[alias]])
+                    config = schema.model_config
+                    by_alias_enabled = config.get("validate_by_alias", True)
+                    by_name_enabled = config.get("validate_by_name")
+                    # Pydantic's effective config preserves the legacy populate_by_name setting,
+                    # otherwise disabling aliases implicitly enables names.
+                    if by_name_enabled is None:
+                        if config.get("populate_by_name") is not None:
+                            by_alias_enabled = True
+                            by_name_enabled = config["populate_by_name"]
+                        else:
+                            by_name_enabled = not by_alias_enabled
+                    if not by_alias_enabled:
+                        choices = []
+                    if by_name_enabled:
+                        choices = [*choices, [name]]
+                    for choice in choices:
+                        value = plain
+                        for key in choice:
+                            if type(value) is dict:
+                                value = value.get(key, _MISSING)
+                            elif type(value) is list and type(key) is int and -len(value) <= key < len(value):
+                                value = value[key]
+                            else:
+                                value = _MISSING
+                                break
+                        if value is _MISSING:
+                            continue
+                        output_name = info.serialization_alias if info.serialization_alias is not None else info.alias
+                        output_name = name if output_name is None else output_name
+                        pair = (by_alias.get(output_name, _MISSING) if type(by_alias) is dict else _MISSING,
+                                by_name.get(name, _MISSING) if type(by_name) is dict else _MISSING)
+                        # A path alias is one model field, regardless of its input wrapper structure.
+                        segment = choice[0] if len(choice) == 1 else name
+                        if _diagnostic_step(schemas, name)[0] == "<key>":
+                            segment = "<key>"
+                        if not all(x is _MISSING for x in pair) and (
+                                w := _bool_as_number(value, pair, (info.annotation,),
+                                                     _diagnostic_path(path, segment),
+                                                     getattr(chosen, name, _MISSING))):
+                            return w
+                        break  # Pydantic uses the first present validation alias.
+            else:
+                containers.append(schema)
+        if schemas and not containers:
+            return None
+        schemas = tuple(containers)
         for k, v in plain.items():
             pair = (by_alias.get(k, _MISSING) if type(by_alias) is dict else _MISSING,
                     by_name.get(k, _MISSING) if type(by_name) is dict else _MISSING)
-            if not all(x is _MISSING for x in pair) and (w := _bool_as_number(v, pair, f"{path}.{k}" if path else k)):
+            segment, child = _diagnostic_step(schemas, k)
+            child_chosen = chosen.get(k, _MISSING) if isinstance(chosen, dict) else _MISSING
+            if not all(x is _MISSING for x in pair) and (
+                    w := _bool_as_number(v, pair, child, _diagnostic_path(path, segment), child_chosen)):
                 return w
     if type(plain) is list:
         for i, v in enumerate(plain):
             pair = tuple(x[i] if type(x) in (list, tuple) and i < len(x) else _MISSING for x in (by_alias, by_name))
-            if not all(x is _MISSING for x in pair) and (w := _bool_as_number(v, pair, f"{path}[{i}]")):
+            _, child = _diagnostic_step(schemas, i)
+            child_chosen = chosen[i] if isinstance(chosen, (list, tuple)) and i < len(chosen) else _MISSING
+            if not all(x is _MISSING for x in pair) and (
+                    w := _bool_as_number(v, pair, child, _diagnostic_path(path, i), child_chosen)):
                 return w
     return None
 
 
-def _validation_text(e: ValidationError) -> str:
-    return "; ".join(f"{'.'.join(str(x) for x in err['loc']) or 'the value'}: {err['msg']}" for err in e.errors()[:4])
+def _validation_text(e: ValidationError, model: type[BaseModel]) -> str:
+    # Validator messages and context can repeat owner data; only paths and error types are diagnostic.
+    errors = e.errors(include_input=False, include_context=False, include_url=False)
+    details = []
+    for err in errors[:4]:
+        schemas, path = (model,), ""
+        for key in err["loc"]:
+            segment, schemas = _diagnostic_step(schemas, key)
+            path = _diagnostic_path(path, segment)
+        details.append(f"{path or 'the value'}: {err['type']}")
+    return "; ".join(details)
 
 
 def _validated(model: type[BaseModel], raw, what: str, code: str) -> BaseModel:
@@ -594,17 +731,20 @@ def _validated(model: type[BaseModel], raw, what: str, code: str) -> BaseModel:
     (by alias, as model_validate does); a bool the model would read as a number is refused."""
     from .common import Refusal
 
-    bad = f"it is a {type(raw).__name__}, not a dict" if type(raw) is not dict else _not_plain(raw)
+    bad = f"it is a {type(raw).__name__}, not a dict" if type(raw) is not dict else _not_plain(raw, (model,))
     if bad is not None:
-        raise Refusal(f"{what} is not valid: {bad}.", code)
+        log.warning("%s refused (%s): %s", what, code, bad)
+        raise Refusal(say("plugin_boundary_failed"), code)
     try:
         validated = model.model_validate(raw)
     except ValidationError as e:
-        raise Refusal(f"{what} is not valid: {_validation_text(e)}.", code) from None
+        log.warning("%s refused (%s): %s: %s", what, code, type(e).__name__, _validation_text(e, model))
+        raise Refusal(say("plugin_boundary_failed"), code) from None
     dumps = (validated.model_dump(mode="python", by_alias=True, warnings=False),
-             validated.model_dump(mode="python", warnings=False))
-    if (bad := _bool_as_number(raw, dumps)) is not None:
-        raise Refusal(f"{what} is not valid: {bad}.", code)
+             validated.model_dump(mode="python", by_alias=False, warnings=False))
+    if (bad := _bool_as_number(raw, dumps, (model,), chosen=validated)) is not None:
+        log.warning("%s refused (%s): %s", what, code, bad)
+        raise Refusal(say("plugin_boundary_failed"), code)
     return validated
 
 
@@ -629,15 +769,23 @@ def _known_currencies(ctx: Ctx, model: BaseModel, what: str) -> None:
     known = set(ctx.conn.execute(select(m.currency.c.code).where(m.currency.c.code.in_(codes))).scalars()) \
         if codes else set()
     if codes - known:
-        raise Refusal(f"{what} names a currency these books do not have: {', '.join(sorted(codes - known))}.",
-                      "unknown_currency")
+        currencies = ", ".join(sorted(codes - known))
+        log.warning("%s refused (unknown_currency): %s", what, currencies)
+        raise Refusal(say("plugin_boundary_currency_unknown", currencies=currencies), "unknown_currency")
+
+
+def _service_uses(caller: str) -> list[tuple[str, bool]]:
+    """Parsed uses for a code-defined consumer or a loaded plugin."""
+    if caller in SERVICE_CONSUMERS:
+        return [parse_use(u) for u in SERVICE_CONSUMERS[caller]]
+    p = REGISTRY.plugins.get(caller)
+    return [parse_use(u) for u in p.manifest.uses] if p is not None else []
 
 
 def declares_service(plugin: str, name: str) -> bool:
-    """Whether the plugin declares the service `name` ("<plugin>.<service>", plain), as a plain use or an optional one:
+    """Whether the caller declares the service `name` ("<plugin>.<service>", plain), as a plain use or an optional one:
     the one answer every reader uses, so no plugin re-derives it."""
-    p = REGISTRY.plugins.get(plugin)
-    return p is not None and any(parse_use(u)[0] == name for u in p.manifest.uses)
+    return any(use == name for use, _ in _service_uses(plugin))
 
 
 def call_service(ctx: Ctx, caller: str, name: str, input: dict) -> dict:
@@ -645,7 +793,7 @@ def call_service(ctx: Ctx, caller: str, name: str, input: dict) -> dict:
     JSON-shaped data crosses, both ways (_not_plain): the caller passes a dict, validated into the service's input
     model; the service returns a dict, never a model instance, validated by its output model; the caller receives
     that model's model_dump(mode="json", by_alias=True), checked to be plain again, since the dump runs the model's
-    own serializers. Refused (each a Refusal, nothing written by the call): a service the caller's manifest does
+    own serializers. Refused (each a Refusal, nothing written by the call): a service the caller's declaration does
     not list in `uses`, plain or optional (undeclared_service); a callee not enabled in these books, or an optional
     one not loaded here (plugin_not_enabled); a write
     service on any `Ctx` but an approved card's commit (service_outside_commit); an input or an output that is not
@@ -654,21 +802,20 @@ def call_service(ctx: Ctx, caller: str, name: str, input: dict) -> dict:
     the caller unchanged: its code, message, options and data."""
     from .common import Refusal
 
-    p = REGISTRY.plugins.get(caller)
     sv = REGISTRY.services.get(name)
     callee = name.partition(".")[0]
-    optional = p is not None and any(parse_use(u) == (name, True) for u in p.manifest.uses)
+    optional = (name, True) in _service_uses(caller)
     owner = approval_scope._caller_owner(ctx)
     if (not declares_service(caller, name) or (sv is None and not optional)
             or (owner is not None and owner != caller)):
-        raise Refusal(f"The {caller} plugin calls the service {name}, which it does not declare.",
-                      "undeclared_service")
+        log.warning("Service %s refused (undeclared_service): caller=%s, owner=%s", name, caller, owner)
+        raise Refusal(say("plugin_boundary_failed"), "undeclared_service")
     if sv is None:  # an optional service whose plugin is not loaded here: as disabled, never a silent no-op
         raise Refusal(f"The {callee} plugin is not enabled in these books.", "plugin_not_enabled")
     ensure_enabled(ctx.conn, callee)
     if sv.effect == "write" and approval_scope.committing(ctx) is None:
-        raise Refusal(f"The service {name} writes, so it runs only inside an approved card's commit.",
-                      "service_outside_commit")
+        log.warning("Service %s refused (service_outside_commit): write outside approved commit", name)
+        raise Refusal(say("plugin_boundary_failed"), "service_outside_commit")
     inp = _validated(sv.input_model, input, f"The input to {name}", "service_input")
     _known_currencies(ctx, inp, f"The input to {name}")  # each Money's currency is a row of the books' currency table
     what = f"The result the service {name} returned"
@@ -678,14 +825,17 @@ def call_service(ctx: Ctx, caller: str, name: str, input: dict) -> dict:
     try:
         result = out.model_dump(mode="json", by_alias=True)
     except Exception as e:  # noqa: BLE001  (a serializer that fails is refused, never passed on)
-        raise Refusal(f"{what} could not be serialized ({type(e).__name__}).", "service_output") from None
-    if (bad := _not_plain(result)) is not None:  # the model's own serializers ran in the dump
-        raise Refusal(f"{what} is not valid: {bad}.", "service_output")
+        log.warning("%s refused (service_output): serialization failed (%s)", what, type(e).__name__)
+        raise Refusal(say("plugin_boundary_failed"), "service_output") from None
+    if (bad := _not_plain(result, (sv.output_model,))) is not None:  # the model's own serializers ran in the dump
+        log.warning("%s refused (service_output): %s", what, bad)
+        raise Refusal(say("plugin_boundary_failed"), "service_output")
     return result
 
 
 def install_preview(p: Plugin) -> dict:
     """What installing the plugin adds to a set of books, shown before it does."""
+    _check_consumer_name(p.name)
     return {"plugin": p.name, "version": p.version, "tables": sorted(p.manifest.owned_tables),
             "operations": sorted(p.manifest.contracts.items()), "metrics": sorted(p.manifest.metrics),
             "slots": sorted(p.manifest.slots)}
@@ -695,6 +845,7 @@ def _install_checks(conn: Connection, p: Plugin) -> None:
     from .common import Refusal
     from .migrate import applied_core_revision, core_at_or_after
 
+    _check_consumer_name(p.name)
     rows = _install_rows(conn)
     if p.name in rows:
         raise Refusal(f"The {p.name} plugin is already installed in these books.", "plugin_installed")
@@ -714,13 +865,27 @@ def _install_checks(conn: Connection, p: Plugin) -> None:
                       f"or later; they are at {applied or 'no core revision'}.", "plugin_core_revision")
 
 
+def _lock_install_chains(conn: Connection) -> None:
+    """An install changes availability in every company, including an absent read-set row.
+    Lock all heads in a stable order before checks or writes, held to transaction end."""
+    from . import ledger, models as m
+    from .common import today
+
+    companies = select(m.company.c.id, m.company.c.name, m.company.c.functional_currency).order_by(m.company.c.id)
+    for company_id, name, currency in conn.execute(companies):
+        # Only the required Ctx fields: no runtime or approval scope is needed.
+        # Pending setup companies may have no name or currency yet, as in company_ctx.
+        ledger.lock_chain(Ctx(conn, company_id, name, currency, today()))
+
+
 def install_into(conn: Connection, p: Plugin, runtime_role: str | None = None) -> None:
-    """Install on the caller's transaction, as the owner: the checks, then the
+    """Install on the caller's transaction, as the owner: the chain locks, the checks, then the
     plugin's branch to its head, the install record and, when a runtime role
     is named, its grants. A failure at any step leaves none of them."""
     from .grants import apply_grants
     from .migrate import upgrade_plugin
 
+    _lock_install_chains(conn)
     _install_checks(conn, p)
     if p.migrations is not None:
         upgrade_plugin(conn, p.name)  # a reinstall after uninstall is a no-op upgrade
@@ -730,7 +895,8 @@ def install_into(conn: Connection, p: Plugin, runtime_role: str | None = None) -
 
 
 def install_record(conn: Connection, p: Plugin) -> None:
-    """Record a plugin as installed in these books, after the install checks (its tables already exist)."""
+    """Take the chain locks, check and record an install (its tables already exist)."""
+    _lock_install_chains(conn)
     _install_checks(conn, p)
     _record(conn, p)
 

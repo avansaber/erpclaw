@@ -14,6 +14,7 @@ import secrets
 from datetime import timedelta
 
 from sqlalchemy import select, update
+from sqlalchemy.engine import Engine
 
 from . import models as m
 from .common import Refusal, audit, company_ctx, new_id, now
@@ -153,6 +154,22 @@ def end_sessions(conn, principal_id: str, why: str, actor: str) -> int:
     if count:
         _principal_audit(conn, p, actor, "end_sessions", count=count, why=why)
     return count
+
+
+def end_all_sessions_at_start(engine: Engine) -> None:
+    """End open sessions and void valid unused codes atomically, without an audit or business write.
+
+    One cutoff preserves credentials created after this call began. Voiding a code
+    uses the existing consumption marker, used_at; ended and used history stays intact.
+    """
+    at = now()
+    with engine.begin() as conn:
+        s = m.principal_session
+        conn.execute(update(s).where(s.c.ended_at.is_(None), s.c.created_at <= at)
+                     .values(ended_at=at, ended_why="engine_start"))
+        c = m.principal_sign_in
+        conn.execute(update(c).where(c.c.used_at.is_(None), c.c.expires_at > at, c.c.created_at <= at)
+                     .values(used_at=at))
 
 
 def sign_out_principal(conn, name: str, actor: str) -> int:

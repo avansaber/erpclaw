@@ -48,7 +48,8 @@ def env(engine, runtime_login, monkeypatch):
         if run_id is not None:
             kwargs["run_id"] = run_id
         app = create_app(runtime, ScriptedModel([]), **kwargs)
-        return TestClient(ListenerApp(app, listener) if listener else app), app
+        return TestClient(ListenerApp(app, listener, port=8740) if listener else app,
+                          base_url="http://127.0.0.1:8740"), app
 
     e.build = build
     e.client, e.app = build()
@@ -508,6 +509,6 @@ def test_the_app_that_serve_hands_to_uvicorn_has_no_session_routes(env, monkeypa
     cli.serve(host="127.0.0.1", port=8740)
     assert len(served) == 1
     code = mint(env)
-    r = TestClient(served[0]).post("/v1/session", json={"sign_in_code": code})
+    r = TestClient(served[0], base_url="http://127.0.0.1:8740").post("/v1/session", json={"sign_in_code": code})
     assert r.status_code == 404 and r.json()["code"] == "not_found"
     assert code_row(env, code)["used_at"] is None

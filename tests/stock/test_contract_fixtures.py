@@ -74,6 +74,12 @@ def test_every_fixture_against_the_producer(engine, stock_consumer, path):
     else:
         out = books.call(case["service"], case["input"], write=write)
         _bind_new_entries(books, case, out)
+        currency = case["books"]["currency"]
+        if "cost" in case["output"]:
+            case["output"]["currency"] = currency
+        for field in ("lines", "ledger_lines", "warehouses", "mirror_entries", "contribution"):
+            for row in case["output"].get(field, []):
+                row["currency"] = currency
         assert out == books.resolve(case["output"])
         after = case["after"]
         if after.get("unchanged"):

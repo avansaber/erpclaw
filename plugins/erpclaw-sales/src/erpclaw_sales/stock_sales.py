@@ -218,6 +218,29 @@ def record_issues(ctx: Ctx, plan: StockPlan) -> None:
             stock_entry_id=i.entry_id, stock_line=i.stock_line))
 
 
+def preview_invoice_reversal(ctx: Ctx, invoice_id: str, when: date) -> dict:
+    """Only this invoice's own issues select the stock branch; deliveries keep their stock."""
+    line_ids = [ln["id"] for ln in invoice_lines(ctx, invoice_id)]
+    issues = ctx.conn.execute(select(t.invoice_issue).where(
+        t.invoice_issue.c.company_id == ctx.company_id,
+        t.invoice_issue.c.invoice_line_id.in_(line_ids))).mappings().all()
+    deliveries = ctx.conn.execute(select(t.invoice_delivery.c.id, t.delivery_line.c.stock_entry_id).join(
+        t.delivery_line, t.delivery_line.c.id == t.invoice_delivery.c.delivery_line_id).where(
+        t.invoice_delivery.c.company_id == ctx.company_id,
+        t.invoice_delivery.c.invoice_line_id.in_(line_ids))).mappings().all()
+    rows = [(t.invoice_issue.name, r["id"]) for r in issues]
+    rows += [(t.invoice_delivery.name, r["id"]) for r in deliveries]
+    if not issues:
+        return {"mirror_entries": [], "read_set": rows,
+                "delivery_backed": any(r["stock_entry_id"] for r in deliveries)}
+    if not stock_on(ctx):
+        raise planned_stock()
+    out = stock(ctx, "preview_reverse", original={"voucher_type": "sales_invoice", "voucher": invoice_id},
+                reversal_date=when.isoformat())
+    return {**out, "read_set": [*rows, *(tuple(r) for r in out["read_set"])],
+            "delivery_backed": any(r["stock_entry_id"] for r in deliveries)}
+
+
 # ---------------------------------------------------------------- sales orders
 
 def find_order(ctx: Ctx, said: str) -> dict:

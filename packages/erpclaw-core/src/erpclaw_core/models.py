@@ -599,12 +599,35 @@ plugin_install = Table(
     CheckConstraint("status in ('installed','disabled')", name="ck_plugin_install_status"),
 )
 
+hosted_books_consent = Table(
+    "hosted_books_consent",
+    metadata,
+    Column("company_id", String(36), ForeignKey("company.id"), nullable=False),
+    Column("profile_name", String(100), nullable=False),
+    Column("provider", String(60), nullable=False),
+    Column("model_id", String(200), nullable=False),
+    Column("endpoint_host", String(253), nullable=False),
+    Column("route_digest", String(64), nullable=False),
+    Column("route_version", String(40), nullable=False),
+    Column("retention_version", String(40), nullable=False),
+    Column("wording_version", String(40), nullable=False),
+    Column("consented_at", DateTime(timezone=True), nullable=False),
+    Column("consented_by", String(100), nullable=False),
+    Column("status", String(10), nullable=False),
+    Column("approval_id", String(36), nullable=False),
+    Column("operation_key", String(36), nullable=False),
+    PrimaryKeyConstraint("company_id", "operation_key", name="pk_hosted_books_consent"),
+    CheckConstraint("status in ('live','withdrawn')", name="ck_hosted_books_consent_status"),
+    Index("uq_hosted_books_consent_live", "company_id", unique=True, postgresql_where=text("status = 'live'")),
+)
+
 # Core's tables, a fixed set: the loader checks marks against it, so neither a
 # table registered early nor a changed mark can make a table core's or take
 # one away (plugin interface: ownership is a mark, not import order).
 CORE_TABLES = frozenset({"currency", "company", "fiscal_year", "fiscal_period", "account", "party", "item",
                          "posting_chain_head", "posting", "ledger_entry", "dimension_set", "number_series", "audit_log", "approval",
                          "principal", "principal_grant", "principal_sign_in", "principal_session",
+                         "hosted_books_consent",
                          "operation_outcome", "conversation_fence", "outbox",
                          "outbox_attempt", "outbox_attachment", "file_object", "plugin_install", "erpclaw_books", "books_identity", "fiscal_year_close",
                          "system_of_record", "external_ref", "account_map", "sync_payload", "sync_journal"})
@@ -619,6 +642,7 @@ for _name in CORE_TABLES:
 # locked tables are among them. tests/test_runtime_role.py derives each from the code.
 RUNTIME = {
     "currency": READ, "erpclaw_books": READ, "books_identity": READ,
+    "hosted_books_consent": READ,
     # the setup card sets a pending company's choices; a trigger refuses the runtime role's change once it is ready
     "company": Runtime(insert=True, update=("name", "functional_currency", "fiscal_year_start_month", "date_order",
                                             "status")),

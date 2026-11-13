@@ -137,6 +137,8 @@ def _restore_order(table, rows: list[dict]) -> list[dict]:
             raise BackupRefused(f"{table.name} rows refer to each other in a cycle")
         for c in cols:
             parent = r.get(c)
+            if table.name == "stock_layer" and c == "group_id" and parent == r["id"]:
+                continue  # A FIFO root names itself as its group; it has no parent to visit.
             if parent is not None and parent in by_id:
                 visit(by_id[parent], path + (r["id"],))
         done.add(r["id"])
@@ -461,7 +463,7 @@ def _client_sessions(c, oid) -> int:
 
 def _q(name: str) -> str:
     if not (name.isascii() and name.replace("_", "").isalnum() and name[0].isalpha() and name == name.lower()):
-        raise BackupRefused(f"{name!r} is not a database name restore accepts ([a-z][a-z0-9_]*)")
+        raise BackupRefused("Invalid database name; restore accepts [a-z][a-z0-9_]*")
     return f'"{name}"'
 
 

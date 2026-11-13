@@ -12,7 +12,7 @@ Kept apart from `payables.py` so `models.py` can register them without importing
 """
 from __future__ import annotations
 
-from sqlalchemy import CheckConstraint, Column, Date, DateTime, ForeignKey, ForeignKeyConstraint, String, Table, \
+from sqlalchemy import CheckConstraint, Column, Date, DateTime, ForeignKey, ForeignKeyConstraint, Integer, String, Table, \
     UniqueConstraint
 
 from .db import APPEND, MoneyText, Runtime, metadata, scale_check, sign_check
@@ -44,6 +44,19 @@ supplier_payable = Table(
     Column("outstanding", MoneyText, nullable=False),
     Column("status", String(10), nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("posting_id", String(36)),
+    Column("control_line_no", Integer),
+    Column("source_voucher_id", String(36)),
+    Column("opening_sequence", Integer),
+    Column("old_reference", String(200)),
+    Column("due_date", Date),
+    ForeignKeyConstraint(["company_id", "posting_id"], ["posting.company_id", "posting.id"],
+                         name="fk_supplier_payable_posting"),
+    ForeignKeyConstraint(["posting_id", "control_line_no"], ["ledger_entry.posting_id", "ledger_entry.line_no"],
+                         name="fk_supplier_payable_control"),
+    CheckConstraint("source_type <> 'opening' or (posting_id is not null and control_line_no is not null "
+                    "and control_line_no > 0 and source_voucher_id is not null "
+                    "and opening_sequence is not null and opening_sequence > 0)", name="ck_supplier_opening_link"),
     ForeignKeyConstraint(["company_id", "supplier_id"], ["party.company_id", "party.id"],
                          name="fk_supplier_payable_supplier"),
     UniqueConstraint("company_id", "id", "currency", name="uq_supplier_payable_currency_key"),

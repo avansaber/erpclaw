@@ -468,16 +468,87 @@ def _refuse_owner_credential() -> None:
         raise typer.Exit(1)
 
 
+def _draw_port(generator) -> int:
+    """Draw from the dynamic range, leaving its final 64 ports unused."""
+    return generator.randint(49152, 65471)
+
+
 @app.command()
-def serve(host: str = "127.0.0.1", port: int = 8740):
+def serve(host: str = "127.0.0.1", port: int | None = None, run_file: Path | None = None, tcp: bool = False):
     """Run the engine API."""
     _refuse_owner_credential()
+    if host != "127.0.0.1":
+        typer.echo("ERPClaw serves this machine only in this version; a remote engine is a later design.")
+        raise typer.Exit(2)
+    # Retain refusal of an explicitly configured foreign books URL.
+    import os
+
+    if os.environ.get("ERPCLAW_DATABASE_URL"):
+        _books_url()
+    if (port is None and run_file is None) or (port is not None and run_file is not None):
+        typer.echo("Choose --port or --run-file with --tcp to launch the engine.")
+        raise typer.Exit(2)
+    if run_file is not None and not tcp:
+        typer.echo("This build has no pipe listener yet; add --tcp for a loopback listener.")
+        raise typer.Exit(2)
+    if port is not None and not 1 <= port <= 65535:
+        typer.echo("The port must be between 1 and 65535.")
+        raise typer.Exit(2)
+    import errno
+    import secrets
+    import socket
+
     import uvicorn
 
-    from erpclaw_api.app import create_app
+    from erpclaw_api.pipe import served_app
+    from erpclaw_api.runfile import check_run_file_path, remove_if_unchanged, write_run_file
     from erpclaw_assistant.muse import model_from_env
     from erpclaw_core.db import make_engine
-    uvicorn.run(create_app(make_engine(_books_url()), model_from_env()), host=host, port=port)
+    from erpclaw_core.outbox import delivery_driver
+    if run_file is not None:
+        try:
+            check_run_file_path(run_file)
+        except (OSError, ValueError) as exc:
+            typer.echo(str(exc))
+            raise typer.Exit(2) from None
+    engine, model = make_engine(_books_url()), model_from_env()
+    from erpclaw_core.administration import end_all_sessions_at_start
+
+    try:
+        end_all_sessions_at_start(engine)
+    except Exception:
+        typer.echo("The engine could not end earlier sessions.")
+        raise typer.Exit(1) from None
+    generator = secrets.SystemRandom() if port is None else None
+    for _ in range(32 if port is None else 1):
+        run_port = _draw_port(generator) if port is None else port
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            try:
+                sock.bind(("127.0.0.1", run_port))
+            except OSError as exc:
+                if port is None and exc.errno == errno.EADDRINUSE:
+                    continue
+                break
+            if run_file is not None:
+                try:
+                    written = write_run_file(run_file, {"port": run_port})
+                except (OSError, ValueError):
+                    typer.echo("The engine could not write the run file.")
+                    raise typer.Exit(1) from None
+            else:
+                typer.echo(f"http://127.0.0.1:{run_port}", err=True)
+            try:
+                application = served_app(engine, model, port=run_port)
+                with delivery_driver(engine):
+                    uvicorn.run(application, fd=sock.fileno(), log_level="warning", ws="none")
+            finally:
+                if run_file is not None:
+                    remove_if_unchanged(run_file, written)
+            return
+    typer.echo("The engine could not open a loopback listener.")
+    raise typer.Exit(1)
 
 
 def _books_key(url: str | None) -> str:
@@ -771,6 +842,27 @@ def plugins_uninstall(name: str):
     _lifecycle(uninstall_plugin, name, "uninstalled; its tables and data are kept")
 
 
+@app.command("journal-csv")
+def journal_csv_cmd(from_date: str = typer.Option(..., "--from", help="First date, YYYY-MM-DD (inclusive)"),
+                    to_date: str = typer.Option(..., "--to", help="Last date, YYYY-MM-DD (inclusive)"),
+                    out: Path = typer.Option(..., "--out", help="New CSV file; never overwritten"),
+                    company: str = typer.Option(None, "--company", help="Company name"),
+                    as_name: str = typer.Option("owner", "--as", help="Principal holding view and export")):
+    """Export a company's posted journal to CSV (read-only)."""
+    from erpclaw_core.common import Refusal
+    from erpclaw_core.journal_export import export_journal
+
+    eng = _books(owner=False)
+    try:
+        with eng.connect() as conn:
+            export_journal(conn, out, from_date=from_date, to_date=to_date,
+                           company_name=company, principal=as_name)
+    except (Refusal, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1)
+    typer.echo("Journal CSV written.")
+
+
 @app.command("backup")
 def backup_cmd(path: Path):
     """Back up these books to a zip file (not encrypted: keep it where the books are kept)."""
@@ -834,11 +926,15 @@ def _unpacked(path: Path, tmp: str) -> Path:
 @app.command("restore")
 def restore_cmd(path: Path,
                 to_database: str = typer.Option(..., "--to-database", help="Name of a NEW PostgreSQL database"),
-                runtime_role: str = typer.Option(None, "--runtime-role", help="PostgreSQL role the engine runs as")):
+                runtime_role: str = typer.Option(None, "--runtime-role", help="PostgreSQL role the engine runs as"),
+                upgrade: bool = typer.Option(False, "--upgrade", help="Upgrade the restored books to this release")):
     """Restore a backup into NEW books; never over existing ones. Switching to them is up to you."""
     import tempfile
 
     from erpclaw_core.backup import BackupRefused, restore
+
+    if upgrade:
+        from erpclaw_core.restore_upgrade import restore
 
     target = _restore_target(to_database, runtime_role)
     with tempfile.TemporaryDirectory() as tmp:

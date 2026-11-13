@@ -16,6 +16,7 @@ from erpclaw_assistant.model import Reply, ScriptedModel, call
 from erpclaw_core import approvals
 from erpclaw_core.common import company_ctx
 from erpclaw_core.masters import create_party
+from erpclaw_assistant import resolve_state, resolve_text
 
 
 def inv(customer, quantity=5):
@@ -102,7 +103,8 @@ def test_every_control_choice_listed_is_one_the_engine_accepts_for_that_question
         matched.append(real(*args, **kw))
         return matched[-1]
 
-    monkeypatch.setattr(resolve, "match_answer", recording)
+    for _module in (resolve, resolve_state):
+        monkeypatch.setattr(_module, 'match_answer', recording)
     a.turn("c1", listed[code], choice=code)
     assert matched[:1] == [("control", name)], (which, name, matched)
 
@@ -128,7 +130,8 @@ def test_the_control_labels_come_from_the_language_table(monkeypatch):
     other = copy.deepcopy(resolve.TABLES["en"])
     other["text"]["controls"] = {"someone_else": "Another one", "cancel": "Stop here"}
     monkeypatch.setitem(resolve.TABLES, "zz", other)
-    monkeypatch.setattr(resolve, "LANGUAGE", "zz")
+    for _module in (resolve, resolve_text):
+        monkeypatch.setattr(_module, 'LANGUAGE', 'zz')
     ask = graph._asked({"type": "ask", "text": "Which?", "code": "customer_ambiguous", "options": ["A", "B"],
                         "data": {"question_id": "q5", "choices": [{"code": "q5-1", "label": "A"},
                                                                   {"code": "q5-2", "label": "B"}]}})

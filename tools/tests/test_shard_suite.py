@@ -7,6 +7,7 @@ import importlib.util
 import json
 import math
 import random
+import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -37,11 +38,22 @@ def write_junit(path: Path, cases: list[tuple[str, str]], seconds: float = 1.0) 
     s = ET.Element("testsuite", name="pytest", tests=str(len(cases)), time=f"{seconds:.3f}")
     for nodeid, outcome in cases:
         classname, name = ss.junit_key(nodeid)
+        tc = None
         for part in outcome.split("+"):
-            tc = ET.SubElement(s, "testcase", classname=classname, name=name, time="0.100")
-            child = {"failed": "failure", "errors": "error", "skipped": "skipped"}.get(part)
+            # Only a failed call opens a second testcase for a teardown error. A skipped or passed
+            # call shares its element with the error, including xfails and non-strict xpasses.
+            if tc is None or part != "errors" or outcome.startswith(("failed+", "strict xpass+")):
+                tc = ET.SubElement(s, "testcase", classname=classname, name=name, time="0.100")
+            child = {"failed": "failure", "errors": "error", "skipped": "skipped",
+                     "xfailed": "skipped", "strict xpass": "failure"}.get(part)
             if child:
-                ET.SubElement(tc, child, message="x")
+                attributes = {"message": "[XPASS(strict)] fixed" if part == "strict xpass" else "x"}
+                if part == "xfailed":
+                    attributes["type"] = "pytest.xfail"
+                ET.SubElement(tc, child, **attributes)
+            if part == "xpassed":
+                properties = ET.SubElement(tc, "properties")
+                ET.SubElement(properties, "property", name="pytest.xpass", value="true")
     root = ET.Element("testsuites", name="pytest tests")
     root.append(s)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -115,9 +127,20 @@ def read_committed_durations() -> dict[str, float]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def test_committed_durations_balance_four_shards():
+@pytest.fixture(scope="module")
+def collected_ids(tmp_path_factory):
+    collected = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", "--ignore=tests/test_demo.py",
+         "-p", "no:cacheprovider", f"--basetemp={tmp_path_factory.mktemp('collection')}"],
+        cwd=_PATH.parents[1], capture_output=True, text=True,
+    )
+    assert collected.returncode == 0, collected.stdout + collected.stderr
+    return ss.parse_collect_output(collected.stdout)
+
+
+def test_committed_durations_balance_four_shards(collected_ids):
     durations = read_committed_durations()
-    ids = sorted(durations)
+    ids = collected_ids
     plan = ss.make_plan(ids, 4, durations)
     weights = [shard["weight"] for shard in plan["plan"]]
     mean = sum(weights) / len(weights)
@@ -128,9 +151,9 @@ def test_committed_durations_balance_four_shards():
     )
 
 
-def test_that_plan_keeps_every_test_exactly_once():
+def test_that_plan_keeps_every_test_exactly_once(collected_ids):
     durations = read_committed_durations()
-    ids = sorted(durations)
+    ids = collected_ids
     plan = ss.make_plan(ids, 4, durations)
     placed = [nodeid for shard in plan["plan"] for nodeid in shard["nodeids"]]
     assert set(placed) == set(ids)
@@ -199,6 +222,18 @@ def test_a_file_heavier_than_the_mean_is_reported():
 def test_tests_missing_from_the_durations_file_weigh_the_known_mean():
     groups = ss.group_by_file(["a.py::t1", "a.py::t2", "b.py::t1"])
     assert ss.file_weights(groups, {"a.py::t1": 4.0, "b.py::t1": 2.0}) == {"a.py": 7.0, "b.py": 2.0}
+
+
+@pytest.mark.parametrize("exact, default", [(8.0, 4.0), (0.0, 2.0)])
+def test_weights_try_exact_then_function_then_the_known_tests_mean(exact, default):
+    groups = ss.group_by_file([
+        "a.py::TestK::test_x[first]", "a.py::TestK::test_x[second]",
+        "a.py::TestK::test_x[third[inner]::text]", "b.py::test_y", "c.py::test_new[value]",
+    ])
+    durations = {"a.py::TestK::test_x[first]": exact, "a.py::TestK::test_x": 2.0,
+                 "b.py::test_y": 4.0, "dropped.py::test_old": 999.0}
+    assert ss.file_weights(groups, durations) == {"a.py": exact + 4.0, "b.py": 4.0, "c.py": default}
+    assert ss.file_weights(groups, {}) == {"a.py": 3.0, "b.py": 1.0, "c.py": 1.0}
 
 
 def independent_suite() -> tuple[list[str], dict[str, float]]:
@@ -275,9 +310,9 @@ def test_independent_cases_can_fill_shards_without_whole_files(shards):
 
 
 @pytest.mark.parametrize("shards", [4, 5])
-def test_committed_collection_balances_and_spreads_independent_cases(shards):
+def test_committed_collection_balances_and_spreads_independent_cases(shards, collected_ids):
     durations = read_committed_durations()
-    ids = sorted(durations)
+    ids = collected_ids
     plan = ss.make_plan(ids, shards, durations)
     weights = [s["weight"] for s in plan["plan"]]
     mean = sum(weights) / shards
@@ -293,6 +328,40 @@ def test_committed_collection_balances_and_spreads_independent_cases(shards):
         f"largest predicted shard is {largest / 60:.1f} minutes; "
         f"mean is {mean / 60:.1f} minutes (maximum allowed: 110% of mean)"
     )
+
+
+@pytest.mark.parametrize("shards", [4, 5])
+def test_refreshed_durations_plan_and_weight_every_collected_case(tmp_path, collected_ids, shards):
+    ids = collected_ids
+    heavy = "tests/test_turn_interleaving.py"
+    collected = tmp_path / "nodeids.txt"
+    collected.write_text("\n".join(ids) + "\n", encoding="utf-8")
+    junit = tmp_path / "junit"
+    junit.mkdir()
+    report = ET.Element("testsuite")
+    for nodeid in ids:
+        classname, name = ss.junit_key(nodeid)
+        ET.SubElement(report, "testcase", classname=classname, name=name,
+                      time="2000" if ss.file_of(nodeid) == heavy else "1")
+    ET.ElementTree(report).write(junit / "shard-0.xml", encoding="utf-8")
+    duration_path = tmp_path / "durations.json"
+    assert ss.main(["durations", "--collected", str(collected), "--junit-dir", str(junit),
+                    "--out", str(duration_path)]) == 0
+    durations = ss.load_durations(duration_path)
+    assert all("[" not in key for key in durations)
+    assert sum(ss.file_of(key) == heavy for key in durations) == 1
+    assert sum(ss.file_of(nodeid) == heavy for nodeid in ids) == 8
+    plan_path = tmp_path / "plan.json"
+    assert ss.main(["split", "--collected", str(collected), "--shards", str(shards),
+                    "--durations", str(duration_path), "--plan-out", str(plan_path)]) == 0
+    plan = ss.load_plan(plan_path)
+    placed = [nodeid for shard in plan["plan"] for nodeid in shard["nodeids"]]
+    assert sorted(placed) == sorted(ids)
+    assert len(placed) == len(set(placed))
+    assert sum(bool(shard["split"]) for shard in plan["plan"]) >= 2
+    for shard in plan["plan"]:
+        assert shard["weight"] == sum(2000.0 if ss.file_of(nodeid) == heavy else 1.0
+                                      for nodeid in shard["nodeids"])
 
 
 @pytest.fixture
@@ -369,6 +438,69 @@ def test_split_is_deterministic(tmp_path, capsys):
     assert capsys.readouterr().out == outputs[0]
 
 
+# ---------------------------------------------------------------- durations
+
+def test_durations_maps_reports_and_collapses_parameters_deterministically(tmp_path, capsys):
+    ids = ["tests/test_plain.py::test_plain", "tests/test_class.py::TestK::test_method",
+           "tests/nested/deeper/test_nested.py::test_nested",
+           "tests/test_params.py::TestK::test_value[first]",
+           "tests/test_params.py::TestK::test_value[key-shaped-test-string[inner]::value]",
+           "tests/test_added.py::test_new"]
+    collected = tmp_path / "nodeids.txt"
+    collected.write_text("\n".join(ids) + "\n", encoding="utf-8")
+    junit = tmp_path / "junit"
+    # Literal JUnit names exercise the conversion independently of junit_key.
+    junit.mkdir()
+    (junit / "shard-1.xml").write_text('''<testsuite>
+      <testcase classname="tests.test_params.TestK" name="test_value[first]" time="1.2344"/>
+      <testcase classname="tests.test_params.TestK"
+                name="test_value[key-shaped-test-string[inner]::value]" time="3.2348"/>
+      <testcase classname="tests.test_added" name="test_new" time="0"/>
+    </testsuite>''', encoding="utf-8")
+    (junit / "shard-0.xml").write_text('''<testsuites><testsuite>
+      <testcase classname="tests.test_plain" name="test_plain" time="4.56789"/>
+      <testcase classname="tests.test_class.TestK" name="test_method" time="2.5"/>
+      <testcase classname="tests.nested.deeper.test_nested" name="test_nested" time="6"/>
+    </testsuite></testsuites>''', encoding="utf-8")
+    (junit / "other.xml").write_text("ignored", encoding="utf-8")
+    out = tmp_path / "output" / "durations.json"
+    out.parent.mkdir()
+    out.write_text(json.dumps({"tests/test_dropped.py::test_old": 999, ids[3]: 99}), encoding="utf-8")
+    expected = {"tests/test_plain.py::test_plain": 4.568, "tests/test_class.py::TestK::test_method": 2.5,
+                "tests/nested/deeper/test_nested.py::test_nested": 6.0,
+                "tests/test_params.py::TestK::test_value": 2.235, "tests/test_added.py::test_new": 0.0}
+    args = ["durations", "--collected", str(collected), "--junit-dir", str(junit), "--out", str(out)]
+    assert ss.main(args) == 0
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "durations: 5 keys from 6 testcases (0 skipped: ambiguous 0, unmatched 0)\n"
+    first = out.read_bytes()
+    assert json.loads(first) == expected
+    assert all("[" not in key for key in json.loads(first))
+    assert first == (json.dumps(expected, sort_keys=True, indent=2) + "\n").encode("utf-8")
+    assert ss.main(args) == 0
+    assert out.read_bytes() == first
+
+
+def test_durations_skips_every_ambiguous_or_unmatched_case(tmp_path, monkeypatch, capsys):
+    ids = ["tests/a/test_b.py::test_x", "tests/a.test_b.py::test_x",
+           "tests/test_escape.py::test_x[\x01]", "tests/test_escape.py::test_x[#x01]",
+           "tests/test_good.py::test_ok", "tests/test_missing.py::test_not_run"]
+    collected = tmp_path / "nodeids.txt"
+    collected.write_text("\n".join(ids) + "\n", encoding="utf-8")
+    junit = tmp_path / "junit"
+    write_junit(junit / "shard-0.xml", [(n, "passed") for n in [*ids[:4], ids[4], "old.py::test_old"]])
+    monkeypatch.chdir(tmp_path)
+    assert ss.main(["durations", "--collected", str(collected), "--junit-dir", str(junit)]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "durations: 1 keys from 6 testcases (5 skipped: ambiguous 4, unmatched 1)\n"
+    assert json.loads((tmp_path / ".test_durations").read_text()) == {ids[4]: 0.1}
+    checked = ss.check(ids, junit, 1)
+    assert len(checked["problems"]["ambiguous"]) == 2
+    assert checked["durations"] == {ids[4]: 0.1}
+
+
 # ---------------------------------------------------------------- check
 
 def test_check_cli_accepts_split_reports_and_detects_misplaced_cases(tmp_path, capsys):
@@ -403,7 +535,8 @@ def test_check_passes_on_an_exact_union(tmp_path):
     ids = suite()
     result = ss.check(ids, run_shards(tmp_path, ids, 3), 3, ss.make_plan(ids, 3))
     assert result["problems"] == {}
-    assert result["totals"] == {"passed": len(ids), "failed": 0, "skipped": 0, "errors": 0}
+    assert result["totals"] == {"passed": len(ids), "failed": 0, "skipped": 0,
+                                "xfailed": 0, "xpassed": 0, "errors": 0}
     assert sum(r["tests"] for r in result["per_shard"]) == len(ids)
 
 
@@ -411,6 +544,83 @@ def test_skips_count_but_do_not_fail_the_union(tmp_path):
     ids = suite()
     result = ss.check(ids, run_shards(tmp_path, ids, 2, {ids[1]: "skipped"}), 2)
     assert result["problems"] == {} and result["totals"]["skipped"] == 1
+
+
+def test_check_reports_skips_and_expected_failures_separately(tmp_path, capsys):
+    ids = suite(5, 5)
+    overrides = {n: "skipped" for n in ids[:18]}
+    overrides.update({n: "xfailed" for n in ids[18:22]})
+    junit = run_shards(tmp_path, ids, 5, overrides)
+    collected = tmp_path / "nodeids.txt"
+    collected.write_text("\n".join(ids) + "\n", encoding="utf-8")
+    summary, report = tmp_path / "summary.md", tmp_path / "report.json"
+    assert ss.main(["check", "--collected", str(collected), "--shards", "5", "--junit-dir", str(junit),
+                    "--summary", str(summary), "--report", str(report)]) == 0
+    output = capsys.readouterr().out
+    assert "collected 25, reported 25 across 5 shards: 3 passed, 0 failed, 18 skipped, 4 xfailed, 0 xpassed, 0 errors" in output
+    assert "22 skipped" not in output
+    totals = {"passed": 3, "failed": 0, "skipped": 18, "xfailed": 4, "xpassed": 0, "errors": 0}
+    assert json.loads(report.read_text())["totals"] == totals
+    result = ss.check(ids, junit, 5)
+    assert {key: sum(row[key] for row in result["per_shard"]) for key in totals} == totals
+    assert "| collected | reported | passed | failed | skipped | xfailed | xpassed | errors |" in summary.read_text()
+    assert "| 25 | 25 | 3 | 0 | 18 | 4 | 0 | 0 |" in summary.read_text()
+
+
+@pytest.mark.parametrize("strict", [True, False])
+def test_check_xpass_fails_only_when_strict(tmp_path, capsys, strict):
+    ids = suite(2, 2)
+    junit = run_shards(tmp_path, ids, 2, {ids[0]: "strict xpass" if strict else "xpassed"})
+    collected = tmp_path / "nodeids.txt"
+    collected.write_text("\n".join(ids) + "\n", encoding="utf-8")
+    assert ss.main(["check", "--collected", str(collected), "--shards", "2", "--junit-dir", str(junit)]) == int(strict)
+    output = capsys.readouterr().out
+    assert "1 xpassed" in output
+    result = ss.check(ids, junit, 2)
+    assert result["totals"]["passed"] == 3
+    assert result["outcomes"][ids[0]] == "xpassed"
+    if strict:
+        assert "strict xpass: 1" in output and ids[0] in output
+        assert result["problems"] == {"strict xpass": [ids[0]]}
+    else:
+        assert "UNION OK" in output
+        assert result["problems"] == {}
+
+
+@pytest.mark.parametrize("outcome", ["xfailed", "xpassed", "strict xpass"])
+def test_expected_failure_outcomes_preserve_teardown_errors(tmp_path, outcome):
+    ids = suite(2, 2)
+    junit = run_shards(tmp_path, ids, 2, {ids[0]: outcome + "+errors"})
+    result = ss.check(ids, junit, 2)
+    assert ids[0] in result["problems"].get("errors", []) or ids[0] in result["problems"].get("strict xpass", [])
+    assert "duplicated" not in result["problems"]
+
+
+@pytest.mark.parametrize("strict", [True, False])
+def test_real_pytest_expected_failure_reports(pytester, monkeypatch, strict):
+    # Load the same report hook as CI, without depending on the caller's working directory.
+    monkeypatch.setenv("PYTHONPATH", str(_PATH.parent))
+    pytester.makepyfile(test_outcomes=f"""
+        import pytest
+        @pytest.mark.parametrize('n', range(18))
+        def test_skip(n): pytest.skip('not available')
+        @pytest.mark.xfail(strict=True, reason='known failure')
+        @pytest.mark.parametrize('n', range(4))
+        def test_xfail(n): assert False
+        @pytest.mark.xfail(strict={strict!r}, reason='fixed')
+        def test_xpass(): pass
+        def test_pass(): pass
+    """)
+    junit = pytester.path / "junit"
+    report = junit / "shard-0.xml"
+    run = pytester.runpytest_subprocess("-p", "no:cacheprovider", "-p", "shard_suite", "-q", f"--junitxml={report}")
+    assert run.ret == int(strict)
+    ids = [f"test_outcomes.py::test_skip[{n}]" for n in range(18)]
+    ids += [f"test_outcomes.py::test_xfail[{n}]" for n in range(4)]
+    ids += ["test_outcomes.py::test_xpass", "test_outcomes.py::test_pass"]
+    result = ss.check(ids, junit, 1)
+    assert result["totals"] == {"passed": 1, "failed": 0, "skipped": 18, "xfailed": 4, "xpassed": 1, "errors": 0}
+    assert result["problems"] == ({"strict xpass": ["test_outcomes.py::test_xpass"]} if strict else {})
 
 
 def test_check_fails_on_a_missing_id(tmp_path):
@@ -456,7 +666,8 @@ def test_check_fails_on_a_failed_test_and_on_an_error(tmp_path):
     ids = suite()
     result = ss.check(ids, run_shards(tmp_path, ids, 3, {ids[2]: "failed", ids[5]: "errors"}), 3)
     assert result["problems"] == {"failed": [ids[2]], "errors": [ids[5]]}
-    assert result["totals"] == {"passed": len(ids) - 2, "failed": 1, "skipped": 0, "errors": 1}
+    assert result["totals"] == {"passed": len(ids) - 2, "failed": 1, "skipped": 0,
+                                "xfailed": 0, "xpassed": 0, "errors": 1}
 
 
 def test_check_fails_on_a_shard_that_did_not_report(tmp_path):
@@ -506,7 +717,7 @@ def test_check_cli_writes_the_summary_and_exits_nonzero_on_a_problem(tmp_path, c
     assert code == 1
     assert "UNION FAILED" in capsys.readouterr().out
     md = summary.read_text()
-    assert "a" * 40 in md and f"| {len(ids)} | {len(ids)} | {len(ids) - 1} | 1 | 0 | 0 |" in md
+    assert "a" * 40 in md and f"| {len(ids)} | {len(ids)} | {len(ids) - 1} | 1 | 0 | 0 | 0 | 0 |" in md
     assert json.loads(report.read_text())["outcomes"][ids[3]] == "failed"
 
 
@@ -544,5 +755,6 @@ def test_the_junit_names_match_what_pytest_writes(pytester, imported_test_module
         pytester.runpytest_subprocess("-p", "no:cacheprovider", "-q", f"--junitxml={report}", *s["files"])
     result = ss.check(ids, junit, 2, plan)
     assert result["problems"] == {"failed": ["test_two.py::test_fail"]}
-    assert result["totals"] == {"passed": 6, "failed": 1, "skipped": 1, "errors": 0}
+    assert result["totals"] == {"passed": 6, "failed": 1, "skipped": 1,
+                                "xfailed": 0, "xpassed": 0, "errors": 0}
     assert all(sys.modules[name] is module for name, module in imported_test_modules.items())

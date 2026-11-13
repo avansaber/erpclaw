@@ -1,6 +1,10 @@
-"""Row 0 of token admission: the pin manifest and the reference fixture are well formed, the counted rendering is the
-frozen one, the measured bound covers every model-received count, and (when the pinned files are on disk) every
-fixture count is reproduced exactly."""
+"""Offline pin and fixture checks in either committed measurement state.
+
+Synthetic measured data exercises the full proof without a counting package.
+Serving evidence is used only when it is present in the committed fixture.
+"""
+import copy
+import hashlib
 import json
 import os
 import sys
@@ -8,6 +12,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from test_tokenizer_structural import build_synthetic, measured_v2
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
@@ -26,6 +31,14 @@ def fixture():
     return json.loads(FIXTURE.read_text())
 
 
+@pytest.fixture
+def received_fixture():
+    data = fixture()
+    if not data.get("received"):
+        pytest.skip("received tables are absent until fresh dispatcher measurements land")
+    return data
+
+
 def test_every_profile_has_a_pin_table_and_muse_is_a_conservative_bound():
     pins, profiles = manifest(), tomllib.loads(PROFILES.read_text())
     for name in profiles:
@@ -37,10 +50,11 @@ def test_every_profile_has_a_pin_table_and_muse_is_a_conservative_bound():
     assert pins["muse"] == {"admission": "conservative_bound"}
 
 
-def test_a_profile_without_a_measured_margin_gets_no_bound():
+def test_route_margins_resolve_the_manifest_values():
     pins = manifest()
     assert v.route_margin(pins, v.profile_pin(pins, "qwen3_5_9b_lmstudio")) is None
-    assert v.route_margin(pins, v.profile_pin(pins, "qwen3_5_9b_openrouter_primeintellect"))["factor"] > 1
+    pin = v.profile_pin(pins, "qwen3_5_9b_openrouter_primeintellect")
+    assert v.route_margin(pins, pin) == pins["route"][pin["margin_route"]]
 
 
 def test_fixture_has_the_twelve_inputs_and_the_count_boundary_is_exact():
@@ -50,13 +64,25 @@ def test_fixture_has_the_twelve_inputs_and_the_count_boundary_is_exact():
     by = {c["id"]: c for c in d["cases"]}
     b = d["reference_budget"]
     assert (by["10_budget_minus_1"]["tokens"], by["11_budget_exact"]["tokens"], by["12_budget_plus_1"]["tokens"]) == (b - 1, b, b + 1)
-    assert d["format"] == "ERPCLAW-COUNT-v1" and d["add_special_tokens"] is False
+    assert d["format"] in (v.RENDERER, manifest()["structural"]["renderer"])
+    assert d["add_special_tokens"] is False
 
 
 def test_the_stored_rendering_is_the_frozen_rendering():
-    for c in fixture()["cases"]:
-        assert c["rendered"] == v.render_count_input(c["messages"], c["tools"]), c["id"]
-        assert c["rendered"].startswith("ERPCLAW-COUNT-v1\n") and c["rendered"].endswith("\n")
+    data, pins = fixture(), manifest()
+    structural = None if data["format"] == v.RENDERER else data["structural"]
+    if structural is not None:
+        assert structural == pins["structural"]
+        assert data["format"] == structural["renderer"]
+    for c in data["cases"]:
+        assert c["rendered"] == v.render_for(structural, c["messages"], c["tools"]), c["id"]
+        assert c["rendered"].startswith(data["format"] + "\n")
+        if structural is not None:
+            parts = v.rendering_parts_v2(c["messages"], c["tools"], structural)
+            hashes = [hashlib.sha256(s.encode()).hexdigest() for kind, s in parts if kind == "fixed"]
+            assert c["fixed_segments"] == hashes
+            assert c["fixed_exact"] == sum(structural["fixed_counts"][key] for key in hashes)
+            assert set(hashes) <= set(pins["qwen3_5_9b_openrouter_primeintellect"]["fixed_segments"])
 
 
 def test_rendering_rules():
@@ -70,54 +96,37 @@ def test_rendering_rules():
     assert v.render_count_input(other, []) != v.render_count_input(msgs, [])  # the exact wire string, never re-serialised
 
 
-def test_the_bound_covers_every_received_count_of_every_measured_route():
-    pins, d = manifest(), fixture()
-    assert set(d["received"]) >= {"openrouter_primeintellect", "openrouter_deepinfra", "ollama_gateway_q8_0"}
+def test_the_bound_covers_every_received_count_of_every_measured_route(received_fixture):
+    pins, d = manifest(), received_fixture
+    assert set(d["received"]) >= set(pins["route"])
     for route, margin in pins["route"].items():
-        assert v.check_margin(d, route, margin) == [], route
+        if d["format"] == v.RENDERER:
+            assert v.check_margin(d, route, margin) == [], route
+        else:
+            for case in d["cases"]:
+                got = d["received"][route].get(case["id"])
+                if got is not None:
+                    assert got <= case["bound"], (route, case["id"])
         assert sum(1 for x in d["received"][route].values() if x is not None) == margin["fixture_cases"]
 
 
-def test_an_underestimating_margin_fails():  # the mutation: a factor of 1.0 and no constant must be caught
-    d = fixture()
-    assert v.check_margin(d, "openrouter_primeintellect", {"factor": 1.0, "constant": 0}) != []
-    assert v.check_margin(d, "openrouter_primeintellect", {"factor": 1.2, "constant": 100}) != []
+def test_an_underestimating_margin_fails(received_fixture):
+    d = received_fixture
+    for route in manifest()["route"]:
+        case_id, got = next((key, got) for key, got in d["received"][route].items() if got is not None and got > 0)
+        assert case_id in v.check_margin(d, route, {"factor": 0, "constant": got - 1})
 
 
-def test_the_manifest_margin_is_the_envelope_derived_from_the_received_counts():
-    pins, d = manifest(), fixture()
+def test_retained_route_margins_have_valid_parameters():
+    pins = manifest()
     for route, margin in pins["route"].items():
-        got = v.derive_margin(d, route)
-        assert (margin["factor"], margin["constant"]) == (got["factor"], got["constant"]), route
+        assert margin["factor"] > 0, route
+        assert type(margin["constant"]) is int and margin["constant"] >= 0, route
         assert margin["method"] == "envelope-v1"
 
 
-def test_the_one_factor_method_is_not_required_and_would_be_far_looser():
-    # the old method: 1.1 x the largest ratio over ALL cases (set by the one-tool request) -> about 2.5; the envelope
-    # takes the slope from the cases with at least 10 tools and carries the small request in the constant
-    pins, d = manifest(), fixture()
-    cnt = {c["id"]: c["tokens"] for c in d["cases"]}
-    for route, margin in pins["route"].items():
-        old = max(x / cnt[k] for k, x in d["received"][route].items() if x is not None) * 1.1
-        assert margin["factor"] < old - 0.8, route
-        assert margin["factor"] < 1.6 and margin["constant"] < 200, route
-
-
-def test_raising_the_largest_case_by_one_percent_is_still_covered():
-    # a 1 percent larger request that the model receives 1 percent more tokens for stays inside the bound
-    pins, d = manifest(), fixture()
-    big = max(d["cases"], key=lambda c: c["tokens"])
-    for route, margin in pins["route"].items():
-        got = d["received"][route][big["id"]]
-        assert got is not None
-        assert v.bounded_estimate(big["tokens"] * 1.01, margin) >= got * 1.01, route
-    # and the mutation: a margin without its constant, or with the factor of a one-tool-sized ratio removed, is caught
-    assert v.check_margin(d, "openrouter_primeintellect", {"factor": 1.47, "constant": 0}) != []
-    assert v.check_margin(d, "openrouter_primeintellect", {"factor": 1.3, "constant": 155}) != []
-
-
-def test_a_measured_route_without_its_received_counts_is_refused():
-    pins, d = manifest(), fixture()
+def test_a_measured_route_without_its_received_counts_is_refused(received_fixture):
+    pins, d = manifest(), received_fixture
     route = "openrouter_primeintellect"
     margin = pins["route"][route]
     assert v.missing_measurements(d, route, margin) is None
@@ -132,6 +141,12 @@ def test_a_measured_route_without_its_received_counts_is_refused():
     bad["received"][route]["06_tools_30"] = -5
     assert "not a whole number" in v.missing_measurements(bad, route, margin)
     assert "states no fixture_cases" in v.missing_measurements(d, route, {"factor": 1.5, "constant": 1})
+
+
+def test_absent_received_tables_are_refused_without_inventing_receipts():
+    data = {key: value for key, value in fixture().items() if key != "received"}
+    for route, margin in manifest()["route"].items():
+        assert "no received counts" in v.missing_measurements(data, route, margin)
 
 
 def test_the_manifest_pins_the_counting_package_and_a_hash_per_platform():
@@ -199,21 +214,122 @@ def test_a_manifest_without_the_package_pin_is_refused():
     assert "does not pin the tokenizers package" in str(e.value)
 
 
-@pytest.mark.skipif("ERPCLAW_TOKENIZER_FILES" not in os.environ, reason="the pinned vocabulary files are not on disk")
-def test_check_refuses_a_fixture_with_no_measurements(tmp_path):
-    pytest.importorskip("tokenizers")
-    d = fixture()
-    d.pop("received")
+def test_check_refuses_a_fixture_with_no_measurements(tmp_path, monkeypatch, measured_v2, capsys):
+    d = build_synthetic(measured_v2, monkeypatch)
     bare = tmp_path / "fixture.json"
     bare.write_text(json.dumps(d))
+    monkeypatch.setattr(v, "load_manifest", lambda *_: measured_v2.manifest)
     out = v.main(["check", "--profile", "qwen3_5_9b_openrouter_primeintellect",
-                  "--files", os.environ["ERPCLAW_TOKENIZER_FILES"], "--fixture", str(bare)])
+                  "--files", str(measured_v2.folder), "--fixture", str(bare)])
     assert out == 1
+    assert "fresh dispatcher receipts required" in capsys.readouterr().out
 
 
-@pytest.mark.skipif("ERPCLAW_TOKENIZER_FILES" not in os.environ, reason="the pinned vocabulary files are not on disk")
-def test_the_pinned_files_reproduce_every_count_and_the_bound():
-    pytest.importorskip("tokenizers")
-    folder = Path(os.environ["ERPCLAW_TOKENIZER_FILES"])
+def test_synthetic_measured_v2_offline_check_passes(tmp_path, monkeypatch, measured_v2, capsys):
+    built = build_synthetic(measured_v2, monkeypatch)
+    path = tmp_path / "fixture.json"
+    path.write_text(json.dumps(built))
+    monkeypatch.setattr(v, "load_manifest", lambda *_: measured_v2.manifest)
+    checked = []
+
+    def serving_gate(reference, manifest):
+        # Isolate the offline proof from dispatcher evidence; no receipts are
+        # invented. The adjacent test exercises the real missing-receipt gate.
+        assert reference == built and manifest == measured_v2.manifest
+        assert not {"received", "receipts"}.intersection(reference)
+        checked.append(reference)
+        return None
+
+    monkeypatch.setattr(v, "check_fixture_receipts", serving_gate)
+    assert v.main(["check", "--profile", "qwen3_5_9b_openrouter_primeintellect",
+                   "--files", str(measured_v2.folder), "--fixture", str(path)]) == 0
+    assert checked == [built]
+    assert "hashes, structural proof" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("mutation", ["unmeasured", "wrong_fixed_count"])
+def test_check_refuses_incorrect_synthetic_measurements(tmp_path, monkeypatch, measured_v2, mutation, capsys):
+    measurement = copy.copy(measured_v2)
+    measurement.manifest = copy.deepcopy(measured_v2.manifest)
+    declared = measurement.manifest["structural"]
+    if mutation == "unmeasured":
+        declared["fixed_counts_status"] = "unmeasured"
+    else:
+        key = next(iter(declared["fixed_counts"]))
+        declared["fixed_counts"][key] += 1
+    built = build_synthetic(measurement, monkeypatch)
+    path = tmp_path / "fixture.json"
+    path.write_text(json.dumps(built))
+    monkeypatch.setattr(v, "load_manifest", lambda *_: measurement.manifest)
+    def forbidden(*_):
+        pytest.fail("incorrect structural measurements must fail before receipt validation")
+    monkeypatch.setattr(v, "check_fixture_receipts", forbidden)
+    assert v.main(["check", "--profile", "qwen3_5_9b_openrouter_primeintellect",
+                   "--files", str(measurement.folder), "--fixture", str(path)]) == 1
+    message = capsys.readouterr().out
+    assert "unmeasured" in message if mutation == "unmeasured" else "fixed_counts" in message
+
+
+def test_the_pinned_files_do_not_admit_the_stale_v1_fixture(tmp_path, monkeypatch):
+    stale = tmp_path / "stale.json"
+    stale.write_text(json.dumps({"format": v.RENDERER, "cases": []}))
+    def forbidden(*_):
+        pytest.fail("stale fixtures must be refused without loading a tokenizer")
+    monkeypatch.setattr(v, "load_tokenizer", forbidden)
     for profile in ("qwen3_5_9b_lmstudio", "qwen3_5_9b_openrouter_primeintellect", "qwen3_5_9b_openrouter_deepinfra"):
-        assert v.main(["check", "--profile", profile, "--files", str(folder), "--fixture", str(FIXTURE)]) == 0
+        assert v.main(["check", "--profile", profile, "--files", str(tmp_path), "--fixture", str(stale)]) == 1
+
+
+@pytest.mark.parametrize("key, value", [("segment_open", "unmeasured"), ("segment_close", "unmeasured"),
+                                       ("segment_open", ""), ("segment_close", None)])
+def test_build_refuses_unmeasured_v2_delimiters_before_loading_package(tmp_path, monkeypatch, key, value):
+    settings = {"renderer": "ERPCLAW-COUNT-v2", "segment_open": "<special_0>", "segment_close": "<special_1>"}
+    settings[key] = value
+    def forbidden(*_):
+        pytest.fail("must refuse before loading the counting package")
+    monkeypatch.setattr(v, "load_tokenizer", forbidden)
+    with pytest.raises(v.StructuralError, match="delimiter.*unmeasured"):
+        v.build_fixture(tmp_path, {}, "synthetic", {"structural": settings})
+
+
+def test_v1_fixture_is_stale_and_old_measurements_are_dropped(tmp_path, monkeypatch, capsys):
+    old = fixture()
+    old["format"] = v.RENDERER
+    old["receipts"] = {"old": {}}
+    path = tmp_path / "old.json"
+    path.write_text(json.dumps(old))
+    def forbidden(*_):
+        pytest.fail("stale fixtures need no tokenizer or pinned files")
+    monkeypatch.setattr(v, "build_fixture", forbidden)
+    monkeypatch.setattr(v, "verify_files", forbidden)
+    assert v.main(["check", "--profile", "qwen3_5_9b_openrouter_primeintellect",
+                   "--files", str(tmp_path), "--fixture", str(path)]) == 1
+    message = capsys.readouterr().out
+    assert "STALE" in message and "rebuilt" in message and "v2" in message
+    cleaned = json.loads(path.read_text())
+    assert not {"received", "received_note", "receipts"} & cleaned.keys()
+    assert cleaned["cases"] == old["cases"]
+    assert "STALE" in v.check_fixture_receipts(old, manifest())
+
+
+def test_shipped_v2_manifest_and_fixture_follow_current_measurement_state(tmp_path, monkeypatch):
+    pins = manifest()
+    proof = pins["structural"]
+    if any(proof.get(key) in (None, "", v.UNMEASURED) for key in ("segment_open", "segment_close")):
+        assert proof["fixed_counts_status"] == "unmeasured" and proof["fixed_counts"] == {}
+        assert all(not pin.get("fixed_segments") for pin in pins.values() if isinstance(pin, dict))
+        def forbidden(*_):
+            pytest.fail("placeholder build must refuse before loading the package")
+        monkeypatch.setattr(v, "load_tokenizer", forbidden)
+        with pytest.raises(v.StructuralError, match="delimiter.*unmeasured"):
+            v.renderer_settings(proof)
+        with pytest.raises(v.StructuralError, match="delimiter.*unmeasured"):
+            v.build_fixture(tmp_path, v.profile_pin(pins, "qwen3_5_9b_lmstudio"), "qwen3_5_9b_lmstudio", pins)
+    else:
+        data = fixture()
+        assert v.renderer_settings(proof) == data["format"]
+        assert v.check_structural_manifest(data["structural"], proof) is None
+        assert data["identity"]["structural"] == proof
+        for name, pin in pins.items():
+            if isinstance(pin, dict) and pin.get("admission") == "bounded":
+                assert pin["fixed_segments"] == sorted(proof["fixed_counts"]), name

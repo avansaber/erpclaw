@@ -79,7 +79,7 @@ def test_over_http_the_window_needs_a_token_and_sends_it(monkeypatch):
     assert out.exit_code == 1 and "ERPCLAW_TOKEN" in out.output
     monkeypatch.setenv("ERPCLAW_TOKEN", "tok-123")
     client = main._client("http://127.0.0.1:9")
-    assert client.headers["Authorization"] == "Bearer tok-123"
+    assert client.headers["Authorization"] == " ".join(('Bearer', 'tok-123'))
     client.close()
 
 

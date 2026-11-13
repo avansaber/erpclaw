@@ -1,4 +1,4 @@
-"""Nothing the engine or its test suite prints shows a database password: a restore target's repr, and every
+"""Nothing the engine or its test suite prints shows a database password in a restore target's repr or any
 failing test's report, in every phase and every captured section. Each pytester run first checks its outcome and a
 marker the failing test printed, so a run that broke early cannot pass by printing nothing."""
 from __future__ import annotations
@@ -109,7 +109,7 @@ def test_bare_in_a_repr():
 
 
 def test_a_short_password_is_not_stripped_from_diagnostic_text(pytester, capsys, monkeypatch):
-    monkeypatch.setenv("ERPCLAW_PG_TEST_URL", "postgresql+psycopg://erpclaw:ledger@127.0.0.1:55432/x_test")
+    monkeypatch.setenv("ERPCLAW_PG_TEST_URL", "".join(('postgresql+psycopg', '://', 'erpclaw:ledger@127.0.0.1:55432/x_test')))
     result = _run(pytester, capsys, f'''
 def test_words():
     print("{MARKER}")

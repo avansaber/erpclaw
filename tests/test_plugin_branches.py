@@ -204,8 +204,11 @@ def test_the_loader_refuses_a_branch_that_does_not_create_exactly_the_plugins_ta
         metadata.remove(t)
 
 
-def test_books_with_sales_tables_and_no_sales_history_are_refused_on_open(engine):
+def test_missing_sales_history_refusal_does_not_invent_cause_or_unknown_version(engine):
     with engine.begin() as conn:
         conn.exec_driver_sql("DELETE FROM alembic_version WHERE version_num = '"+sales_head()+"'")
-    with pytest.raises(BooksRefused, match="pre-release build"):
+    with pytest.raises(BooksRefused) as caught:
         check_installed(engine)
+    assert str(caught.value) == ("These books have tables for plugin sales, but their migration history for that "
+                                 "plugin is missing. An update for existing books is not available yet. "
+                                 "Nothing was changed.")

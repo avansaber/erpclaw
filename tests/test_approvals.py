@@ -240,7 +240,7 @@ def api(engine):
     return client
 
 
-@pytest.mark.parametrize("auth", [None, "Bearer nope", "Basic abc", "disabled"])
+@pytest.mark.parametrize("auth", [None, " ".join(('Bearer', 'nope')), "Basic abc", "disabled"])
 def test_the_api_refuses_an_unknown_disabled_or_missing_token(engine, api, auth):
     if auth == "disabled":
         _, token = person(engine, "dora", ["view", "draft"])

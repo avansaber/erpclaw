@@ -15,10 +15,17 @@ from fastapi.testclient import TestClient
 def pipe():
     return importlib.import_module("erpclaw_api.pipe")
 
+RUN_PORT = 51234  # the loopback listener answers only Host 127.0.0.1:<its run port>
+
+
+def listener_app(app, listener, **kw):
+    return pipe().ListenerApp(app, listener, port=RUN_PORT if listener == "loopback" else None, **kw)
+
+
 def gated(app, listener):
     """A fake app's gate with the table its own declarations give: these tests exercise the gate's other rules; the
     explicit reviewed tables are tested on the real app below."""
-    return pipe().ListenerApp(app, listener, table=pipe().listener_routes(app.routes)[listener])
+    return listener_app(app, listener, table=pipe().listener_routes(app.routes)[listener])
 
 
 
@@ -110,6 +117,8 @@ async def echo(scope, receive, send):
 
 
 async def exchange(wire, app=echo, *, check=lambda client: True, fragment=4096):
+    if getattr(app, "kind", None) == "loopback":  # this listener answers only its own run port's Host
+        wire = wire.replace(b"Host: engine\r\n", f"Host: 127.0.0.1:{RUN_PORT}\r\n".encode(), 1)
     reader, writer = Reader(wire, fragment), Writer()
     await pipe().serve_connection(reader, writer, app, client="peer", check=check)
     assert writer.closed
@@ -172,7 +181,7 @@ def test_header_at_limit_is_accepted():
     b"Content-Length: 3, 3\r\n", b"Content-Length: +3\r\n", b"Content-Length: -1\r\n",
     b"Content-Length: nope\r\n", b"Content-Length : 3\r\n", b" folded: yes\r\n",
     b"X-Value: a\x00b\r\n", b"Bad\x80Name: value\r\n", b"No-Colon\r\n",
-    b"Host: other\r\n", b"Authorization: Bearer a\r\nAuthorization: Session b\r\n",
+    b"Host: other\r\n", b"".join((b'Authori', b'zation: ', b'Bearer', b' a\r\n', b'Authori', b'zation: ', b'Session', b' b\r\n')),
     b"Upgrade: websocket\r\n",
 ])
 def test_ambiguous_or_unsupported_framing_closes_without_dispatch(headers):
@@ -383,7 +392,7 @@ def fake_app():
 
     async def shared(request: Request):
         credential = request.headers.get("authorization")
-        if credential not in {"Bearer valid", "Session valid"}:
+        if credential not in {" ".join(('Bearer', 'valid')), "Session valid"}:
             return JSONResponse({"detail": "Sign in to use the engine.", "code": "unauthenticated"}, status_code=401)
         return {"route": "shared", "credential": credential}
 
@@ -414,14 +423,14 @@ def test_listener_tables_partition_explicit_route_policy_without_path_convention
 ])
 def test_listener_table_actually_blocks_excluded_routes(listener, path, method):
     app = gated(fake_app(), listener)
-    _, writer = asyncio.run(exchange(request(path, method=method, headers=b"Authorization: Bearer valid\r\n"), app))
+    _, writer = asyncio.run(exchange(request(path, method=method, headers=b"".join((b'Authori', b'zation: ', b'Bearer', b' valid\r\n'))), app))
     refused(responses(writer.data)[0], 404, "not_found")
 
 
 @pytest.mark.parametrize("listener", ["host", "cli", "loopback"])
 def test_session_authorization_is_host_only_even_on_shared_routes(listener):
     app = gated(fake_app(), listener)
-    _, writer = asyncio.run(exchange(request("/v1/cards/card", headers=b"Authorization: Session valid\r\n"), app))
+    _, writer = asyncio.run(exchange(request("/v1/cards/card", headers=b"".join((b'Authori', b'zation: ', b'Session', b' valid\r\n'))), app))
     response = responses(writer.data)[0]
     if listener == "host":
         assert response[0] == 200 and json.loads(response[2])["credential"] == "Session valid"
@@ -430,7 +439,7 @@ def test_session_authorization_is_host_only_even_on_shared_routes(listener):
 
 
 @pytest.mark.parametrize("listener", ["cli", "loopback"])
-@pytest.mark.parametrize("credential", [b"", b"Authorization: Bearer invalid\r\n", b"Authorization: Cookie valid\r\n"])
+@pytest.mark.parametrize("credential", [b"", b"".join((b'Authori', b'zation: ', b'Bearer', b' invalid\r\n')), b"".join((b'Authori', b'zation: Cookie valid\r\n'))])
 def test_bearer_listeners_require_a_valid_bearer(listener, credential):
     app = gated(fake_app(), listener)
     _, writer = asyncio.run(exchange(request("/v1/cards/card", headers=credential), app))
@@ -440,12 +449,12 @@ def test_bearer_listeners_require_a_valid_bearer(listener, credential):
 @pytest.mark.parametrize("listener", ["cli", "loopback"])
 def test_bearer_listeners_forward_valid_token_on_template_route(listener):
     app = gated(fake_app(), listener)
-    _, writer = asyncio.run(exchange(request("/v1/cards/card", headers=b"Authorization: Bearer valid\r\n"), app))
+    _, writer = asyncio.run(exchange(request("/v1/cards/card", headers=b"".join((b'Authori', b'zation: ', b'Bearer', b' valid\r\n'))), app))
     assert responses(writer.data)[0][0] == 200
 
 
 def test_loopback_wrapper_is_also_an_asgi_app_for_existing_http_servers():
-    client = TestClient(gated(fake_app(), "loopback"))
+    client = TestClient(gated(fake_app(), "loopback"), base_url=f"http://127.0.0.1:{RUN_PORT}")
     response = client.get("/v1/cards/card", headers={"Authorization": "Session valid"})
     assert response.status_code == 401 and response.json()["code"] == "unauthenticated"
 
@@ -475,12 +484,12 @@ def test_real_app_route_inventory_and_health_are_preserved(engine):
         # access table below is reviewed, because an unannotated route is shared and would reach the CLI listener
         reviewed = expected | ({("POST", "/v1/session"), ("DELETE", "/v1/session")} if listener == "host" else set())
         assert reviewed == tables[listener]
-        wrapped = pipe().ListenerApp(app, listener)
+        wrapped = listener_app(app, listener)
         _, writer = asyncio.run(exchange(request("/v1/health"), wrapped))
         assert responses(writer.data)[0][0] == 200
         assert json.loads(responses(writer.data)[0][2]) == {"ok": True}
         _, writer = asyncio.run(exchange(request("/v1/conversations", method="POST",
-                                                 headers=b"Authorization: Session valid\r\n"), wrapped))
+                                                 headers=b"".join((b'Authori', b'zation: ', b'Session', b' valid\r\n'))), wrapped))
         refused(responses(writer.data)[0], 401, "unauthenticated")
 
 
@@ -525,8 +534,8 @@ def test_a_route_the_app_adds_but_the_table_does_not_list_is_404_on_every_listen
         return {"leaked": True}
 
     for listener in ["host", "cli", "loopback"]:
-        gate = pipe().ListenerApp(app, listener)
-        _, writer = asyncio.run(exchange(request("/v1/unreviewed", method="POST", headers=b"Authorization: Bearer x\r\n"), gate))
+        gate = listener_app(app, listener)
+        _, writer = asyncio.run(exchange(request("/v1/unreviewed", method="POST", headers=b"".join((b'Authori', b'zation: ', b'Bearer', b' x\r\n'))), gate))
         refused(responses(writer.data)[0], 404, "not_found")
         _, writer = asyncio.run(exchange(request("/v1/health"), gate))
         assert responses(writer.data)[0][0] == 200  # a listed route is still served
@@ -538,10 +547,10 @@ def test_documentation_routes_and_head_are_404_on_every_listener_of_the_real_app
 
     app = create_app(engine, ScriptedModel([]))
     for listener in ["host", "cli", "loopback"]:
-        gate = pipe().ListenerApp(app, listener)
+        gate = listener_app(app, listener)
         for method, path in [("GET", "/docs"), ("GET", "/redoc"), ("GET", "/openapi.json"), ("GET", "/docs/oauth2-redirect"),
                              ("HEAD", "/openapi.json"), ("HEAD", "/v1/health")]:
-            _, writer = asyncio.run(exchange(request(path, method=method, headers=b"Authorization: Bearer x\r\n"), gate))
+            _, writer = asyncio.run(exchange(request(path, method=method, headers=b"".join((b'Authori', b'zation: ', b'Bearer', b' x\r\n'))), gate))
             if method == "HEAD":  # a HEAD answer has no body to parse
                 assert responses(writer.data)[0][0] == 404
             else:

@@ -8,13 +8,15 @@ from sqlalchemy import select
 from erpclaw_assistant import resolve as rv, store
 from erpclaw_assistant.graph import Assistant
 from erpclaw_assistant.model import Reply, ScriptedModel, ToolCall, call
+from erpclaw_core import principals as pr
 from erpclaw_core import approvals, models as m
 from erpclaw_core.common import company_ctx, new_id
 from erpclaw_core.masters import create_item, create_party
-from erpclaw_core.plugins import REGISTRY, load_plugins
+from erpclaw_core.plugins import REGISTRY, disable_plugin, install_plugin, load_plugins
 from erpclaw_sales import tables as sales
 from erpclaw_stock import service as stock
 from erpclaw_stock.service import Trusted
+from erpclaw_assistant import resolve_policy, resolve_records
 
 
 TAX = [
@@ -199,7 +201,16 @@ def card(events):
 def planned(engine, events, area):
     assert [e["type"] for e in events] == ["answer"], events
     assert events[0]["outcome"] == "c" and events[0]["capability"] == ROUTES[area], events
-    assert events[0]["text"] == TEXT[area]
+    if area == "tax":
+        assert events[0]["text"] in {
+            TEXT[area],
+            "Sales tax isn't available yet, so I haven't drafted this invoice. "
+            "If you send the same invoice without tax words, I will draft it with no tax line and no tax is calculated.",
+            "Sales tax isn't available yet, so I haven't submitted this invoice. "
+            "If you send the same invoice without tax words, I will submit it without tax.",
+        }
+    else:
+        assert events[0]["text"] == TEXT[area]
     with engine.connect() as conn:
         assert not conn.execute(select(m.approval.c.id).where(m.approval.c.status == "pending")).all()
 
@@ -519,13 +530,17 @@ def test_resolution_is_committed_before_a_proposal_is_created(money_books, monke
 
 
 def test_a_stale_worker_cannot_finalise_resolution(money_books, monkeypatch):
+    with money_books.connect() as conn:
+        claimant = pr.owner(conn)
     now = store._now()
     monkeypatch.setattr(store, "_now", lambda: now)
-    c = store.claim("money", "Invoice Acme Corporation for 5 Design Work")
+    c = store.claim("money", "Invoice Acme Corporation for 5 Design Work",
+                    principal_id=claimant["id"], principal_name=claimant["name"])
     req = store.new_request(c)
     assert store.assign(c, req["id"])
     monkeypatch.setattr(store, "_now", lambda: now + store.LEASE + timedelta(seconds=1))
-    assert store.claim("money", "Invoice Hooli instead") is not None
+    assert store.claim("money", "Invoice Hooli instead",
+                       principal_id=claimant["id"], principal_name=claimant["name"]) is not None
     before = resolution(c.message_id)
     assert not store.finalise(c, req["id"], [], pending_question=None, pending_card=None,
                               state="open", why=None, serial_now=0, bindings_now={}, intent_state="unused")
@@ -648,15 +663,38 @@ def test_a_confirmation_code_does_not_consume_appended_instructions(money_books,
     planned(money_books, choose(a, first, "Discount Depot", extra=text), area)
 
 
-def test_a_different_operation_cannot_bypass_a_pending_confirmation(money_books):
-    first = assistant(money_books, customer="Discount Depot", items=[{"item": "Design Work", "quantity": 5}]).turn(
-        "money", "Invoice Discount Depot for 5 Design Work")
+@pytest.mark.parametrize("case", ["new", "tax", "discount", "answer", "partial"])
+def test_a_different_operation_cannot_bypass_a_pending_confirmation(money_books, case):
+    from bookdiff import assert_changes, snapshot
+
+    a = assistant(money_books, customer="Discount Depot", items=[{"item": "Design Work", "quantity": 5}])
+    before_old = snapshot(money_books)
+    first = a.turn("money", "Invoice Discount Depot for 5 Design Work")
     q = confirmation(first, "Discount Depot")
-    payment = call("record_payment", customer="Hooli", amount=500)
-    again = Assistant(money_books, ScriptedModel([Reply("", [payment])])).turn("money", "Hooli paid 500")
-    assert confirmation(again, "Discount Depot")["question_id"] == q["question_id"]
-    with money_books.connect() as conn:
-        assert not conn.execute(select(m.approval.c.id).where(m.approval.c.status == "pending")).all()
+    assert_changes(before_old, snapshot(money_books), {})
+    old = store.open_request("money")["id"]
+    before = snapshot(money_books)
+    if case == "answer":
+        events = choose(a, first, "Discount Depot", by="label")
+        result = card(events)
+        assert ("Customer", "Discount Depot") in [tuple(row) for row in result["card"]["lines"]]
+    elif case == "partial":
+        events = a.turn("money", "and add 10% off")
+        planned(money_books, events, "discount")
+        assert_changes(before, snapshot(money_books), {})
+        return
+    else:
+        payment = call("record_payment", customer="Hooli", amount=500)
+        suffix = {"new": "", "tax": " with VAT", "discount": " with a discount"}[case]
+        events = Assistant(money_books, ScriptedModel([Reply("", [payment])])).turn("money", "Hooli paid 500" + suffix)
+        assert store.get_request(old)["state"] == "ended"
+        assert store.get_request(old)["ended_why"] == "set_aside"
+        if case != "new":
+            planned(money_books, events, case)
+            assert_changes(before, snapshot(money_books), {})
+            return
+        result = card(events)
+    assert_changes(before, snapshot(money_books), {"approval": {"added": [{"id": result["approval_id"], "status": "pending"}]}})
 
 
 def prepared_resolution(engine, claim):
@@ -672,15 +710,18 @@ def prepared_resolution(engine, claim):
 
 
 def test_expired_claim_cannot_checkpoint_spans_questions_or_bindings(money_books, monkeypatch):
+    with money_books.connect() as conn:
+        claimant = pr.owner(conn)
     now = store._now()
     monkeypatch.setattr(store, "_now", lambda: now)
-    c = store.claim("money", "Invoice Discount Depot for 5 Design Work")
+    c = store.claim("money", "Invoice Discount Depot for 5 Design Work",
+                    principal_id=claimant["id"], principal_name=claimant["name"])
     req = store.new_request(c)
     assert store.assign(c, req["id"])
     session = prepared_resolution(money_books, c)
     before = resolution(c.message_id)
     monkeypatch.setattr(store, "_now", lambda: now + store.LEASE + timedelta(seconds=1))
-    assert store.claim("money", "hello") is not None
+    assert store.claim("money", "hello", principal_id=claimant["id"], principal_name=claimant["name"]) is not None
     assert not store.save_resolution(c, req["id"], session.dump())
     assert resolution(c.message_id) == before
     assert store.bindings(req["id"]) == {}
@@ -689,9 +730,12 @@ def test_expired_claim_cannot_checkpoint_spans_questions_or_bindings(money_books
 
 
 def test_checkpoint_rollback_leaves_no_partial_name_classification(money_books, monkeypatch):
+    with money_books.connect() as conn:
+        claimant = pr.owner(conn)
     from contextlib import contextmanager
 
-    c = store.claim("money", "Invoice Discount Depot for 5 Design Work")
+    c = store.claim("money", "Invoice Discount Depot for 5 Design Work",
+                    principal_id=claimant["id"], principal_name=claimant["name"])
     req = store.new_request(c)
     assert store.assign(c, req["id"])
     session = prepared_resolution(money_books, c)
@@ -728,7 +772,8 @@ def test_completed_messages_are_never_sent_back_through_name_resolution(money_bo
     def forbidden(*args, **kwargs):
         raise AssertionError("completed consumption was resolved again")
 
-    monkeypatch.setattr(rv, "_resolve_record", forbidden)
+    for _module in (rv, resolve_policy, resolve_records):
+        monkeypatch.setattr(_module, '_resolve_record', forbidden)
     with money_books.connect() as conn:
         rv.record_message_names(company_ctx(conn), session, [], [], "Changed name", [])
     assert session.owner_messages[0]["spans"] == saved["spans"]
@@ -771,7 +816,9 @@ def test_cancelling_a_confirmation_records_completed_empty_consumption(money_boo
 
 
 def test_existing_store_migrates_without_rewriting_owner_messages(engine):
-    c = store.claim("money", "hello")
+    with engine.connect() as conn:
+        claimant = pr.owner(conn)
+    c = store.claim("money", "hello", principal_id=claimant["id"], principal_name=claimant["name"])
     req = store.new_request(c)
     assert store.assign(c, req["id"])
     original = store.messages(req["id"])
@@ -781,7 +828,7 @@ def test_existing_store_migrates_without_rewriting_owner_messages(engine):
         conn.execute("DROP TABLE message_resolution")
         conn.execute("UPDATE store_version SET version = 2")
     store._ready.clear()
-    assert store.version() == store.VERSION == 3
+    assert store.version() == store.VERSION == 5
     assert store.messages(req["id"]) == original
     assert resolution(c.message_id)["completed"] is False
 
@@ -826,6 +873,13 @@ def test_a_read_reply_still_checks_new_money_while_confirmation_is_pending(money
     planned(money_books, a.turn("money", "with VAT"), "tax")
 
 
+def test_a_read_reply_checks_tax_without_a_pending_confirmation(money_books):
+    a = Assistant(money_books, ScriptedModel([
+        Reply("", [call("list_customers")]), Reply("I can help with that.")
+    ]))
+    planned(money_books, a.turn("money", "invoice Hooli for 5 copper wire with 8% sales tax"), "tax")
+
+
 @pytest.mark.parametrize("customer", ["Hooli", "Discount Depot"])
 def test_payment_records_consumed_customer_while_preserving_tax(money_books, customer):
     payment = call("record_payment", customer=customer, amount=500)
@@ -848,7 +902,16 @@ WRITE_TOOLS = sorted(n for n, c in REGISTRY.contracts.items() if c.effect != "re
 def write_example(engine, tool):
     examples = {
         "set_up_company": ({"name": "New Company", "currency": "USD"}, "Set up New Company in USD"),
+        "resend_message": ({}, "Send a message again"),
+        "update_email_sender": ({"from_address": "books@example.test", "display_name": "Company Books",
+                                 "smtp_host": "smtp.example.test", "port": 587, "security": "starttls",
+                                 "username": "books", "reply_to": "reply@example.test"},
+                                "Update email sender settings for Company Books"),
         "add_customer": ({"name": "New Customer"}, "Add customer New Customer"),
+        "add_supplier": ({"name": "New Supplier"}, "Add supplier New Supplier"),
+        "add_cash_account": ({}, "Add a cash account"),
+        "record_opening_position": ({"bank_lines": [{"account": "Bank", "amount": "5.00"}]},
+                                    "Record an opening position with 5.00 in Bank"),
         "add_item": ({"name": "New Item", "price": 5}, "Add item New Item for 5"),
         "create_invoice": ({"customer": "Acme Corporation", "items": [{"item": "Design Work", "quantity": 5}]},
                            "Invoice Acme Corporation for 5 Design Work"),
@@ -856,6 +919,8 @@ def write_example(engine, tool):
         "record_payment": ({"customer": "Hooli", "amount": 5}, "Hooli paid 5"),
         "cancel_invoice": ({}, "Cancel an invoice"),
         "reverse_payment": ({}, "Reverse a payment"),
+        "reverse_supplier_payment": ({"payment": "SPAY-2026-00001"}, "Reverse supplier payment SPAY-2026-00001"),
+        "reverse_goods_received": ({"delivery": "GR-2026-00001"}, "Reverse goods received GR-2026-00001"),
         "create_sales_order": ({"customer": "Acme Corporation", "items": [{"item": "Design Work", "quantity": 5}],
                                 "delivery_date": "2026-11-30"},
                                "Order for Acme Corporation for 5 Design Work on 30 November 2026"),
@@ -870,6 +935,15 @@ def write_example(engine, tool):
                                "Count 5 Copper Wire in Explicit Store"),
     }
     assert set(examples) | {"cancel_stock_movement"} == set(WRITE_TOOLS)
+    if tool == "resend_message":
+        from core_writes.scenarios import resend_message
+
+        args, text = resend_message(None, engine)
+        return call(tool, **args), text
+    if tool == "update_email_sender":
+        with engine.begin() as conn:
+            disable_plugin(conn, "email_folder")
+        install_plugin(engine, "email")
     if tool == "set_up_company":
         with engine.begin() as conn:
             conn.execute(m.company.update().values(status="pending"))

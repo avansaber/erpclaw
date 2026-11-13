@@ -1,8 +1,8 @@
-"""Whole supplier-payment reversal behind a future exact Core approval.
+"""Whole supplier-payment reversal behind its exact Core approval.
 
 Resolved stored identities only. Allocations and original postings remain
 immutable; Core owns the locks, effect savepoint, outcome and retry handling.
-This module registers no public contract and issues no commit authority.
+The public contract resolves owner numbers; this module issues no commit authority.
 """
 from __future__ import annotations
 
@@ -175,12 +175,20 @@ def plan_reversal(ctx: Ctx, request: ReverseSupplierPayment) -> ReversalPlan:
         total=payment._amount(ctx,item["amount"])
         if (item["status"] not in ("open","paid") or (item["status"]=="paid") != (before==0)
                 or before>total): raise _bad()
-        source,source_lines=_posting(ctx,payment.payables.DELIVERY,item["source_id"],item["posting_date"],dependencies)
+        opening = item["source_type"] == payment.payables.OPENING
+        kind = payment.payables.OPENING if opening else payment.payables.DELIVERY
+        voucher = item["source_voucher_id"] if opening else item["source_id"]
+        source,source_lines=_posting(ctx,kind,voucher,item["posting_date"],dependencies)
+        if opening and (source["id"] != item["posting_id"] or source["memo"] != item["source_number"]):
+            raise _bad()
         if ctx.conn.execute(select(m.posting.c.id).where(m.posting.c.company_id==ctx.company_id,
                 m.posting.c.reverses_posting_id==source["id"]).limit(1)).first():
             raise _bad("A delivery settled by this payment has been reversed.")
         party_lines=[r for r in source_lines if r["party_id"] is not None]
+        if opening:
+            party_lines=[r for r in party_lines if r["party_id"] == supplier["id"]]
         if (len(party_lines)!=1 or party_lines[0]["account_id"]!=ap_id
+                or (opening and party_lines[0]["line_no"] != item["control_line_no"])
                 or party_lines[0]["party_id"]!=supplier["id"]
                 or payment._amount(ctx,party_lines[0]["credit"])!=total
                 or payment._amount(ctx,party_lines[0]["debit"],positive=False)!=0): raise _bad()
@@ -205,8 +213,9 @@ def plan_reversal(ctx: Ctx, request: ReverseSupplierPayment) -> ReversalPlan:
 def _preview_plan(ctx: Ctx,plan: ReversalPlan) -> Preview:
     sh=Shown(ctx.currency);sh.title("Reverse a supplier payment")
     sh.line("Payment",plan.payment["number"]);sh.line("Supplier",plan.supplier["name"])
-    sh.line("Amount paid",sh.amount(plan.amount));sh.line("Original date",plan.payment["posting_date"].isoformat())
+    sh.line("Original date",plan.payment["posting_date"].isoformat())
     sh.line("Reversal date",plan.request.reversal_date.isoformat())
+    sh.line("Amount paid",sh.amount(plan.amount))
     if plan.request.reason: sh.line("Reason",plan.request.reason)
     for release in plan.releases:
         sh.line(release.item["source_number"],f"{sh.amount(release.amount)} owed again: outstanding "
@@ -219,7 +228,7 @@ def _preview_plan(ctx: Ctx,plan: ReversalPlan) -> Preview:
         side,value=("debit",line.debit) if line.debit else ("credit",line.credit)
         party=f" ({plan.supplier['name']})" if line.party_id else ""
         sh.book(f"{account['number']} {account['name']}{party}{mapped}: {side} {sh.amount(value)} {ctx.currency}")
-    sh.line("Original entries","The original entries stay; reversing entries are added on the reversal date.")
+    sh.line("Original entries",f"The original entries stay; reversing entries are added on {plan.request.reversal_date.isoformat()}.")
     if plan.original_period["id"]!=plan.reversal_period["id"]:
         sh.warning(f"{plan.payment['number']} stays in the period beginning {plan.original_period['start_date']}; "
                    f"this reversal is in the period beginning {plan.reversal_period['start_date']}.")
@@ -291,7 +300,7 @@ def commit_reversal(ctx: Ctx,request: ReverseSupplierPayment,operation_key: str)
         item=release.item
         changed=ctx.conn.execute(supplier_payable.update().where(supplier_payable.c.company_id==ctx.company_id,
             supplier_payable.c.id==item["id"],supplier_payable.c.supplier_id==pay["supplier_id"],
-            supplier_payable.c.currency==ctx.currency,supplier_payable.c.source_type==payment.payables.DELIVERY,
+            supplier_payable.c.currency==ctx.currency,supplier_payable.c.source_type==item["source_type"],
             supplier_payable.c.source_id==item["source_id"],supplier_payable.c.amount==item["amount"],
             supplier_payable.c.status==item["status"],supplier_payable.c.outstanding==release.before)
             .values(outstanding=release.after,status="open"))

@@ -21,6 +21,9 @@ def add_feature(name: str) -> None:
         FEATURES.sort()
 
 
+add_feature("turn_failure_codes")
+
+
 def register_me(app: FastAPI, engine: Engine, model: Model, principal: Callable[..., dict]) -> None:
     @app.get("/v1/me")
     def me(who: dict = Depends(principal)):

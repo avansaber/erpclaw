@@ -374,7 +374,7 @@ def test_exact_committed_company_contract_scoped_replay(world):
     assert q == {"company_id_1":"co","key_1":"key","status_1":"committed","contract_1":r.NAME}
 
 
-def test_backend_has_no_public_registration_or_input():
-    assert r.NAME not in [contract.name for contract in PLUGIN.contracts]
-    assert not hasattr(r,"Contract") and not hasattr(r,"Input")
+def test_backend_dataclass_has_public_contract_adapter():
+    assert r.NAME in [contract.name for contract in PLUGIN.contracts]
+    assert r.CONTRACT.input_model is r.ReverseGoodsReceivedInput
     assert dataclasses.is_dataclass(r.ReverseGoodsReceived)

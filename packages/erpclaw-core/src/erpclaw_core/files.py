@@ -24,6 +24,7 @@ from . import models as m
 from .common import Ctx, Refusal, new_id, now
 from .db import books_id, data_root, read_only
 from .plugins import BooksRefused
+from .plugin_text import say
 
 log = logging.getLogger(__name__)
 
@@ -32,8 +33,6 @@ MAX_SIZE = 10 * 1024 * 1024
 ROOT_MARKER = "ROOT.json"
 ROOT_FORMAT = 1
 LOCK_CLASS = 7_303_615  # the advisory lock class of a stored file's bytes; the key is taken from its sha256
-UNSAFE = "The file could not be saved safely."
-ALTERED = "The stored file has been altered or lost."
 SHA_NAME = re.compile(r"^[0-9a-f]{64}$")
 COMPANY_NAME = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")  # a company id: a UUID
 
@@ -120,11 +119,11 @@ def _home_problem() -> str | None:
 
 def _home_ready() -> None:
     """For a put, which runs inside an approved card's commit and so can reach the owner in chat: the owner reads
-    business words, the operator's words with the paths go to the log."""
+    business words, and the log records the failure with names redacted."""
     problem = _home_problem()
     if problem:
-        log.warning(problem)
-        raise Refusal("ERPClaw's storage folder isn't set up yet, so the file could not be saved.", "files_home_missing")
+        log.warning("files_home_missing: engine home <key> cannot be made; parent <key> does not exist")
+        raise Refusal(say("files_home_missing"), "files_home_missing")
 
 
 def _sync_path(path: Path) -> None:
@@ -192,9 +191,9 @@ def read_marker(root: Path) -> dict | None:
     return doc
 
 
-def _marker_problem(root: Path, books: str, database: str) -> str | None:
-    """What is wrong with the root for these books, in words for the owner; None when it is theirs."""
-    folder = f"files/{root.name}"
+def _marker_problem(root: Path, books: str, database: str, *, redact: bool = False) -> str | None:
+    """What is wrong with the root for the operator; names can be redacted for diagnostics."""
+    folder = "<key>" if redact else f"files/{root.name}"
     if not root.is_dir():
         return (f"The files of these books are not in {folder}; restore them, or point the engine at the books "
                 "they belong to.")
@@ -205,7 +204,8 @@ def _marker_problem(root: Path, books: str, database: str) -> str | None:
     if doc["books_id"] != books:
         return f"The files in {folder} belong to other books."
     if doc["database"] != database:
-        return (f"The books were renamed from {doc['database']} to {database}; rename the files folder to match, "
+        previous, current = ("<key>", "<key>") if redact else (doc["database"], database)
+        return (f"The books were renamed from {previous} to {current}; rename the files folder to match, "
                 "or rename the database back.")
     return None
 
@@ -219,9 +219,10 @@ def _ensure_root(conn: Connection) -> Path:
         _make_dirs(root)
         _write_durably(root / ROOT_MARKER, _marker(books, database))
     _sync_path(root / ROOT_MARKER)  # a marker an interrupted first put left is made durable too
-    problem = _marker_problem(root, books, database)
+    problem = _marker_problem(root, books, database, redact=True)
     if problem:
-        raise Refusal(problem, "files_not_these_books")
+        log.warning("files_not_these_books: %s", problem)
+        raise Refusal(say("files_not_these_books"), "files_not_these_books")
     return root
 
 
@@ -273,15 +274,22 @@ def lock_bytes(conn: Connection, sha256: str) -> None:
 
 
 def _render_inputs(value, path: str = "render_inputs") -> None:
-    if not isinstance(value, dict):
-        raise Refusal(f"{path} must be a mapping of names to text.", "render_inputs_shape")
-    for k, v in value.items():
-        if not isinstance(k, str):
-            raise Refusal(f"{path} has a key that is not text: {k!r}.", "render_inputs_shape")
-        if isinstance(v, dict):
-            _render_inputs(v, f"{path}.{k}")
-        elif not isinstance(v, str):
-            raise Refusal(f"{path}.{k} must be text or a mapping, not {type(v).__name__}.", "render_inputs_shape")
+    def check(value, safe_path: str) -> None:
+        if not isinstance(value, dict):
+            log.warning("render_inputs_shape: %s must be a mapping, not %s", safe_path, type(value).__name__)
+            raise Refusal(say("render_inputs_shape"), "render_inputs_shape")
+        for k, v in value.items():
+            child = f"{safe_path}.<key>"
+            if not isinstance(k, str):
+                log.warning("render_inputs_shape: %s key is not text: %s", child, type(k).__name__)
+                raise Refusal(say("render_inputs_shape"), "render_inputs_shape")
+            if isinstance(v, dict):
+                check(v, child)
+            elif not isinstance(v, str):
+                log.warning("render_inputs_shape: %s must be text or a mapping, not %s", child, type(v).__name__)
+                raise Refusal(say("render_inputs_shape"), "render_inputs_shape")
+
+    check(value, "render_inputs" if path == "render_inputs" else "<key>")
 
 
 def put(ctx: Ctx, data: bytes, media_type: str, document: tuple[str, str], *,
@@ -289,15 +297,18 @@ def put(ctx: Ctx, data: bytes, media_type: str, document: tuple[str, str], *,
     """Store the bytes of a document's file and return its row's id; the same bytes for the same document return
     the existing row. Runs in the caller's transaction: the row commits with it, after the file reached the disk."""
     if not isinstance(data, (bytes, bytearray)):
-        raise Refusal("A stored file is bytes.", "file_not_bytes")
+        log.warning("file_not_bytes: data must be bytes, not %s", type(data).__name__)
+        raise Refusal(say("file_not_bytes"), "file_not_bytes")
     if media_type not in MEDIA_TYPES:
-        raise Refusal(f"A file of type {media_type} cannot be stored; only {', '.join(MEDIA_TYPES)}.",
-                      "file_type_refused")
+        log.warning("file_type_refused: media_type=<key>; supported=%s", ", ".join(MEDIA_TYPES))
+        raise Refusal(say("file_type_refused"), "file_type_refused")
     if not 0 < len(data) <= MAX_SIZE:
-        raise Refusal("A stored file holds at least one byte and at most 10 MB.", "file_size_refused")
+        log.warning("file_size_refused: size=%d; allowed=1..%d bytes", len(data), MAX_SIZE)
+        raise Refusal(say("file_size_refused"), "file_size_refused")
     if (not isinstance(document, tuple) or len(document) != 2 or not all(isinstance(x, str) and x for x in document)
             or len(document[0]) > 40 or len(document[1]) > 36):
-        raise Refusal("A stored file belongs to one document: (voucher type, voucher id).", "file_document")
+        log.warning("file_document: document=<key> must be a pair of bounded nonempty strings; received %s", type(document).__name__)
+        raise Refusal(say("file_document"), "file_document")
     if render_inputs is not None:
         _render_inputs(render_inputs)
     data = bytes(data)
@@ -316,8 +327,9 @@ def put(ctx: Ctx, data: bytes, media_type: str, document: tuple[str, str], *,
             _make_dirs(path.parent)
             _write_durably(path, data)
         _sync_path(path)  # a copy an interrupted put left is made durable too, before any row names it
-    except OSError:
-        raise Refusal(UNSAFE, "file_not_saved") from None
+    except OSError as exc:
+        log.warning("file_not_saved: path=<key>; %s", type(exc).__name__)
+        raise Refusal(say("file_not_saved"), "file_not_saved") from None
     fault("before_insert")
     fid = new_id()
     ctx.conn.execute(m.file_object.insert().values(
@@ -340,7 +352,8 @@ def row(ctx: Ctx, file_id: str) -> dict:
     r = ctx.conn.execute(select(m.file_object).where(m.file_object.c.id == file_id,
                                                      m.file_object.c.company_id == ctx.company_id)).mappings().first()
     if r is None:
-        raise Refusal("No such stored file.", "file_not_found")
+        log.warning("file_not_found: company_id=<key>; file_id=<key>")
+        raise Refusal(say("file_not_found"), "file_not_found")
     return dict(r)
 
 
@@ -350,10 +363,12 @@ def get(ctx: Ctx, file_id: str) -> bytes:
     path = file_path(root_dir(ctx.conn), r["company_id"], r["sha256"])
     try:
         data = path.read_bytes()
-    except OSError:
-        raise Refusal(ALTERED, "file_altered") from None
+    except OSError as exc:
+        log.warning("file_altered: path=<key>; %s", type(exc).__name__)
+        raise Refusal(say("file_altered"), "file_altered") from None
     if len(data) != r["size"] or hashlib.sha256(data).hexdigest() != r["sha256"]:
-        raise Refusal(ALTERED, "file_altered")
+        log.warning("file_altered: path=<key>; size or sha256 mismatch")
+        raise Refusal(say("file_altered"), "file_altered")
     return data
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections import OrderedDict, UserDict, deque
 from dataclasses import replace
 from pathlib import Path
@@ -44,6 +45,15 @@ def books(engine, monkeypatch):
     sp.RAN.clear()
     sp.install(monkeypatch, engine, sp.provider(), sp.consumer())
     return engine
+
+
+@pytest.fixture
+def private_probe(books, monkeypatch):
+    class PrivateProbe(sp.ProbeIn):
+        private_note: str
+
+    monkeypatch.setattr(REGISTRY.services[f"{PROVIDER}.probe"], "input_model", PrivateProbe)
+    return {"private_note": "private-probe-7c9e"}
 
 
 def _posted(engine) -> int:
@@ -94,6 +104,28 @@ def _refused(engine, name: str, inp, **kw) -> Refusal:
     with pytest.raises(Refusal) as e:
         _call(engine, name, inp, **kw)
     return e.value
+
+
+def _private_warning(caplog, service, code, reason, *values):
+    records = [record for record in caplog.records if record.name == "erpclaw_core.plugins"]
+    assert len(records) == 1
+    record = records[0]
+    assert record.levelname == "WARNING"
+    what = f"The input to {service}" if code == "service_input" else f"The result the service {service} returned"
+    assert record.getMessage().startswith(f"{what} refused ({code}): ")
+    assert reason in record.getMessage()
+    assert record.exc_info is None
+    for value in values:
+        assert value not in record.getMessage()
+        assert value not in repr(record.msg)
+        assert value not in repr(record.args)
+        for captured in caplog.records:
+            assert value not in captured.getMessage()
+            assert value not in repr(captured.msg)
+            assert value not in repr(captured.args)
+            assert value not in (captured.exc_text or "")
+            if captured.exc_info:
+                assert value not in logging.Formatter().formatException(captured.exc_info)
 
 
 # --- the digest -------------------------------------------------------------------
@@ -275,12 +307,16 @@ INPUT_NOT_PLAIN = {
 
 
 @pytest.mark.parametrize("case", INPUT_NOT_PLAIN)
-def test_an_input_that_is_not_plain_data_is_refused_before_validation(books, case):
+def test_an_input_that_is_not_plain_data_is_refused_before_validation(books, case, caplog):
     """Floats, containers other than an exact dict or list, subclasses (enums, a str subclass) and model instances,
     nested anywhere: refused by exact type before the model sees them."""
     inp, why = INPUT_NOT_PLAIN[case]
-    r = _refused(books, QUOTE, inp)
-    assert r.code == "service_input" and why in r.message, r.message
+    private = "private-input-7c9e"
+    with caplog.at_level("WARNING", logger="erpclaw_core.plugins"):
+        r = _refused(books, QUOTE, {**inp, "private_note": private})
+    assert r.code == "service_input"
+    assert r.message == "Something went wrong inside your books' software, so nothing was changed."
+    _private_warning(caplog, QUOTE, r.code, why, private, "0.30000000000000004", "0.5", "USD")
 
 
 @pytest.mark.parametrize("inp", [sp.QuoteIn(amount=M("1"), rate="1"), UserDict({"amount": M("1"), "rate": "1"}),
@@ -310,21 +346,34 @@ OUTPUT_NOT_PLAIN = {
 
 
 @pytest.mark.parametrize("give", OUTPUT_NOT_PLAIN)
-def test_an_output_that_is_not_plain_data_is_refused_before_validation(books, give):
-    r = _refused(books, f"{PROVIDER}.probe", {"give": give})
-    assert r.code == "service_output" and OUTPUT_NOT_PLAIN[give] in r.message, r.message
+def test_an_output_that_is_not_plain_data_is_refused_before_validation(books, give, caplog, private_probe):
+    with caplog.at_level("WARNING", logger="erpclaw_core.plugins"):
+        r = _refused(books, f"{PROVIDER}.probe", {"give": give, **private_probe})
+    assert r.code == "service_output"
+    assert r.message == "Something went wrong inside your books' software, so nothing was changed."
+    # A selector such as "tuple" can also be a diagnostic type; its quoted value must stay private.
+    _private_warning(caplog, f"{PROVIDER}.probe", r.code, OUTPUT_NOT_PLAIN[give],
+                     repr(give), private_probe["private_note"])
 
 
-def test_a_serializer_that_emits_a_float_is_refused_after_the_dump(books):
+def test_a_serializer_that_emits_a_float_is_refused_after_the_dump(books, caplog, private_probe):
     """The caller's dict is the model's model_dump(mode="json"), which runs the model's own serializers; the dump
     is checked again, so a serializer cannot hand the caller a float."""
-    r = _refused(books, f"{PROVIDER}.probe", {"give": "serializer_float"})
-    assert r.code == "service_output" and "note is a floating-point number" in r.message
+    with caplog.at_level("WARNING", logger="erpclaw_core.plugins"):
+        r = _refused(books, f"{PROVIDER}.probe", {"give": "serializer_float", **private_probe})
+    assert r.code == "service_output"
+    assert r.message == "Something went wrong inside your books' software, so nothing was changed."
+    _private_warning(caplog, f"{PROVIDER}.probe", r.code, "note is a floating-point number",
+                     "serializer_float", private_probe["private_note"])
 
 
-def test_a_bool_is_not_taken_as_a_number(books):
-    r = _refused(books, f"{PROVIDER}.probe", {"give": "bool_as_number"})
-    assert r.code == "service_output" and "true or false where a number is required" in r.message
+def test_a_bool_is_not_taken_as_a_number(books, caplog, private_probe):
+    with caplog.at_level("WARNING", logger="erpclaw_core.plugins"):
+        r = _refused(books, f"{PROVIDER}.probe", {"give": "bool_as_number", **private_probe})
+    assert r.code == "service_output"
+    assert r.message == "Something went wrong inside your books' software, so nothing was changed."
+    _private_warning(caplog, f"{PROVIDER}.probe", r.code,
+                     "true or false where a number is required", "bool_as_number", private_probe["private_note"])
 
 
 def test_exact_decimals_in_the_output_cross_as_canonical_strings(books):

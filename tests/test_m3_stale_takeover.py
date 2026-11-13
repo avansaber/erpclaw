@@ -6,6 +6,7 @@ import pytest
 from erpclaw_assistant import store
 from erpclaw_assistant.graph import Assistant
 from erpclaw_assistant.model import Reply, ScriptedModel, call
+from erpclaw_core import principals as pr
 
 
 class Clock:
@@ -23,18 +24,22 @@ class Clock:
 @pytest.mark.parametrize("boundary", ["retired", "intent"])
 @pytest.mark.parametrize("kind", ["card", "question"])
 def test_a_paused_turn_cannot_change_a_later_holders_request(engine, monkeypatch, boundary, kind):
+    with engine.connect() as conn:
+        claimant = pr.owner(conn)
     clock = Clock()
     monkeypatch.setattr(store, "_now", clock)
     a = Assistant(engine, ScriptedModel([Reply("", [call(
         "create_invoice", customer="Acme Corporation", items=[{"item": "copper wire", "quantity": 5}])])]))
     cid = "m3-stale-takeover"
     assert any(e["type"] == "card" for e in a.turn(cid, "Invoice Acme Corporation for 5 copper wire"))
-    abandoned = store.claim(cid, "stopped before activation")
+    abandoned = store.claim(cid, "stopped before activation",
+                            principal_id=claimant["id"], principal_name=claimant["name"])
     req = store.open_request(cid)
     assert store.retoken(abandoned, req["id"])
     clock.lapse()
     if boundary == "intent":
-        current = store.claim(cid, "assigned before activation")
+        current = store.claim(cid, "assigned before activation",
+                              principal_id=claimant["id"], principal_name=claimant["name"])
         assert current and store.assign(current, req["id"])
         clock.lapse()
     original = a._reconcile if boundary == "retired" else a._close_intent
@@ -44,7 +49,7 @@ def test_a_paused_turn_cannot_change_a_later_holders_request(engine, monkeypatch
         assert not captured
         live_req = store.open_request(cid)
         clock.lapse()
-        later = store.claim(cid, "newer holder")
+        later = store.claim(cid, "newer holder", principal_id=claimant["id"], principal_name=claimant["name"])
         assert later and store.assign(later, live_req["id"])
         question = {"id": "q7", "field": "create_invoice#0:customer", "choices": []} if kind == "question" else None
         card = "synthetic-newer-card" if kind == "card" else None
@@ -53,7 +58,7 @@ def test_a_paused_turn_cannot_change_a_later_holders_request(engine, monkeypatch
                               serial_now=7, bindings_now={"synthetic": "newer binding"}, intent_state="proposed")
         captured["request"] = store.get_request(req["id"])
         if boundary == "intent":
-            latest = store.claim(cid, "later live intent")
+            latest = store.claim(cid, "later live intent", principal_id=claimant["id"], principal_name=claimant["name"])
             assert latest and store.assign(latest, req["id"])
         captured["intent"] = store.intent(cid)
         captured["events"] = store.events(req["id"])
@@ -70,17 +75,21 @@ def test_a_paused_turn_cannot_change_a_later_holders_request(engine, monkeypatch
     assert store.bindings(req["id"]) == captured["bindings"]
 
 def test_crash_after_closing_retired_intent_does_not_strand_the_pending_card(engine, monkeypatch):
+    with engine.connect() as conn:
+        claimant = pr.owner(conn)
     clock = Clock()
     monkeypatch.setattr(store, "_now", clock)
     a = Assistant(engine, ScriptedModel([Reply("", [call(
         "create_invoice", customer="Acme Corporation", items=[{"item": "copper wire", "quantity": 5}])])]))
     cid = "m3-crashed-takeover"
     card = next(e for e in a.turn(cid, "Invoice Acme Corporation for 5 copper wire") if e["type"] == "card")
-    abandoned = store.claim(cid, "stopped before activation")
+    abandoned = store.claim(cid, "stopped before activation",
+                            principal_id=claimant["id"], principal_name=claimant["name"])
     req = store.open_request(cid)
     assert store.retoken(abandoned, req["id"])
     clock.lapse()
-    stopped = store.claim(cid, "assigned before activation")
+    stopped = store.claim(cid, "assigned before activation",
+                          principal_id=claimant["id"], principal_name=claimant["name"])
     assert stopped and store.assign(stopped, req["id"])
     clock.lapse()
     original = a._close_intent

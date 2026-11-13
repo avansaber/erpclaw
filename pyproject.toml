@@ -3,7 +3,7 @@ name = "erpclaw-workspace"
 version = "0.0.0"
 description = "ERPClaw development workspace (not published)"
 license = "GPL-3.0-only"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
   "erpclaw-core",
   "erpclaw-assistant",

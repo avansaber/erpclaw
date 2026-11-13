@@ -3,7 +3,7 @@ name = "erpclaw-email-folder"
 version = "0.0.1"
 description = "ERPClaw folder email connector: writes .eml files instead of sending"
 license = "GPL-3.0-only"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = ["erpclaw-core"]
 
 [project.entry-points."erpclaw.plugins"]

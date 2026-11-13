@@ -122,6 +122,24 @@ def account_by_type(ctx: Ctx, account_type: str) -> dict:
     raise Refusal(f"{ctx.company_name} has no {words} account.", f"no_{account_type}_account")
 
 
+def cash_account(ctx: Ctx) -> dict:
+    """Cash is identified by its normalised name, never by the bank role or account number."""
+    rows = ctx.conn.execute(select(m.account).where(
+        m.account.c.company_id == ctx.company_id, m.account.c.is_group.is_(False))
+        .order_by(m.account.c.number)).mappings().all()
+    rows = [r for r in rows if " ".join(r["name"].split()).lower() == "cash on hand"]
+    live = [r for r in rows if not r["frozen"]]
+    if len(live) == 1:
+        return dict(live[0])
+    if live:
+        names = ", ".join(f"{r['number']} {r['name']}" for r in live)
+        raise Refusal(f"{ctx.company_name} has more than one Cash on Hand account: {names}; say which one.",
+                      "several_cash_accounts")
+    if rows:
+        raise Refusal(f"{rows[0]['number']} {rows[0]['name']} is frozen.", "frozen_account")
+    raise Refusal(f"{ctx.company_name} has no Cash on Hand account.", "no_cash_account")
+
+
 def _for_update(ctx: Ctx, query):
     return query.with_for_update()
 
@@ -387,7 +405,7 @@ def _check_opening_order(ctx: Ctx, posting_date: date, voucher_type: str, lines:
 
 
 def check_post(ctx: Ctx, posting_date: date, voucher_type: str, voucher_id: str | None,
-               lines: list[Line]) -> list[Line]:
+               lines: list[Line], *, _opening_preview: bool = False) -> list[Line]:
     """Every refusal `post` can raise before its first write, without writing and without a lock, so a preview can
     refuse a card for a posting the books would refuse. `voucher_id` None is a
     document not yet created (an invoice created and submitted in one card): it cannot already be in the books, so
@@ -398,7 +416,10 @@ def check_post(ctx: Ctx, posting_date: date, voucher_type: str, voucher_id: str 
     clean = _check_lines(ctx, lines)
     from .payables import check_payable_source
 
-    check_payable_source(ctx, voucher_type, clean)
+    if _opening_preview and voucher_type == OPENING:
+        check_payable_source(ctx, voucher_type, clean, preview=True)
+    else:
+        check_payable_source(ctx, voucher_type, clean)
     _check_opening_order(ctx, posting_date, voucher_type, clean)
     from .integration import account_codes, system_of_record
 

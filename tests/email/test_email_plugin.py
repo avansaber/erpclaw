@@ -25,9 +25,9 @@ def test_the_manifest():
     assert (mf.name, mf.distribution, mf.licence) == ("email", "erpclaw-email", "GPL-3.0-only")
     assert set(mf.slots) == {"send_message", "message_sender"}
     assert all(d.cardinality == "one" for d in mf.slots.values())
-    assert mf.contracts == {} and mf.owned_tables == [] and mf.metrics == []
+    assert mf.contracts == {"update_email_sender": "write"} and mf.owned_tables == ["email_sender"] and mf.metrics == []
     assert mf.after_core_revision == "0009"
-    assert erpclaw_email.PLUGIN.kind == "connector" and erpclaw_email.PLUGIN.contracts == []
+    assert erpclaw_email.PLUGIN.kind == "connector" and [(c.name, c.planned) for c in erpclaw_email.PLUGIN.contracts] == [("update_email_sender", None)]
 
 
 def test_it_loads_beside_the_folder_connector():
@@ -37,9 +37,17 @@ def test_it_loads_beside_the_folder_connector():
     assert set(r.slots["send_message"]) == {"email"} and set(r.slots["message_sender"]) == {"email"}
 
 
-def test_the_sender_slot_refuses_until_a_sender_is_set_up():
-    with pytest.raises(Refusal) as e:
-        erpclaw_email.PLUGIN.slots["message_sender"](None)
+def test_the_sender_slot_refuses_until_a_sender_is_set_up(engine):
+    from erpclaw_core.common import company_ctx
+
+    with engine.begin() as conn:
+        uninstall_plugin(conn, "email_folder")
+    install_plugin(engine, "email")
+    with engine.connect() as conn:
+        ctx = company_ctx(conn)
+        assert conn.execute(select(erpclaw_email.tables.email_sender)).first() is None
+        with pytest.raises(Refusal) as e:
+            erpclaw_email.PLUGIN.slots["message_sender"](ctx)
     assert str(e.value) == "No email account is set up for this company." and e.value.code == "no_email_sender"
 
 

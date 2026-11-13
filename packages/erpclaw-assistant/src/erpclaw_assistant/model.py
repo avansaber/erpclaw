@@ -16,9 +16,57 @@ from __future__ import annotations
 import json
 import os
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Protocol
+from typing import Callable, Protocol
+
+from erpclaw_core.common import Refusal
+
+TURN_TIMEOUT_TEXT = "This turn took too long. Please try again or ask for something smaller."
+_turn_remaining: ContextVar[Callable[[], float | None] | None] = ContextVar("turn_remaining", default=None)
+
+
+def check_turn_budget(remaining: float | None) -> float | None:
+    if remaining is not None and remaining <= 0:
+        raise Refusal(TURN_TIMEOUT_TEXT, "turn_timeout")
+    return remaining
+
+
+@contextmanager
+def turn_budget(remaining: Callable[[], float | None]):
+    """Bind this call's budget without changing a shared model or HTTP client."""
+    token = _turn_remaining.set(remaining)
+    try:
+        check_turn_budget(remaining())
+        yield
+    finally:
+        _turn_remaining.reset(token)
+
+
+def _remaining_budget() -> float | None:
+    remaining = _turn_remaining.get()
+    return check_turn_budget(remaining()) if remaining else None
+
+
+def request_timeout(timeout) -> dict:
+    """Recompute the cap for every HTTP attempt, including the one retry."""
+    import httpx
+
+    remaining = _remaining_budget()
+    if remaining is None:
+        return {}
+    limits = {key: min(value, remaining) if value is not None else remaining
+              for key, value in httpx.Timeout(timeout).as_dict().items()}
+    return {"timeout": httpx.Timeout(**limits)}
+
+
+def retry_sleep(sleep: Callable[[float], None], seconds: float) -> None:
+    """A retry wait consumes the same budget; an expired request never retries."""
+    remaining = _remaining_budget()
+    sleep(seconds if remaining is None else min(seconds, remaining))
+    _remaining_budget()
 
 THINK_BLOCK = re.compile(r"<think>.*?</think>", re.S)
 TOOL_CALL_TEXT = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.S)
@@ -160,6 +208,8 @@ class OpenAICompatModel:
         else:
             from .profiles import ProfileError, read_key
 
+            if profile.backend == "claude":
+                raise ProfileError("The claude model adapter is not available yet.")
             self.backend, self.hosted, self.hosted_books = profile.backend, profile.hosted, profile.hosted_books
             self.base_url, self.name, self.max_tokens = profile.base_url, profile.model, profile.max_tokens
             self.thinking = bool(profile.reasoning.get("enabled", False)) if profile.backend == "lmstudio" else False
@@ -199,33 +249,68 @@ class OpenAICompatModel:
         body, headers = self._extensions()
         kw = dict(model=self.name, messages=messages, tools=tools or None, temperature=self.temperature,
                   max_tokens=self.max_tokens, extra_body=body or None, extra_headers=headers or None)
+        parameters = self.profile.parameters if self.profile is not None else {}
+        if "temperature" in parameters.get("omit", []):
+            del kw["temperature"]
+        if parameters.get("rename"):
+            kw[parameters["rename"]["max_tokens"]] = kw.pop("max_tokens")
         create = self.client.chat.completions.with_raw_response.create  # the raw body keeps the cost exact
         if not self.hosted:  # the local route as before: a failure is the server's own error
-            return create(**kw)
-        for attempt in (1, 2):
             try:
-                return create(**kw)
+                return create(**kw, **request_timeout(self.client.timeout))
+            except (openai.APITimeoutError, openai.APIConnectionError):
+                _remaining_budget()
+                raise
+        single_attempt = bool(self.profile is not None and self.profile.new_route)
+        for attempt in ((1,) if single_attempt else (1, 2)):
+            try:
+                return create(**kw, **request_timeout(self.client.timeout))
             except openai.APIStatusError as e:
-                if e.status_code in RETRY and attempt == 1:
-                    self._sleep(1.0)
+                if e.status_code in RETRY and attempt == 1 and not single_attempt:
+                    retry_sleep(self._sleep, 1.0)
                     continue
                 self.usage.append({"statuses": [e.status_code], "native_calls": 0, "reasoning_tokens": None,
                                    "prompt_tokens": None, "completion_tokens": None, "cost": None, "served_by": None})
+                if single_attempt and e.status_code in (400, 422):
+                    from . import hosted
+
+                    error = e.body if isinstance(e.body, dict) else {}
+                    label = hosted.check(e.body)
+                    if label:
+                        hosted._record(self.usage, label)
+                    declared = set(parameters.get("omit", [])) | set(parameters.get("rename", {}))
+                    declared.update(parameters.get("rename", {}).values())
+                    declared.update({"temperature", "max_tokens"} & kw.keys())
+                    param = error.get("param")
+                    if not label and isinstance(param, str) and param in declared:
+                        raise Refusal(f"The model refused the {param} setting; no second request was sent.",
+                                      "model_refused") from None
+                    raise Refusal("The model refused a setting in the request; no second request was sent.",
+                                  "model_refused") from None
                 if e.status_code == 404:  # fallbacks are off: no endpoint matched the pins
                     raise Refusal("No provider in this profile's pins can take this request (its data policy, "
                                   "quantization, or the tools the request needs). Nothing was sent elsewhere and "
                                   "nothing was saved.", "model_refused") from None
+                if e.status_code == 429:
+                    raise Refusal("The model service is busy right now.", "model_rate_limited") from None
                 if e.status_code in RETRY:
                     raise Refusal("The hosted model is unavailable right now. Nothing was saved.",
                                   "model_unavailable") from None
                 raise Refusal(f"The hosted model refused the request ({e.status_code}). Nothing was saved.",
                               "model_refused") from None
             except (openai.APITimeoutError, openai.APIConnectionError):
-                if attempt == 1:
-                    self._sleep(1.0)
+                if single_attempt:
+                    self.usage.append({"statuses": [504], "native_calls": 0, "reasoning_tokens": None,
+                                       "prompt_tokens": None, "completion_tokens": None, "cost": None,
+                                       "served_by": None})
+                _remaining_budget()
+                if attempt == 1 and not single_attempt:
+                    retry_sleep(self._sleep, 1.0)
                     continue
-                self.usage.append({"statuses": [504], "native_calls": 0, "reasoning_tokens": None,
-                                   "prompt_tokens": None, "completion_tokens": None, "cost": None, "served_by": None})
+                if not single_attempt:
+                    self.usage.append({"statuses": [504], "native_calls": 0, "reasoning_tokens": None,
+                                       "prompt_tokens": None, "completion_tokens": None, "cost": None,
+                                       "served_by": None})
                 raise Refusal("The hosted model is unavailable right now. Nothing was saved.",
                               "model_unavailable") from None
 
@@ -240,27 +325,52 @@ class OpenAICompatModel:
         msg = choice.message
         u = resp.usage
         det = getattr(u, "completion_tokens_details", None) if u else None
-        cost = _exact_cost(raw.text)
+        cost = None if self.backend == "openai" else _exact_cost(raw.text)
         served_by, served_model = _served(getattr(resp, "model_extra", None) or {})
-        self.usage.append({"reasoning_tokens": getattr(det, "reasoning_tokens", None),
-                           "prompt_tokens": getattr(u, "prompt_tokens", None),
-                           "completion_tokens": getattr(u, "completion_tokens", None),
+        if self.backend == "openai" and served_model is None:
+            served_model = getattr(resp, "model", None)
+        def count(value):
+            return value if type(value) is int and value >= 0 else None
+
+        entry = {"reasoning_tokens": count(getattr(det, "reasoning_tokens", None)),
+                           "prompt_tokens": count(getattr(u, "prompt_tokens", None)),
+                           "completion_tokens": count(getattr(u, "completion_tokens", None)),
                            "cost": cost,
-                           "served_by": served_by, "served_model": served_model,
-                           "native_calls": len(msg.tool_calls or [])})
+                           "served_by": None, "served_model": None,
+                           "native_calls": len(msg.tool_calls or [])}
+        self.usage.append(entry)
         native = [(tc.id, tc.function.name, tc.function.arguments) for tc in (msg.tool_calls or [])]
         extra_fields = getattr(msg, "model_extra", None) or {}
         reasoning = extra_fields.get("reasoning_content") or extra_fields.get("reasoning")
-        return clean_reply(msg.content, native, choice.finish_reason or "", reasoning)
+        reply = clean_reply(msg.content, native, choice.finish_reason or "", reasoning)
+        from . import hosted
+
+        screened = {"text": reply.text, "finish": reply.finish, "reasoning_as_answer": reply.reasoning_as_answer,
+                    "text_calls": reply.text_calls,
+                    "calls": [{"id": c.id, "name": c.name, "raw": c.raw, "error": c.error,
+                               "args_json": None if c.args is None else json.dumps(c.args, default=str)}
+                              for c in reply.calls], "served_by": served_by, "served_model": served_model}
+        refused = hosted.refused_input(self, json.dumps(screened, default=str))
+        if refused:
+            raise Refusal(refused["text"], refused["code"])
+        entry["served_by"], entry["served_model"] = served_by, served_model
+        return reply
 
 
 def _served(extra: dict) -> tuple[str | None, str | None]:
     """The provider that served a reply and the model id it served, as OpenRouter names them: the reply's own top-level
     provider, else the endpoint its metadata marks selected. (None, None) from a server that names neither."""
-    endpoints = ((extra.get("openrouter_metadata") or {}).get("endpoints") or {}).get("available") or []
+    metadata = extra.get("openrouter_metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    endpoints = metadata.get("endpoints")
+    endpoints = endpoints if isinstance(endpoints, dict) else {}
+    endpoints = endpoints.get("available")
+    endpoints = endpoints if isinstance(endpoints, list) else []
     chosen = next((e for e in endpoints if isinstance(e, dict) and e.get("selected") is True), {})
     provider = extra.get("provider") if isinstance(extra.get("provider"), str) else None
-    return provider or chosen.get("provider"), chosen.get("model")
+    selected_provider, selected_model = chosen.get("provider"), chosen.get("model")
+    return (provider or (selected_provider if isinstance(selected_provider, str) else None),
+            selected_model if isinstance(selected_model, str) else None)
 
 
 def _exact_cost(body: str) -> Decimal | None:

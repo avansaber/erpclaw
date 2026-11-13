@@ -19,6 +19,7 @@ import pytest
 from sqlalchemy import select, update
 
 from bookdiff import changes, snapshot
+from core_writes.scenarios import MONEY_SCENARIOS, opening_position_value_problems, stored_opening_position
 from erpclaw_core import approvals, models as m
 from erpclaw_core.contracts import moves_money
 from erpclaw_core.plugins import REGISTRY
@@ -119,7 +120,15 @@ def _order_number(engine):
         return conn.execute(select(t.order.c.number).where(t.order.c.operation_key == out.operation_key)).scalar_one()
 
 
+from test_supplier_payment_reversal_contract import (
+    supplier_reversal_scenario, delivery_reversal_scenario, stored_reversal, reversal_value_problems,
+)
+REVERSAL_SCENARIOS = {"reverse_supplier_payment": supplier_reversal_scenario,
+                      "reverse_goods_received": delivery_reversal_scenario}
+
+
 SCENARIOS = {  # each sets up the books, and returns the card's arguments
+    "record_opening_position": lambda e: MONEY_SCENARIOS["record_opening_position"](None, e)[0],
     "create_invoice": lambda e: {"customer": "Acme Corporation", **LINES},
     "submit_invoice": lambda e: {"invoice": _invoice_number(e, submit=False)},
     "record_payment": lambda e: (_earlier_credit(e, "300.25"), _invoice_number(e, submit=True),
@@ -175,6 +184,7 @@ MASTER_STOCK_SCENARIOS = {
     "cancel_stock_movement": _cancel_stock_scenario,
 }
 SCENARIOS.update(MASTER_STOCK_SCENARIOS)
+SCENARIOS.update(REVERSAL_SCENARIOS)
 
 
 def _stock_entries(conn, voucher_id: str) -> list[tuple[Decimal, Decimal, Decimal]]:
@@ -186,6 +196,10 @@ def _stock_entries(conn, voucher_id: str) -> list[tuple[Decimal, Decimal, Decima
 
 
 def _stored(engine, contract, args, out, before) -> dict:
+    if contract == "record_opening_position":
+        return stored_opening_position(engine, out, before)
+    if contract in REVERSAL_SCENARIOS:
+        return stored_reversal(engine, args, out, before)
     if contract in MASTER_STOCK_SCENARIOS:
         return _stored_master_stock(engine, contract, args, out, before)
     """What the commit stored, read from the books: the document, its lines, the allocations, the new ledger entries."""
@@ -242,6 +256,10 @@ def _stored(engine, contract, args, out, before) -> dict:
 
 
 def problems(contract: str, card: dict, texts: list[str], stored: dict) -> list[str]:
+    if contract == "record_opening_position":
+        return opening_position_value_problems(card, texts, stored)
+    if contract in REVERSAL_SCENARIOS:
+        return reversal_value_problems(contract, card, texts, stored)
     if contract in MASTER_STOCK_SCENARIOS:
         return _master_stock_problems(contract, card, texts, stored)
     """Each shown value against the stored value it stands for; an empty list when every one is exact."""

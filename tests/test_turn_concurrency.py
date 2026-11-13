@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from erpclaw_assistant import store
 from erpclaw_assistant.graph import Assistant
 from erpclaw_assistant.model import Reply, ScriptedModel, call
+from erpclaw_core import principals as pr
 from erpclaw_core import approvals
 from erpclaw_core import models as m
 
@@ -156,6 +157,8 @@ def test_a_takeover_that_keeps_the_request_open_still_fences_the_stalled_turn_ou
 def test_the_busy_reply_says_working_while_the_holder_renews_and_stopped_after(engine, monkeypatch):
     """Chosen from the holder's last recorded renewal, on an injected clock: within STALLED_AFTER the turn is still
     working; beyond it (and before the lease lapses) it stopped partway, and nothing was saved."""
+    with engine.connect() as conn:
+        claimant = pr.owner(conn)
     from datetime import datetime, timezone
 
     from erpclaw_assistant.resolve import _say
@@ -164,7 +167,8 @@ def test_the_busy_reply_says_working_while_the_holder_renews_and_stopped_after(e
     clock = [t0]
     monkeypatch.setattr(store, "_now", lambda: clock[0])
     assert store.STALLED_AFTER < store.LEASE
-    holder = store.claim("c1", "an earlier message", turn_id="another-turn")
+    holder = store.claim("c1", "an earlier message", turn_id="another-turn",
+                         principal_id=claimant["id"], principal_name=claimant["name"])
     idle = Assistant(engine, ScriptedModel([]))
 
     def busy_text():

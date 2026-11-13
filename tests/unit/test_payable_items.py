@@ -163,9 +163,20 @@ def test_missing_role_is_not_created(world, monkeypatch):
 
 
 @pytest.mark.parametrize("source", p.PAYABLE_SOURCES)
-def test_matching_frozen_source_allowlist_needs_no_role_query(world, source):
+def test_matching_frozen_source_allowlist_needs_no_role_query(world, source, monkeypatch):
+    if source == p.OPENING:
+        with pytest.raises(Refusal) as exc:
+            p.check_payable_source(world.ctx, source, [ledger.Line("ap", credit=D(1), party_id="supplier")])
+        assert exc.value.code == "payable_source_not_allowed" and world.conn.writes == []
+        assert len(world.conn.queries) == 1
+        world.conn.queries.clear()
+        world.conn.card.contract = "record_opening_position"
+        monkeypatch.setitem(REGISTRY.contract_plugin, "record_opening_position", "core")
+        world.authority.wrap(monkeypatch, p, "check_payable_source")
     p.check_payable_source(world.ctx, source, [ledger.Line("ap", credit=D(1), party_id="supplier")])
-    assert world.conn.queries == [] and world.conn.writes == []
+    assert [next(iter(q.selected_columns)).table.name for q in world.conn.queries] == (
+        ["approval"] if source == p.OPENING else [])
+    assert world.conn.writes == []
 
 
 def test_source_allowlist_matches_frozen0015_without_importing_migration():
@@ -173,7 +184,8 @@ def test_source_allowlist_matches_frozen0015_without_importing_migration():
     tree = ast.parse(path.read_text())
     definition = next(n.value for n in tree.body if isinstance(n, ast.Assign)
                       and any(isinstance(t, ast.Name) and t.id == "PAYABLE_SOURCES" for t in n.targets))
-    assert p.PAYABLE_SOURCES == ast.literal_eval(definition)
+    assert (p.ITEM_SOURCES == ("stock_goods_received", "opening")
+            and p.PAYABLE_SOURCES == ("opening", *ast.literal_eval(definition)))
 
 
 @pytest.mark.parametrize("source", ["journal", "opening", "stock_receipt"])
@@ -270,7 +282,7 @@ def test_open_items_is_scoped_ordered_and_filters_payment_date_without_writes(wo
     assert len(p.open_items(world.ctx, "supplier")) == 2
     q = world.conn.queries[0]
     assert params(q) == {"company_id_1": "co", "supplier_id_1": "supplier", "status_1": ["open"]}
-    assert "ORDER BY supplier_payable.posting_date, supplier_payable.source_number, supplier_payable.id" in str(q)
+    assert "ORDER BY supplier_payable.posting_date, supplier_payable.source_number, supplier_payable.opening_sequence, supplier_payable.id" in str(q)
     assert world.conn.writes == []
 
 

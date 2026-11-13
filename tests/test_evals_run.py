@@ -25,17 +25,18 @@ CARD = [{"type": "card", "approval_id": "a", "digest": "d", "card": {"title": "I
                                                                       "warnings": []}}]
 
 
-# A choice the engine asks (not a confirm), as a payment with several open invoices will: the grading of that kind,
-# kept for the payment cases, which stay planned until payments are released.
+# A choice the engine asks (not a confirm), as a payment with several open invoices will.
 WHICH_CASE = Case("X1", "record a payment of 500 from Pied Piper", "ask", ask_code="invoice_ambiguous",
                   expect=["INV-2026-00003", "INV-2026-00006", "oldest first"])
 
 
 def test_the_changed_cases_and_their_reasons():
     got = {i: BY_ID[i].kind for i in ("W1", "P1", "W4", "P4", "W5", "P6", "P5")}
-    assert got == {"W1": "confirm", "P1": "confirm", "W4": "planned", "P4": "planned", "W5": "confirm",
+    assert got == {"W1": "confirm", "P1": "confirm", "W4": "ask", "P4": "ask", "W5": "confirm",
                    "P6": "confirm", "P5": "write"}
-    assert BY_ID["W4"].expect == ["not in ERPClaw yet"] and BY_ID["W4"].ask_code is None
+    for i in ("W4", "P4"):
+        assert BY_ID[i].expect == ["INV-2026-00003", "INV-2026-00006", "oldest first"]
+        assert BY_ID[i].ask_code == "invoice_ambiguous"
     for i in ("W1", "P1", "W4", "P4", "W5", "P6"):
         assert BY_ID[i].reason.startswith("2026-10-29: ") and " -> " in BY_ID[i].reason, i
     assert not BY_ID["P5"].reason and BY_ID["P5"].card_must == ["Hooli", "500 x Copper Wire", "14,000.00"]
@@ -48,10 +49,12 @@ def test_each_passes_on_the_engines_own_first_turn(case, events):
     assert grade_reply(BY_ID[case], events) is None
 
 
-def test_a_payment_case_passes_on_the_planned_reply_and_the_choice_on_its_question():
-    planned = [{"type": "answer", "outcome": "c", "text": "Record payment is not in ERPClaw yet: it is planned for the "
-                                                           "core release."}]
-    assert grade_reply(BY_ID["W4"], planned) is None and grade_reply(BY_ID["P4"], planned) is None
+def test_payment_cases_pass_on_the_question_and_fail_on_the_planned_reply():
+    planned = [{"type": "answer", "outcome": "c", "text": "Record payment is not in ERPClaw yet."}]
+    for i in ("W4", "P4"):
+        assert grade_reply(BY_ID[i], WHICH) is None
+        assert grade_reply(BY_ID[i], planned) is not None
+        assert grade_reply(BY_ID[i], CARD + WHICH) == "an approval card was produced for a question"
     assert grade_reply(WHICH_CASE, WHICH) is None
 
 

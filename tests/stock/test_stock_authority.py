@@ -91,7 +91,7 @@ def test_the_trusted_path_writes_and_runs_its_comparison(stocked):
         out = stock.issue(ctx, "sales_invoice", "inv-t", WHEN, [{"item": stocked["item"],
                                                                  "warehouse": stocked["warehouse"], "qty": "1"}],
                           trusted=trusted)
-        assert out["lines"] == [{"cost": "2.00"}] and not ctx.checks  # nothing registered on the context
+        assert out["lines"] == [{"cost": "2.00", "currency": "USD"}] and not ctx.checks  # nothing registered on the context
         assert len(trusted.checks) == 1
         with pytest.raises(Refusal) as caught:  # its posting was never made: the comparison refuses
             trusted.verify(ctx)

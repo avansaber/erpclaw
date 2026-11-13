@@ -240,8 +240,13 @@ def test_books_record_versions_and_both_digests(engine):
 def test_books_do_not_open_when_a_plugin_changed(engine, column, what):
     with engine.begin() as conn:
         conn.execute(m.plugin_install.update().where(m.plugin_install.c.name == "sales").values({column: "0" * 20}))
-    with pytest.raises(BooksRefused, match=f"different {what}"):
+    with pytest.raises(BooksRefused) as caught:
         check_installed(engine)
+    recorded = "0" * 20 if column == "version" else REGISTRY.plugins["sales"].version
+    assert str(caught.value) == (f"These books were set up with plugin sales {recorded}; this engine has "
+                                 f"{REGISTRY.plugins['sales'].version} with a different {what}. "
+                                 "An update for existing books is not available yet, so these books need "
+                                 "the engine version they were set up with. Nothing was changed.")
 
 
 def test_a_code_change_with_the_same_version_and_manifest_refuses_the_books(engine, tmp_path):
@@ -454,3 +459,10 @@ def test_lifecycle_functions_check_the_books_first(engine):
                 fn(conn, "email_folder")
     with pytest.raises(BooksRefused, match="different code"):
         install_plugin(engine, "email_folder")
+
+
+def test_plugin_refusals_never_advise_init_force():
+    from pathlib import Path
+    import erpclaw_core.plugins as plugins
+
+    assert "init --force" not in Path(plugins.__file__).read_text()

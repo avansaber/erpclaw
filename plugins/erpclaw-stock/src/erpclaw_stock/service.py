@@ -405,7 +405,8 @@ def ledger_lines(ctx: Ctx, moves: list[Move], *, srnb: bool = False) -> list[dic
         if net.get(a, ZERO) != 0:
             amount = abs(net[a])
             out.append({"account": a, "debit": money_text(amount if net[a] > 0 else ZERO, ctx.currency),
-                        "credit": money_text(amount if net[a] < 0 else ZERO, ctx.currency)})
+                        "credit": money_text(amount if net[a] < 0 else ZERO, ctx.currency),
+                        "currency": ctx.currency})
     return out
 
 
@@ -607,7 +608,7 @@ def _move_head(ctx: Ctx, p: Pair, seq: int, mv: Move, posting_date: date) -> Non
 
 def _cost_line(ctx: Ctx, mv: Move) -> dict:
     """An issue line's cost; a zero cost carries its note for the card: less than the currency's smallest unit."""
-    line = {"cost": money_text(mv.value, ctx.currency)}
+    line = {"cost": money_text(mv.value, ctx.currency), "currency": ctx.currency}
     if mv.value == 0:
         line["card_note"] = f"less than {smallest_unit(ctx.currency)}"
     return line
@@ -685,6 +686,7 @@ def preview_return(ctx: Ctx, posting_date: date, voucher_id: str, line_no: int, 
     original = original_issue(ctx, voucher_id, line_no)
     mv = _return_move(ctx, original, posting_date, qty, lock=False)
     return {"cost": money_text(mv.value, ctx.currency), "ledger_lines": ledger_lines(ctx, [mv]),
+            "currency": ctx.currency,
             "read_set": sorted({("stock_head", mv.pair.head["id"]), ("stock_ledger_entry", original["id"])})}
 
 
@@ -697,7 +699,8 @@ def return_in(ctx: Ctx, voucher_type: str, voucher_id: str, posting_date: date, 
     out = ledger_lines(ctx, [mv])
     eid = _entry_id(ctx, mv, posting_date, voucher_type, voucher_id)
     contribute(ctx, ("voucher", voucher_type, voucher_id), lines_net(out), trusted)
-    return {"cost": money_text(mv.value, ctx.currency), "ledger_lines": out, "entry_id": eid}
+    return {"cost": money_text(mv.value, ctx.currency), "currency": ctx.currency,
+            "ledger_lines": out, "entry_id": eid}
 
 
 # ---------------------------------------------------------------- receipts (the stock plugin's own voucher)
@@ -730,7 +733,8 @@ def receive(ctx: Ctx, voucher_id: str, item_id: str, warehouse_id: str, qty: obj
     ledger.check_post(ctx, posting_date, "stock_receipt", voucher_id, lines)  # validate the whole posting
     eid = _entry_id(ctx, mv, posting_date, "stock_receipt", voucher_id)
     ledger.post(ctx, posting_date, "stock_receipt", voucher_id, lines)
-    return {"value": money_text(mv.value, ctx.currency), "ledger_lines": out, "entry_id": eid}
+    return {"value": money_text(mv.value, ctx.currency), "currency": ctx.currency,
+            "ledger_lines": out, "entry_id": eid}
 
 
 # ---------------------------------------------------------------- reversal
@@ -800,7 +804,7 @@ def _contribution(ctx: Ctx, moves: list[Move]) -> list[dict]:
             cogs = cogs or role_account(ctx, "cost_of_goods_sold")
             net[cogs] = net.get(cogs, ZERO) - value
     order = ([cogs] if cogs else []) + [account for account in net if account != cogs]
-    return [{"account": account, "net": money_text(net[account], ctx.currency)}
+    return [{"account": account, "net": money_text(net[account], ctx.currency), "currency": ctx.currency}
             for account in order if net[account] != 0]
 
 
@@ -811,7 +815,7 @@ def stock_inventory(ctx: Ctx) -> set[str]:
 def _mirror_entry(mv: Move, ctx: Ctx) -> dict:
     return {"item": mv.pair.item["item_id"], "warehouse": mv.pair.wh["id"], "direction": mv.direction,
             "qty": qty_text(mv.qty), "value": money_text(mv.value, ctx.currency), "qty_after": qty_text(mv.qty_after),
-            "value_after": money_text(mv.value_after, ctx.currency)}
+            "value_after": money_text(mv.value_after, ctx.currency), "currency": ctx.currency}
 
 
 def _require_delivery_reversal(ctx: Ctx, voucher_type: str, voucher_id: str) -> None:
@@ -862,7 +866,7 @@ def stock_on_hand(ctx: Ctx, item_id: str, warehouse_id: str | None = None) -> di
     for w in whs:
         qty, value = on_hand(ctx, item_id, w["id"])
         out.append({"warehouse": w["id"], "name": w["name"], "qty": qty_text(qty),
-                    "value": money_text(value, ctx.currency)})
+                    "value": money_text(value, ctx.currency), "currency": ctx.currency})
     return {"warehouses": out}
 
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import re
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -21,14 +21,17 @@ from erpclaw_core import approvals
 from erpclaw_core import principals as pr
 from erpclaw_core import catalogue as cat
 from erpclaw_core import models as m
+from erpclaw_core.masters import find_customer, find_item, find_supplier
+from erpclaw_core.money import fmt_qty, fmt_rate
 from erpclaw_core.common import Refusal, company_ctx, is_question, public_data, today
-from erpclaw_core.contracts import check_answer, planned_capability, planned_reply
+from erpclaw_core.contracts import Shown, _figure, _shown as _shown_amount, check_answer, planned_capability, planned_reply
 from erpclaw_core.core_contracts import SETUP
 from erpclaw_core.db import read_only
 from erpclaw_core.plugins import REGISTRY, enabled_plugins, ensure_enabled, operation_enabled
 
 from . import hosted, resolve, store
-from .model import Model, Reply
+from .resolve_payment import payment_display_purpose
+from .model import Model, Reply, TURN_TIMEOUT_TEXT, check_turn_budget, turn_budget
 from .resolve import (Planned, Session, account, one_at_a_time, owner_order, reply_peers, resolve_args,
                       strict_customers, with_codes, write_intents, write_scopes)
 from .resolve import _say as say
@@ -41,12 +44,271 @@ RECORD = re.compile(r"\b[A-Z]{2,4}-\d{4}-\d+\b")  # a document's number, checked
 LIST_MARKER = re.compile(r"^\s*\d+[.)]\s", re.M)
 
 
-def _reply_dict(r: Reply) -> dict:
-    return {"text": r.text, "finish": r.finish, "reasoning_as_answer": r.reasoning_as_answer,
+def _record_count_spans(text, operation):
+    suffix = resolve.table()["record_count_suffix"].get(operation)
+    if not suffix:
+        return []
+    numbers = [w for w, value in resolve.table()["quantity"].items() if value > 1]
+    components = set(numbers) | set(resolve.table()["scales"]) | set(resolve.table()["number_and"])
+    components.add(next(w for w, value in resolve.table()["quantity"].items() if value == 1 and w not in resolve.table()["articles"]))
+    word = r"(?:" + "|".join(map(re.escape, sorted(components, key=len, reverse=True))) + r")"
+    number = r"(?:[2-9]|[1-9]\d+|" + word + r"(?:[\s-]+" + word + r")*)"
+    counts = list(re.finditer(rf"\b({number})\s+{suffix}", text, re.I))
+    references = []
+    for count in counts:
+        pattern = resolve.table()["record_count_reference"].format(number=re.escape(count.group(1)))
+        reference = re.search(pattern, text[:count.start(1)], re.I)
+        if reference:
+            references.append(reference)
+    return sorted(counts + references, key=lambda match: match.start(1))
+
+
+def _none_reply(named):
+    actions = []
+    for entry, _ in named:
+        if entry.state != "installed" or entry.kind not in ("operation", "metric"):
+            continue
+        contract = REGISTRY.contracts.get(entry.target) if entry.kind == "operation" else None
+        action = contract.plain if contract and contract.plain else entry.name
+        if entry.kind == "metric":
+            action = say("none_found_metric", name=action)
+        if action not in actions:
+            actions.append(action)
+    parts = []
+    if actions:
+        joined = actions[0] if len(actions) == 1 else ", ".join(actions[:-1]) + " or " + actions[-1]
+        parts.append(say("none_found_actions", actions=joined))
+    return " ".join(parts)
+
+
+def _tax_next_step(engine, writes, session, request, mixed):
+    """Offer a next step only when a tax-free version resolves and previews without omissions."""
+    if len(writes) != 1 or len(session.owner_messages) != 1 or mixed:
+        return None
+    _, contract, args = writes[0]
+    if contract.name not in ("create_invoice", "submit_invoice"):
+        return None
+    # Remove only a complete, trailing tax instruction; otherwise keep the plain refusal.
+    suffix = re.search(r"\s+(?:and\s+add|with|plus)\s+(?:\d+(?:\.\d+)?%\s*)?(?:sales\s+)?tax\s*[.!]?$", request, re.I)
+    if not suffix:
+        return None
+    clean = request[:suffix.start()]
+    msg = dict(session.owner_messages[0], text=clean, spans=[], completed=False)
+    trial = Session(owner_messages=[msg])
+    try:
+        with read_only(engine) as conn:
+            ctx = company_ctx(conn)
+            peers = reply_peers([(contract, args)])
+            scope = write_scopes(ctx, clean, [(contract, args)])[0]
+            result = resolve_args(ctx, contract, args, clean, trial, peers, scope, mixed=False)
+            strict_customers([(contract, result.args)], trial, [scope])
+            order = owner_order(ctx, clean, [(contract, result.args)])
+            account(ctx, clean, [(contract, result.args)], [result], order[0] if order else None, trial, [scope])
+            resolve.guard_messages(trial)
+            if result.not_done:
+                return None
+            validated = contract.input_model.model_validate(result.args)
+            contract.preview(ctx, validated)
+    except (Refusal, ValidationError):
+        return None
+    return say("tax_submit_next" if contract.name == "submit_invoice" or validated.submit else "tax_draft_next")
+
+
+def _model_label(model, key):
+    labels = resolve.table()["model_labels"]
+    kind = resolve.marks(model).get(key, {}).get("kind")
+    return resolve.table()["model_field_labels"].get(key, labels.get(kind, labels["default"]))
+
+
+def _model_value(model, key, value, currency):
+    """Render model disagreements using the contract's marks and owner language."""
+    mark = resolve.marks(model).get(key, {})
+    kind = mark.get("kind", resolve.table()["model_field_formats"].get(key, "default"))
+    if value is None:
+        return say("model_missing")
+    if isinstance(value, list) and not value:
+        return say("step_invoice_none")
+    if isinstance(value, bool):
+        return say("model_yes" if value else "model_no")
+    if isinstance(value, list) and key in model.model_fields:
+        line_model = resolve._line_model(model, key)
+        if line_model:
+            rows = []
+            for row in value:
+                if not isinstance(row, dict):
+                    continue
+                parts = [say("model_field", field=_model_label(line_model, name),
+                             value=_model_value(line_model, name, row[name], currency))
+                         for name in line_model.model_fields if name in row]
+                rows.append(say("model_list_join").join(parts))
+            return say("model_list_join").join(rows) or say("model_missing")
+    try:
+        if kind == "quantity":
+            return fmt_qty(value)
+        if kind == "figure":
+            return fmt_rate(value, currency)
+    except (ValueError, TypeError, InvalidOperation):
+        pass
+    if isinstance(value, (dict, list)):
+        return say("model_missing")
+    return str(value).translate(str.maketrans("", "", '{}[]"'))
+
+
+def _display_payment_purpose(engine, outcome, request: str) -> None:
+    if outcome.card is None:
+        return
+    with read_only(engine) as conn:
+        company_id = conn.execute(select(m.approval.c.company_id).where(
+            m.approval.c.id == outcome.approval_id)).scalar_one()
+        purpose = payment_display_purpose(company_ctx(conn, company_id=company_id), request)
+    if purpose:
+        outcome.card = {**outcome.card, "lines": [*outcome.card["lines"], ["Purpose (not saved)", purpose]]}
+
+
+def _recover_payment_purpose(engine, outcome, card: dict) -> None:
+    if card["contract"] != "record_payment" or not card.get("conversation_id"):
+        return
+    request = store.open_request(card["conversation_id"])
+    if not request or request.get("pending_card") not in {card["id"], outcome.approval_id}:
+        return
+    messages = [message["text"] for message in store.messages(request["id"])]
+    with read_only(engine) as conn:
+        ctx = company_ctx(conn, company_id=card["company_id"])
+        words = resolve.request_words(ctx, messages,
+                                      [(REGISTRY.contracts[card["contract"]], json.loads(card["args_json"]))])
+    _display_payment_purpose(engine, outcome, words)
+
+
+approvals.payment_purpose_recovery = _recover_payment_purpose
+
+
+def _short_step(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    head = text[:max(0, limit - 1)]
+    head = head.rsplit(" ", 1)[0] if " " in head else ""
+    return head.rstrip(" ,;.") + "…"
+
+
+def _bounded_steps(steps: list[dict]) -> list[dict]:
+    """Keep the earliest outcomes, cap sentences, then enforce compact JSON's UTF-8 byte bound."""
+    kept = [{"n": i, "asked": _short_step(s["asked"], 120), "returned": _short_step(s["returned"], 140)}
+            for i, s in enumerate(steps[:5], 1)]
+
+    def size():
+        return len(json.dumps(kept, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+
+    while len(kept) > 1 and size() > 2048:
+        kept.pop()
+    if kept:
+        for key in ("returned", "asked"):
+            while size() > 2048 and len(kept[0][key]) > 1:
+                kept[0][key] = _short_step(kept[0][key], len(kept[0][key]) - 1)
+        if size() > 2048:
+            return []
+    return kept
+
+
+def _attach_steps(events: list[dict], steps: list[dict] | None = None) -> list[dict]:
+    """Attach bounded turn steps only to answer/card events, before either return or persistence."""
+    out = []
+    for event in events:
+        if event.get("type") in ("answer", "card"):
+            bounded = _bounded_steps(steps if steps is not None else event.get("steps", []))
+            event = {k: v for k, v in event.items() if k != "steps"}
+            if bounded:
+                event["steps"] = bounded
+        out.append(event)
+    return out
+
+
+def _record_step(steps: list[dict], pair: tuple[str, str] | None) -> None:
+    if pair:
+        steps.append({"n": len(steps) + 1, "asked": pair[0], "returned": pair[1]})
+
+
+def _read_step(ctx, contract, inp, res) -> tuple[str, str] | None:
+    """Read only typed summaries; the metric's canonical scope is the sole permitted extra lookup."""
+    data = res.data
+    if contract.name == "list_invoices":
+        if not {"count", "customer_name"} <= data.keys() or type(data["count"]) is not int or data["count"] < 0:
+            return None
+        if data["customer_name"] is not None and not isinstance(data["customer_name"], str):
+            return None
+        amounts = {a.what: f"{Shown(a.currency).amount(Decimal(a.value))} {a.currency}"
+                   for a in res.amounts if a.what in contract.amounts and a.what in ("total", "outstanding")}
+        return resolve.step_text("list_invoices", status=inp.status, count=data["count"],
+                                 customer_name=data["customer_name"], **amounts)
+    if contract.name != "get_metric" or not {"metric", "value", "unit", "row_count", "rows"} <= data.keys():
+        return None
+    metric, value, unit, count, rows = (data[k] for k in ("metric", "value", "unit", "row_count", "rows"))
+    if (not isinstance(metric, str) or metric not in REGISTRY.metrics or unit not in ("money", "count")
+            or type(count) is not int or count < 0 or not isinstance(rows, list) or len(rows) > 5):
+        return None
+    if value is None and (count or rows):
+        return None
+
+    def figure(value):
+        if not isinstance(value, str) or not re.fullmatch(r"-?\d+(?:\.\d+)?", value):
+            raise ValueError("invalid typed figure")
+        number = Decimal(value)
+        if unit == "count":
+            if number != number.to_integral_value():
+                raise ValueError("invalid typed count")
+            return str(int(number))
+        return f"{Shown(ctx.currency).amount(number)} {ctx.currency}"
+
+    try:
+        shown = figure(value) if value is not None else None
+        shown_rows = []
+        for row in rows:
+            if not isinstance(row, dict) or set(row) != {"name", "value"} or not isinstance(row["name"], str):
+                return None
+            shown_rows.append((row["name"], figure(row["value"])))
+    except (ValueError, InvalidOperation):
+        return None
+    scope = resolve.metric_scope_name(ctx, inp.customer, inp.city)
+    return resolve.step_text("get_metric", metric=metric, label=REGISTRY.metrics[metric].title, scope=scope,
+                             scope_noun="the customer" if inp.customer is not None else "the city",
+                             value=shown, row_count=count, rows=shown_rows)
+
+
+def _write_step(contract, inp, card: dict | None, not_done: list[dict]) -> tuple[str, str] | None:
+    if card is None:
+        return None
+    if contract.name == SETUP:
+        return resolve.step_text(SETUP, drafted=True)
+    text = resolve.table()["text"]
+    operation = text["step_write_operations"].get(contract.name)
+    if not operation:
+        return None
+    # Only marked record fields resolved from the books, never new master text or document identifiers.
+    names, nouns = [], []
+    for field, mark in resolve.marks(contract.input_model).items():
+        if mark["kind"] in ("customer", "supplier", "item"):
+            name = getattr(inp, field, None)
+            if isinstance(name, str):
+                names.append(name)
+                nouns.append(f"the {mark['kind']}")
+    return resolve.step_text("write", operation=operation, names=names,
+                             name_noun=nouns[0] if len(nouns) == 1 else "the record",
+                             title=resolve.sanitise_name(card["title"], text["step_write_titles"][contract.name]),
+                             parts=[n.get("part") for n in not_done])
+
+
+def _reply_dict(r: Reply, model: Model | None = None, *, pending_card: bool = False) -> dict:
+    reply = {"text": r.text, "finish": r.finish, "reasoning_as_answer": r.reasoning_as_answer,
             "text_calls": r.text_calls,
             "calls": [{"id": c.id, "name": c.name, "raw": c.raw, "error": c.error,
                        "args_json": None if c.args is None else json.dumps(c.args, default=str)}
                       for c in r.calls]}
+    # A withheld reply ends the turn before routing, tool execution or storage; usage keeps only its label.
+    refused = hosted.refused_input(model, json.dumps(reply, default=str))
+    if refused:
+        raise Refusal(refused["text"], refused["code"])
+    if r.finish == "length" or (pending_card and not r.text.strip() and not r.calls and not r.text_calls):
+        raise Refusal("The answer was cut short before it finished.", "answer_interrupted")
+    return reply
 
 
 class Stopped(Exception):
@@ -55,6 +317,11 @@ class Stopped(Exception):
 
 class ReconciliationIncomplete(Exception):
     """An earlier version recorded an outcome without applying it; do not guess what was shown."""
+
+
+def _turn_expired(claim: store.Claim) -> bool:
+    remaining = store.turn_remaining(claim)
+    return remaining is not None and remaining <= 0
 
 
 def _checkpoint_resolution(engine: Engine, claim: store.Claim, request_id: str, resolution: dict) -> dict | None:
@@ -71,6 +338,7 @@ def _checkpoint_resolution(engine: Engine, claim: store.Claim, request_id: str, 
                               [c["label"] for c in question["choices"]], field=question["field"],
                               question_id=question["id"], span_id=question["span_id"], choices=question["choices"])
             try:
+                check_turn_budget(store.turn_remaining(claim))
                 out = approvals.set_aside(engine, claim.conversation_id, req["token"], pending["id"],
                                           question["text"], refusal)
             except Refusal as rf:
@@ -89,7 +357,9 @@ class State(TypedDict, total=False):
     conversation_id: str
     transcript: list                            # what the model sees before this turn: ended requests, the request
     request_text: str                           # every owner message of the current request, in order
+    previous_reads_only: bool                   # previous open turn made only read calls
     message_text: str                           # this turn's own message
+    mixed: bool                                 # both intents in the original message, before any filtering
     messages: list                              # the request's owner messages an answer did not consume, in order
     engine_text: str                            # the figures the engine produced earlier in the request, as text
     answered: bool                              # this turn's message answered the pending question
@@ -97,12 +367,14 @@ class State(TypedDict, total=False):
     pending_contract: str | None                # the operation of the request's pending card, if one is pending
     pending_args: str | None                    # that card's stored arguments (JSON), for the engine's re-proposal
     pending_card: str | None                    # that card's id: a new card replaces it only while it is pending
+    correction_from_calls: bool
     reproposed: dict | None                     # the arguments the engine re-proposed this turn, if it did
     request_id: str
     claim: object                               # the turn's claim on its conversation (store.Claim)
     token: str                                  # the request's card token, live in the books' fence
     turn: list                                  # this turn's model-facing messages
     events: list                                # this turn's output events
+    steps: list                                 # engine summaries in tool run order, never model prose
     grounding: list                             # figures the engine produced this turn
     requests: int
     reply: dict | None                          # {"text", "calls": [{"id","name","args_json","raw","error"}]}
@@ -173,7 +445,7 @@ def quoted(text: str, names: list[str]) -> str:
 
 FIND_TOOL = {"type": "function", "function": {
     "name": "find_capability",
-    "description": ("Search what ERPClaw can do, when none of the other tools clearly fits the request. "
+    "description": ("Search what ERPClaw can do. "
                     "Pass the owner's own words. Then call choose_capability."),
     "parameters": {"type": "object", "properties": {"request": {"type": "string"}}, "required": ["request"]}}}
 CHOOSE_TOOL = {"type": "function", "function": {
@@ -216,6 +488,134 @@ ASKED = {"date": ("date_today_or_leave", "date_today", TODAY), "rate": ("rate_li
          "memo": ("memo_none_or_leave", "memo_none", NO_MEMO)}
 
 
+def _reading_text(text: str) -> str:
+    """Blank only quotes around the whole message, preserving character offsets."""
+    first = len(text) - len(text.lstrip())
+    last = len(text.rstrip()) - 1
+    if first >= last:
+        return text
+    pairs = {'"': '"', "'": "'", '“': '”', '‘': '’'}
+    start, end = text[first], text[last]
+    if start in pairs and end in pairs.values() and end != pairs[start]:
+        return text
+
+    def count(mark: str, a: int, b: int) -> int:
+        return sum(1 for i in range(a, b) if text[i] == mark and not (
+            mark in {"'", '’'} and i > 0 and i + 1 < len(text) and
+            text[i - 1].isalnum() and text[i + 1].isalnum()))
+
+    paired = (start in pairs and end == pairs[start] and
+              (start != end or count(start, first + 1, last) % 2 == 0))
+    left = paired or (start in pairs and count(pairs[start], first + 1, last + 1) % 2 == 0)
+    opener = next((opening for opening, closing in pairs.items() if closing == end), None)
+    right = paired or (opener is not None and count(opener, first + int(left), last) % 2 == 0)
+    # A terminal apostrophe can be part of a name or reference, even without an opening quote.
+    # An unmatched mark after an email address remains a message boundary as before.
+    if not paired and end in {"'", '’'} and last > first and text[last - 1].isalnum():
+        token = text[:last].split()[-1]
+        if '@' not in token:
+            right = False
+    chars = list(text)
+    if left:
+        chars[first] = ' '
+    if right:
+        chars[last] = ' '
+    return ''.join(chars)
+
+
+def _read_names_card(engine, card: dict, text: str) -> bool:
+    """Compare the resolver's named records with the card's marked party and line fields."""
+    contract = REGISTRY.contracts.get(card["contract"])
+    if not contract:
+        return False
+    args = json.loads(card["args_json"])
+    values = {"customer": set(), "supplier": set(), "item": set()}
+    for field, mark in resolve.marks(contract.input_model).items():
+        kind = mark["kind"]
+        if kind in values and isinstance(args.get(field), str):
+            values[kind].add(args[field].casefold())
+        elif kind == "lines" and resolve._lines_shape(args.get(field)):
+            line_model = resolve._line_model(contract.input_model, field)
+            if line_model:
+                item_fields = [name for name, entry in resolve.marks(line_model).items() if entry["kind"] == "item"]
+                for line in args.get(field) or []:
+                    for name in item_fields:
+                        if isinstance(line.get(name), str):
+                            values["item"].add(line[name].casefold())
+    if not any(values.values()):
+        return False
+    with read_only(engine) as conn:
+        ctx = company_ctx(conn, company_id=card["company_id"])
+        parties = [dict(row) for row in conn.execute(select(m.party).where(
+            m.party.c.company_id == ctx.company_id, m.party.c.kind.in_(("customer", "supplier")))).mappings()]
+        rows = {kind: [r for r in parties if r["kind"] == kind] for kind in ("customer", "supplier")}
+        rows["item"] = resolve._items(ctx)
+        # Preserve original names containing an apostrophe as well as English possessive references.
+        for said in (text, re.sub(r"(?<=\w)['’]s\b", "", text, flags=re.I)):
+            ws = resolve.words(said)
+            supplier_spans = resolve.bounded_names(ws, [r["name"] for r in rows["supplier"]],
+                                                   item=False, bounded=False)
+            occurrences = resolve.inventory(ctx, said, rows["item"], supplier_spans)
+            if any(o.kind in values and isinstance(o.value, str) and o.value.casefold() in values[o.kind]
+                   for o in occurrences):
+                return True
+            # A partial name is a resolver candidate; keep only a unique candidate that actually shares
+            # a name word, so a nearby unrelated word cannot preserve a card through fuzzy matching.
+            for kind, records in rows.items():
+                candidates = [r for r in resolve._candidates(records, ws, item=kind == "item", limit=len(records))
+                              if set(resolve._core(r["name"])) & set(ws)]
+                if len(candidates) == 1 and candidates[0]["name"].casefold() in values[kind]:
+                    return True
+    return False
+
+
+def _card_read(text: str) -> bool:
+    """Read wording only wins when the owner supplied no correction cue."""
+    return bool(re.search(resolve.table()["read_request"], text, re.I)) and not bool(
+        re.search(resolve.table()["correction_cue"], text, re.I))
+
+
+def _complete_request(text: str) -> bool:
+    """Recognise self-contained operations, not corrections or short answers."""
+    said = _reading_text(text).strip()
+    prefix = r'(?:(?:please|kindly)\s+|(?:can|could)\s+you\s+(?:please\s+)?)?'
+    name = r'(?!(?:called|named|a|an|the|it|them|another|instead|with|in|for|has|have|did|does|is|was|what|show|list)\b)\S+'
+    explicit_name = r'(?!(?:it|them|instead)\b)\S+'
+    party = rf'(?:(?:called|named|with\s+(?:the\s+)?name)\s+{explicit_name}|{name})'
+    add = rf'(?:add|create|make)\s+(?:a\s+|an\s+|new\s+)*(?:customer|supplier)\s+{party}'
+    quantity = r'(?:\d+(?:[.,]\d+)?|one|two|three|four|five|six|seven|eight|nine|ten)'
+    invoice = (rf'(?:(?:create|make|raise|draft|send)\s+(?:an?\s+|new\s+)*invoice\s+for\s+|invoice\s+|bill\s+)'
+               rf'{name}.*?(?:\bfor\s+|:\s*){quantity}\s+\w')
+    item = (rf'(?:add|create|make)\s+(?:a\s+|an\s+|new\s+)*(?:item|product|service)\s+'
+            rf'{party}(?=.*\b(?:each|hour|day|unit|meter|metre)\b)(?=.*\d)')
+    document = (r'(?:cancel|void|undo|reverse|submit|finali[sz]e)\s+(?:(?:the|an?)\s+)?'
+                r'(?:(?:invoice|payment|order|delivery)\s*(?:(?:number|no)\.?\s*)?#?\s*)?'
+                r'(?:[a-z]{2,5}[- ]\d[\w-]*|\d+)')
+    cash = r'(?:add|create)\s+(?:a\s+|new\s+)*cash\s+account\b'
+    new_party = rf'new\s+(?:customer|supplier)\s+{party}'
+    # A payment names both its payer and its amount. Bare values remain answers.
+    payment = (rf'{name}.*?\bpaid\s+[$£€]?\d|'
+               r'(?:record|add)\s+(?:a\s+)?payment\b(?=.*\d)(?=.*\b(?:from|by|for)\s+\w)')
+    read = r'(?:show|list|display)\s+(?:me\s+)?(?:the\s+)?(?:customers|suppliers|invoices|sales|receivables)\b'
+    return bool(re.match(rf'^{prefix}(?:{add}|{new_party}|{invoice}|{item}|{document}|{cash}|{payment}|{read})', said, re.I))
+
+
+def _end_question_request(c: store.Claim, req: dict) -> bool:
+    """End the unanswered request and its bindings atomically under the live claim."""
+    with store._tx() as conn:
+        if not store._holds(conn, c):
+            return False
+        changed = conn.execute("UPDATE request SET state = 'ended', ended_why = 'set_aside', ended_at = ?, "
+                               "pending_question = NULL WHERE id = ? AND state = 'open' AND pending_card IS NULL",
+                               (store._stored(store._stamp(store._now())), store._stored(req['id'])))
+        if changed.rowcount != 1:
+            return False
+        conn.execute("DELETE FROM request_binding WHERE request_id = ?", (req['id'],))
+        conn.execute("UPDATE conversation SET intent_state = 'unused' WHERE id = ? AND intent_request = ? "
+                     "AND intent_state = 'open'", (c.conversation_id, req['id']))
+        return True
+
+
 def owner_words(turn: list[dict]) -> str:
     """The owner's words in a turn: every user message the engine did not add itself, whatever it begins with."""
     return " ".join(m["content"] for m in turn if m["role"] == "user" and not m.get(ENGINE_ADDED))
@@ -241,6 +641,8 @@ def build_graph(engine: Engine, model: Model):
     def renew(state: State) -> None:
         if state.get("claim") is not None and not store.renew(state["claim"]):
             raise Stopped()
+        if state.get("claim") is not None:
+            check_turn_budget(store.turn_remaining(state["claim"]))
 
     def propose(state: State, contract, inp, session: Session, **kwargs):
         """Every card passes the same request-wide guard, after resolution and before persistence."""
@@ -262,7 +664,9 @@ def build_graph(engine: Engine, model: Model):
         msgs = [{k: v for k, v in x.items() if k != ENGINE_ADDED} for x in msgs]  # the engine's mark stays here
         msgs = [{**x, "content": UUID.sub("[record]", x["content"])} if isinstance(x.get("content"), str) else x
                 for x in msgs]  # no record id reaches the model
-        reply = _reply_dict(model.complete(msgs, tools_schema(state)))
+        with turn_budget(lambda: store.turn_remaining(state["claim"]) if state.get("claim") else None):
+            reply = _reply_dict(model.complete(msgs, tools_schema(state)), model,
+                                pending_card=bool(state.get("pending_card")))
         if not state.get("setup"):
             return {"reply": reply, "requests": state.get("requests", 0) + 1}
         # the pending gate: of the model's calls only set_up_company runs; a read it called is answered as not set up
@@ -271,26 +675,109 @@ def build_graph(engine: Engine, model: Model):
         return {"reply": {**reply, "calls": setup}, "requests": state.get("requests", 0) + 1,
                 "setup_read": read and not setup}
 
+    def reads_only(state: State) -> bool:
+        calls = [tc["function"]["name"] for msg in state["turn"] if msg["role"] == "assistant"
+                 for tc in (msg.get("tool_calls") or [])]
+        return bool(calls) and all((c := REGISTRY.contracts.get(name)) is not None and c.effect == "read"
+                                   for name in calls)
+
+    def named_for_continuation(said: str) -> list:
+        with read_only(engine) as conn:
+            named = cat.named_by_synonym(conn, said)
+            entries = cat.catalogue(conn)
+        return named, entries
+
+    def installed_write(entry) -> bool:
+        contract = REGISTRY.contracts.get(entry.target) if entry.kind == "operation" else None
+        return entry.state == "installed" and contract is not None and contract.effect == "write"
+
+    def money_stop(state: State) -> dict | None:
+        session = Session.load(state.get("resolution"))
+        try:
+            resolve.guard_messages(session)
+        except Planned as p:
+            with read_only(engine) as conn:
+                company_id = company_ctx(conn).company_id
+            store.record_demand(company_id, "c", p.route, state.get("request_text") or state.get("message_text") or "")
+            event = {"type": "answer", "outcome": "c", "text": p.message, "capability": p.route}
+        except Refusal as rf:
+            event = {"type": "ask", "text": rf.message, "code": rf.code, "options": rf.options,
+                     "data": public_data(rf.data)}
+        else:
+            return None
+        return {"events": list(state.get("events", [])) + [event], "resolution": session.dump()}
+
     def route(state: State) -> str:
+        # The original message owns this reply, before any model text, call or refusal can route it elsewhere.
+        if state.get("mixed", False):
+            return "l3"
         r = state["reply"]
         if state.get("setup") and not r["calls"]:
             return "setup_ask"
+        card_read = bool(state.get("pending_args") and state.get("message_text") and
+                         _card_read(state["message_text"]))
+        cue = bool(state.get("message_text") and
+                   re.search(resolve.table()["correction_cue"], state["message_text"], re.I))
+        if card_read and r["calls"] and any(
+                (w := REGISTRY.contracts.get(c["name"])) is None or w.effect != "read" for c in r["calls"]):
+            return "answer"  # a read request cannot create or replace a card
         if r["calls"]:
+            if state.get("pending_args") and not state.get("reproposed") and not state.get("answered") \
+                    and state.get("message_text") and not card_read:
+                message = state["message_text"]
+                contract = REGISTRY.contracts.get(state.get("pending_contract"))
+                kinds = set()
+                if contract:
+                    for name, mark in resolve.marks(contract.input_model).items():
+                        if mark["kind"] == "lines":
+                            line_model = resolve._line_model(contract.input_model, name)
+                            if line_model:
+                                kinds.update(m["kind"] for m in resolve.marks(line_model).values())
+                        else:
+                            kinds.add(mark["kind"])
+                with read_only(engine) as conn:
+                    ctx = company_ctx(conn)
+                    values = resolve.inventory(ctx, message, resolve._items(ctx))
+                value_kinds = set(kinds)
+                if kinds & {"quantity", "amount", "rate"}:
+                    value_kinds.update({"figure", "number"})
+                correction = cue or (not _complete_request(message) and
+                                     any(v.kind in value_kinds for v in values))
+                if not correction and (resolve.keeps_card(message) or
+                                       re.search(resolve.table()["approval_words"], message, re.I)):
+                    return "answer"
+                if correction:
+                    said = set(resolve.words(message)) - resolve.STOP
+                    old = json.loads(state["pending_args"])
+
+                    def leaves(value):
+                        if isinstance(value, dict):
+                            return [x for v in value.values() for x in leaves(v)]
+                        if isinstance(value, list):
+                            return [x for v in value for x in leaves(v)]
+                        return resolve.words(str(value)) if value is not None else []
+
+                    grounded_update = bool(values) and len(r["calls"]) == 1 and any(
+                        c["name"] == state.get("pending_contract") and c["args_json"] and
+                        (args := json.loads(c["args_json"])) != old and
+                        bool(said & (set(leaves(args)) - resolve.STOP)) for c in r["calls"])
+                    if cue or not grounded_update:
+                        return "repropose"
             return "tools"
         if state.get("searched") or state.get("selected"):  # in the catalogue path, text is never the answer
             return "phase_prompt" if state.get("requests", 0) < MAX_MODEL_REQUESTS else "unsure"
         if r.get("text_calls") and not r["text"] and state.get("requests", 0) < MAX_MODEL_REQUESTS:
             return "reprompt"
         if state.get("pending_args") and not state.get("reproposed") and not state.get("answered") \
-                and state.get("message_text") and not resolve.keeps_card(state["message_text"]):
+                and state.get("message_text") and not resolve.keeps_card(state["message_text"]) and not card_read:
             return "repropose"  # the engine applies the owner's correction itself, whatever the model said
         tooled = any(x["role"] == "tool" or x.get("tool_calls") for x in state["turn"])
-        if not tooled and not state.get("answered") and not state.get("l3") and state.get("message_text"):
+        if (not tooled or reads_only(state)) and not state.get("answered") and not state.get("l3") and state.get("message_text"):
             # the order for a tool-less reply: a write in play gets the engine's reply, and a completion claim is
             # replaced, both before the catalogue reads the turn's own words; the figure check comes last
             write_turn, _ = _write_turn(state, _owner_text(state))
             claims = any(re.search(p, r["text"] or "", re.I | re.M) for p in resolve.table()["completion_claims"])
-            if not write_turn and not claims:
+            if not write_turn and (not claims or reads_only(state)):
                 return "l3"
         return "answer"
 
@@ -301,21 +788,29 @@ def build_graph(engine: Engine, model: Model):
         return {"turn": turn, "reply": None}
 
     def l3(state: State) -> dict:
-        """The turn's own words to the catalogue, never the model's text or earlier messages: entries ERPClaw lacks
-        (available or planned, alone or tied) get their own replies; a switched-on entry among them, or nothing
-        found, leaves the text."""
-        with read_only(engine) as conn:  # only what the owner's own words name by a synonym, never other overlap
-            named = cat.named_by_synonym(conn, state["message_text"])
+        """Use the open request after reads; otherwise use this turn's own words for the catalogue."""
+        message = state["message_text"]
+        said = (state.get("request_text") or message) if reads_only(state) and state.get("previous_reads_only") else message
+        with read_only(engine) as conn:  # only what the owner's words name by a synonym, never other overlap
+            named = cat.named_by_synonym(conn, said)
             on_now = cat.switched_on(conn)
             company_id = company_ctx(conn).company_id
-        if not named:
+        mixed = state.get("mixed", False)
+        if not named and not mixed:
             return {"l3": True}
-        top = max(sc for _, sc in named)  # the owner's strongest words, whatever the states
+        top = max((sc for _, sc in named), default=0)  # the owner's strongest words, whatever the states
         tied = [e for e, sc in named if sc == top]
-        if any(e.state == "installed" for e in tied):
+        if not mixed and len(tied) <= 1:
+            stop = money_stop(state)
+            if stop:
+                return {**stop, "l3": True}
+        if not mixed and any(e.state == "installed" for e in tied):
+            writes = [e for e in tied if installed_write(e)]
+            if reads_only(state) and len(writes) == 1:
+                return {"l3": True, "selected": writes[0].id, "candidates": [e.id for e in tied]}
             return {"l3": True}  # the model's text stands, as for a request that names nothing
-        d = cat.decide(tied, "unsure", on_now, [(e, top) for e in tied]) if len(tied) > 1 \
-            else cat.decide(tied, tied[0].id, on_now)
+        d = cat.decide(tied, "unsure", on_now, named, mixed=mixed) if mixed or len(tied) > 1 \
+            else cat.decide(tied, tied[0].id, on_now, mixed=mixed)
         if d.outcome in ("b", "c", "d"):
             store.record_demand(company_id, d.outcome, d.entry.id if d.entry else None, state["message_text"])
         # the engine's reply in place of the model's text
@@ -330,6 +825,7 @@ def build_graph(engine: Engine, model: Model):
         is made. A read the model called is answered first: not set up. While a setup card waits, the owner keeping it
         is told to approve it and anything else is answered as not set up, never with the model's text."""
         events, said = list(state.get("events", [])), state.get("message_text") or ""
+        steps = list(state.get("steps", []))
         if state.get("pending_card"):
             text = f"{say('nothing_saved')} {say('approve_card')}" if resolve.keeps_card(said) \
                 else say("books_not_set_up")
@@ -370,18 +866,26 @@ def build_graph(engine: Engine, model: Model):
                     session.bindings.pop(f"{scope}currency")
                     continue
                 events.append(event(with_codes(rf, session, scope)))
-                return {"events": events, "resolution": session.dump()}
+                _record_step(steps, resolve.step_text(SETUP, field=rf.data.get("field")))
+                return {"events": _attach_steps(events, steps), "steps": steps, "resolution": session.dump()}
             break
         who = {"id": state["principal_id"]} if state.get("principal_id") else None
         try:
             out = propose(state, contract, inp, session, principal=who, date_source={"not_applicable": True},
                           owner_words=state.get("request_text") or said)
         except Refusal as rf:
+            if rf.code in MODEL_REFUSALS:
+                raise
             return {"events": events + [event(rf)], "resolution": session.dump()}
         session.end()  # a card using the request's answers ends them
-        return {"events": events + approvals.card_events(out), "resolution": session.dump()}
+        if out.card is not None:
+            _record_step(steps, resolve.step_text(SETUP, drafted=True))
+        return {"events": _attach_steps(events + approvals.card_events(out), steps), "steps": steps,
+                "resolution": session.dump()}
 
     def after_l3(state: State) -> str:
+        if state.get("selected"):
+            return "phase_prompt" if state.get("requests", 0) < MAX_MODEL_REQUESTS else "unsure"
         return "finish" if state.get("events") else "answer"
 
     def repropose(state: State) -> dict:
@@ -391,7 +895,7 @@ def build_graph(engine: Engine, model: Model):
         return {"reply": {"text": "", "finish": None, "reasoning_as_answer": False, "text_calls": False,
                           "calls": [{"id": "engine-correction", "name": state["pending_contract"], "raw": args,
                                      "error": None, "args_json": args}]},
-                "reproposed": json.loads(args)}
+                "reproposed": json.loads(args), "correction_from_calls": bool(state["reply"]["calls"])}
 
     def _capability_event(d: cat.Decision, resolution: dict | None, engine_reply: bool = False) -> tuple[dict, dict]:
         """The event for a catalogue outcome that runs nothing."""
@@ -415,7 +919,8 @@ def build_graph(engine: Engine, model: Model):
             entries = {e.id: e for e in cat.catalogue(conn)}
             named = cat.named_by_synonym(conn, said)  # the owner's words, never the model's search
             on_now = cat.switched_on(conn)
-        d = cat.decide([entries[i] for i in candidates if i in entries], "unsure", on_now, named)
+        d = cat.decide([entries[i] for i in candidates if i in entries], "unsure", on_now, named,
+                       mixed=state.get("mixed", False))
         return _capability_event(d, resolution)
 
     def unsure(state: State) -> dict:
@@ -426,11 +931,28 @@ def build_graph(engine: Engine, model: Model):
         r = state["reply"]
         events = list(state.get("events", []))
         grounding = list(state.get("grounding", []))
+        steps = list(state.get("steps", []))
         turn = list(state["turn"])
         candidates, selected, searched = list(state.get("candidates", [])), state.get("selected"), state.get("searched", False)
         catalogue_reply = False
         message = state.get("message_text") or owner_words(state["turn"])
         request = state.get("request_text") or message
+        prior_calls = [tc["function"]["name"] for msg in turn if msg["role"] == "assistant"
+                       for tc in (msg.get("tool_calls") or [])]
+        call_names = prior_calls + [c["name"] for c in r["calls"]]
+        only_reads = bool(call_names) and all((w := REGISTRY.contracts.get(n)) is not None and w.effect == "read"
+                                               for n in call_names)
+        continuation_text = request if state.get("previous_reads_only") else message
+        named, entries = named_for_continuation(continuation_text) if only_reads and not state.get("answered") else ([], [])
+        top = max((score for _, score in named), default=0)
+        tied = [entry for entry, score in named if score == top]
+        pending = (state.get("resolution") or {}).get("pending") or state.get("pending_card")
+        if only_reads and (len(tied) <= 1 or pending) and not state.get("answered"):
+            stop = money_stop(state)
+            if stop:
+                return stop
+        continue_reads = bool(tied) and (any(installed_write(e) for e in tied) or
+                                         not any(e.state == "installed" for e in tied))
         turn.append({"role": "assistant", "content": r["text"] or None, "tool_calls": [
             {"id": c["id"], "type": "function", "function": {"name": c["name"], "arguments": c["raw"] or "{}"}}
             for c in r["calls"]]})
@@ -465,7 +987,101 @@ def build_graph(engine: Engine, model: Model):
             # another operation than the pending card's: its words are this message's; the earlier ones were the
             # pending card's, which the new card sets aside
             request = message
-        if writes and (len(writes) > 1 or write_intents(message) > 1):  # one change per message
+        ignored_writes = set()
+        model_question = None
+        if len(writes) > 1 and write_intents(message) <= 1 and not (searched and not selected):
+            session = Session.load(resolution)
+            if len({w.name for _, w, _ in writes}) > 1:
+                choices = list(dict.fromkeys(resolve.describe(w, a) for _, w, a in writes))
+                model_question = say("model_steps", choices=say("model_join").join(choices))
+            else:
+                # Resolve each candidate independently, without another candidate's peers or bindings.
+                candidates = []
+                try:
+                    with read_only(engine) as conn:
+                        ctx = company_ctx(conn)
+                        for _, w, args in writes:
+                            candidate_session = Session.load(resolution)
+                            result = resolve_args(ctx, w, args, request, candidate_session,
+                                                  mixed=state.get("mixed", False))
+                            canonical = w.input_model.model_validate(result.args).model_dump()
+                            candidates.append((canonical, result.not_done))
+                except (Refusal, Planned, ValidationError):
+                    candidates = []
+                # Resolution can replace a model's document with the one in the owner's words.
+                # Preserve a disagreement in explicitly supplied fields for the owner's review.
+                try:
+                    supplied = [w.input_model.model_validate(a).model_dump(exclude_unset=True)
+                                for _, w, a in writes]
+                except ValidationError:
+                    supplied = [a for _, _, a in writes]
+                # Compare supplied record references by the same master lookup used by the engine.
+                # Retain explicit conflicts even when owner-text resolution replaces a model value.
+                def canonical_supplied(model, values, ctx):
+                    result = dict(values)
+                    for key, mark in resolve.marks(model).items():
+                        value = result.get(key)
+                        if value is None:
+                            continue
+                        finder = {"customer": find_customer, "supplier": find_supplier, "item": find_item}.get(
+                            mark["kind"])
+                        if finder and isinstance(value, str):
+                            try:
+                                result[key] = finder(ctx, value)["name"]
+                            except Refusal:
+                                pass
+                        elif mark["kind"] == "document" and isinstance(value, str):
+                            try:
+                                result[key] = mark["resolve"](ctx, value)
+                            except Refusal:
+                                pass
+                        elif mark["kind"] == "lines" and isinstance(value, list):
+                            line_model = resolve._line_model(model, key)
+                            if line_model:
+                                result[key] = [canonical_supplied(line_model, line, ctx) if isinstance(line, dict)
+                                               else line for line in value]
+                    return result
+
+                with read_only(engine) as conn:
+                    ctx = company_ctx(conn)
+                    comparable = [canonical_supplied(w.input_model, value, ctx) for value in supplied]
+                disagreements = {key for value in comparable for key in value
+                                 if any(key in other and value[key] != other[key] for other in comparable)}
+                party_fields = {name for name, mark in resolve.marks(w.input_model).items()
+                                if mark["kind"] in ("customer", "supplier")}
+                if disagreements & party_fields:
+                    # Leave both writes for the ordinary one-change gate below.
+                    pass
+                elif candidates and not disagreements and all(c == candidates[0] for c in candidates[1:]):
+                    ignored_writes = {k for k, _, _ in writes[1:]}
+                    writes = writes[:1]
+                else:
+                    values = supplied if disagreements else ([c[0] for c in candidates] if candidates
+                                                              else [a for _, _, a in writes])
+                    fields = sorted({key for value in values for key in value
+                                     if any(value.get(key) != other.get(key) for other in values)})
+                    if fields:
+                        choices = [say("model_field", field=_model_label(w.input_model, key),
+                                       value=_model_value(w.input_model, key, value.get(key), ctx.currency))
+                                   for key in fields for value in values]
+                        model_question = say("model_values", choices=say("model_join").join(dict.fromkeys(choices)))
+                    elif all(a == comparable[0] for a in comparable):
+                        # The usual single-call path supplies the unresolved call's own question.
+                        ignored_writes = {k for k, _, _ in writes[1:]}
+                        writes = writes[:1]
+            if model_question:
+                rf = session.ask("changes", model_question, "changes_ambiguous", [], [])
+                stop = {"type": "ask", "text": rf.message, "code": rf.code, "options": rf.options,
+                        "data": public_data(rf.data)}
+                resolution = session.dump()
+        if model_question:
+            pass
+        elif writes and (len(writes) > 1 or write_intents(message) > 1):  # one change per message
+            if state.get("mixed", False):
+                d = cat.decide([], "unsure", mixed=state["mixed"])
+                store.record_demand(ctx.company_id, d.outcome, d.entry.id, message)
+                event, resolution = _capability_event(d, resolution, engine_reply=True)
+                return {"events": events + [event], "resolution": resolution, "catalogue_reply": True}
             session = Session.load(resolution)
             try:
                 with read_only(engine) as conn:
@@ -513,14 +1129,28 @@ def build_graph(engine: Engine, model: Model):
                     scopes = {k: named[n] for n, (k, _, _) in enumerate(writes)}
                     for k, w, a in writes:
                         current = k
-                        resolved[k] = resolve_args(ctx, w, a, said, session, peers, scopes[k])
+                        resolved[k] = resolve_args(ctx, w, a, said, session, peers, scopes[k],
+                                                   mixed=state.get("mixed", False))
                     current = None
                     strict_customers([(w, resolved[k].args) for k, w, _ in writes], session,
                                      [scopes[k] for k, _, _ in writes])
                     order = owner_order(ctx, said, [(w, resolved[k].args) for k, w, _ in writes])
-                    account(ctx, said, [(w, resolved[k].args) for k, w, _ in writes],
-                            [resolved[k] for k, _, _ in writes], order[0] if order else None, session,
-                            [scopes[k] for k, _, _ in writes])
+                    counts = _record_count_spans(said, writes[0][1].name) if len(writes) == 1 else []
+                    accounting_text = said
+                    for count in reversed(counts):
+                        accounting_text = (accounting_text[:count.start(1)] + " " * (count.end(1) - count.start(1)) +
+                                           accounting_text[count.end(1):])
+                    # Owner-text accounting claims the evidence, but it is not a public notice.
+                    for result in resolved.values():
+                        result.not_done.extend(result.internal)
+                    try:
+                        account(ctx, accounting_text, [(w, resolved[k].args) for k, w, _ in writes],
+                                [resolved[k] for k, _, _ in writes], order[0] if order else None, session,
+                                [scopes[k] for k, _, _ in writes])
+                    finally:
+                        for result in resolved.values():
+                            if result.internal:
+                                del result.not_done[-len(result.internal):]
                     for k, w, _ in writes:  # every write validated, then previewed with nothing stored, before any card
                         try:
                             w.input_model.model_validate(resolved[k].args)
@@ -541,6 +1171,11 @@ def build_graph(engine: Engine, model: Model):
                 stop = {"type": "ask" if is_question(rf.code) else "refused", "text": rf.message, "code": rf.code,
                         "options": rf.options, "data": public_data(data),
                         **({"capability": capability} if capability else {})}
+            if len(writes) == 1 and _record_count_spans(request, writes[0][1].name):
+                if stop:
+                    stop["text"] = f"{say('records_one_at_a_time')} {stop['text']}"
+                else:
+                    events.append({"type": "notice", "text": say("records_one_at_a_time")})
             resolution = session.dump()
         session = Session.load(resolution)
         try:
@@ -554,6 +1189,10 @@ def build_graph(engine: Engine, model: Model):
         except Refusal as rf:
             stop = {"type": "ask", "text": rf.message, "code": rf.code, "options": rf.options,
                     "data": public_data(rf.data)}
+        if stop and stop.get("capability") == "planned.tax_engine":
+            next_step = _tax_next_step(engine, writes, session, request, state.get("mixed", False))
+            if next_step:
+                stop["text"] = next_step
         resolution = session.dump()
         if state.get("claim"):
             notice = _checkpoint_resolution(engine, state["claim"], state["request_id"], resolution or {})
@@ -563,6 +1202,9 @@ def build_graph(engine: Engine, model: Model):
         later = [writes[j] for j in rank[1:]]
         drafted = None  # the lead's contract and canonical arguments, once its card is made
         for idx, c in enumerate(r["calls"]):
+            if idx in ignored_writes:
+                turn.append({"role": "tool", "tool_call_id": c["id"], "content": "not run: duplicate"})
+                continue
             not_done: list = []
             args = json.loads(c["args_json"]) if c["args_json"] else {}
             out_of_phase = (searched and not selected and c["name"] != "choose_capability") or \
@@ -577,6 +1219,8 @@ def build_graph(engine: Engine, model: Model):
                     if c["name"] == "find_capability":
                         found = cat.find_capability(conn, str(args.get("request") or request))
                         candidates, searched = [e.id for e in found], True
+                        _record_step(steps, resolve.step_text("find_capability",
+                                                            descriptions=[e.description for e in found]))
                         turn.append({"role": "tool", "tool_call_id": c["id"], "content": json.dumps(
                             [{"id": e.id, "kind": e.kind, "description": e.description, "state": e.state}
                              for e in found])})
@@ -586,7 +1230,9 @@ def build_graph(engine: Engine, model: Model):
                     on_now = cat.switched_on(conn)
                     named = cat.named_by_synonym(conn, request)  # the owner's words, never the model's search
                 d = cat.decide([entries[i] for i in candidates if i in entries], str(args.get("pick", "unsure")),
-                               on_now, named)
+                               on_now, named, mixed=state.get("mixed", False))
+                _record_step(steps, resolve.step_text("choose_capability", pick=args.get("pick"),
+                                                     description=d.entry.description if d.entry else None))
                 if d.outcome == "a":
                     selected = d.entry.id
                     turn.append({"role": "tool", "tool_call_id": c["id"], "content": (
@@ -596,6 +1242,10 @@ def build_graph(engine: Engine, model: Model):
                 if d.outcome in ("b", "c", "d"):
                     store.record_demand(company_id, d.outcome, d.entry.id if d.entry else None, request)
                 event, resolution = _capability_event(d, resolution)
+                if args.get("pick") == "none" and d.outcome == "d" and d.capability == "unsupported.no_match":
+                    found = [entries[i] for i in candidates if i in entries]
+                    if len(named) != 1 or any(e.state in ("planned", "unsupported") for e in found):
+                        event["text"] = _none_reply(named) or d.text
                 events.append(event)
                 catalogue_reply = True
                 break  # the outcome ends the batch: nothing after it in this reply runs
@@ -651,38 +1301,115 @@ def build_graph(engine: Engine, model: Model):
                 if contract.effect == "read":
                     with read_only(engine) as conn:
                         ensure_enabled(conn, REGISTRY.contract_plugin[contract.name])
-                        res = contract.run(company_ctx(conn), inp)
+                        ctx = company_ctx(conn)
+                        res = contract.run(ctx, inp)
+                        amounts = check_answer(contract, res)
+                        _record_step(steps, _read_step(ctx, contract, inp, res))
                     # its amounts, named as declared and each in its text, or the answer is not shown
-                    events.append({"type": "answer", "text": res.text, "amounts": check_answer(contract, res)})
+                    # A read must be relevant to the owner's words before its result is included.
+                    # Only named_by_synonym decides whether an unavailable area was requested.
+                    read_entry = next((e for e in entries if e.state == "installed" and
+                                       ((e.kind == "operation" and e.target == contract.name) or
+                                        (e.kind == "metric" and contract.name == "get_metric" and
+                                         e.target == inp.metric)) and cat._score(e, cat.words(continuation_text)) > 0), None)
+                    answered_read = read_entry is not None
+                    shadowed = {entry_id for e, _ in named for entry_id in e.overrides}
+                    unavailable = [(e, score) for e, score in named
+                                   if e.state in ("planned", "available") and e.id not in shadowed]
+                    if answered_read and unavailable and not any(installed_write(e) for e in tied):
+                        entry, _ = max(unavailable, key=lambda pair: pair[1])
+                        with read_only(engine) as conn:
+                            on_now = cat.switched_on(conn)
+                            company_id = company_ctx(conn).company_id
+                        decision = cat.decide([entry], entry.id, on_now)
+                        store.record_demand(company_id, decision.outcome, entry.id, message)
+                        event, resolution = _capability_event(decision, resolution, engine_reply=True)
+                        events.append(event)
+                        read_text = res.text
+                        for amount in res.amounts:
+                            shown = _shown_amount(amount.kind, amount.value, amount.currency)
+                            for figure in {shown, amount.value} - {None}:
+                                read_text = _figure(figure).sub("[amount omitted]", read_text)
+                        label = contract.name.removeprefix("list_").replace("_", " ")
+                        intro = f"Here are your {label}:" if contract.name.startswith("list_") \
+                            else "Here is what is available:"
+                        events.append({"type": "answer", "text": f"{intro}\n{read_text}", "amounts": [],
+                                       **({"checked": "engine"} if state.get("pending_card") and
+                                          _card_read(state.get("message_text") or "") else {})})
+                        # Read-step summaries can themselves contain money figures.
+                        steps = []
+                        grounding += res.figures
+                        break
+                    if continue_reads and (any(installed_write(e) for e in tied) or not answered_read):
+                        turn[-1]["content"] = res.text
+                    else:
+                        events.append({"type": "answer", "text": res.text, "amounts": amounts,
+                                       **({"checked": "engine"} if state.get("pending_card") and
+                                          _card_read(state.get("message_text") or "") else {})})
                     grounding += res.figures
                 else:
                     who = {"id": state["principal_id"]} if state.get("principal_id") else None
                     with read_only(engine) as conn:  # the card's date and where it came from, from what was read
                         source, dated = resolve.date_source_of(company_ctx(conn), contract, inp, request)
                     bound = Session.load(resolution).bindings
-                    for part, (question, go, ref) in ASKED.items():  # one question at a time, in this order
+                    for part, (question, go, ref) in ASKED.items():  # one question at a time
+                        if part == "date" and contract.name not in ("create_invoice", "submit_invoice"):
+                            continue
+                        if part == "rate":
+                            evidence = resolved[idx].internal
+                            candidates = [n for n in evidence if n.get("type") == "rate_candidate"]
+                            unread = any(n.get("type") == "rate_unread" for n in evidence)
+                            many_writes = len(writes) > 1 and any(
+                                n.get("type") in {"rate_candidate", "rate_unread"}
+                                for result in resolved.values() for n in result.internal)
+                            if unread or many_writes:
+                                raise Refusal(say("invoice_rate_unavailable"), "rate_choice_missing", [], field="rate")
+                            ambiguous = [n for n in candidates if n.get("ambiguous")]
+                            if ambiguous:
+                                values = list(dict.fromkeys(n["value"] for n in ambiguous))
+                                labels = [Shown(ctx.currency).unit_price(Decimal(v)) for v in values]
+                                raise Refusal(say("invoice_rate_conflict", values=" and ".join(labels), item=ambiguous[0]["item"]), "rate_choice_missing", labels,
+                                              field="rate", choices=[{"label": label, "ref": value}
+                                                                     for label, value in zip(labels, values)])
+                            if candidates:
+                                continue
                         notices = [n["text"] for n in not_done if n.get("part") == part]
                         if notices and bound.get(f"{scopes.get(idx, '')}{part}") != ref:
                             # a part the engine cannot set yet: never a card made without it unasked
                             wording = {"qualifier": resolve.memo_qualifier(request)[0]} if part == "memo" else {}
+                            if part == "date" and resolved[idx].future_invoice_date:
+                                notices = [say("invoice_future_date")]
                             raise Refusal(" ".join(notices + [say(question, **wording)]), f"{part}_choice_missing",
                                           [say(go, **wording), say("leave_it")], field=part,
                                           choices=[{"label": say(go, **wording), "ref": ref},
                                                    {"label": say("leave_it"), "ref": LEAVE}])
                     if state.get("reproposed") is not None and inp.model_dump(mode="json") == \
                             contract.input_model.model_validate(state["reproposed"]).model_dump(mode="json"):
+                        if state.get("correction_from_calls"):
+                            raise Refusal(say("correction_missing"), "correction_missing", [], field="correction")
                         events.append({"type": "notice", "code": "card_set_aside", "text": say("card_unchanged")})
                         continue
                     session = Session.load(resolution)
                     out = propose(state, contract, inp, session, principal=who, date_source=source,
                                   owner_words=request, replaces=state.get("pending_card"))
+                    delivery_date = any(n.get("type") == "delivery_date" for n in resolved[idx].internal)
+                    if delivery_date:
+                        not_done.append({"type": "not_done", "part": "delivery_date",
+                                         "capability": "planned.invoice_fields", "text": say("nd_delivery_date")})
                     events += not_done + dated  # the parts not done, said before the card and never part of it
+                    if contract.name == "record_payment":
+                        _display_payment_purpose(engine, out, request)
                     events += approvals.card_events(out)
+                    _record_step(steps, _write_step(contract, inp, out.card, not_done + dated))
                     drafted = (contract, given)
                     session = Session.load(resolution)
                     session.end()  # a card using the request's answers ends them
                     resolution = session.dump()
             except Refusal as rf:  # one rule with the approval path (erpclaw_core.common.is_question)
+                if rf.code in MODEL_REFUSALS:
+                    raise
+                if contract.name == SETUP:
+                    _record_step(steps, resolve.step_text(SETUP, field=rf.data.get("field")))
                 session = Session.load(resolution)
                 rf = with_codes(rf, session, scopes.get(idx, ""))  # a contract's question: the step's id and codes
                 resolution = session.dump()
@@ -691,7 +1418,8 @@ def build_graph(engine: Engine, model: Model):
                                **({"capability": rf.capability} if rf.capability else {})})
         if drafted is not None:  # each other write of the reply, said after the card it waits behind
             events += [one_at_a_time(drafted, (w, resolved[k].args)) for k, w, _ in later]
-        return {"turn": turn, "events": events, "grounding": grounding, "reply": None,
+        return {"turn": turn, "events": _attach_steps(events, steps), "steps": steps,
+                "grounding": grounding, "reply": None,
                 "candidates": candidates, "selected": selected, "searched": searched, "resolution": resolution,
                 "catalogue_reply": catalogue_reply}
 
@@ -758,7 +1486,7 @@ def build_graph(engine: Engine, model: Model):
         return {"events": [{"type": "refused", "text": text}]}
 
     def finish(state: State) -> dict:
-        return {}
+        return {"events": _attach_steps(state.get("events", []), state.get("steps", []))}
 
     g = StateGraph(State)
     g.add_node("model", model_node)
@@ -777,7 +1505,8 @@ def build_graph(engine: Engine, model: Model):
                                              "phase_prompt": "phase_prompt", "unsure": "unsure", "l3": "l3",
                                              "repropose": "repropose", "setup_ask": "setup_ask"})
     g.add_edge("repropose", "tools")
-    g.add_conditional_edges("l3", after_l3, {"finish": "finish", "answer": "answer"})
+    g.add_conditional_edges("l3", after_l3, {"finish": "finish", "answer": "answer",
+                                               "phase_prompt": "phase_prompt", "unsure": "unsure"})
     g.add_edge("reprompt", "model")
     g.add_edge("phase_prompt", "model")
     g.add_edge("unsure", "finish")
@@ -840,19 +1569,24 @@ def _engine_text(e: dict, names: list[str]) -> str:
 
 
 # the refusals a model route raises before or instead of a reply; each ends the turn that met it
-MODEL_REFUSALS = ("credential_refused", "model_refused", "model_unavailable", "model_input_invalid")
+MODEL_REFUSALS = ("credential_refused", "model_refused", "model_unavailable", "model_input_invalid",
+                  "model_rate_limited", "answer_interrupted", "turn_timeout")
 
 
 class Assistant:
     def __init__(self, engine: Engine, model: Model):
         if not hosted.books_allowed(engine, model):  # a hosted model meets only demo or eval books
             raise hosted.HostedRefused(hosted.BOOKS_REFUSED)
+        with read_only(engine) as conn:
+            owner = pr.owner(conn)
+        store.assign_legacy_owner(engine, owner["id"])
         self.engine = engine
         self.model = model
         self.graph = build_graph(engine, model)
 
     def turn(self, conversation_id: str, text: str, principal: dict | None = None,
-             choice: str | None = None) -> list[dict]:
+             choice: str | None = None, *, create: bool = True,
+             client_message_id: str | None = None) -> list[dict]:
         """One turn for the authenticated principal (the owner when None, in-process); a write only proposes.
         A turn reads the books, so the principal must hold `view` on the company. One turn per
         conversation at a time: a message while a live turn holds the conversation is refused as busy."""
@@ -863,18 +1597,48 @@ class Assistant:
         if not hosted.books_allowed(self.engine, self.model):  # again each turn: the books may have changed since
             return approvals.with_currency([{"type": "refused", "code": "hosted_books_refused",
                                              "text": hosted.BOOKS_REFUSED}], approvals.books_currency(self.engine))
-        refused = hosted.refused_input(self.model, text)  # before the message is stored: nothing of it is kept
+        refused = hosted.refused_input(self.model, text)  # before storage: only labels and the withheld sentence remain
+        choice_codes = set()
+        if choice is not None:
+            req = store.open_request(conversation_id)
+            pending = (req or {}).get("pending_question") or {}
+            event = pending.get("event") or {"type": "ask", "data": {
+                "question_id": pending.get("id"), "choices": pending.get("choices", [])}}
+            choice_codes = {c["code"] for c in _asked(event).get("choices", [])}
         if refused:
-            return approvals.with_currency([refused], approvals.books_currency(self.engine))
+            text = hosted.scrub(text)
         busy = [{"type": "refused", "code": "busy", "text": say("busy")}]
-        c = store.claim(conversation_id, text, choice)
+        try:
+            c = store.claim(conversation_id, text, choice, principal_id=who["id"], principal_name=who["name"], create=create,
+                            client_message_id=client_message_id, choice_codes=choice_codes)
+        except Refusal as rf:
+            if rf.code != "credential_refused":
+                raise
+            return approvals.with_currency([{"type": "refused", "code": rf.code, "text": rf.message}],
+                                           approvals.books_currency(self.engine))
+        if isinstance(c, store.ClaimResult):
+            if c.kind == "reused":
+                raise Refusal("That client message id was already used for a different message.",
+                              "client_message_id_reused")
+            events = c.events if c.kind == "replay" else [
+                {"type": "refused", "code": "message_overtaken",
+                 "text": "A later message in this conversation was handled first, so this one was not run. Send it again if you still want it."}]
+            return approvals.with_currency(events, approvals.books_currency(self.engine))
         if c is None:  # what the store recorded of the holder decides the wording, never a guess
             stopped = store.holder_stalled(conversation_id)
             return approvals.with_currency([{"type": "refused", "code": "busy",
                                              "text": say("busy_stopped" if stopped else "busy")}],
                                            approvals.books_currency(self.engine))
+        if refused:
+            events = [refused] if store.finalise_refusal(c, refused) else busy
+            return approvals.with_currency(events, approvals.books_currency(self.engine))
         try:
-            events = self._turn(c, ctx.company_id, principal)
+            # A button answers the pending question; only the owner's typed message can be mixed.
+            mixed = bool(text and choice is None and cat.is_mixed(text))
+            if mixed and store.open_request(conversation_id) is None:
+                events = self._mixed_turn(c, ctx.company_id, text)
+            else:
+                events = self._turn(c, ctx.company_id, principal, mixed=mixed)
         except Stopped:  # the claim or the fence moved on: this turn writes nothing more
             events = busy
         except ReconciliationIncomplete:
@@ -884,14 +1648,32 @@ class Assistant:
                                "the conversation needs recovery before continuing."}]
         return approvals.with_currency(events, approvals.books_currency(self.engine))
 
-    def _activate(self, c: store.Claim, company_id: str, token: str) -> tuple[store.Claim, approvals.Activation]:
-        """The fence at this turn's generation; a store behind the books catches up once, while its claim is live."""
+    def _mixed_turn(self, c: store.Claim, company_id: str, text: str) -> list[dict]:
+        """Answer this message in its own completed request when no request is open.
+
+        No approval fence is activated; conversations with a pending question or card use the normal turn path.
+        """
+        req = store.new_request(c)
+        if req is None or not (store.reassign if c.rerun else store.assign)(c, req["id"]):
+            raise Stopped()
+        d = cat.decide([], "unsure", mixed=True)
+        store.record_demand(company_id, d.outcome, d.capability, text)
+        return self._finish(c, req, [{"type": "answer", "outcome": d.outcome, "text": d.text,
+                                      "capability": d.capability}], Session(store.serial(c.conversation_id)), None,
+                            catalogue_reply=True)
+
+    def _activate(self, c: store.Claim, company_id: str, token: str) -> tuple[store.Claim, approvals.Activation | None]:
+        """Activate the fence, catching up once while the claim is live; None means the turn expired first."""
+        if _turn_expired(c):
+            return c, None
         act = approvals.activate(self.engine, c.conversation_id, company_id, c.generation, token)
         if act.status == "active":
             return c, act
         c = store.catch_up(c, act.generation)
         if c is None:
             raise Stopped()
+        if _turn_expired(c):
+            return c, None
         act = approvals.activate(self.engine, c.conversation_id, company_id, c.generation, token)
         if act.status != "active":
             raise Stopped()
@@ -1004,7 +1786,7 @@ class Assistant:
                 out.append({"role": "assistant", "content": _engine_text(item, names)})
         return out
 
-    def _turn(self, c: store.Claim, company_id: str, principal: dict | None) -> list[dict]:
+    def _turn(self, c: store.Claim, company_id: str, principal: dict | None, *, mixed: bool = False) -> list[dict]:
         cid = c.conversation_id
         req = store.open_request(cid)
         if req is not None and c.took_over:  # a takeover: the request goes on under a fresh token
@@ -1013,6 +1795,8 @@ class Assistant:
         if req is None:
             raise Stopped()
         c, act = self._activate(c, company_id, req["token"])
+        if act is None:
+            return self._timeout(c, req, [])
         # cards of a turn that lost its claim, set aside by this activation: said once, before the turn's own events
         notices = [{"type": "notice", "code": "card_set_aside", "text": say("turn_unfinished")}] if act.set_aside else []
         self._close_intent(c, req, act.set_aside)
@@ -1020,11 +1804,22 @@ class Assistant:
         still_open, said = self._reconcile(c, req, act.set_aside)
         notices += said
         if any(e["type"] == "ask" for e in said):  # a question the owner never saw: asked now, before anything else
-            if not store.assign(c, req["id"]):
+            if not (store.reassign if c.rerun else store.assign)(c, req["id"]):
                 raise Stopped()
             req = store.get_request(req["id"])
             return self._finish(c, req, notices, Session(store.serial(cid), req["pending_question"],
                                                          store.bindings(req["id"])), req["pending_question"])
+        if still_open and req.get("pending_question") and not req.get("pending_card") and not self._books_pending():
+            # Inspect the claimed message before assigning it to the old request. Explicit choices always answer it.
+            with store._tx() as conn:
+                mine = conn.execute("SELECT text, choice FROM request_message WHERE id = ?", (c.message_id,)).fetchone()
+            recovered = c.rerun and store.message_resolution(c.message_id).get("question_id") is not None
+            if mine and not recovered and mine["choice"] is None and not resolve.match_answer(
+                    req["pending_question"], _reading_text(mine["text"])) and _complete_request(mine["text"]):
+                if not _end_question_request(c, req):
+                    raise Stopped()
+                approvals.end_request(self.engine, cid, c.generation, req["token"])
+                still_open = False
         if not still_open:  # the message starts a new request, with its own token, at the next generation
             c = store.next_generation(c)
             if c is None:
@@ -1032,17 +1827,41 @@ class Assistant:
             req = store.new_request(c)
             if req is None:
                 raise Stopped()
-            c, _ = self._activate(c, company_id, req["token"])
-        if not store.assign(c, req["id"]):
+            c, act = self._activate(c, company_id, req["token"])
+            if act is None:
+                return self._timeout(c, req, notices)
+        if not (store.reassign if c.rerun else store.assign)(c, req["id"]):
             raise Stopped()
         req = store.get_request(req["id"])
         session = Session(store.serial(cid), req["pending_question"], store.bindings(req["id"]))
-        said = store.messages(req["id"])
+        said = [{**x, "text": _reading_text(x["text"])} for x in store.messages(req["id"])]
         mine = next(x for x in said if x["id"] == c.message_id)
+        with store._tx() as conn:
+            previous_turn = conn.execute(
+                "SELECT previous.request_id, current.outcome FROM request_message AS previous "
+                "JOIN request_message AS current ON current.id = ? "
+                "WHERE previous.conversation_id = ? AND previous.id < current.id ORDER BY previous.id DESC LIMIT 1",
+                (c.message_id, cid)).fetchone()
         text = mine["text"]
         session.owner_messages = [{**x, **store.message_resolution(x["id"])} for x in said]
-        matched = resolve.match_answer(req["pending_question"], text, mine["choice"],  # before the model runs
-                                       card_pending=bool(req["pending_card"]))
+        current_message = next(x for x in session.owner_messages if x["id"] == c.message_id)
+        continuation = bool(previous_turn is not None and previous_turn["request_id"] == req["id"] and
+                            previous_turn["outcome"] == "reads_only_continuation")
+        # A checkpoint can contain a question this attempt never emitted. Recreate it with the
+        # same serial when retrying this continuation, without treating the message as its answer.
+        unseen = req["pending_question"] or {}
+        qid = unseen.get("id")
+        if (c.rerun and continuation and current_message["completed"] and qid and
+                not any((event.get("data") or {}).get("question_id") == qid or
+                        event.get("question_id") == qid for event in store.events(req["id"])) and
+                qid == f"q{session.serial}"):
+            session.serial -= 1
+            session.pending = req["pending_question"] = None
+        # save_resolution checkpoints the answered question's identity with the next pending question and bindings.
+        # A re-run resumes that state; its saved answer cannot answer the next, unseen question.
+        recovered_answer = c.rerun and current_message["question_id"] is not None
+        matched = None if recovered_answer else resolve.match_answer(
+            req["pending_question"], text, mine["choice"], card_pending=bool(req["pending_card"]))
         # the request's words: every owner message of it but those an answer consumed
         request_text = " ".join(x["text"] for x in said if not x["answer"] and not (matched and x is mine))
         picked = next((ch for ch in (req["pending_question"] or {}).get("choices") or []
@@ -1050,7 +1869,6 @@ class Assistant:
         leave = picked is not None and picked.get("ref") == LEAVE and \
             str(req["pending_question"].get("field") or "").rpartition(":")[2] in ASKED
         if matched:
-            current_message = next(x for x in session.owner_messages if x["id"] == c.message_id)
             current_message.update(answer=1, question_id=(req["pending_question"] or {}).get("id"),
                                    field=(req["pending_question"] or {}).get("field"),
                                    answer_ref=picked.get("ref") if picked else None,
@@ -1089,21 +1907,54 @@ class Assistant:
                 return self._finish(c, req, notices + [req["pending_question"]["event"]], session,
                                     req["pending_question"])
         pending = approvals.pending_card(self.engine, cid) if req["pending_card"] else None
+        # A card set aside at the end of the immediately preceding request can still
+        # supply the operation and its earlier words to a short correction. Its old
+        # approval remains superseded; any new card belongs to this request.
+        prior_card = None
+        prior_messages = []
+        if not pending and len(said) == 1 and not matched and not recovered_answer and \
+                not resolve.keeps_card(text) and (re.search(resolve.table()["correction_cue"], text, re.I) or
+                                                   not _complete_request(text)) and not _card_read(text):
+            with store._tx() as conn:
+                previous = conn.execute(
+                    "SELECT id, ended_why FROM request WHERE conversation_id = ? AND state = 'ended' "
+                    "ORDER BY created_at DESC, rowid DESC LIMIT 1", (cid,)).fetchone()
+            if previous and previous["ended_why"] == SET_ASIDE_END:
+                cards = [e for e in store.events(previous["id"]) if e.get("type") == "card"]
+                if cards:
+                    with read_only(self.engine) as conn:
+                        prior_card = conn.execute(select(m.approval.c.contract, m.approval.c.args_json).where(
+                            m.approval.c.id == cards[-1]["approval_id"], m.approval.c.status == "superseded")).first()
+                    if prior_card:
+                        prior_messages = [_reading_text(x["text"]) for x in store.messages(previous["id"])
+                                          if not x["answer"]]
+        if not pending and not prior_card and req.get("pending_question") and not matched and not recovered_answer:
+            # A correction question leaves the request open after superseding its card.
+            # Its next typed correction continues that card's operation as well.
+            cards = [e for e in store.events(req["id"]) if e.get("type") == "card"]
+            if cards:
+                with read_only(self.engine) as conn:
+                    prior_card = conn.execute(select(m.approval.c.contract, m.approval.c.args_json).where(
+                        m.approval.c.id == cards[-1]["approval_id"], m.approval.c.status == "superseded")).first()
         setting_up = self._books_pending()  # the pending gate: until the books are set up, only the setup runs
         try:
             out = self.graph.invoke({"conversation_id": cid, "transcript": self._history(c, req),
-                                     "request_text": request_text, "message_text": "" if matched else text,
-                                     "messages": [x["text"] for x in said if not x["answer"] and not (matched and x is mine)],
+                                     "request_text": " ".join(prior_messages + [request_text])
+                                     if prior_messages and not continuation else request_text,
+                                     "previous_reads_only": bool(not req["pending_card"] and continuation),
+                                     "message_text": "" if matched or recovered_answer else text,
+                                     "mixed": mixed,
+                                     "messages": prior_messages + [x["text"] for x in said if not x["answer"] and not (matched and x is mine)],
                                      "engine_text": " ".join(_shown(e) for e in store.events(req["id"])),
-                                     "answered": matched is not None, "l3": False,
+                                     "answered": matched is not None or recovered_answer, "l3": False,
                                      "pending_contract": pending["contract"] if pending and pending["id"] == req[
-                                         "pending_card"] else None,
+                                         "pending_card"] else prior_card.contract if prior_card else None,
                                      "pending_args": pending["args_json"] if pending and pending["id"] == req[
-                                         "pending_card"] else None,
+                                         "pending_card"] else prior_card.args_json if prior_card else None,
                                      "pending_card": pending["id"] if pending and pending["id"] == req[
                                          "pending_card"] else None,
                                      "claim": c, "token": req["token"], "request_id": req["id"],
-                                     "turn": [{"role": "user", "content": text}], "events": [], "grounding": [],
+                                     "turn": [{"role": "user", "content": text}], "events": [], "steps": [], "grounding": [],
                                      "requests": 0, "reply": None, "candidates": [], "selected": None, "searched": False,
                                      "principal_id": principal["id"] if principal else None,
                                      "resolution": session.dump(), "setup": setting_up, "setup_read": False},
@@ -1121,7 +1972,12 @@ class Assistant:
         session = Session.load(out.get("resolution"))
         last = events[-1] if events else {"type": "answer", "text": ""}
         question = dict(session.pending, event=last) if last["type"] == "ask" and session.pending else None
-        return self._finish(c, req, events, session, question, catalogue_reply=out.get("catalogue_reply", False))
+        calls = [tc["function"]["name"] for msg in out["turn"] if msg["role"] == "assistant"
+                 for tc in (msg.get("tool_calls") or [])]
+        only_reads = bool(calls) and all(
+            (contract := REGISTRY.contracts.get(name)) is not None and contract.effect == "read" for name in calls)
+        return self._finish(c, req, events, session, question, catalogue_reply=out.get("catalogue_reply", False),
+                            steps=out.get("steps", []), reads_only_turn=only_reads)
 
     def _set_aside(self, c: store.Claim, req: dict, last: dict, question: dict | None = None) -> dict | None:
         """The request's pending card, set aside by a turn that ends with anything but a new card (a question, a
@@ -1143,6 +1999,7 @@ class Assistant:
         refusal = Refusal(last["text"], last["code"], last.get("options") or [], **data) \
             if last["type"] in ("ask", "refused") and last.get("code") else None
         try:
+            check_turn_budget(store.turn_remaining(c))
             out = approvals.set_aside(self.engine, c.conversation_id, req["token"], req["pending_card"],
                                       last.get("text") or "", refusal)
         except Refusal as rf:
@@ -1154,24 +2011,74 @@ class Assistant:
             return {"type": "notice", "code": "card_set_aside", "text": SET_ASIDE.format(title=out.data["title"]) + again}
         return {"type": "notice", "code": "card_already_ended", "text": out.text}  # an approval won the card's row
 
+    def _timeout(self, c: store.Claim, req: dict, events: list[dict], *,
+                 code: str = "turn_timeout", message: str = TURN_TIMEOUT_TEXT) -> list[dict]:
+        """Persist a timeout with only a card that is still pending under the books' live fence."""
+        cid = c.conversation_id
+        req = store.get_request(req["id"])
+        pending = approvals.pending_card(self.engine, cid)
+        card_id = req["pending_card"] if (pending or {}).get("id") == req["pending_card"] else None
+        # Approval's stale-card replacement inherits the request token; pending_card checks its live fence.
+        if pending and pending["request_card_token"] == req["token"]:
+            card_id = pending["id"]
+        text = message + (" Your approval card is still pending." if card_id else "")
+        # An unchanged correction can announce a set-aside before the final checkpoint actually applies it.
+        events = [e for e in events if e["type"] == "notice" and
+                  not (card_id and e.get("code") == "card_set_aside")] + [
+            {"type": "refused", "code": code, "text": text}]
+        if not store.finalise(c, req["id"], events, pending_question=req["pending_question"], pending_card=card_id,
+                              state="open" if card_id else "ended", why=None if card_id else "refused",
+                              serial_now=store.serial(cid), bindings_now=store.bindings(req["id"]),
+                              intent_state="used" if card_id else "unused"):
+            return [{"type": "refused", "code": "busy", "text": say("busy")}]
+        if not card_id:
+            approvals.end_request(self.engine, cid, c.generation, req["token"])
+        return events
+
     def _finish(self, c: store.Claim, req: dict, events: list[dict], session: Session, question: dict | None,
-                *, catalogue_reply: bool = False) -> list:
+                *, catalogue_reply: bool = False, steps: list[dict] | None = None,
+                reads_only_turn: bool = False) -> list:
         """The request's new state from the turn's events, the pending card set aside when the turn ends without a
         new card, and the turn written in one short transaction."""
+        # Completion is also a safe point: a final answer arriving at the deadline is never shown as success.
+        # Do not check between a newly proposed card and its finalise; that card must be recorded normally.
+        timed_out = any(e.get("code") == "turn_timeout" for e in events)
+        if not any(e["type"] == "card" for e in events):
+            timed_out = timed_out or _turn_expired(c)
+        if timed_out:
+            return self._timeout(c, req, events)
+        interrupted = next((e for e in events if e.get("code") == "answer_interrupted"), None)
+        if interrupted:
+            pending = approvals.pending_card(self.engine, c.conversation_id)
+            if pending and (pending["id"] == req["pending_card"] or pending["request_card_token"] == req["token"]):
+                return self._timeout(c, req, events, code="answer_interrupted", message=interrupted["text"])
+        try:
+            return self._finish_live(c, req, events, session, question, catalogue_reply=catalogue_reply, steps=steps,
+                                     reads_only_turn=reads_only_turn)
+        except Refusal as rf:
+            if rf.code != "turn_timeout":
+                raise
+            return self._timeout(c, req, events)
+
+    def _finish_live(self, c: store.Claim, req: dict, events: list[dict], session: Session, question: dict | None,
+                     *, catalogue_reply: bool, steps: list[dict] | None, reads_only_turn: bool) -> list[dict]:
         cid = c.conversation_id
         if not session.owner_messages:
             session.owner_messages = [{**x, **store.message_resolution(x["id"])} for x in store.messages(req["id"])]
         try:
             # A catalogue outcome runs nothing and already has its own reply. A later write still
             # checks every original message before proposing a card.
-            if not catalogue_reply:
+            # A credential refusal is terminal: owner-word checks must not replace it with another outcome.
+            if not catalogue_reply and not any(e.get("code") == "credential_refused" for e in events):
                 resolve.guard_messages(session)
         except Planned as p:
             if not any(e.get("capability") == p.route and e.get("outcome") == "c" for e in events):
                 with read_only(self.engine) as conn:
                     company_id = company_ctx(conn).company_id
                 store.record_demand(company_id, "c", p.route, " ".join(msg["text"] for msg in session.owner_messages))
+            prior = next((e for e in events if e.get("capability") == p.route and e.get("outcome") == "c"), None)
             events = [e for e in events if e["type"] == "notice"] + [
+                prior if p.route == "planned.tax_engine" and prior else
                 {"type": "answer", "outcome": "c", "text": p.message, "capability": p.route}]
             question = None
         except Refusal as rf:
@@ -1187,8 +2094,14 @@ class Assistant:
             question = {**question, "event": _asked(question["event"])}
         card = next((e for e in reversed(events) if e["type"] == "card"), None)
         last = events[-1] if events else {"type": "answer", "text": ""}
-        keeps = last["type"] == "answer" and last.get("checked") == "engine" and req["pending_card"] and \
-            (approvals.pending_card(self.engine, cid) or {}).get("id") == req["pending_card"]
+        pending = approvals.pending_card(self.engine, cid) if req["pending_card"] else None
+        same_card = pending and pending.get("id") == req["pending_card"]
+        current = next((msg for msg in session.owner_messages if msg.get("id") == c.message_id), None)
+        text = current["text"] if current else ""
+        if same_card and _card_read(text):
+            keeps = _read_names_card(self.engine, pending, text)
+        else:
+            keeps = bool(same_card and last["type"] == "answer" and last.get("checked") == "engine")
         aside = False  # the card's own row was set aside by this turn
         if card is None and not keeps:
             if req["pending_card"] and not store.renew(c):  # the lease, immediately before the card is set aside
@@ -1199,16 +2112,20 @@ class Assistant:
                 events = [notice, *events]
         if card is not None:
             state, why, pending_card = "open", None, card["approval_id"]
+        elif keeps:
+            # Keep the card alongside a related read's question, if any.
+            state, why, pending_card = "open", None, req["pending_card"]
+            if last["type"] != "ask":
+                question = None
         elif last["type"] == "ask":
             state, why, pending_card = "open", None, None
-        elif keeps:
-            # the engine's own reply about the pending card ("approve the card to save it"): the card stays
-            state, why, pending_card, question = "open", None, req["pending_card"], None
         else:
             state, why, pending_card, question = "ended", SET_ASIDE_END if aside else last["type"], None, None
+        events = _attach_steps(events, steps)
         if not store.finalise(c, req["id"], events, pending_question=question, pending_card=pending_card, state=state,
                               why=why, serial_now=session.serial, bindings_now=session.bindings,
-                              intent_state="used" if card is not None else "unused"):
+                              intent_state="used" if card is not None else "unused",
+                              reads_only_turn=state == "open" and last["type"] == "ask" and reads_only_turn):
             return [{"type": "refused", "code": "busy", "text": say("busy")}]  # never a card it could not record
         if state == "ended":
             approvals.end_request(self.engine, cid, c.generation, req["token"])

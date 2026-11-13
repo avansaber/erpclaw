@@ -149,12 +149,12 @@ def test_render_inputs_are_stored_as_canonical_json_whatever_the_key_order(engin
         '{"fonts":{"bold":"Noto Bold","sans":"Noto Sans"},"template":"invoice/1"}'
 
 
-@pytest.mark.parametrize("bad, key", [({"pages": 3}, "pages"), ({"a": {"b": [1]}}, "a.b"), ({"x": None}, "x"),
-                                      ({"flag": True}, "flag"), ({1: "one"}, "1")])
-def test_render_inputs_other_than_text_or_mappings_are_refused_naming_the_key(engine, bad, key):
+@pytest.mark.parametrize("bad", [{"pages": 3}, {"a": {"b": [1]}}, {"x": None}, {"flag": True}, {1: "one"}])
+def test_render_inputs_other_than_text_or_mappings_are_refused_in_plain_words(engine, bad):
     with engine.begin() as conn, pytest.raises(Refusal) as e:
         files.put(company_ctx(conn), PDF, "application/pdf", DOC, render_inputs=bad)
-    assert e.value.code == "render_inputs_shape" and key in str(e.value)
+    assert e.value.code == "render_inputs_shape"
+    assert str(e.value) == "The file could not be saved. Please try making it again; nothing was changed."
 
 
 def test_the_database_refuses_render_inputs_that_are_not_json(engine):

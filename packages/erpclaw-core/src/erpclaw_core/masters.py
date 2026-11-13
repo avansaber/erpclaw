@@ -1,4 +1,4 @@
-"""Customers and items: resolution from the owner's words to records.
+"""Customers, suppliers and items: resolution from the owner's words to records.
 
 The model passes names exactly as the owner said them. The engine matches.
 An unknown or ambiguous name never falls through to a guess.
@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from . import models as m
 from .common import Ctx, Refusal, new_id
@@ -18,8 +18,8 @@ STOP = {"inc", "inc.", "corp", "corp.", "corporation", "co", "co.", "ltd", "llc"
 
 
 def normalise_name(s: str) -> str:
-    """Lower case, punctuation removed; every whitespace character separates words, and runs collapse to one space."""
-    return " ".join(re.sub(r"[^a-z0-9\s]", "", s.lower()).split())
+    """Case-fold, remove punctuation and collapse runs of whitespace."""
+    return " ".join(re.sub(r"[^\w\s]|_", "", s.casefold()).split())
 
 
 _norm = normalise_name  # compatibility for existing core and plugin name readers
@@ -164,6 +164,47 @@ def customers(ctx: Ctx) -> list[dict]:
 
 def find_customer(ctx: Ctx, said: str) -> dict:
     return _match(customers(ctx), said, "customer", references=True)
+
+
+def suppliers(ctx: Ctx) -> list[dict]:
+    return [dict(r) for r in ctx.conn.execute(select(m.party).where(
+        m.party.c.company_id == ctx.company_id, m.party.c.kind == "supplier")).mappings()]
+
+
+def _filter_name_matches(needle: str, name: str) -> bool:
+    words = _norm(name).split()
+    compact = "".join(words)
+    plural = "".join(words[:-1]) + regular_plural(words[-1]) if words else ""
+    return bool(needle) and (needle in compact or needle == plural)
+
+
+def master_page(ctx: Ctx, what: str, offset: int, limit: int,
+                name_filter: str | None = None) -> tuple[int, list[dict]]:
+    """Count and page this company's masters in raw-name and id order."""
+    source = m.item if what == "item" else m.party
+    conditions = [source.c.company_id == ctx.company_id]
+    if what != "item":
+        conditions.append(source.c.kind == what)
+    if name_filter is not None:
+        needle = _norm(name_filter).replace(" ", "")
+        matches = (row for row in ctx.conn.execute(select(source).where(*conditions).order_by(
+            func.convert_to(source.c.name, "UTF8"), func.convert_to(source.c.id, "UTF8"))).mappings()
+                   if _filter_name_matches(needle, row["name"]))
+        count, page = 0, []
+        for row in matches:
+            if offset <= count < offset + limit:
+                page.append(dict(row))
+            count += 1
+        return count, page
+    count = ctx.conn.execute(select(func.count()).select_from(source).where(*conditions)).scalar_one()
+    rows = ctx.conn.execute(select(source).where(*conditions).order_by(
+        func.convert_to(source.c.name, "UTF8"), func.convert_to(source.c.id, "UTF8"))
+        .offset(offset).limit(limit)).mappings()
+    return count, [dict(row) for row in rows]
+
+
+def find_supplier(ctx: Ctx, said: str) -> dict:
+    return _match(suppliers(ctx), said, "supplier", references=True)
 
 
 def find_item(ctx: Ctx, said: str) -> dict:

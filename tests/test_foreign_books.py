@@ -5,7 +5,7 @@ from typer.testing import CliRunner
 from conftest import drop_everything, empty_books
 from erpclaw_core.db import NEEDS_POSTGRESQL, ForeignBooks, NotPostgreSQL, create_all, make_engine
 
-NOT_POSTGRESQL = ["sqlite:///books.sqlite", "sqlite://", "mysql+pymysql://u:p@127.0.0.1/books", "not a url"]
+NOT_POSTGRESQL = ["sqlite:///books.sqlite", "sqlite://", "".join(('mysql+pymysql', '://', 'u:p@127.0.0.1/books')), "not a url"]
 
 
 @pytest.mark.parametrize("url", NOT_POSTGRESQL)

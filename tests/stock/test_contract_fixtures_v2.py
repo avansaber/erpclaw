@@ -34,6 +34,9 @@ def test_every_setup_fixture_against_the_producer(engine, monkeypatch, case):
         assert books.call_setup() == books.resolve(case["output"])
         books.assert_effects(before, books.snapshot())
     after_call = books.snapshot()
+    for expected in case["after"].get("on_hand", {}).values():
+        for row in expected["warehouses"]:
+            row["currency"] = case["books"]["currency"]
     books.assert_after()
     assert books.snapshot() == after_call  # after-state reads and verification must also be read-only
 

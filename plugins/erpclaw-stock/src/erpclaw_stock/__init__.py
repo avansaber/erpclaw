@@ -22,6 +22,7 @@ from .opening_stock import CONTRACT as OPENING_STOCK
 from .write_off import CONTRACT as WRITE_OFF
 from .count_stock import CONTRACT as STOCK_COUNT
 from .cancellation import CONTRACT as CANCEL_STOCK
+from .reverse_goods_received import CONTRACT as REVERSE_GOODS_RECEIVED
 
 # ---------------------------------------------------------------- the contract's models (stock/1)
 # Every figure crosses as a canonical decimal string; item and warehouse are ids (the consumer resolves names).
@@ -48,6 +49,7 @@ class WarehouseOnHand(ServiceModel):
     name: str
     qty: str
     value: str
+    currency: str
 
 
 class OnHandOut(ServiceModel):
@@ -85,6 +87,7 @@ class IssueIn(ServiceModel):
 
 class Cost(Omitting):
     cost: str
+    currency: str
     card_note: str | None = None  # a zero cost: "less than 0.01 USD", the currency's smallest unit, for the card
 
 
@@ -92,6 +95,7 @@ class LedgerLine(ServiceModel):
     account: str
     debit: str
     credit: str
+    currency: str
 
 
 class PreviewIssueOut(ServiceModel):
@@ -121,12 +125,14 @@ class ReturnIn(ServiceModel):
 
 class PreviewReturnOut(ServiceModel):
     cost: str
+    currency: str
     ledger_lines: list[LedgerLine]
     read_set: list[list[str]]
 
 
 class ReturnOut(ServiceModel):
     cost: str
+    currency: str
     ledger_lines: list[LedgerLine]
     entry_id: str
 
@@ -155,11 +161,13 @@ class Mirror(ServiceModel):
     value: str
     qty_after: str
     value_after: str
+    currency: str
 
 
 class Net(ServiceModel):
     account: str
     net: str
+    currency: str
 
 
 class PreviewReverseOut(ServiceModel):
@@ -173,7 +181,7 @@ class ReverseOut(ServiceModel):
     entry_ids: list[str]
 
 
-# ---------------------------------------------------------------- additive setup models (stock/2); stock/1 above stays frozen
+# ---------------------------------------------------------------- additive setup models (stock/2)
 
 class NoInput(ServiceModel):
     pass
@@ -347,10 +355,10 @@ MANIFEST = Manifest(
     name="stock", version="0.1.1", publisher=PUBLISHER, distribution="erpclaw-stock", licence="GPL-3.0-only",
     source=Source(repository="workspace", commit="workspace"), engine=">=0.0.2", after_core_revision="0015",
     depends={}, conflicts=[], owned_tables=[tbl.name for tbl in TABLES], contracts={OPENING_STOCK.name: OPENING_STOCK.effect, WRITE_OFF.name: WRITE_OFF.effect,
-        STOCK_COUNT.name: STOCK_COUNT.effect, CANCEL_STOCK.name: CANCEL_STOCK.effect}, calls=[],
+        STOCK_COUNT.name: STOCK_COUNT.effect, CANCEL_STOCK.name: CANCEL_STOCK.effect, REVERSE_GOODS_RECEIVED.name: REVERSE_GOODS_RECEIVED.effect}, calls=[],
     events=Events(emits=[], consumes=[]), slots={}, voucher_types=["stock_receipt", "stock_opening", "stock_write_off", "stock_count", "stock_goods_received"],
     capabilities=Capabilities(network=[], files=[]), metrics=[],
     services=[ServiceDecl(name=s.name, effect=s.effect) for s in SERVICES],
 )
 
-PLUGIN = Plugin(manifest=MANIFEST, kind="business-module", contracts=[OPENING_STOCK, WRITE_OFF, STOCK_COUNT, CANCEL_STOCK], metrics=[], services=SERVICES)
+PLUGIN = Plugin(manifest=MANIFEST, kind="business-module", contracts=[OPENING_STOCK, WRITE_OFF, STOCK_COUNT, CANCEL_STOCK, REVERSE_GOODS_RECEIVED], metrics=[], services=SERVICES)
