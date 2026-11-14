@@ -186,7 +186,7 @@ def test_reserved_source_versions_are_consistent_without_installation_claim():
     root = Path(__file__).resolve().parents[1]
     packages = [("packages/erpclaw-core", "erpclaw-core", "0.0.2", core_contracts.MANIFEST),
                 ("plugins/erpclaw-sales", "erpclaw-sales", "0.0.4", SALES),
-                ("plugins/erpclaw-stock", "erpclaw-stock", "0.1.1", STOCK)]
+                ("plugins/erpclaw-stock", "erpclaw-stock", "0.1.3", STOCK)]
     lock = {p["name"]:p["version"] for p in tomllib.loads((root/"uv.lock").read_text())["package"]}
     for path, name, version, manifest in packages:
         project = tomllib.loads((root/path/"pyproject.toml").read_text())["project"]

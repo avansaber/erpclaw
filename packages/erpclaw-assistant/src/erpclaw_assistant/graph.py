@@ -31,7 +31,7 @@ from erpclaw_core.plugins import REGISTRY, enabled_plugins, ensure_enabled, oper
 
 from . import hosted, resolve, store
 from .resolve_payment import payment_display_purpose
-from .model import Model, Reply, TURN_TIMEOUT_TEXT, check_turn_budget, turn_budget
+from .model import Model, Reply, ToolCall, TURN_TIMEOUT_TEXT, check_turn_budget, turn_budget
 from .resolve import (Planned, Session, account, one_at_a_time, owner_order, reply_peers, resolve_args,
                       strict_customers, with_codes, write_intents, write_scopes)
 from .resolve import _say as say
@@ -332,7 +332,7 @@ def _checkpoint_resolution(engine: Engine, claim: store.Claim, request_id: str, 
         if not store.renew(claim):
             raise Stopped()
         req = store.get_request(request_id)
-        pending = approvals.pending_card(engine, claim.conversation_id)
+        pending = approvals.pending_card(engine, claim.conversation_id, ownership_check=claim.owns)
         if pending:
             refusal = Refusal(question["text"], "money_name_ambiguous",
                               [c["label"] for c in question["choices"]], field=question["field"],
@@ -340,7 +340,7 @@ def _checkpoint_resolution(engine: Engine, claim: store.Claim, request_id: str, 
             try:
                 check_turn_budget(store.turn_remaining(claim))
                 out = approvals.set_aside(engine, claim.conversation_id, req["token"], pending["id"],
-                                          question["text"], refusal)
+                                          question["text"], refusal, ownership_check=claim.owns)
             except Refusal as rf:
                 if rf.code == "fenced":
                     raise Stopped() from None
@@ -366,6 +366,7 @@ class State(TypedDict, total=False):
     l3: bool                                    # the turn's own words already went to the catalogue
     pending_contract: str | None                # the operation of the request's pending card, if one is pending
     pending_args: str | None                    # that card's stored arguments (JSON), for the engine's re-proposal
+    pending_preview: str | None                  # the ownership-checked card's stored preview
     pending_card: str | None                    # that card's id: a new card replaces it only while it is pending
     correction_from_calls: bool
     reproposed: dict | None                     # the arguments the engine re-proposed this turn, if it did
@@ -651,10 +652,17 @@ def build_graph(engine: Engine, model: Model):
             raise Stopped()
         renew(state)
         return approvals.propose(engine, contract, inp.model_dump(mode="json"), state.get("conversation_id"),
-                                 request_card_token=state.get("token"), **kwargs)
+                                 request_card_token=state.get("token"),
+                                 ownership_check=state["claim"].owns if state.get("claim") else None, **kwargs)
 
     def model_node(state: State) -> dict:
         renew(state)  # the lease, before every model call
+        hold = (state.get("resolution") or {}).get("bindings", {}).get("invoice_hold")
+        if hold and hold.get("stage") == "adding":
+            kind, name = hold["names"][0]
+            args = {"name": name, **hold.get("details", {})}
+            return {"reply": _reply_dict(Reply("", [ToolCall("add_name", "add_" + kind, args, json.dumps(args))])),
+                    "requests": state.get("requests", 0) + 1}
         with read_only(engine) as conn:
             ctx = company_ctx(conn)
         msgs = [{"role": "system", "content": system_prompt(ctx.company_name or "a new business, not set up yet",
@@ -738,10 +746,21 @@ def build_graph(engine: Engine, model: Model):
                 with read_only(engine) as conn:
                     ctx = company_ctx(conn)
                     values = resolve.inventory(ctx, message, resolve._items(ctx))
+                    price_correction = (frozenset(), None)
+                    catalogue_price = None
+                    if not _complete_request(message) and not resolve.keeps_card(message) and not re.search(
+                            resolve.table()["approval_words"], message, re.I):
+                        price_correction = resolve.owner_price_correction(
+                            ctx, contract, json.loads(state["pending_args"]), state.get("messages") or [])
+                        catalogue_price = resolve.catalogue_marked_price(
+                            ctx, contract, json.loads(state["pending_args"]), state.get("messages") or [],
+                            state.get("pending_preview"))
+                if catalogue_price is not None:
+                    return "repropose"
                 value_kinds = set(kinds)
                 if kinds & {"quantity", "amount", "rate"}:
                     value_kinds.update({"figure", "number"})
-                correction = cue or (not _complete_request(message) and
+                correction = cue or bool(price_correction[0]) or (not _complete_request(message) and
                                      any(v.kind in value_kinds for v in values))
                 if not correction and (resolve.keeps_card(message) or
                                        re.search(resolve.table()["approval_words"], message, re.I)):
@@ -982,6 +1001,17 @@ def build_graph(engine: Engine, model: Model):
                 a = json.loads(c["args_json"], parse_float=Decimal)
                 if isinstance(a, dict):
                     writes.append((k, w, a))
+        hold = (resolution or {}).get("bindings", {}).get("invoice_hold")
+        if hold and hold.get("stage") == "resume":
+            expected = hold["args"]
+            if len(writes) != 1 or writes[0][1].name != "create_invoice" or writes[0][2] != expected:
+                session = Session.load(resolution)
+                session.bindings.pop("invoice_hold", None)
+                rf = session.ask("invoice", say("model_values", choices=""), "invoice_ambiguous", [], [])
+                return {"events": events + [{"type": "ask", "text": rf.message, "code": rf.code,
+                        "options": rf.options, "data": public_data(rf.data)}], "resolution": session.dump(),
+                        "turn": turn, "reply": None}
+            events.append({"type": "notice", "text": say("add_continue")})
         resolved, stop, rank, invalid, scopes = {}, None, [], {}, {}
         if writes and state.get("pending_contract") and all(w.name != state["pending_contract"] for _, w, _ in writes):
             # another operation than the pending card's: its words are this message's; the earlier ones were the
@@ -1117,9 +1147,27 @@ def build_graph(engine: Engine, model: Model):
                 current = None  # the write being resolved or previewed: a question it raises belongs to it
                 with read_only(engine) as conn:
                     ctx = company_ctx(conn)
+                    price_correction = (frozenset(), None)
+                    catalogue_price = None
+                    stored = state.get("reproposed")
+                    if stored is None and state.get("pending_card") and state.get("pending_args") and \
+                            len(writes) == 1 and writes[0][1].name == state.get("pending_contract"):
+                        stored = json.loads(state["pending_args"])
+                    if stored is not None and len(writes) == 1 and message and not state.get("answered") and \
+                            not _complete_request(message) and not _card_read(message) and not resolve.keeps_card(message) and not re.search(
+                                resolve.table()["approval_words"], message, re.I):
+                        price_correction = resolve.owner_price_correction(
+                            ctx, writes[0][1], stored, state.get("messages") or [])
+                        catalogue_price = resolve.catalogue_marked_price(
+                            ctx, writes[0][1], stored, state.get("messages") or [], state.get("pending_preview"))
+                        if price_correction[0] or catalogue_price is not None:
+                            k, w, _ = writes[0]
+                            writes = [(k, w, stored)]
+                            peers = reply_peers([(w, stored)])
                     if request is not message and len(state.get("messages") or []) > 1:
                         # the request's words, the latest mention of each field supplying it
-                        request = resolve.request_words(ctx, state["messages"], [(w, a) for _, w, a in writes])
+                        request = resolve.request_words(ctx, state["messages"], [(w, a) for _, w, a in writes],
+                                                        superseded_rates=price_correction[0])
                         latest = set() if state.get("answered") else {  # an answer binds; it never clears itself
                             o.kind for o in resolve.inventory(ctx, message, resolve._items(ctx))}
                         session.bindings = {p: v for p, v in session.bindings.items()  # a later mention clears
@@ -1129,6 +1177,20 @@ def build_graph(engine: Engine, model: Model):
                     scopes = {k: named[n] for n, (k, _, _) in enumerate(writes)}
                     for k, w, a in writes:
                         current = k
+                        hold = session.bindings.get("invoice_hold")
+                        if hold and hold.get("stage") == "adding" and w.name == "add_item":
+                            preflight = {**a, **{key[len(scopes[k]):]: value for key, value in session.bindings.items()
+                                                    if key.startswith(scopes[k])}}
+                            w.preview(ctx, w.input_model.model_validate(preflight))
+                        if price_correction[0] and w.name == "add_item":
+                            a = {**a, "price": str(price_correction[1])}
+                            # These fields can only have entered the pending card through engine questions.
+                            for field in ("kind", "valuation_method", "warehouse", "inventory_account", "new_item"):
+                                if a.get(field) is not None:
+                                    session.bindings.setdefault(f"{scopes[k]}{field}", a[field])
+                        elif (price_correction[0] or catalogue_price is not None) and w.name == "create_invoice":
+                            rate = price_correction[1] if price_correction[0] else catalogue_price
+                            a = {**a, "items": [{**a["items"][0], "rate": str(rate)}]}
                         resolved[k] = resolve_args(ctx, w, a, said, session, peers, scopes[k],
                                                    mixed=state.get("mixed", False))
                     current = None
@@ -1146,7 +1208,8 @@ def build_graph(engine: Engine, model: Model):
                     try:
                         account(ctx, accounting_text, [(w, resolved[k].args) for k, w, _ in writes],
                                 [resolved[k] for k, _, _ in writes], order[0] if order else None, session,
-                                [scopes[k] for k, _, _ in writes])
+                                [scopes[k] for k, _, _ in writes],
+                                superseded_rates=price_correction[0])
                     finally:
                         for result in resolved.values():
                             if result.internal:
@@ -1246,6 +1309,9 @@ def build_graph(engine: Engine, model: Model):
                     found = [entries[i] for i in candidates if i in entries]
                     if len(named) != 1 or any(e.state in ("planned", "unsupported") for e in found):
                         event["text"] = _none_reply(named) or d.text
+                    unavailable = cat.unshared_unavailable(named, request)
+                    if unavailable:
+                        event["text"] += " " + cat.decide([unavailable], unavailable.id).text
                 events.append(event)
                 catalogue_reply = True
                 break  # the outcome ends the batch: nothing after it in this reply runs
@@ -1403,7 +1469,10 @@ def build_graph(engine: Engine, model: Model):
                     _record_step(steps, _write_step(contract, inp, out.card, not_done + dated))
                     drafted = (contract, given)
                     session = Session.load(resolution)
+                    hold = session.bindings.get("invoice_hold")
                     session.end()  # a card using the request's answers ends them
+                    if hold and hold.get("stage") == "adding":
+                        session.bindings["invoice_hold"] = hold
                     resolution = session.dump()
             except Refusal as rf:  # one rule with the approval path (erpclaw_core.common.is_question)
                 if rf.code in MODEL_REFUSALS:
@@ -1592,6 +1661,8 @@ class Assistant:
         conversation at a time: a message while a live turn holds the conversation is refused as busy."""
         with read_only(self.engine) as conn:
             who = pr.by_id(conn, principal["id"]) if principal else pr.owner(conn)
+            if not store.may_start_turn(conversation_id, who["id"], create=create):
+                raise Refusal("That conversation was not found.", "no_conversation")
             ctx = company_ctx(conn)
             pr.require(conn, who, ctx.company_id, "view")
         if not hosted.books_allowed(self.engine, self.model):  # again each turn: the books may have changed since
@@ -1607,7 +1678,6 @@ class Assistant:
             choice_codes = {c["code"] for c in _asked(event).get("choices", [])}
         if refused:
             text = hosted.scrub(text)
-        busy = [{"type": "refused", "code": "busy", "text": say("busy")}]
         try:
             c = store.claim(conversation_id, text, choice, principal_id=who["id"], principal_name=who["name"], create=create,
                             client_message_id=client_message_id, choice_codes=choice_codes)
@@ -1630,7 +1700,7 @@ class Assistant:
                                              "text": say("busy_stopped" if stopped else "busy")}],
                                            approvals.books_currency(self.engine))
         if refused:
-            events = [refused] if store.finalise_refusal(c, refused) else busy
+            events = [refused] if store.finalise_refusal(c, refused) else [{"type": "refused", "code": "turn_lapsed", "text": say("turn_lapsed")}]
             return approvals.with_currency(events, approvals.books_currency(self.engine))
         try:
             # A button answers the pending question; only the owner's typed message can be mixed.
@@ -1640,7 +1710,7 @@ class Assistant:
             else:
                 events = self._turn(c, ctx.company_id, principal, mixed=mixed)
         except Stopped:  # the claim or the fence moved on: this turn writes nothing more
-            events = busy
+            events = [{"type": "refused", "code": "turn_lapsed", "text": say("turn_lapsed")}]
         except ReconciliationIncomplete:
             store.release(c)
             events = [{"type": "refused", "code": "reconciliation_incomplete",
@@ -1664,9 +1734,11 @@ class Assistant:
 
     def _activate(self, c: store.Claim, company_id: str, token: str) -> tuple[store.Claim, approvals.Activation | None]:
         """Activate the fence, catching up once while the claim is live; None means the turn expired first."""
+        if not c.owns(c.conversation_id):
+            raise Refusal("That conversation was not found.", "no_conversation")
         if _turn_expired(c):
             return c, None
-        act = approvals.activate(self.engine, c.conversation_id, company_id, c.generation, token)
+        act = approvals._activate(self.engine, c.conversation_id, company_id, c.generation, token)
         if act.status == "active":
             return c, act
         c = store.catch_up(c, act.generation)
@@ -1674,7 +1746,7 @@ class Assistant:
             raise Stopped()
         if _turn_expired(c):
             return c, None
-        act = approvals.activate(self.engine, c.conversation_id, company_id, c.generation, token)
+        act = approvals._activate(self.engine, c.conversation_id, company_id, c.generation, token)
         if act.status != "active":
             raise Stopped()
         return c, act
@@ -1718,7 +1790,7 @@ class Assistant:
                                                   for e in store.events(req["id"]))
         title = (json.loads(row.card_json) if row.card_json else {}).get("title") or "the card"
         fresh = decision.get("fresh_approval_id")
-        if fresh and (approvals.pending_card(self.engine, req["conversation_id"]) or {}).get("id") == fresh:
+        if fresh and (approvals.pending_card(self.engine, req["conversation_id"], ownership_check=c.owns) or {}).get("id") == fresh:
             apply(row.status, "replaced", card=fresh)  # approval's fresh card, already shown
             return True, []
         if row.status == "superseded" and is_question(decision.get("code") or ""):
@@ -1749,6 +1821,10 @@ class Assistant:
             apply(row.status, "question", question=question, events=said, serial=session.serial,
                   previous_serial=previous_serial)
             return True, said
+        hold = store.bindings(req["id"]).get("invoice_hold")
+        if row.status == "consumed" and hold and hold.get("stage") == "adding":
+            apply(row.status, "continued")
+            return True, []
         said = [] if told or row.status in ("consumed", "declined") else [  # an end the owner did not cause or see
             {"type": "notice", "code": "card_set_aside",
              "text": SET_ASIDE.format(title=title) if row.status == "superseded" else approvals.GONE.get(
@@ -1803,12 +1879,25 @@ class Assistant:
         req = store.get_request(req["id"])
         still_open, said = self._reconcile(c, req, act.set_aside)
         notices += said
+        req = store.get_request(req["id"])
         if any(e["type"] == "ask" for e in said):  # a question the owner never saw: asked now, before anything else
             if not (store.reassign if c.rerun else store.assign)(c, req["id"]):
                 raise Stopped()
             req = store.get_request(req["id"])
             return self._finish(c, req, notices, Session(store.serial(cid), req["pending_question"],
                                                          store.bindings(req["id"])), req["pending_question"])
+        held = store.bindings(req["id"]).get("invoice_hold") if still_open else None
+        if held and held.get("stage") == "adding" and not req.get("pending_card") and not req.get("pending_question"):
+            with store._tx() as conn:
+                upcoming = conn.execute("SELECT text FROM request_message WHERE id = ?", (c.message_id,)).fetchone()
+            probe = _reading_text(upcoming["text"]).strip().lower().strip(" .!?,;:") if upcoming else ""
+            answers = resolve.table()["answers"]
+            if probe not in answers["continue_invoice"] | answers["decline_invoice"]:
+                if not _end_question_request(c, req):
+                    raise Stopped()
+                approvals._end_request(self.engine, cid, c.generation, req["token"])
+                notices.append({"type": "notice", "text": say("cancelled")})
+                still_open = False
         if still_open and req.get("pending_question") and not req.get("pending_card") and not self._books_pending():
             # Inspect the claimed message before assigning it to the old request. Explicit choices always answer it.
             with store._tx() as conn:
@@ -1818,7 +1907,7 @@ class Assistant:
                     req["pending_question"], _reading_text(mine["text"])) and _complete_request(mine["text"]):
                 if not _end_question_request(c, req):
                     raise Stopped()
-                approvals.end_request(self.engine, cid, c.generation, req["token"])
+                approvals._end_request(self.engine, cid, c.generation, req["token"])
                 still_open = False
         if not still_open:  # the message starts a new request, with its own token, at the next generation
             c = store.next_generation(c)
@@ -1862,6 +1951,45 @@ class Assistant:
         recovered_answer = c.rerun and current_message["question_id"] is not None
         matched = None if recovered_answer else resolve.match_answer(
             req["pending_question"], text, mine["choice"], card_pending=bool(req["pending_card"]))
+        hold = session.bindings.get("invoice_hold")
+        if hold and hold.get("stage") == "offer":
+            selected = next((ch.get("ref") for ch in (session.pending or {}).get("choices", [])
+                             if matched and matched[0] == "choice" and ch["code"] == matched[1]), None)
+            if selected == "decline" or text.strip().lower() in resolve.table()["answers"]["decline_invoice"]:
+                matched = ("control", "cancel")
+            elif selected == "add" or text.strip().lower() in resolve.table()["answers"]["continue_invoice"]:
+                hold["stage"] = "adding"
+                session.pending = None
+                matched = ("offer", "add")
+            elif not matched:
+                with read_only(self.engine) as conn:
+                    try:
+                        customer = find_customer(company_ctx(conn), text)["name"]
+                    except Refusal:
+                        customer = None
+                session.bindings.pop("invoice_hold", None)
+                session.pending = None
+                if customer:
+                    session.bindings["create_invoice#0:customer"] = customer
+                    matched = ("offer", "customer")
+        elif hold and hold.get("stage") == "adding" and not req["pending_card"] and not session.pending:
+            probe = text.strip().lower().strip(" .!?,;:")
+            if probe in resolve.table()["answers"]["decline_invoice"]:
+                matched = ("control", "cancel")
+            elif probe in resolve.table()["answers"]["continue_invoice"]:
+                hold["names"].pop(0)
+                hold.pop("details", None)
+                hold["stage"] = "adding" if hold["names"] else "resume"
+                matched = ("offer", "continue")
+            else:
+                session.bindings.pop("invoice_hold", None)
+        if hold and hold.get("stage") == "adding" and session.pending and not matched:
+            field = session.pending.get("field", "")
+            if field in ("add_item#0:unit", "add_item#0:price"):
+                hold.setdefault("details", {})[field.rsplit(":", 1)[-1]] = text.strip()
+                session.bindings[field] = text.strip()
+                session.pending = None
+                matched = ("offer", "detail")
         # the request's words: every owner message of it but those an answer consumed
         request_text = " ".join(x["text"] for x in said if not x["answer"] and not (matched and x is mine))
         picked = next((ch for ch in (req["pending_question"] or {}).get("choices") or []
@@ -1875,21 +2003,21 @@ class Assistant:
                                    choice_label=picked.get("label") if picked else None)
         if matched == ("control", "cancel") or leave:  # the request ends; its pending card is declined
             if req["pending_card"]:
-                approvals.decline(self.engine, req["pending_card"], principal)
+                approvals.decline(self.engine, req["pending_card"], principal, ownership_check=c.owns)
             events = notices + [{"type": "answer", "text": say("cancelled"), "checked": "engine"}]
             session.end()
             if not store.save_resolution(c, req["id"], session.dump()):
                 raise Stopped()
             if not store.finalise(c, req["id"], events, pending_question=None, pending_card=None, state="ended",
                                   why="cancelled", serial_now=session.serial, bindings_now={}, intent_state="unused"):
-                return [{"type": "refused", "code": "busy", "text": say("busy")}]
-            approvals.end_request(self.engine, cid, c.generation, req["token"])
+                return [{"type": "refused", "code": "turn_lapsed", "text": say("turn_lapsed")}]
+            approvals._end_request(self.engine, cid, c.generation, req["token"])
             return events
         if matched and matched[0] == "choice":
             session.answer(matched[1])
-        elif matched:
+        elif matched and matched[0] == "control":
             session.control(matched[1])
-        elif (req["pending_question"] or {}).get("choices") and req["pending_question"].get("event") and \
+        elif not matched and (req["pending_question"] or {}).get("choices") and req["pending_question"].get("event") and \
                 not req["pending_question"].get("span_id"):
             with read_only(self.engine) as conn:
                 ctx = company_ctx(conn)
@@ -1906,7 +2034,7 @@ class Assistant:
                                                            "capability": p.route}], session, None)
                 return self._finish(c, req, notices + [req["pending_question"]["event"]], session,
                                     req["pending_question"])
-        pending = approvals.pending_card(self.engine, cid) if req["pending_card"] else None
+        pending = approvals.pending_card(self.engine, cid, ownership_check=c.owns) if req["pending_card"] else None
         # A card set aside at the end of the immediately preceding request can still
         # supply the operation and its earlier words to a short correction. Its old
         # approval remains superseded; any new card belongs to this request.
@@ -1936,6 +2064,14 @@ class Assistant:
                 with read_only(self.engine) as conn:
                     prior_card = conn.execute(select(m.approval.c.contract, m.approval.c.args_json).where(
                         m.approval.c.id == cards[-1]["approval_id"], m.approval.c.status == "superseded")).first()
+        hold = session.bindings.get("invoice_hold")
+        if hold and hold.get("stage") == "adding":
+            request_text = hold["names"][0][1] + " " + " ".join(hold.get("details", {}).values()) + " " + " ".join(
+                x["text"] for x in said[1:] if not x["answer"] and x is not mine)
+            if not matched:
+                request_text += " " + text
+        elif hold and hold.get("stage") == "resume":
+            request_text = hold["words"]
         setting_up = self._books_pending()  # the pending gate: until the books are set up, only the setup runs
         try:
             out = self.graph.invoke({"conversation_id": cid, "transcript": self._history(c, req),
@@ -1944,13 +2080,15 @@ class Assistant:
                                      "previous_reads_only": bool(not req["pending_card"] and continuation),
                                      "message_text": "" if matched or recovered_answer else text,
                                      "mixed": mixed,
-                                     "messages": prior_messages + [x["text"] for x in said if not x["answer"] and not (matched and x is mine)],
+                                     "messages": [request_text] if hold and hold.get("stage") in ("adding", "resume") else prior_messages + [x["text"] for x in said if not x["answer"] and not (matched and x is mine)],
                                      "engine_text": " ".join(_shown(e) for e in store.events(req["id"])),
                                      "answered": matched is not None or recovered_answer, "l3": False,
                                      "pending_contract": pending["contract"] if pending and pending["id"] == req[
                                          "pending_card"] else prior_card.contract if prior_card else None,
                                      "pending_args": pending["args_json"] if pending and pending["id"] == req[
                                          "pending_card"] else prior_card.args_json if prior_card else None,
+                                     "pending_preview": pending["card_json"] if pending and pending["id"] == req[
+                                         "pending_card"] else None,
                                      "pending_card": pending["id"] if pending and pending["id"] == req[
                                          "pending_card"] else None,
                                      "claim": c, "token": req["token"], "request_id": req["id"],
@@ -1982,7 +2120,7 @@ class Assistant:
     def _set_aside(self, c: store.Claim, req: dict, last: dict, question: dict | None = None) -> dict | None:
         """The request's pending card, set aside by a turn that ends with anything but a new card (a question, a
         refusal, an answer), with the turn's own decision stored; None when no card of the request is pending."""
-        pending = approvals.pending_card(self.engine, c.conversation_id)
+        pending = approvals.pending_card(self.engine, c.conversation_id, ownership_check=c.owns)
         if not req["pending_card"] or (pending or {}).get("id") != req["pending_card"]:
             return None
         data = dict(last.get("data") or {})
@@ -2001,7 +2139,7 @@ class Assistant:
         try:
             check_turn_budget(store.turn_remaining(c))
             out = approvals.set_aside(self.engine, c.conversation_id, req["token"], req["pending_card"],
-                                      last.get("text") or "", refusal)
+                                      last.get("text") or "", refusal, ownership_check=c.owns)
         except Refusal as rf:
             if rf.code == "fenced":  # a newer turn took the conversation over: this one stops
                 raise Stopped() from None
@@ -2016,7 +2154,7 @@ class Assistant:
         """Persist a timeout with only a card that is still pending under the books' live fence."""
         cid = c.conversation_id
         req = store.get_request(req["id"])
-        pending = approvals.pending_card(self.engine, cid)
+        pending = approvals.pending_card(self.engine, cid, ownership_check=c.owns)
         card_id = req["pending_card"] if (pending or {}).get("id") == req["pending_card"] else None
         # Approval's stale-card replacement inherits the request token; pending_card checks its live fence.
         if pending and pending["request_card_token"] == req["token"]:
@@ -2030,9 +2168,9 @@ class Assistant:
                               state="open" if card_id else "ended", why=None if card_id else "refused",
                               serial_now=store.serial(cid), bindings_now=store.bindings(req["id"]),
                               intent_state="used" if card_id else "unused"):
-            return [{"type": "refused", "code": "busy", "text": say("busy")}]
+            return [{"type": "refused", "code": "turn_lapsed", "text": say("turn_lapsed")}]
         if not card_id:
-            approvals.end_request(self.engine, cid, c.generation, req["token"])
+            approvals._end_request(self.engine, cid, c.generation, req["token"])
         return events
 
     def _finish(self, c: store.Claim, req: dict, events: list[dict], session: Session, question: dict | None,
@@ -2049,7 +2187,7 @@ class Assistant:
             return self._timeout(c, req, events)
         interrupted = next((e for e in events if e.get("code") == "answer_interrupted"), None)
         if interrupted:
-            pending = approvals.pending_card(self.engine, c.conversation_id)
+            pending = approvals.pending_card(self.engine, c.conversation_id, ownership_check=c.owns)
             if pending and (pending["id"] == req["pending_card"] or pending["request_card_token"] == req["token"]):
                 return self._timeout(c, req, events, code="answer_interrupted", message=interrupted["text"])
         try:
@@ -2094,7 +2232,7 @@ class Assistant:
             question = {**question, "event": _asked(question["event"])}
         card = next((e for e in reversed(events) if e["type"] == "card"), None)
         last = events[-1] if events else {"type": "answer", "text": ""}
-        pending = approvals.pending_card(self.engine, cid) if req["pending_card"] else None
+        pending = approvals.pending_card(self.engine, cid, ownership_check=c.owns) if req["pending_card"] else None
         same_card = pending and pending.get("id") == req["pending_card"]
         current = next((msg for msg in session.owner_messages if msg.get("id") == c.message_id), None)
         text = current["text"] if current else ""
@@ -2105,7 +2243,7 @@ class Assistant:
         aside = False  # the card's own row was set aside by this turn
         if card is None and not keeps:
             if req["pending_card"] and not store.renew(c):  # the lease, immediately before the card is set aside
-                return [{"type": "refused", "code": "busy", "text": say("busy")}]
+                return [{"type": "refused", "code": "turn_lapsed", "text": say("turn_lapsed")}]
             notice = self._set_aside(c, req, last, question)
             aside = notice is not None and notice["code"] == "card_set_aside"
             if notice is not None and not (last["type"] == "notice" and last.get("code") == "card_set_aside"):
@@ -2126,9 +2264,9 @@ class Assistant:
                               why=why, serial_now=session.serial, bindings_now=session.bindings,
                               intent_state="used" if card is not None else "unused",
                               reads_only_turn=state == "open" and last["type"] == "ask" and reads_only_turn):
-            return [{"type": "refused", "code": "busy", "text": say("busy")}]  # never a card it could not record
+            return [{"type": "refused", "code": "turn_lapsed", "text": say("turn_lapsed")}]  # never a card it could not record
         if state == "ended":
-            approvals.end_request(self.engine, cid, c.generation, req["token"])
+            approvals._end_request(self.engine, cid, c.generation, req["token"])
         return events
 
     def note(self, conversation_id: str, text: str, question: dict | None = None) -> None:

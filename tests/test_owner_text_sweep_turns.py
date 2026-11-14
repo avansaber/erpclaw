@@ -290,18 +290,23 @@ def test_a_malformed_provider_body_never_shows_its_detail(engine):
         swept(r.json()["events"])
 
 
-@pytest.mark.xfail(strict=True, raises=DeferredOwnerText, reason="awaiting plain words for the approval read-contract refusal; "
-                   "get_metric is not a write with a declared read set.; rule 5: contract name")
 def test_proposing_a_read_checks_the_actual_refusal_text(engine):
+    """Restoring the contract-specific sentence fails the name and plain-text assertions."""
     from erpclaw_core import approvals
     from erpclaw_core.common import Refusal
+    from owner_text import violation_rules
 
-    with pytest.raises(Refusal) as caught:
-        approvals.propose(engine, REGISTRY.contracts["get_metric"], {"metric": "sales"})
-    refusal = caught.value
-    assert refusal.code == "not_a_write"
-    defer_owner_text([refusal.message], [("get_metric is not a write with a declared read set.", [5])],
-                     code=refusal.code)
+    messages = []
+    for name, arguments in (("get_metric", {"metric": "sales"}), ("list_customers", {})):
+        with pytest.raises(Refusal) as caught:
+            approvals.propose(engine, REGISTRY.contracts[name], arguments)
+        refusal = caught.value
+        assert refusal.code == "not_a_write"
+        assert name not in refusal.message
+        assert "declared read set" not in refusal.message
+        assert not violation_rules(refusal.message, refusal.code)
+        messages.append(refusal.message)
+    assert messages[0] == messages[1]
 
 
 # One runtime case per construction, including the helper that returns a refusal
@@ -867,8 +872,7 @@ def test_remaining_refusals_check_actual_text_through_feature_scenarios(request,
     from owner_text import violation_rules
     entries = [e for e in entries if not (
         e["file"] in (PLUGIN_PATH, FILE_PATH) and set(violation_rules(e["text"], e["code"])) <= {2, 5})
-        and not (e["code"] == "not_a_write" and e["line"] == 205
-                 and e["text"] == "get_metric is not a write with a declared read set.") ]
+    ]
     check_inventory(entries, case)
 
 

@@ -474,7 +474,8 @@ def test_real_app_route_inventory_and_health_are_preserved(engine):
 
     app = create_app(engine, ScriptedModel([]))
     tables = pipe().listener_routes(app.routes)
-    expected = {("GET", "/v1/health"), ("POST", "/v1/conversations"),
+    expected = {("GET", "/v1/cards/{aid}"), ("GET", "/v1/conversations/{cid}/stream"),
+                ("GET", "/v1/health"), ("POST", "/v1/conversations"),
                 ("POST", "/v1/conversations/{cid}/messages"), ("POST", "/v1/cards/{aid}/approve"),
                 ("POST", "/v1/cards/{aid}/decline"), ("GET", "/v1/operations/{key}"),
                 # the caller's own identity: served on every listener, the bearer ones included

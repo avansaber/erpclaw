@@ -345,10 +345,24 @@ def create_conversation(conversation_id: str, principal_id: str) -> None:
 
 
 def conversation_owner(conversation_id: str) -> str | None:
-    with _tx() as conn:
+    conn = _open()
+    try:
         row = conn.execute("SELECT owner_principal_id FROM conversation WHERE id = ?",
                            (conversation_id,)).fetchone()
         return row["owner_principal_id"] if row is not None else None
+    finally:
+        conn.close()
+
+
+def may_start_turn(conversation_id: str, principal_id: str, *, create: bool) -> bool:
+    """Check ownership without taking a claim; direct callers may create a new conversation."""
+    conn = _open()
+    try:
+        row = conn.execute("SELECT owner_principal_id FROM conversation WHERE id = ?",
+                           (conversation_id,)).fetchone()
+        return create if row is None else row["owner_principal_id"] is not None and row["owner_principal_id"] == principal_id
+    finally:
+        conn.close()
 
 
 def list_conversations(owner_principal_id: str, after: tuple[str, str] | None = None, limit: int = 50) -> dict:
@@ -430,6 +444,10 @@ class Claim:
     message_id: int
     took_over: bool = False  # the claim was taken from a turn whose lease lapsed: its request gets a fresh token
     rerun: bool = False
+    principal_id: str | None = None
+
+    def owns(self, conversation_id: str) -> bool:
+        return self.principal_id is not None and conversation_owner(conversation_id) == self.principal_id
 
 
 @dataclass
@@ -451,6 +469,8 @@ def claim(conversation_id: str, text: str, choice: str | None = None, turn_id: s
     A stopped newest message runs again under the new turn without allocating another message or seq."""
     conversation_id, text, choice, turn_id, principal_id, principal_name, client_message_id = (
         _stored(v) for v in (conversation_id, text, choice, turn_id, principal_id, principal_name, client_message_id))
+    if not principal_id:
+        raise Refusal("That conversation was not found.", "no_conversation")
     turn_id = turn_id or secrets.token_hex(8)
     at = _now()
     with _tx() as conn:
@@ -516,7 +536,7 @@ def claim(conversation_id: str, text: str, choice: str | None = None, turn_id: s
                                (_stored(conversation_id), _stored(turn_id), _stored(text), _stored(choice), _stored(_stamp(at)), _stored(seq),
                                 _stored(principal_id), _stored(principal_name), _stored(client_message_id),
                                 _stored("reads_only_continuation" if continuation else None))).lastrowid
-        return Claim(conversation_id, turn_id, gen, row["version"], mid, took_over, message is not None)
+        return Claim(conversation_id, turn_id, gen, row["version"], mid, took_over, message is not None, principal_id)
 
 
 def _holds(conn, c: Claim, at: datetime | None = None) -> bool:
@@ -571,7 +591,7 @@ def catch_up(c: Claim, fence_generation: int) -> Claim | None:
         gen = max(fence_generation, c.generation) + 1
         conn.execute("UPDATE conversation SET generation = ?, claim_until = ? WHERE id = ?",
                      (_stored(gen), _stored(_stamp(at + LEASE)), _stored(c.conversation_id)))
-        return Claim(c.conversation_id, c.turn_id, gen, c.version, c.message_id, c.took_over, c.rerun)
+        return Claim(c.conversation_id, c.turn_id, gen, c.version, c.message_id, c.took_over, c.rerun, c.principal_id)
 
 
 def next_generation(c: Claim) -> Claim | None:

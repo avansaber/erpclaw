@@ -22,6 +22,8 @@ def add_feature(name: str) -> None:
 
 
 add_feature("turn_failure_codes")
+add_feature("decision_events")
+add_feature("steps")
 
 
 def register_me(app: FastAPI, engine: Engine, model: Model, principal: Callable[..., dict]) -> None:

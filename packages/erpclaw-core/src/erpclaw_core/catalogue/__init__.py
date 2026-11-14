@@ -351,6 +351,69 @@ def named_by_synonym(conn: Connection, said: str) -> list[tuple[Entry, int]]:
     return _named(catalogue(conn), said)
 
 
+def unshared_unavailable(named: list[tuple[Entry, int]], said: str) -> Entry | None:
+    """Return the uniquely strongest unavailable entry with unshared binding evidence."""
+    def singular(word: str) -> str:
+        if len(word) > 4 and word.endswith("ies"):
+            return word[:-3] + "y"
+        if len(word) > 4 and word.endswith(("sses", "xes", "zes", "ches", "shes", "uses")):
+            return word[:-2]
+        if len(word) > 3 and word.endswith("s") and not word.endswith(("ss", "us", "is")):
+            return word[:-1]
+        return word
+
+    request = words(said)
+    folded_request = [singular(word) for word in request]
+    tokens = _tokens(said)
+    records = json.loads(OVERRIDES.read_text())
+
+    def evidence(entry: Entry, *, fold_request: bool) -> set[tuple[str, ...]]:
+        result = set()
+        synonyms = [(synonym, False) for synonym in entry.synonyms]
+        for record in records:
+            protected = tuple(record.get("protect_from", ()))
+            target_overrides = protected if record.get("preserve_area_pick", False) else (
+                record["area"], *protected)
+            target_overrides = tuple(dict.fromkeys(target_overrides))
+            bound = (entry.id == record["area"] and entry.overrides == protected or
+                     entry.id == record["target"] and entry.overrides == target_overrides)
+            if not bound or not entry.overrides:
+                continue
+            followed = set(record.get("triggers_followed_by_token", ()))
+            for trigger in record["triggers"]:
+                if trigger in followed:
+                    phrase_tokens = _tokens(trigger)
+                    if not any(tokens[i:i + len(phrase_tokens)] == phrase_tokens and
+                               i + len(phrase_tokens) < len(tokens) for i in range(len(tokens))):
+                        continue
+                synonyms.append((trigger, True))
+        for synonym, qualified in synonyms:
+            phrase = words(synonym)
+            if not phrase:
+                continue
+            source = folded_request if fold_request else request
+            if fold_request:
+                phrase = [singular(word) for word in phrase]
+            if (len(phrase) == 1 and phrase[0] in source or
+                    len(phrase) > 1 and any(source[i:i + len(phrase)] == phrase
+                                            for i in range(len(source) - len(phrase) + 1))):
+                # Qualified triggers can distinguish intent with stop words,
+                # as in "payment to". Ordinary synonyms bind using words().
+                evidence_words = _tokens(synonym) if qualified else words(synonym)
+                result.add(tuple(singular(word) for word in evidence_words))
+        return result
+
+    shared = set().union(*(evidence(entry, fold_request=True) for entry, _ in named
+                           if entry.state == "installed"))
+    qualifying = [(entry, score) for entry, score in named if entry.state in ("planned", "unsupported")
+                  and evidence(entry, fold_request=False) - shared]
+    if not qualifying:
+        return None
+    top = max(score for _, score in qualifying)
+    winners = [entry for entry, score in qualifying if score == top]
+    return winners[0] if len(winners) == 1 else None
+
+
 def planned_instead(conn: Connection, operation: str, said: str, *, mixed: bool | None = None) -> Decision | None:
     """The planned answer for a request whose own words name, by one of its synonyms, a planned area declared in place
     of this operation while it is off. A bound available target gives its availability reply; an installed target
@@ -385,7 +448,8 @@ def find_capability(conn: Connection, request: str) -> list[Entry]:
     # A singular master followed by its name is a read request, even when the
     # name also matches other catalogue entries and crowds the list out.
     tokens = _tokens(request)
-    match = re.match(r"^(?:show|list|find|view|display|get)(?: me)?(?: my| our| the| a)? "
+    match = re.match(r"^(?:(?:please|kindly) |(?:can|could|would) you (?:please )?)?"
+                     r"(?:show|list|find|view|display|get)(?: me)?(?: my| our| the| a)? "
                      r"(customer|supplier|item)(?: |$)", " ".join(tokens))
     if match:
         wanted = f"op.list_{match.group(1)}s"

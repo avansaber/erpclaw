@@ -16,7 +16,7 @@ from erpclaw_core.contracts import Service, ServiceModel
 from erpclaw_core.manifest import PUBLISHER, Capabilities, Events, Manifest, ServiceDecl, Source
 from erpclaw_core.plugins import Plugin
 
-from . import service
+from . import service, opening_stock
 from .tables import TABLES
 from .opening_stock import CONTRACT as OPENING_STOCK
 from .write_off import CONTRACT as WRITE_OFF
@@ -335,7 +335,58 @@ def make_stock_item(ctx, inp: StockItemIn) -> dict:
     return result
 
 
+class OpeningInput(ServiceModel):
+    lines: list[dict[str, str]]
+
+
+class OpeningWriteInput(OpeningInput):
+    voucher_id: str
+    number: str
+
+
+class OpeningOutput(ServiceModel):
+    currency: str
+    lines: list[dict[str, str]]
+    read_set: list[list[str]]
+    details: list[dict[str, str]]
+
+
+class OpeningWritten(ServiceModel):
+    voucher_id: str
+
+
+def plan_position_stock(ctx, inp: OpeningInput) -> dict:
+    plan = opening_stock.plan_opening(ctx, opening_stock.RecordOpeningStock(lines=inp.lines))
+    return {"currency": ctx.currency,
+            "lines": [{"account": mv.pair.account, "debit": str(mv.value)} for mv in plan.moves],
+            "read_set": _rows(plan.read_set),
+            "details": [{"item": item["name"], "warehouse": mv.pair.wh["name"],
+                         "quantity": str(mv.qty), "rate": str(rate), "value": str(mv.value)}
+                        for item, mv, rate in zip(plan.items, plan.moves, plan.rates)]}
+
+
+def write_position_stock(ctx, inp: OpeningWriteInput) -> dict:
+    from erpclaw_core import approvals, ledger, models
+    from erpclaw_core.common import Refusal
+    from sqlalchemy import select
+
+    service.authorize(ctx, None, "write_position_stock")
+    approval_id = approvals.committing(ctx)
+    card = ctx.conn.execute(select(models.approval).where(models.approval.c.id == approval_id)).mappings().one()
+    posting = ctx.conn.execute(select(models.posting.c.id).where(
+        models.posting.c.company_id == ctx.company_id, models.posting.c.voucher_type == ledger.OPENING,
+        models.posting.c.voucher_id == inp.voucher_id)).first()
+    if card["contract"] != "record_opening_position" or posting is None:
+        raise Refusal("Opening stock needs its approved opening position.", "not_approved")
+    plan = opening_stock.plan_opening(ctx, opening_stock.RecordOpeningStock(lines=inp.lines), lock=True)
+    service.check_fresh(ctx, [mv.pair for mv in plan.moves], plan.read_set)
+    opening_stock.write_opening_rows(ctx, plan, inp.voucher_id, inp.number, ledger.OPENING, inp.voucher_id)
+    return {"voucher_id": inp.voucher_id}
+
+
 SERVICES = [
+    Service("plan_position_stock", "read", OpeningInput, OpeningOutput, plan_position_stock),
+    Service("write_position_stock", "write", OpeningWriteInput, OpeningWritten, write_position_stock),
     Service("stock_on_hand", "read", ItemIn, OnHandOut, stock_on_hand),
     Service("choose_warehouse", "read", ChooseIn, ChooseOut, choose_warehouse),
     Service("preview_issue", "read", IssueIn, PreviewIssueOut, preview_issue),
@@ -352,7 +403,7 @@ SERVICES = [
 ]
 
 MANIFEST = Manifest(
-    name="stock", version="0.1.1", publisher=PUBLISHER, distribution="erpclaw-stock", licence="GPL-3.0-only",
+    name="stock", version="0.1.3", publisher=PUBLISHER, distribution="erpclaw-stock", licence="GPL-3.0-only",
     source=Source(repository="workspace", commit="workspace"), engine=">=0.0.2", after_core_revision="0015",
     depends={}, conflicts=[], owned_tables=[tbl.name for tbl in TABLES], contracts={OPENING_STOCK.name: OPENING_STOCK.effect, WRITE_OFF.name: WRITE_OFF.effect,
         STOCK_COUNT.name: STOCK_COUNT.effect, CANCEL_STOCK.name: CANCEL_STOCK.effect, REVERSE_GOODS_RECEIVED.name: REVERSE_GOODS_RECEIVED.effect}, calls=[],

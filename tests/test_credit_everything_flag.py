@@ -73,7 +73,7 @@ def draft_and_commit_invoice(engine, customer, quantity, cid):
     card = events[0]
     from erpclaw_core import approvals
 
-    assert approvals.approve(engine, card["approval_id"], card["digest"]).status == "committed"
+    assert approvals.approve(engine, card["approval_id"], card["digest"], ownership_check=_ownership(engine)).status == "committed"
     with engine.connect() as conn:
         number = conn.execute(
             select(t.invoice.c.number).order_by(t.invoice.c.number.desc()).limit(1)
@@ -190,3 +190,12 @@ def test_gate_case_gets_past_the_invoice_number(engine):
     events = assistant.turn("c1", number)
     assert kinds(events) == ["card"], events
     assert snapshot_business(engine) == before_business
+
+
+def _ownership(engine):
+    from erpclaw_assistant import store
+    from erpclaw_core import principals
+
+    with engine.connect() as conn:
+        owner = principals.owner(conn)["id"]
+    return lambda cid: store.conversation_owner(cid) == owner

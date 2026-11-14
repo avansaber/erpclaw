@@ -350,8 +350,7 @@ def owner_sweep_xfail_marks(request, *, all_collected=False):
 
 
 def test_every_strict_xfail_reason_names_its_fix(request):
-    phrases = ("awaiting plain words for the approval read-contract refusal",
-               "awaiting the model text screen")
+    phrases = ("awaiting the model text screen",)
     for mark in owner_sweep_xfail_marks(request):
         if mark.kwargs.get("strict") is True:
             assert mark.kwargs.get("reason", "").startswith(phrases), mark
@@ -432,24 +431,23 @@ def test_core_plugin_sentences_use_the_same_static_owner_text_rules(monkeypatch,
     assert texts and all(5 in fired(text) for text in texts)
 
 
-@pytest.mark.parametrize("case", ["static-approval", "static-service", "model", "approval"])
+@pytest.mark.parametrize("case", ["static-service", "model"])
 def test_a_crash_before_text_checking_is_reported_as_failed(request, monkeypatch, case):
     """Use pytest's real report hooks without starting another pytest or database run."""
     from _pytest.runner import CallInfo
     from _pytest.skipping import evaluate_xfail_marks, xfailed_key
     import test_owner_text_sweep_static as static
     import test_owner_text_sweep_turns as turns
-    from erpclaw_core import approvals
 
     def crash(*args, **kwargs):
         raise RuntimeError("injected crash before the owner text check")
 
     if case.startswith("static-"):
-        key = "approvals.py:not_a_write#0" if case == "static-approval" else "plugins.py:service_output#1"
+        key = "plugins.py:service_output#1"
         fn = static.test_every_refusal_text_in_the_source_reads_plainly
         parameter = next(p for p in fn.pytestmark[0].args[1] if p == key or getattr(p, "values", ()) == (key,))
         mark = next((m for m in getattr(parameter, "marks", ()) if m.name == "xfail"), None)
-        assert (mark is None) == (case == "static-service")
+        assert mark is None
         monkeypatch.setattr(static, "checked", crash)
         operation = lambda: fn(key)
     elif case == "model":
@@ -459,12 +457,6 @@ def test_a_crash_before_text_checking_is_reported_as_failed(request, monkeypatch
         mark = next(m for m in parameter.marks if m.name == "xfail")
         monkeypatch.setattr(turns, "chat", crash)
         operation = lambda: fn(None, parameter.values[0])
-    else:
-        fn = turns.test_proposing_a_read_checks_the_actual_refusal_text
-        mark = next(m for m in fn.pytestmark if m.name == "xfail")
-        monkeypatch.setattr(approvals, "propose", crash)
-        operation = lambda: fn(None)
-
     item = pytest.Function.from_parent(request.node.parent, name="injected_crash", callobj=operation)
     if mark is not None:
         item.add_marker(pytest.mark.xfail(*mark.args, **mark.kwargs))

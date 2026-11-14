@@ -1,5 +1,17 @@
 # Changelog
 
+## Preview 4
+
+- A card can be approved or declined only from the conversation that made it.
+- On a card for a single item that is waiting for your approval, a later price ("at 80", "actually 35 each") corrects the price, whether the card's price was one you wrote or the catalogue's. If the card's price can't be read with certainty, nothing is changed.
+- An invoice for a customer you don't have yet no longer stops at "unknown customer": ERPClaw asks which customer you meant, or offers to add the new one first.
+- If a message takes too long to finish, ERPClaw stops and says so, so you can check what is already there and send it again if it is missing.
+- When you answer "none of these" to a choice, ERPClaw names a feature that isn't there yet only when your own words clearly point to it, instead of guessing.
+- Picking from a list of names needs the name as written: a reply that differs from a name by a digit, a mark or a symbol no longer picks that name.
+- Polite requests such as "could you show me my customers" or "please list my suppliers" now list them.
+- A request that isn't something ERPClaw can save no longer shows an internal operation name in its reply.
+- To update an existing installation, follow docs/UPDATING.md.
+
 ## Preview 3
 
 - Payments from customers can now be recorded. A payment goes to the open invoice you pick, and if it isn't clear which one, ERPClaw asks. (Paying a supplier's bill is not available yet.) Reversing a payment and cancelling an invoice are available too. Every one of these is saved only after you approve its card.

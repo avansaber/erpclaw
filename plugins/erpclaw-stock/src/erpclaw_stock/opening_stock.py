@@ -186,6 +186,17 @@ def opening_read_set(ctx: Ctx, inp: RecordOpeningStock) -> list[tuple[str, str]]
     return plan_opening(ctx, inp).read_set
 
 
+def write_opening_rows(ctx: Ctx, plan: OpeningPlan, voucher_id: str, number: str,
+                       posting_type: str, posting_voucher_id: str) -> None:
+    ctx.conn.execute(t.voucher.insert().values(id=voucher_id, company_id=ctx.company_id,
+        kind="opening", number=number, posting_date=plan.date, reason=None, created_at=now()))
+    for item, mv, rate in zip(plan.items, plan.moves, plan.rates):
+        ctx.conn.execute(t.voucher_line.insert().values(id=new_id(), company_id=ctx.company_id,
+            voucher_id=voucher_id, line_no=mv.line_no, item_id=item["id"], warehouse_id=mv.pair.wh["id"],
+            currency=ctx.currency, qty_moved=mv.qty, counted_qty=None, books_qty=None,
+            rate=rate, direction=mv.direction, value=mv.value))
+        s._entry_id(ctx, mv, plan.date, posting_type, posting_voucher_id)
+
 def commit_opening(ctx: Ctx, inp: RecordOpeningStock, key: str) -> Result:
     # Core has claimed the card and locked chain/period/read-set before this call.
     s.authorize(ctx, None, NAME)
@@ -194,16 +205,9 @@ def commit_opening(ctx: Ctx, inp: RecordOpeningStock, key: str) -> Result:
     voucher_id = new_id()
     ledger.check_post(ctx, plan.date, VOUCHER, voucher_id, plan.lines)
     # First write only after every line, account, period and complete posting is valid.
-    # SO is intentionally shared with sales orders in the company's fiscal year.
-    number = next_number(ctx, "SO", plan.date)
-    ctx.conn.execute(t.voucher.insert().values(id=voucher_id, company_id=ctx.company_id,
-        kind="opening", number=number, posting_date=plan.date, reason=None, created_at=now()))
-    for item, mv, rate in zip(plan.items, plan.moves, plan.rates):
-        ctx.conn.execute(t.voucher_line.insert().values(id=new_id(), company_id=ctx.company_id,
-            voucher_id=voucher_id, line_no=mv.line_no, item_id=item["id"], warehouse_id=mv.pair.wh["id"],
-            currency=ctx.currency, qty_moved=mv.qty, counted_qty=None, books_qty=None,
-            rate=rate, direction=mv.direction, value=mv.value))
-        s._entry_id(ctx, mv, plan.date, VOUCHER, voucher_id)
+    # Opening stock has its own series in the company's fiscal year.
+    number = next_number(ctx, "OS", plan.date)
+    write_opening_rows(ctx, plan, voucher_id, number, VOUCHER, voucher_id)
     ledger.post(ctx, plan.date, VOUCHER, voucher_id, plan.lines, operation_key=key)
     sh = Shown(ctx.currency)
     total = sum((ln.debit for ln in plan.lines), Decimal(0))
@@ -216,7 +220,7 @@ def commit_opening(ctx: Ctx, inp: RecordOpeningStock, key: str) -> Result:
 
 def find_opening(ctx: Ctx, key: str) -> Result | None:
     # The existing atomic outcome is the replay record, scoped to this company
-    # and actual contract; the shared SO prefix never identifies a voucher kind.
+    # and actual contract; a number prefix never identifies a voucher kind.
     o, a = m.operation_outcome, m.approval
     raw = ctx.conn.execute(select(o.c.result_json).join(a, a.c.id == o.c.approval_id).where(
         o.c.company_id == ctx.company_id, o.c.key == key, o.c.status == "committed", a.c.contract == NAME

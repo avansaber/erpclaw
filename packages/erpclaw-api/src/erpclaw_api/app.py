@@ -19,6 +19,7 @@ only after a card approval.
 from __future__ import annotations
 
 import logging
+import json
 
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
@@ -42,6 +43,7 @@ from erpclaw_core.plugins import check_installed, load_plugins
 
 from . import session
 from .me import register_me
+from .stream import Streams
 
 log = logging.getLogger(__name__)
 
@@ -100,6 +102,10 @@ def create_app(engine: Engine, model: Model, *, embedded_owner: bool = False,
                   docs_url=None, redoc_url=None, openapi_url=None)
     assistant = Assistant(engine, model)
     app.state.engine, app.state.assistant = engine, assistant
+    streams = getattr(engine, "_erpclaw_streams", None)
+    if streams is None:
+        streams = engine._erpclaw_streams = Streams()
+    engine._erpclaw_decision_emit = streams.emit
 
     @app.exception_handler(Refused)
     def refused(request: Request, e: Refused) -> JSONResponse:
@@ -237,11 +243,76 @@ def create_app(engine: Engine, model: Model, *, embedded_owner: bool = False,
         # a refusal of something not offered always names it; every event names the books' currency
         return {"events": approvals.with_currency(check_events(events), approvals.books_currency(engine))}
 
+    def check_card_owner(who: dict, *, aid: str | None = None, key: str | None = None) -> None:
+        with read_only(engine) as conn:
+            card_id = conn.execute(select(m.approval.c.id).where(
+                m.approval.c.id == aid if aid is not None else m.approval.c.operation_key == key)).scalar()
+        cid = approvals.conversation_of(engine, card_id or "")
+        owner = store.conversation_owner(cid or "")
+        if card_id is None or (cid is not None and owner != who["id"]):
+            raise Refusal("That conversation was not found.", "no_conversation")
+
+    def check_unbound_target(aid: str, conversation_id: str | None, who: dict) -> None:
+        if (conversation_id is not None and not approvals.conversation_of(engine, aid)
+                and store.conversation_owner(conversation_id) != who["id"]):
+            raise Refusal("That conversation was not found.", "no_conversation")
+
+    @app.get("/v1/conversations/{cid}/stream")
+    def conversation_stream(cid: str, request: Request, after: str = "0", who: dict = Depends(principal)):
+        if store.conversation_owner(cid) != who["id"]:
+            raise Refusal("That conversation was not found.", "no_conversation")
+        cursor_text = request.headers.get("last-event-id", after)
+        if len(cursor_text) > 19 or not cursor_text.isascii() or not cursor_text.isdecimal():
+            return error(422, "That request is not valid; check the named fields.", "invalid_request", fields=[])
+        after = int(cursor_text)
+        if after > 9223372036854775807:
+            return error(422, "That request is not valid; check the named fields.", "invalid_request", fields=[])
+        key = streams.subscribe(who["id"], cid)
+        if key is None:
+            return error(429, "Too many open streams.", "stream_limit")
+        listener = request.scope.get("erpclaw_listener")
+        scheme, token = session.credentials(request)
+        embedded = request.headers.get("authorization") is None and embedded_owner and listener is None
+
+        def authorized():
+            try:
+                with read_only(engine) as conn:
+                    if listener == "host":
+                        found = session.live_session(conn, token, session.now()) if scheme == "session" else None
+                        current = found[1] if found else None
+                    elif embedded:
+                        current = pr.owner(conn)
+                        if current["disabled"]:
+                            return False
+                    else:
+                        current = pr.authenticate(conn, token if scheme == "bearer" else None)
+                    return current is not None and current["id"] == who["id"]
+            except Refusal:
+                return False
+
+        return streams.response(key, cid, after, who["id"], authorized)
+
+    @app.get("/v1/cards/{aid}")
+    def read_card(aid: str, who: dict = Depends(principal)):
+        check_card_owner(who, aid=aid)
+        with read_only(engine) as conn:
+            card = approvals._card(conn, aid)
+            approvals._check_ownership(card["conversation_id"],
+                                       lambda cid: store.conversation_owner(cid) == who["id"])
+            pr.require(conn, pr.by_id(conn, who["id"]), card["company_id"], "view")
+            status = approvals._status_now(conn, card)
+        return {"approval_id": aid, "status": status, "card": json.loads(card["card_json"]),
+                "expires_at": card["expires_at"].isoformat(), "conversation_id": card["conversation_id"],
+                **({"digest": card["digest"]} if status == "pending" else {})}
+
     @app.post("/v1/cards/{aid}/approve")
     def approve(aid: str, body: Approval, conversation_id: str | None = None, who: dict = Depends(principal)):
         try:
+            check_card_owner(who, aid=aid)
+            check_unbound_target(aid, conversation_id, who)
             currency = approvals.books_currency(engine, approval_id=aid)
-            o = approvals.approve(engine, aid, body.digest, principal=who, actor=who["name"])
+            o = approvals.approve(engine, aid, body.digest, principal=who, actor=who["name"],
+                                  ownership_check=lambda cid: store.conversation_owner(cid) == who["id"])
         except Refusal as r:
             raise Refused(refusal_status(r), r) from None
         return card_response(o, aid, conversation_id, currency)
@@ -250,8 +321,11 @@ def create_app(engine: Engine, model: Model, *, embedded_owner: bool = False,
     def decline(aid: str, body: Body | None = None, conversation_id: str | None = None,
                 who: dict = Depends(principal)):
         try:
+            check_card_owner(who, aid=aid)
+            check_unbound_target(aid, conversation_id, who)
             currency = approvals.books_currency(engine, approval_id=aid)
-            o = approvals.decline(engine, aid, principal=who)
+            o = approvals.decline(engine, aid, principal=who,
+                                  ownership_check=lambda cid: store.conversation_owner(cid) == who["id"])
         except Refusal as r:
             raise Refused(refusal_status(r), r) from None
         return card_response(o, aid, conversation_id, currency)
@@ -259,9 +333,11 @@ def create_app(engine: Engine, model: Model, *, embedded_owner: bool = False,
     @app.get("/v1/operations/{key}")
     def operation(key: str, who: dict = Depends(principal)):
         try:
-            o = approvals.read_back(engine, key, principal=who)
+            check_card_owner(who, key=key)
+            o = approvals.read_back(engine, key, principal=who,
+                                    ownership_check=lambda cid: store.conversation_owner(cid) == who["id"])
         except Refusal as r:
-            raise Refused(403, r) from None
+            raise Refused(refusal_status(r), r) from None
         return {"status": o.status, "text": o.text, "amounts": o.amounts,
                 "currency": approvals.books_currency(engine, key=key)}
 

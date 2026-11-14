@@ -169,13 +169,9 @@ def test_the_refusals_are_found_and_listed():
 
 
 REFUSAL_XFAIL = {
-    "approvals.py:not_a_write#0":
-        "awaiting plain words for the approval read-contract refusal; "
-        "get_metric is not a write with a declared read set.; rule 5: contract name",
 }
 
 REFUSAL_DEFERRED = {
-    "approvals.py:not_a_write#0": [("get_metric is not a write with a declared read set.", [5])],
 }
 
 

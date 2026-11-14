@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import re
+import json
 from dataclasses import field
 from typing import Callable
 from sqlalchemy import select
 from erpclaw_core import models as m
 from erpclaw_core.catalogue import planned_instead
 from erpclaw_core.common import Ctx, Refusal, is_question
-from erpclaw_core.masters import STOP, _norm, customers, same_word
+from erpclaw_core.masters import STOP, _norm, _match, customers, same_word
 from erpclaw_core.plugins import call_service
 from .resolve_text import MESSAGE_BREAK, _memo_phrases, _say, table
 from .resolve_words import _as_written, _core, _leaves, _raw_words, _written_span, bounded_names, consumed_ranges, punct_after, without_names, words
@@ -34,7 +35,180 @@ def outgoing_account_phrases(*args, **kwargs):
 
 
 
-def request_words(ctx: Ctx, messages: list[str], calls: list[tuple[object, dict]]) -> str:
+def owner_price_correction(ctx: Ctx, contract, args: dict, messages: list[str]):
+    """Return the earlier rate and replacement only when their provenance is unambiguous."""
+    if len(messages) < 2 or contract is None:
+        return frozenset(), None
+    items = _items(ctx)
+    current = inventory(ctx, messages[-1], items)
+    if len(current) != 1 or current[0].kind != "rate":
+        return frozenset(), None
+    rate = re.match(table()["ordinary_rate"], current[0].said, re.I)
+    if not rate or rate.group(1) is None or re.search(table()["percent_figure"], messages[-1], re.I):
+        return frozenset(), None
+    new_figures = figures(current[0].said)
+    if len(new_figures) != 1:
+        return frozenset(), None
+    new = new_figures[0][0]
+    earlier = f" . {MESSAGE_BREAK} ".join(messages[:-1])
+    if re.search(table()["percent_figure"], earlier, re.I):
+        return frozenset(), None
+    occurrences = inventory(ctx, earlier, items)
+    rates = [o for o in occurrences if o.kind == "rate"]
+    if len(rates) != 1:
+        return frozenset(), None
+    old_figures = figures(rates[0].said)
+    if len(old_figures) != 1:
+        return frozenset(), None
+    old = old_figures[0][0]
+    if old == new:
+        return frozenset(), None
+    if contract.name == "add_item":
+        if _decimal(args.get("price")) != old or not args.get("name"):
+            return frozenset(), None
+        name_words = words(str(args["name"]))
+        earlier_words = words(earlier)
+        names = [i for i in range(rates[0].start) if name_words and
+                 earlier_words[i:i + len(name_words)] == name_words]
+        if len(names) != 1 or names[0] + len(name_words) != rates[0].start:
+            return frozenset(), None
+        if any(o.kind in {"figure", "number"} and o.value == old for o in occurrences):
+            return frozenset(), None
+        try:
+            literal_figure(old, earlier, ctx.currency, Session(), "price", ("", []))
+        except Refusal:
+            return frozenset(), None
+    elif contract.name == "create_invoice":
+        lines = args.get("items")
+        if not isinstance(lines, list) or len(lines) != 1 or not isinstance(lines[0], dict):
+            return frozenset(), None
+        line = lines[0]
+        if _decimal(line.get("rate")) != old:
+            return frozenset(), None
+        named = [o for o in occurrences if o.kind == "item" and o.end <= rates[0].start]
+        if not named or named[-1].value != line.get("item") or len(named) != 1:
+            return frozenset(), None
+        # A quantity immediately before this item is a separate, already claimed field.
+        if any(o.kind in {"figure", "number"} and o.value == old and o.end != named[0].start
+               for o in occurrences):
+            return frozenset(), None
+        try:
+            replay = invoice_not_done(ctx, earlier, [], lines, items, False, carry_rates=True,
+                                      invoice_rate_context=True)
+        except Refusal:
+            return frozenset(), None
+        candidates = [e for e in replay if e.get("type") == "rate_candidate"]
+        if len(candidates) != 1 or candidates[0]["item"] != line.get("item") or \
+                _decimal(candidates[0]["value"]) != old or candidates[0]["in_memo"] or \
+                any(e.get("type") == "rate_unread" for e in replay):
+            return frozenset(), None
+    else:
+        return frozenset(), None
+    joined = f" . {MESSAGE_BREAK} ".join(messages)
+    try:
+        literal_figure(new, messages[-1], ctx.currency, Session(), "price", ("", []))
+        if contract.name == "create_invoice":
+            full_replay = invoice_not_done(ctx, joined, [], lines, items, False, carry_rates=True,
+                                           invoice_rate_context=True)
+            latest = [e for e in full_replay if e.get("type") == "rate_candidate" and
+                      e.get("message") == len(messages) - 1]
+            if len(latest) != 1 or latest[0]["item"] != line.get("item") or \
+                    _decimal(latest[0]["value"]) != new or latest[0]["in_memo"] or \
+                    any(e.get("type") == "rate_unread" for e in full_replay):
+                return frozenset(), None
+    except Refusal:
+        return frozenset(), None
+    joined_rates = [(i, o) for i, o in enumerate(inventory(ctx, joined, items)) if o.kind == "rate"]
+    if len(joined_rates) != 2 or _decimal(figures(joined_rates[0][1].said)[0][0]) != old:
+        return frozenset(), None
+    index, occurrence = joined_rates[0]
+    return frozenset({(index, occurrence.start, occurrence.end, old)}), new
+
+
+
+def catalogue_marked_price(ctx: Ctx, contract, args: dict, messages: list[str], card):
+    """Qualify only a single, fully inventoried marked invoice rate with no prior price."""
+    if len(messages) < 2 or contract is None or contract.name != "create_invoice":
+        return None
+    lines = args.get("items")
+    if not isinstance(lines, list) or len(lines) != 1 or not isinstance(lines[0], dict):
+        return None
+    if "rate" not in lines[0] or lines[0]["rate"] is not None:
+        return None
+    try:
+        card = json.loads(card) if isinstance(card, str) else card
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(card, dict):
+        return None
+    rows = card.get("lines")
+    if not isinstance(rows, list) or any(not isinstance(row, (list, tuple)) or len(row) != 2 for row in rows):
+        return None
+    item_rows = [row[1] for row in rows if row[0] == "Item"]
+    if len(item_rows) != 1 or not isinstance(item_rows[0], str):
+        return None
+    if item_rows[0].count(" @ ") != 1 or item_rows[0].count(" = ") != 1:
+        return None
+    shown = re.fullmatch(r"\S+ x .+ @ ((?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?) = \S+", item_rows[0])
+    stored = _decimal(shown.group(1)) if shown else None
+    if stored is None or not stored.is_finite():
+        return None
+    items = _items(ctx)
+    from .resolve_text import _invoice_rate_context
+    token = _invoice_rate_context.set(True)
+    try:
+        current = inventory(ctx, messages[-1], items)
+        earlier = [inventory(ctx, msg, items) for msg in messages[:-1]]
+    finally:
+        _invoice_rate_context.reset(token)
+    if len(current) != 1 or current[0].kind != "rate" or re.search(table()["percent_figure"], messages[-1], re.I):
+        return None
+    prefix = re.match(table()["marked_price_prefix"], messages[-1], re.I)
+    rest = messages[-1][prefix.end():].strip() if prefix else messages[-1].strip()
+    match = re.match(table()["invoice_rate"], rest, re.I)
+    if not match:
+        return None
+    tail = rest[match.end():]
+    if tail and (not re.fullmatch(table()["marked_rate_tail"], tail, re.I) or
+                 (tail.strip().lower() == table()["marked_rate_tail_needs_per"] and
+                  not match.group().lower().endswith(table()["marked_rate_per_ending"])) or
+                 (tail.strip().lower() == table()["marked_rate_tail_needs_currency"] and not match.group(1))):
+        return None
+    found = figures(current[0].said)
+    if not prefix and (len(found) != 1 or not _has_amount_marker(current[0].said, found[0][1], found[0][2])):
+        return None
+    if len(found) != 1 or found[0][0] == stored:
+        return None
+    # Any earlier rate or unassigned numeric occurrence is potentially owner pricing.
+    # Only a figure directly before the one named line can be classified as quantity.
+    for message, occurrences in zip(messages[:-1], earlier):
+        names = [o for o in occurrences if o.kind == "item" and o.value == lines[0].get("item")]
+        for o in occurrences:
+            if o.kind == "rate":
+                return None
+            if o.kind in {"figure", "number"}:
+                if not any(o.end == name.start for name in names):
+                    return None
+                if any(_word_at(message, start) == o.start and _has_amount_marker(message, start, end)
+                       for _, start, end in figures(message)):
+                    return None
+    new = found[0][0]
+    joined = f" . {MESSAGE_BREAK} ".join(messages)
+    try:
+        literal_figure(new, messages[-1], ctx.currency, Session(), "price", ("", []))
+        replay = invoice_not_done(ctx, joined, [], lines, items, False, carry_rates=True,
+                                  invoice_rate_context=True)
+    except Refusal:
+        return None
+    candidates = [e for e in replay if e.get("type") == "rate_candidate" and
+                  e.get("message") == len(messages) - 1]
+    if len(candidates) != 1 or candidates[0]["item"] != lines[0].get("item") or \
+            _decimal(candidates[0]["value"]) != new or candidates[0]["in_memo"] or \
+            any(e.get("type") == "rate_unread" for e in replay):
+        return None
+    return new
+
+def request_words(ctx: Ctx, messages: list[str], calls: list[tuple[object, dict]], *, superseded_rates=frozenset()) -> str:
     """The request's words for the resolution step, its messages in order, each ended by MESSAGE_BREAK. The latest
     message that mentions a field supplies it: a customer, a date or a document number in a later message drops every
     earlier mention of its kind; an earlier figure or item drops out when the calls no longer use it and do use a later
@@ -57,11 +231,15 @@ def request_words(ctx: Ctx, messages: list[str], calls: list[tuple[object, dict]
         return _norm(str(o.value or o.said)) in names_used
 
     kept = []
+    offset = 0
     for n, text in enumerate(messages):
         later = [o for found in occs[n + 1:] for o in found]
         marked_figures = {_word_at(text, a) for _, a, b in figures(text) if _has_amount_marker(text, a, b)}
         drop: set[int] = set()
         for o in occs[n]:
+            if o.kind == "rate" and any(o.start + offset == start and o.end + offset == end
+                                        for _, start, end, _ in superseded_rates):
+                continue  # a superseded rate stays in the text for occurrence accounting
             same = [x for x in later if x.kind == o.kind]
             if not same:
                 continue
@@ -77,6 +255,7 @@ def request_words(ctx: Ctx, messages: list[str], calls: list[tuple[object, dict]
         ranges = [(i, i + 1) for k in drop for i in range(tokens[k].start(), tokens[k].end())
                   if i not in markers]
         kept.append(mask_money_spans(text, ranges))
+        offset += len(words(text)) + 1  # the message-break token
     return f" . {MESSAGE_BREAK} ".join(kept)  # a sentence ends with each message, so a memo ends there too
 
 
@@ -270,6 +449,29 @@ def resolve_args(ctx: Ctx, contract, args: dict, text: str, session: Session, pe
             out.get(lines_field) is None and mk[lines_field].get("presence") != "optional")):
         item_args = [None]  # the implicit line resolves its item from the owner's words, just like an explicit line
     record_message_names(ctx, session, cust_rows, item_rows, customer_arg, item_args, record_text)
+    if contract.name == "create_invoice" and customer_arg and lines_field and not session.bindings.get("invoice_hold") and not session.bindings.get(f"{scope}customer"):
+        missing = []
+        for kind, name, rows in [("customer", customer_arg, cust_rows)] + [("item", n, item_rows) for n in item_args if n]:
+            if not isinstance(name, str):
+                continue
+            found = bounded_names(ws, [name], item=kind == "item", breaks=punct_after(text))
+            if not found:
+                continue
+            f = found[0]
+            written = _as_written(text, (f.start, f.end))
+            try:
+                _match(rows, written, kind, plural=kind == "item", references=kind == "customer")
+            except Refusal as rf:
+                if rf.code == f"{kind}_unknown" and not rf.options:
+                    missing.append((f.start, kind, written))
+        missing.sort()
+        if any(kind == "customer" for _, kind, _ in missing):
+            names = list(dict.fromkeys((kind, name) for _, kind, name in missing))
+            session.bindings["invoice_hold"] = {"words": text, "args": args, "names": names, "stage": "offer"}
+            labels = [_say("add_offer_it" if len(names) == 1 else "add_offer_them"), _say("add_offer_no")]
+            question = _say("add_offer_one", kind=names[0][0], name=names[0][1]) if len(names) == 1 else \
+                _say("add_offer_many", names=", ".join("'" + n + "'" for _, n in names))
+            raise session.ask("invoice_offer", question, "customer_offer_unknown" if len(names) == 1 else "names_offer_unknown", labels, ["add", "decline"])
     if lines_field:
         guard_messages(session)
         planned_money(text, spans, ctx.today, check_money=not bool(session.owner_messages))

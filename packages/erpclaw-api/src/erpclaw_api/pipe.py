@@ -48,7 +48,8 @@ _API_HEADERS = (
 # CLI pipe and the loopback listener list the bearer-token routes only.
 _COMMON = (("GET", "/v1/health"), ("POST", "/v1/conversations"), ("POST", "/v1/conversations/{cid}/messages"),
            ("POST", "/v1/cards/{aid}/approve"), ("POST", "/v1/cards/{aid}/decline"), ("GET", "/v1/operations/{key}"),
-           ("GET", "/v1/me"))  # the caller's own identity
+           ("GET", "/v1/me"), ("GET", "/v1/cards/{aid}"),
+           ("GET", "/v1/conversations/{cid}/stream"))  # the caller's own identity
 LISTENER_TABLES = {
     "host": frozenset((*_COMMON, ("POST", "/v1/session"), ("DELETE", "/v1/session"))),
     "cli": frozenset(_COMMON),

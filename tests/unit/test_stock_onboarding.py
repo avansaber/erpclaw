@@ -112,7 +112,12 @@ def test_choice_fields_are_hidden_and_have_no_default_choice():
         assert getattr(cc.AddItem(name="New"), name) is None
     assert set(cc.MANIFEST.uses) == {"stock." + name + "?" for name in
         ("list_warehouses", "preview_create_warehouse", "create_warehouse",
-         "preview_make_stock_item", "make_stock_item")}
+         "preview_make_stock_item", "make_stock_item", "plan_position_stock", "write_position_stock")}
+    from erpclaw_stock import OpeningInput, OpeningWriteInput
+    for model in (OpeningInput, OpeningWriteInput):
+        for name, field in model.model_fields.items():
+            assert name not in props
+            assert field.is_required()
 
 
 def test_missing_kind_is_asked_before_any_stock_service(ctx, boundary):

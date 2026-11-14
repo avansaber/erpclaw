@@ -8,7 +8,8 @@ import threading
 import pytest
 from sqlalchemy import func, select
 
-from erpclaw_core import approvals
+from erpclaw_assistant import store
+from erpclaw_core import approvals, principals as pr
 from erpclaw_core import models as m
 from erpclaw_core.common import Refusal, company_ctx, new_id
 from erpclaw_core.plugins import REGISTRY
@@ -20,13 +21,22 @@ QUESTION = Refusal("Do you mean Wayne Enterprises?", "customer_ambiguous", ["Way
                    choices=[{"code": "q3-1", "label": "Wayne Enterprises"}, {"code": "q3-2", "label": "someone else"}])
 
 
+def ownership(engine):
+    with engine.connect() as conn:
+        owner = pr.owner(conn)["id"]
+    return lambda cid: store.conversation_owner(cid) == owner
+
+
 def pending(engine, generation=1):
     """A conversation fenced at `generation` with one pending card under its token."""
     conv, token = new_id(), new_id()
     with engine.connect() as conn:
+        owner = pr.owner(conn)["id"]
+    store.create_conversation(conv, owner)
+    with engine.connect() as conn:
         company = company_ctx(conn).company_id
-    assert approvals.activate(engine, conv, company, generation, token).status == "active"
-    out = approvals.propose(engine, REGISTRY.contracts["create_invoice"], INVOICE, conv, request_card_token=token)
+    assert approvals._activate(engine, conv, company, generation, token).status == "active"
+    out = approvals.propose(engine, REGISTRY.contracts["create_invoice"], INVOICE, conv, request_card_token=token, ownership_check=ownership(engine))
     return conv, token, out
 
 
@@ -42,12 +52,12 @@ def status(engine, aid) -> str:
 
 def test_a_set_aside_card_is_superseded_with_the_turn_s_question_and_a_repeat_approval_returns_it(engine):
     conv, token, card = pending(engine)
-    out = approvals.set_aside(engine, conv, token, card.approval_id, QUESTION.message, QUESTION)
+    out = approvals.set_aside(engine, conv, token, card.approval_id, QUESTION.message, QUESTION, ownership_check=ownership(engine))
     assert out.status == "set_aside" and out.data["title"] == card.text, out
     assert status(engine, card.approval_id) == "superseded"
     invoices = count(engine, t.invoice)
     for _ in range(2):  # the same question every time, unchanged, and nothing written
-        again = approvals.approve(engine, card.approval_id, card.digest)
+        again = approvals.approve(engine, card.approval_id, card.digest, ownership_check=ownership(engine))
         assert again.status == "superseded" and again.text == QUESTION.message, again
         assert again.data["code"] == "customer_ambiguous" and again.data["options"] == QUESTION.options
         assert again.data["data"]["choices"] == QUESTION.data["choices"], again.data
@@ -57,8 +67,8 @@ def test_a_set_aside_card_is_superseded_with_the_turn_s_question_and_a_repeat_ap
 def test_a_refusal_or_an_answer_is_stored_as_its_text(engine):
     conv, token, card = pending(engine)
     text = "ERPClaw does not do that yet."
-    assert approvals.set_aside(engine, conv, token, card.approval_id, text, None).status == "set_aside"
-    again = approvals.approve(engine, card.approval_id, card.digest)
+    assert approvals.set_aside(engine, conv, token, card.approval_id, text, None, ownership_check=ownership(engine)).status == "set_aside"
+    again = approvals.approve(engine, card.approval_id, card.digest, ownership_check=ownership(engine))
     assert again.status == "superseded" and again.text == text and "code" not in again.data, again
 
 
@@ -67,13 +77,13 @@ def test_a_stale_token_is_refused_and_the_card_stays(engine):
     with engine.connect() as conn:
         company = company_ctx(conn).company_id
     newer = new_id()
-    assert approvals.activate(engine, conv, company, 2, newer).status == "active"  # a takeover: the card is retired
+    assert approvals._activate(engine, conv, company, 2, newer).status == "active"  # a takeover: the card is retired
     with pytest.raises(Refusal) as r:
-        approvals.set_aside(engine, conv, token, card.approval_id, QUESTION.message, QUESTION)
+        approvals.set_aside(engine, conv, token, card.approval_id, QUESTION.message, QUESTION, ownership_check=ownership(engine))
     assert r.value.code == "fenced"
     conv2, token2, card2 = pending(engine)
     with pytest.raises(Refusal) as r:
-        approvals.set_aside(engine, conv2, new_id(), card2.approval_id, QUESTION.message, QUESTION)
+        approvals.set_aside(engine, conv2, new_id(), card2.approval_id, QUESTION.message, QUESTION, ownership_check=ownership(engine))
     assert r.value.code == "fenced" and status(engine, card2.approval_id) == "pending"
 
 
@@ -81,14 +91,14 @@ def test_a_card_of_another_conversation_is_never_set_aside(engine):
     conv, token, card = pending(engine)
     other, other_token, _ = pending(engine)
     with pytest.raises(Refusal) as r:
-        approvals.set_aside(engine, other, other_token, card.approval_id, QUESTION.message, QUESTION)
+        approvals.set_aside(engine, other, other_token, card.approval_id, QUESTION.message, QUESTION, ownership_check=ownership(engine))
     assert r.value.code == "replaces_mismatch" and status(engine, card.approval_id) == "pending"
 
 
 def test_an_approval_that_won_is_reported_and_never_set_aside(engine):
     conv, token, card = pending(engine)
-    assert approvals.approve(engine, card.approval_id, card.digest).status == "committed"
-    out = approvals.set_aside(engine, conv, token, card.approval_id, QUESTION.message, QUESTION)
+    assert approvals.approve(engine, card.approval_id, card.digest, ownership_check=ownership(engine)).status == "committed"
+    out = approvals.set_aside(engine, conv, token, card.approval_id, QUESTION.message, QUESTION, ownership_check=ownership(engine))
     assert out.status == "replaced_card_ended" and out.data["predecessor"]["status"] == "consumed", out
     assert "already approved" in out.text
 
@@ -101,11 +111,11 @@ def test_an_approval_racing_a_set_aside_exactly_one_wins_and_the_other_is_told(e
 
     def approve():
         start.wait()
-        results["approve"] = approvals.approve(engine, card.approval_id, card.digest)
+        results["approve"] = approvals.approve(engine, card.approval_id, card.digest, ownership_check=ownership(engine))
 
     def set_aside():
         start.wait()
-        results["set_aside"] = approvals.set_aside(engine, conv, token, card.approval_id, QUESTION.message, QUESTION)
+        results["set_aside"] = approvals.set_aside(engine, conv, token, card.approval_id, QUESTION.message, QUESTION, ownership_check=ownership(engine))
 
     threads = [threading.Thread(target=f) for f in ((approve, set_aside) if trial % 2 else (set_aside, approve))]
     for th in threads:

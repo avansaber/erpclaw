@@ -32,9 +32,11 @@ from stock_setup_producer import SetupBooks, consumer as setup_consumer
 
 
 DAY = date(2026, 10, 20)
-SCALES = {"JPY": 0, "KWD": 3}
+SCALES = {"USD": 2, "JPY": 0, "KWD": 3}
 # Paths name every monetary output, not quantities, account numbers or IDs.
 SERVICE_MONEY = {
+    "plan_position_stock": ("lines[].debit", "details[].rate", "details[].value"),
+    "write_position_stock": (),
     "stock_on_hand": ("warehouses[].value",),
     "choose_warehouse": (),
     "preview_issue": ("lines[].cost", "ledger_lines[].debit", "ledger_lines[].credit"),
@@ -67,7 +69,7 @@ def test_public_output_inventory_matches_manifest():
     assert {s.name: s.effect for s in MANIFEST.services} == {s.name: s.effect for s in PLUGIN.services}
     assert {c.name for c in PLUGIN.contracts} == set(CONTRACTS)
     assert MANIFEST.contracts == {c.name: c.effect for c in PLUGIN.contracts}
-    assert SETUP_SERVICES == {name for name, fields in SERVICE_MONEY.items() if not fields} - {"choose_warehouse"}
+    assert SETUP_SERVICES == {name for name, fields in SERVICE_MONEY.items() if not fields} - {"choose_warehouse", "write_position_stock"}
     assert not set(DELIVERIES) & set(MANIFEST.contracts)
     assert {c.amounts for c in PLUGIN.contracts} == {("value",)}
 
@@ -144,7 +146,7 @@ def assert_money_fields(out, paths, currency):
     assert not errors, "\n".join(errors)
 
 
-@pytest.mark.parametrize("operation", [name for name, fields in SERVICE_MONEY.items() if fields])
+@pytest.mark.parametrize("operation", [name for name, fields in SERVICE_MONEY.items() if fields and name != "plan_position_stock"])
 def test_service_money_outputs(pg_engine, monkeypatch, currency, method, operation):
     install(monkeypatch, pg_engine, consumer())
     books = Books(pg_engine, books_case(currency, method))
@@ -173,6 +175,25 @@ def test_service_money_outputs(pg_engine, monkeypatch, currency, method, operati
     values = [row[field] for row, field in field_rows(out, path)]
     values = [v["value"] if isinstance(v, dict) else v for v in values]
     assert any(Decimal(v).copy_abs() == Decimal(expected) for v in values)
+
+
+@pytest.mark.parametrize("currency,rate,value", [("USD", "4.25", "53.13"),
+                                                  ("JPY", "4", "50"), ("KWD", "4.251", "53.138")])
+def test_opening_plan_money_outputs(pg_engine, monkeypatch, currency, rate, value):
+    from erpclaw_core.plugins import call_service
+
+    install(monkeypatch, pg_engine, consumer())
+    books = Books(pg_engine, books_case(currency, "moving_average"))
+    with pg_engine.begin() as conn:
+        out = call_service(books.ctx(conn), "core", "stock.plan_position_stock", {"lines": [{
+            "item": "Wire", "warehouse": "Main Store", "quantity": "12.5", "rate": rate}]})
+    assert out["currency"] == currency
+    for path in SERVICE_MONEY["plan_position_stock"]:
+        for row, field in field_rows(out, path):
+            assert not money_errors({**row, "currency": out["currency"]}, field, currency, path)
+    assert out["lines"][0]["debit"] == value
+    assert out["details"][0]["rate"] == rate
+    assert out["details"][0]["value"] == value
 
 
 @pytest.mark.parametrize("operation", ["receive", "ledger_lines"])

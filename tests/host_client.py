@@ -194,13 +194,15 @@ class PipeServer:
 class Response:
     status: int
     headers: dict[str, str]
+    raw_headers: list[tuple[str, str]]
     body: bytes
     method: str = "UNKNOWN"
     path: str = "/"
 
-    def __init__(self, status, headers, body, method="UNKNOWN", path="/"):
+    def __init__(self, status, headers, body, method="UNKNOWN", path="/", raw_headers=None):
         __tracebackhide__ = True
         self.status, self.headers, self.body = status, headers, body
+        self.raw_headers = raw_headers
         self.method, self.path = method, path
 
     def json(self):
@@ -338,9 +340,10 @@ class HostClient:
             try:
                 status = response.status
                 fields = {}
-                for key, value in response.getheaders():
+                raw_headers = response.getheaders()
+                for key, value in raw_headers:
                     fields[key.lower()] = value
-                return Response(status, fields, response.read(), method, path)
+                return Response(status, fields, response.read(), method, path, raw_headers)
             finally:
                 kind = _close(connection, response)
                 if kind is not None:

@@ -159,6 +159,28 @@ def test_core_declares_exactly_the_stock_services_it_calls():
     calls = {"stock." + ast.literal_eval(node.args[1]) for node in ast.walk(tree)
              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
              and node.func.id == "_stock_setup_call"}
+    for path in Path(core_contracts.__file__).parent.rglob("*.py"):
+        module = ast.parse(path.read_text())
+        helper_calls = []
+        if path == Path(core_contracts.__file__):
+            helper = next(node for node in module.body if isinstance(node, ast.FunctionDef)
+                          and node.name == "_stock_setup_call")
+            helper_calls = [node for node in ast.walk(helper) if isinstance(node, ast.Call)
+                            and isinstance(node.func, ast.Name) and node.func.id == "call_service"]
+            assert len(helper_calls) == 1
+            assert ast.unparse(helper_calls[0].args[2]) == "'stock.' + name"
+        for node in ast.walk(module):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "call_service"):
+                continue
+            # The setup helper is the sole dynamic dispatch; its literal callers were collected above.
+            if node in helper_calls:
+                continue
+            assert len(node.args) >= 3, f"{path}:{node.lineno}: call_service requires literal caller and name"
+            assert isinstance(node.args[1], ast.Constant) and isinstance(node.args[1].value, str), (path, node.lineno)
+            assert isinstance(node.args[2], ast.Constant) and isinstance(node.args[2].value, str), (path, node.lineno)
+            if node.args[1].value == "core" and node.args[2].value.startswith("stock."):
+                calls.add(node.args[2].value)
     uses = {parse_use(use)[0] for use in core_contracts.MANIFEST.uses}
     assert uses == calls
     assert WAREHOUSES in calls

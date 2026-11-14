@@ -387,6 +387,6 @@ def test_operation_replay_is_exact_contract_company_and_key():
 def test_contract_is_real_registered_but_planned_gated(as_released):
     assert o.CONTRACT in PLUGIN.contracts and o.CONTRACT.moves_money and o.CONTRACT.effect == "write"
     assert MANIFEST.contracts[o.NAME] == "write" and "stock_write_off" in MANIFEST.voucher_types
-    assert o.CONTRACT.planned == "Core" and MANIFEST.version == "0.1.1"
+    assert o.CONTRACT.planned == "Core" and MANIFEST.version == "0.1.3"
     with pytest.raises(Refusal) as exc: approvals._write_contract(o.CONTRACT)
     assert exc.value.code == "planned" and exc.value.capability == "planned.op.write_off_stock"

@@ -39,7 +39,7 @@ def setup_question(engine, monkeypatch):
     with engine.begin() as conn:
         conn.execute(m.party.update().where(m.party.c.name == "Acme Corporation").values(name="Acme Corporation North"))
         create_party(company_ctx(conn), "customer", "Acme Corporation South")
-    assert approvals.approve(engine, card["approval_id"], card["digest"]).status == "superseded"
+    assert approvals.approve(engine, card["approval_id"], card["digest"], ownership_check=_ownership(engine)).status == "superseded"
     return a, card, clock
 
 
@@ -135,7 +135,7 @@ def test_crash_after_set_aside_preserves_private_question_choices(engine, monkey
     assert all("ref" not in choice for choice in asked["data"]["choices"])
     pending = store.open_request("private-refs")["pending_question"]
     assert [choice["ref"] for choice in pending["choices"]] == ["Main", "Back"]
-    outcome = approvals.approve(engine, card["approval_id"], card["digest"])
+    outcome = approvals.approve(engine, card["approval_id"], card["digest"], ownership_check=_ownership(engine))
     assert [choice["ref"] for choice in outcome.data["data"]["choices"]] == ["Main", "Back"]
 
     from erpclaw_api.app import create_app
@@ -149,3 +149,12 @@ def test_crash_after_set_aside_preserves_private_question_choices(engine, monkey
     assert first == second
     assert all("ref" not in ch for ev in first for ch in ev.get("data", {}).get("choices", []))
     assert all("ref" not in ch for ev in first for ch in ev.get("choices", []))
+
+
+def _ownership(engine):
+    from erpclaw_assistant import store
+    from erpclaw_core import principals
+
+    with engine.connect() as conn:
+        owner = principals.owner(conn)["id"]
+    return lambda cid: store.conversation_owner(cid) == owner

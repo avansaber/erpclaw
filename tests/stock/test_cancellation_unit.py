@@ -214,12 +214,12 @@ def test_date_is_required_and_not_defaulted():
     with pytest.raises(ValidationError):inputs("")
 
 
-@pytest.mark.parametrize("kind,vtype,prefix",[("opening","stock_opening","SO"),("count","stock_count","SC"),("write_off","stock_write_off","SW")])
+@pytest.mark.parametrize("kind,vtype,prefix",[("opening","stock_opening","OS"),("count","stock_count","SC"),("write_off","stock_write_off","SW")])
 def test_kind_controls_identity_not_prefix(world,kind,vtype,prefix):
-    world.voucher.update(kind=kind,number="SO-2026-00999")
+    world.voucher.update(kind=kind,number="OS-2026-00999")
     world.posting["voucher_type"]=vtype
     world.db.tables["stock_ledger_entry"][0]["voucher_type"]=vtype
-    plan=o.plan_cancellation(world.ctx,inputs("SO-2026-00999"))
+    plan=o.plan_cancellation(world.ctx,inputs("OS-2026-00999"))
     assert plan.voucher_type==vtype
     assert [ln.account_id for ln in plan.lines]==["writeoff","inv"]
     assert world.db.events==[]
@@ -252,14 +252,14 @@ def test_writeoff_mirrors_original_accounts_not_current_roles(world):
 
 
 def test_opening_fifo_removes_its_original_layer(world):
-    world.voucher.update(kind="opening",number="SO-2026-00001")
+    world.voucher.update(kind="opening",number="OS-2026-00001")
     world.posting["voucher_type"]="stock_opening"
     e=world.db.tables["stock_ledger_entry"][0];e.update(direction="in",voucher_type="stock_opening")
     world.db.tables["stock_item"][0]["method"]="fifo"
     world.db.tables["stock_head"][0].update(qty=D(4),value=D(8))
     world.groups["wire"]=[Group("g",D(4),D(8))]
     world.db.tables["stock_layer"]=[dict(id="layer",entry_id="entry",group_id="g",qty=D(4),value=D(8))]
-    mv=o.plan_cancellation(world.ctx,inputs("SO-2026-00001")).moves[0]
+    mv=o.plan_cancellation(world.ctx,inputs("OS-2026-00001")).moves[0]
     assert (mv.direction,mv.qty_after,mv.value_after,mv.take_layer,mv.takes)==("out",D(0),D(0),"layer",[])
     assert [(g.qty,g.value) for g in mv.pair.groups]==[(D(0),D(0))]
 

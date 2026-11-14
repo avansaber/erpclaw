@@ -93,7 +93,7 @@ def test_the_owner_s_figure_from_an_earlier_turn_of_the_request_passes(engine):
 def test_a_figure_from_an_ended_request_does_not_pass(engine):
     a, _ = assistant(engine, Reply("", [inv("Acme Corporation", 5)]), Reply("Those 5 copper wire are on their way."))
     card = a.turn("c1", "Invoice Acme Corporation for 5 copper wire")[-1]
-    assert approvals.approve(engine, card["approval_id"], card["digest"]).status == "committed"
+    assert approvals.approve(engine, card["approval_id"], card["digest"], ownership_check=_ownership(engine)).status == "committed"
     e = only(a.turn("c1", "hello there"))
     assert e.get("checked") == "replaced", e
 
@@ -167,7 +167,7 @@ def test_approve_it_with_a_card_pending_gets_the_engine_s_reply_and_never_the_ca
     e = only(a.turn("c1", "approve it"))
     assert e["text"] == "Nothing has been saved yet. Approve the card to save it." and e["checked"] == "engine", e
     assert seen == []  # the catalogue was never asked
-    assert approvals.pending_card(engine, "c1")["id"] == card["approval_id"]
+    assert approvals.pending_card(engine, "c1", ownership_check=_ownership(engine))["id"] == card["approval_id"]
 
 
 def test_a_completion_claim_is_replaced_before_the_catalogue(engine, monkeypatch):
@@ -268,7 +268,7 @@ def test_approval_words_with_a_card_pending_still_get_the_engine_s_reply(engine)
     ev = a.turn("c1", "just do it")
     assert ev == [{"currency": "USD", "type": "answer", "checked": "engine",
                    "text": "Nothing has been saved yet. Approve the card to save it."}], ev
-    assert approvals.approve(engine, card["approval_id"], card["digest"]).status == "committed"
+    assert approvals.approve(engine, card["approval_id"], card["digest"], ownership_check=_ownership(engine)).status == "committed"
 
 
 @pytest.mark.parametrize("reply", ["I created the invoice.", "Approved."])
@@ -377,6 +377,15 @@ def test_an_owner_message_with_a_prefix_is_the_owner_s_words(engine, said, shows
     first = only(a.turn("c1", "invoice Acme Corporation for 5 copper wire"))
     ev = a.turn("c1", said)
     assert [m["content"] for m in model.seen[-1] if m["role"] == "user"][-1] == said  # shown as the owner's text
-    assert approvals.approve(engine, first["approval_id"], first["digest"]).status == "superseded"
+    assert approvals.approve(engine, first["approval_id"], first["digest"], ownership_check=_ownership(engine)).status == "superseded"
     if shows:
         assert shows in str(ev[-1]), ev  # the Wayne mention rebinds the customer
+
+
+def _ownership(engine):
+    from erpclaw_assistant import store
+    from erpclaw_core import principals
+
+    with engine.connect() as conn:
+        owner = principals.owner(conn)["id"]
+    return lambda cid: store.conversation_owner(cid) == owner

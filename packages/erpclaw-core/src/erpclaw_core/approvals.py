@@ -41,6 +41,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from importlib.metadata import version
 from packaging.version import InvalidVersion, Version
+from collections.abc import Callable
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -53,6 +54,7 @@ from .contracts import (Contract, Result, amount_dicts, check_amount_names, chec
                         planned_capability, planned_reply)
 from .db import metadata, read_only
 from .ledger import _for_share, _for_update
+from .plugin_text import say
 from .plugins import REGISTRY, ensure_enabled
 
 payment_purpose_recovery = None
@@ -62,6 +64,11 @@ _PAYMENT_SWITCH_CONTRACTS = frozenset({"record_payment", "reverse_payment", "can
 
 VALID_FOR = timedelta(minutes=10)
 FOOTER = "Valid 10 minutes. Rechecked before saving."
+
+
+def _check_ownership(conversation_id: str | None, ownership_check: Callable[[str], bool] | None) -> None:
+    if conversation_id is not None and (ownership_check is None or not ownership_check(conversation_id)):
+        raise Refusal("That conversation was not found.", "no_conversation")
 
 
 def canonical(obj) -> str:
@@ -205,7 +212,7 @@ def _owner(conn: Connection) -> dict:
 
 
 def _not_a_write(contract: Contract) -> None:
-    raise Refusal(f"{contract.name} is not a write with a declared read set.", "not_a_write")
+    raise Refusal(say("not_a_write"), "not_a_write")
 
 
 def _write_contract(contract: Contract) -> None:
@@ -282,7 +289,7 @@ class _Stale(Exception):
         self.generation = generation
 
 
-def activate(engine: Engine, conversation_id: str, company_id: str, generation: int, token: str) -> Activation:
+def _activate(engine: Engine, conversation_id: str, company_id: str, generation: int, token: str) -> Activation:
     """Set the conversation's fence to this turn's generation and token, only if the generation is higher than the
     fence's (a compare-and-set), superseding in the same transaction every pending card of the
     conversation whose token is not this one. A stale generation changes nothing and returns the fence's."""
@@ -313,7 +320,7 @@ def activate(engine: Engine, conversation_id: str, company_id: str, generation: 
     return Activation("active", generation, list(others))
 
 
-def end_request(engine: Engine, conversation_id: str, generation: int, token: str) -> bool:
+def _end_request(engine: Engine, conversation_id: str, generation: int, token: str) -> bool:
     """A request ended: its token is no longer live, at the same generation. Only the fence's own generation and
     token can end it; anything else changes nothing."""
     with engine.begin() as conn:
@@ -326,11 +333,12 @@ def end_request(engine: Engine, conversation_id: str, generation: int, token: st
 
 
 def set_aside(engine: Engine, conversation_id: str, token: str, approval_id: str, text: str,
-              refusal: Refusal | None = None) -> Outcome:
+              refusal: Refusal | None = None, *, ownership_check: Callable[[str], bool] | None = None) -> Outcome:
     """A turn that ends with a question, a confirm, a refusal or an answer while a card is pending sets that card
     aside: superseded, with the turn's own decision stored (its question's code, options and choices, or its text),
     so a repeated approval returns that decision. Under the turn's live token, and only while the card is still
     pending, in the lock order fence, then card; an approval that won the card's row is reported, never undone."""
+    _check_ownership(conversation_id, ownership_check)
     with engine.begin() as conn:
         if not token or not _token_is_live(_fence_row(conn, conversation_id, share=True), token):
             raise Refusal("That request has ended; ask again.", "fenced")
@@ -371,7 +379,8 @@ def _ended_text(conn: Connection, a: dict) -> str:
 
 def propose(engine: Engine, contract: Contract, args: dict, conversation_id: str | None = None,
             principal: dict | None = None, company_id: str | None = None, request_card_token: str | None = None,
-            replaces: str | None = None, date_source: dict | None = None, owner_words: str | None = None) -> Outcome:
+            replaces: str | None = None, date_source: dict | None = None, owner_words: str | None = None,
+            *, ownership_check: Callable[[str], bool] | None = None) -> Outcome:
     """Build the exact preview and its read set and store a pending card; writes no business row. Needs `draft`.
     In a conversation the new card supersedes the conversation's pending card, whatever its operation, and names it
     in `data["set_aside"]`. With a request token the conversation's fence must hold it live. With
@@ -379,6 +388,7 @@ def propose(engine: Engine, contract: Contract, args: dict, conversation_id: str
     is returned; the new card takes the named card's token, if it has one, and passes that token's fence.
     The fence and the named card are checked before the preview. While the company is pending (`init --own-books`),
     only its setup is accepted."""
+    _check_ownership(conversation_id, ownership_check)
     from .core_contracts import SETUP, say as own_books_say
 
     if contract.name != SETUP:
@@ -524,10 +534,12 @@ def _touch(engine: Engine, a: dict) -> str:
     return status
 
 
-def decline(engine: Engine, approval_id: str, principal: dict | None = None) -> Outcome:
+def decline(engine: Engine, approval_id: str, principal: dict | None = None, *,
+            ownership_check: Callable[[str], bool] | None = None) -> Outcome:
     """Any principal with `draft` or `approve` on the card's company; writes no business row."""
     with read_only(engine) as conn:
         a = _card(conn, approval_id)
+        _check_ownership(a["conversation_id"], ownership_check)
         who = pr.by_id(conn, (principal or _owner(conn))["id"])
         if who["disabled"] or not (pr.holds(conn, who["id"], a["company_id"], "draft")
                                    or pr.holds(conn, who["id"], a["company_id"], "approve")):
@@ -539,6 +551,7 @@ def decline(engine: Engine, approval_id: str, principal: dict | None = None) -> 
         done = _end(conn, approval_id, "declined", _decision("declined", GONE["declined"]))
     if not done:
         return Outcome("unknown", "That card is no longer waiting for a decision.", approval_id)
+    getattr(engine, "_erpclaw_decision_emit", lambda *args: None)(a["conversation_id"], approval_id, "declined")
     return Outcome("declined", "Not saved. Nothing changed in your books.", approval_id)
 
 
@@ -606,7 +619,7 @@ def _ended(approval_id: str, r: Refusal) -> Outcome:
                    approval_id, data=refusal_data(r))
 
 
-def _end_before_claim(engine: Engine, a, r: Refusal, seen: dict) -> Outcome:
+def _end_before_claim(engine: Engine, a, r: Refusal, seen: dict, ownership_check) -> Outcome:
     """End a pending card refused before its claim (its operation switched off as planned): a conditional update;
     if it loses, the card was claimed meanwhile, and its current outcome is returned."""
     ended = _ended(a["id"], r)
@@ -617,7 +630,7 @@ def _end_before_claim(engine: Engine, a, r: Refusal, seen: dict) -> Outcome:
     with read_only(engine) as conn:
         now_card = _card(conn, a["id"])
     if now_card["status"] == "consumed":
-        return read_back(engine, a["operation_key"], seen)
+        return read_back(engine, a["operation_key"], seen, ownership_check=ownership_check)
     return Outcome(now_card["status"], GONE.get(now_card["status"], "That card can no longer be approved."), a["id"])
 
 
@@ -627,19 +640,20 @@ def committing(ctx: Ctx) -> str | None:
 
 
 def approve(engine: Engine, approval_id: str, digest_sent: str | None, principal: dict | None = None,
-            actor: str = "owner") -> Outcome:
+            actor: str = "owner", *, ownership_check: Callable[[str], bool] | None = None) -> Outcome:
     """Approve and commit in one transaction. `principal` is the authenticated approver as seen at
     authentication (its grants_version is rechecked under lock); the owner when called in-process."""
     with read_only(engine) as conn:
         a = _card(conn, approval_id)
+        _check_ownership(a["conversation_id"], ownership_check)
         seen = principal or _owner(conn)
         pr.require(conn, pr.by_id(conn, seen["id"]), a["company_id"], "view")  # before any result is shown
     if not digest_sent or not hmac.compare_digest(str(digest_sent), a["digest"]):
         raise Refusal("That approval does not match the card (its digest differs); nothing was saved.", "digest")
     if a["status"] == "consumed":  # the same card again: the stored outcome, nothing written
-        return read_back(engine, a["operation_key"], seen)
+        return read_back(engine, a["operation_key"], seen, ownership_check=ownership_check)
     if a["status"] != "pending":  # ended without a commit: its stored decision, nothing written
-        return _decided(engine, a, seen)
+        return _decided(engine, a, seen, ownership_check)
     status = _touch(engine, a)
     if status != "pending":
         return Outcome(status, GONE.get(status, f"That card is {status} and cannot be approved."), approval_id)
@@ -649,7 +663,7 @@ def approve(engine: Engine, approval_id: str, digest_sent: str | None, principal
     except Refusal as r:
         if r.code != "planned":
             raise
-        return _end_before_claim(engine, a, r, seen)  # it ends, rather than refusing until it expires
+        return _end_before_claim(engine, a, r, seen, ownership_check)  # it ends, rather than refusing until it expires
     if contract.name in _PAYMENT_SWITCH_CONTRACTS:
         try:
             older = Version(a["contract_version"]) < Version(PAYMENT_SWITCH_VERSION)
@@ -658,7 +672,7 @@ def approve(engine: Engine, approval_id: str, digest_sent: str | None, principal
         if older:
             historical = replace(contract, planned="Core")
             return _end_before_claim(engine, a, Refusal(planned_reply(historical), "planned",
-                                                       capability=planned_capability(historical)), seen)
+                                                       capability=planned_capability(historical)), seen, ownership_check)
     args = json.loads(a["args_json"])
     credential_match = credentials.check([args, json.loads(a["card_json"])])
     inp = None if credential_match else contract.input_model.model_validate(args)
@@ -777,9 +791,9 @@ def approve(engine: Engine, approval_id: str, digest_sent: str | None, principal
             with engine.begin() as conn:
                 if _end(conn, approval_id, "superseded", _decision("superseded", ended.text, r)):
                     return ended
-            return _now_outcome(engine, approval_id, seen)
+            return _now_outcome(engine, approval_id, seen, ownership_check)
         if fresh.status == "ended":  # claimed or ended meanwhile
-            return _now_outcome(engine, approval_id, seen)
+            return _now_outcome(engine, approval_id, seen, ownership_check)
         if fresh.card is not None:
             fresh.status, fresh.text = "superseded", FRESH
             if payment_purpose_recovery:
@@ -790,27 +804,28 @@ def approve(engine: Engine, approval_id: str, digest_sent: str | None, principal
             _end(conn, approval_id, "invalidated", _decision("invalidated", GONE["invalidated"]))
         return Outcome("invalidated", GONE["invalidated"], approval_id)
     except _NotClaimed:  # another attempt claimed it first, or it expired meanwhile
-        return _now_outcome(engine, approval_id, seen)
+        return _now_outcome(engine, approval_id, seen, ownership_check)
     if outcome == "refused":  # the refusal as stored, its catalogue id included when it has one
         return Outcome("refused", stored["text"], approval_id, operation_key=key,
                        data={k: stored[k] for k in ("code", "options", "data", "capability") if k in stored})
+    getattr(engine, "_erpclaw_decision_emit", lambda *args: None)(a["conversation_id"], approval_id, "consumed")
     return Outcome("committed", result.text, approval_id, operation_key=key, figures=result.figures, data=result.data,
                    amounts=stored["amounts"])
 
 
-def _now_outcome(engine: Engine, approval_id: str, seen: dict) -> Outcome:
+def _now_outcome(engine: Engine, approval_id: str, seen: dict, ownership_check) -> Outcome:
     """A card's outcome as it stands now: committed or refused from its outcome row, else its stored decision."""
     with read_only(engine) as conn:
         a = _card(conn, approval_id)
     if a["status"] == "consumed":
-        return read_back(engine, a["operation_key"], seen)
+        return read_back(engine, a["operation_key"], seen, ownership_check=ownership_check)
     if a["status"] != "pending":
-        return _decided(engine, a, seen)
+        return _decided(engine, a, seen, ownership_check)
     status = _touch(engine, a)
     return Outcome(status, GONE.get(status, "That card can no longer be approved."), approval_id)
 
 
-def _decided(engine: Engine, a: dict, seen: dict, depth: int = 0) -> Outcome:
+def _decided(engine: Engine, a: dict, seen: dict, ownership_check, depth: int = 0) -> Outcome:
     """A repeated approval of a card that ended without a commit, writing nothing: its stored decision
     as the same events; a fresh card while it is pending and its token live, else that card's own outcome. A card
     ended before decisions were stored (older books) gives the plain message of its status."""
@@ -832,21 +847,23 @@ def _decided(engine: Engine, a: dict, seen: dict, depth: int = 0) -> Outcome:
         if status == "pending":  # its request has ended: approving it would end it so
             return Outcome("superseded", ENDED, f["id"])
         if status == "consumed":
-            return read_back(engine, f["operation_key"], seen)
+            return read_back(engine, f["operation_key"], seen, ownership_check=ownership_check)
         if f["status"] != "pending":
-            return _decided(engine, f, seen, depth + 1)
+            return _decided(engine, f, seen, ownership_check, depth + 1)
         return Outcome(status, GONE.get(status, "That card can no longer be approved."), f["id"])
     return Outcome(d["status"], d["text"], a["id"],
                    data={k: d[k] for k in ("code", "options", "data", "capability") if k in d})
 
 
-def read_back(engine: Engine, key: str, principal: dict | None = None) -> Outcome:
+def read_back(engine: Engine, key: str, principal: dict | None = None, *,
+              ownership_check: Callable[[str], bool] | None = None) -> Outcome:
     """What the books show for an operation key, from its outcome row; never retries anything.
     The caller must hold `view` on the card's company (the owner in-process)."""
     with read_only(engine) as conn:
         o = conn.execute(select(m.operation_outcome).where(m.operation_outcome.c.key == key)).mappings().first()
         card = conn.execute(select(m.approval).where(m.approval.c.operation_key == key)).mappings().first()
         if card is not None:
+            _check_ownership(card["conversation_id"], ownership_check)
             pr.require(conn, pr.by_id(conn, (principal or _owner(conn))["id"]), card["company_id"], "view")
     if o is None:
         if card is None:
@@ -888,9 +905,11 @@ def with_currency(events: list[dict], currency: str | None) -> list[dict]:
             for e in events]
 
 
-def pending_card(engine: Engine, conversation_id: str) -> dict | None:
+def pending_card(engine: Engine, conversation_id: str, *,
+                 ownership_check: Callable[[str], bool] | None = None) -> dict | None:
     """The conversation's pending card, only if it has no token or its token is live, as on every route that
     returns a card."""
+    _check_ownership(conversation_id, ownership_check)
     with read_only(engine) as conn:
         row = conn.execute(select(m.approval).where(
             m.approval.c.conversation_id == conversation_id, m.approval.c.status == "pending"

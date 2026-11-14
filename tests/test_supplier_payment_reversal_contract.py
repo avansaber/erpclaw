@@ -797,7 +797,7 @@ def test_chat_routes_reversal_words_to_card_and_commits(engine):
     with engine.connect() as conn:
         stored = conn.execute(select(m.approval).where(m.approval.c.id == card["approval_id"])).mappings().one()
     bound = SimpleNamespace(approval_id=card["approval_id"], digest=card["digest"], operation_key=stored["operation_key"])
-    result = approvals.read_back(engine, stored["operation_key"])
+    result = approvals.read_back(engine, stored["operation_key"], ownership_check=lambda conversation: conversation == cid)
     assert_reversal_diff(before, snapshot(engine), bound, result, seed)
 
 

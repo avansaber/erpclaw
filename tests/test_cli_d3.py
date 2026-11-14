@@ -403,7 +403,7 @@ def test_an_entry_whose_card_was_committed_is_read_back_at_the_next_start(engine
     """The window killed after sending, or after the reply but before removing the entry: the next chat's re-send
     reads the committed result back, one posting, and removes the entry."""
     api, cid, card = a_card(engine)
-    assert approvals.approve(engine, card["approval_id"], card["digest"]).status == "committed"
+    assert approvals.approve(engine, card["approval_id"], card["digest"], ownership_check=_ownership(engine)).status == "committed"
     n = invoices(engine)
     with journal.Journal(journal.folder(), books_key()) as j:
         j.keep(j.publish(card["approval_id"], card["digest"], cid))
@@ -418,7 +418,7 @@ def test_an_ended_card_re_sent_after_a_restart_returns_its_outcome_and_never_com
     says of that card, the same words a repeat approval gets."""
     api, cid, card = a_card(engine)
     if ended == "declined":
-        approvals.decline(engine, card["approval_id"])
+        approvals.decline(engine, card["approval_id"], ownership_check=_ownership(engine))
     else:
         with engine.begin() as conn:
             conn.execute(update(m.approval).where(m.approval.c.id == card["approval_id"]).values(
@@ -428,7 +428,7 @@ def test_an_ended_card_re_sent_after_a_restart_returns_its_outcome_and_never_com
         j.keep(j.publish(card["approval_id"], card["digest"], cid))
     out = chat(monkeypatch, engine, [], [])
     assert out.exit_code == 0, out.output
-    said = approvals.approve(engine, card["approval_id"], card["digest"])
+    said = approvals.approve(engine, card["approval_id"], card["digest"], ownership_check=_ownership(engine))
     assert said.status == ended and said.text in out.said, (said, out.output)
     assert invoices(engine) == n and entries(home) == []
 
@@ -722,3 +722,12 @@ def test_an_entry_gone_before_the_re_send_is_not_sent(engine, monkeypatch, home)
     shown = main.con.export_text()
     assert main.UNSAFE not in shown
     assert "may or may not have been saved" in shown
+
+
+def _ownership(engine):
+    from erpclaw_assistant import store
+    from erpclaw_core import principals
+
+    with engine.connect() as conn:
+        owner = principals.owner(conn)["id"]
+    return lambda cid: store.conversation_owner(cid) == owner

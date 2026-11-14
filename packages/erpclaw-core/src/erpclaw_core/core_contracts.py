@@ -901,7 +901,7 @@ MANIFEST = Manifest(
     calls=[], events=Events(emits=[], consumes=[]), slots={},
     voucher_types=["journal", "opening", "year_end_close", "supplier_payment"], capabilities=Capabilities(network=[], files=[]),
     metrics=["receivables"],
-    uses=["stock.list_warehouses?", "stock.preview_create_warehouse?", "stock.create_warehouse?",
+    uses=["stock.plan_position_stock?", "stock.write_position_stock?", "stock.list_warehouses?", "stock.preview_create_warehouse?", "stock.create_warehouse?",
           "stock.preview_make_stock_item?", "stock.make_stock_item?"],
 )
 

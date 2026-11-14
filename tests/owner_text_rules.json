@@ -158,6 +158,7 @@
     "client_message_id_reused",
     "invalid_request",
     "busy",
+    "turn_lapsed",
     "message_overtaken",
     "too_many_streams",
     "no_file",

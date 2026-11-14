@@ -197,7 +197,7 @@ def test_legacy_card_reconciliation_withholds_event_and_releases_claim(engine, m
     with engine.begin() as conn:
         conn.execute(m.party.update().where(m.party.c.name == "Acme Corporation").values(name="Acme Corporation North"))
         create_party(company_ctx(conn), "customer", "Acme Corporation South")
-    assert approvals.approve(engine, card["approval_id"], card["digest"]).status == "superseded"
+    assert approvals.approve(engine, card["approval_id"], card["digest"], ownership_check=_ownership(engine)).status == "superseded"
     value = credential()
     with engine.begin() as conn:
         legacy = json.loads(conn.execute(select(m.approval.c.card_json).where(
@@ -329,3 +329,12 @@ def test_structural_guard_rejects_indirect_sql_and_literal_writes():
                  '''conn.execute(f"UPDATE capability_demand SET request = '{text}' WHERE outcome = ?", (_stored("e"),))'''):
         mutation = Path(store.__file__).read_text() + '\n\ndef added_writer(conn, text):\n    ' + body + '\n'
         assert any(item.startswith("added_writer:") for item in unguarded_writes(mutation))
+
+
+def _ownership(engine):
+    from erpclaw_assistant import store
+    from erpclaw_core import principals
+
+    with engine.connect() as conn:
+        owner = principals.owner(conn)["id"]
+    return lambda cid: store.conversation_owner(cid) == owner

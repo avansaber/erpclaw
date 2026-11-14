@@ -192,7 +192,7 @@ def test_same_bank_account_twice_is_refused_as_duplicated(engine):
                     "duplicated_part")
 
 
-@pytest.mark.parametrize("field", ["customer_lines", "stock_lines", "operation_key", "date"])
+@pytest.mark.parametrize("field", ["customer_lines", "operation_key", "date"])
 def test_later_line_fields_and_engine_fields_are_rejected(engine, field):
     before = snapshot(engine)
     with pytest.raises(ValidationError, match="Extra inputs"):
@@ -203,6 +203,29 @@ def test_later_line_fields_and_engine_fields_are_rejected(engine, field):
 def test_supplier_lines_are_accepted(engine):
     card = propose_opening(engine, {**opening_args(), "supplier_lines": []})
     assert card.status == "card"
+
+
+def test_stock_lines_are_accepted(engine):
+    from bookdiff import changes
+    from erpclaw_stock import service as stock
+
+    with engine.begin() as conn:
+        ctx = company_ctx(conn)
+        item_id = conn.execute(select(m.item.c.id).where(
+            m.item.c.company_id == ctx.company_id, m.item.c.name == "Copper Wire")).scalar_one()
+        warehouse = "Warehouse " + new_id()[:8]
+        stock.create_warehouse(ctx, warehouse)
+        stock.make_stock_item(ctx, item_id, "moving_average")
+    before = snapshot(engine)
+    empty = propose_opening(engine, {**opening_args(), "stock_lines": []})
+    assert empty.status == "card"
+    assert set(changes(before, snapshot(engine))) <= {"approval"}
+    before = snapshot(engine)
+    card = propose_opening(engine, {"stock_lines": [{"item": "Copper Wire",
+        "warehouse": warehouse, "quantity": "100", "rate": "8.00"}]})
+    assert card.status == "card"
+    assert ["Copper Wire", f"100 in {warehouse} at 8.00 USD: 800.00 USD"] in card.card["lines"]
+    assert set(changes(before, snapshot(engine))) <= {"approval"}
 
 
 def test_empty_opening_is_refused(engine):

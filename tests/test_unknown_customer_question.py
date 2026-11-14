@@ -27,11 +27,12 @@ def test_invoice_abc_asks_who_to_invoice_without_a_card_or_book_changes(engine):
     before = snapshot(engine)
     q = question(assistant.turn("conversation", "invoice ABC"))
     assert_changes(before, snapshot(engine), {})
-    assert q["code"] == "customer_unknown"
-    assert q["text"] == "I can't find a customer called 'ABC'. Which customer is it for?"
-    assert q["options"] == []
-    assert q["kind"] == "free"
-    assert q["choices"] == [{"code": f"{q['question_id']}-cancel", "label": "Cancel", "control": True}]
+    assert q["code"] == "customer_offer_unknown"
+    assert q["text"] == "I can't find a customer called 'ABC'. Which customer is it for, or shall I add it first? After approving each card, say continue to proceed with the invoice."
+    assert q["options"] == ["Add it", "No thanks"]
+    assert q["kind"] == "field"
+    assert [c["label"] for c in q["choices"] if not c["control"]] == ["Add it", "No thanks"]
+    assert any(c["label"] == "Cancel" and c["control"] for c in q["choices"])
     assert store.open_request("conversation")["pending_question"]["id"] == q["question_id"]
 
 
@@ -67,7 +68,7 @@ def test_answer_with_real_customer_continues_original_invoice(engine):
     before = snapshot(engine)
     q = question(assistant.turn("conversation", "invoice ABC for 3 copper wire"))
     assert_changes(before, snapshot(engine), {})
-    assert q["text"].endswith("Which customer is it for?")
+    assert q["text"] == "I can't find a customer called 'ABC'. Which customer is it for, or shall I add it first? After approving each card, say continue to proceed with the invoice."
     original = store.open_request("conversation")["id"]
     events = assistant.turn("conversation", "Acme Corporation")
     assert [e["type"] for e in events] == ["card"], events

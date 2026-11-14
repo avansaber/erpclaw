@@ -7,6 +7,7 @@ from bookdiff import snapshot
 from erpclaw_assistant import resolve_text, store
 from erpclaw_assistant.graph import Assistant, FIND_TOOL
 from erpclaw_assistant.model import Reply, ScriptedModel, call
+from ownership_helpers import owner_check
 from erpclaw_core import approvals, catalogue as cat
 from erpclaw_sales import tables as sales
 
@@ -28,7 +29,7 @@ def test_tax_next_step_refuses_then_drafts_without_tax(engine, as_released):
     events = assistant.turn("tax-next", "draft an invoice for Hooli for 5 copper wire")
     assert [e["type"] for e in events] == ["card"]
     assert ["Tax", "No tax calculated: no tax template is set. That is not a statement that no tax is owed."] in events[0]["card"]["lines"]
-    result = approvals.approve(engine, events[0]["approval_id"], events[0]["digest"])
+    result = approvals.approve(engine, events[0]["approval_id"], events[0]["digest"], ownership_check=owner_check(engine))
     assert result.status == "committed"
     with engine.connect() as conn:
         invoice = conn.execute(select(sales.invoice).where(sales.invoice.c.operation_key == result.operation_key)).mappings().one()
@@ -61,7 +62,7 @@ def test_submit_draft_with_tax_next_step_submits(engine, as_released):
                  items=[{"item": "copper wire", "quantity": 5}])
     maker = Assistant(engine, ScriptedModel([Reply("", [draft])]))
     card = maker.turn("make-draft", "draft an invoice for Hooli for 5 copper wire")[0]
-    result = approvals.approve(engine, card["approval_id"], card["digest"])
+    result = approvals.approve(engine, card["approval_id"], card["digest"], ownership_check=owner_check(engine))
     with engine.connect() as conn:
         number = conn.execute(select(sales.invoice.c.number).where(
             sales.invoice.c.operation_key == result.operation_key)).scalar_one()

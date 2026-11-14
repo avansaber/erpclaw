@@ -384,7 +384,7 @@ def test_lost_claim_persists_no_partial_steps_and_takeover_starts_at_one(engine,
     monkeypatch.setattr(store, "finalise", lapse)
     events = turn(engine, [call("list_invoices")])
     assert captured and steps(captured[0][1])[0]["n"] == 1
-    assert events[-1]["code"] == "busy" and "steps" not in events[-1]
+    assert events[-1]["code"] == "turn_lapsed" and "steps" not in events[-1]
     assert store.events(captured[0][0]) == []
     monkeypatch.setattr(store, "finalise", original)
     events = turn(engine, [call("list_invoices")])
@@ -405,7 +405,7 @@ def test_takeover_sets_aside_unfinished_card_as_notice_and_keeps_fresh_numbering
     result = turn(engine, [call("create_invoice", customer="Acme Corporation",
                                items=[{"item": "copper wire", "quantity": 1}])],
                   text="Invoice Acme Corporation for one copper wire")
-    assert result[-1]["code"] == "busy" and captured
+    assert result[-1]["code"] == "turn_lapsed" and captured
     assert steps(captured[0][1])[0]["n"] == 1 and store.events(captured[0][0]) == []
     monkeypatch.setattr(store, "finalise", original)
     result = turn(engine, [call("list_invoices")])

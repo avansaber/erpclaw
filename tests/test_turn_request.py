@@ -17,6 +17,12 @@ from erpclaw_core import approvals
 from erpclaw_core import models as m
 
 
+def ownership(engine):
+    with engine.connect() as conn:
+        owner = pr.owner(conn)["id"]
+    return lambda cid: store.conversation_owner(cid) == owner
+
+
 def assistant(engine, *replies):
     return Assistant(engine, ScriptedModel(list(replies)))
 
@@ -120,7 +126,7 @@ def test_a_figure_given_before_an_engine_question_reaches_the_card(engine):
 def test_a_figure_from_an_ended_request_never_reaches_a_card(engine):
     a = assistant(engine, Reply("", [inv("Acme Corporation", 5)]), Reply("", [inv("Hooli", 5)]))
     card = a.turn("c1", "Invoice Acme Corporation for 5 copper wire")[-1]
-    assert approvals.approve(engine, card["approval_id"], card["digest"]).status == "committed"
+    assert approvals.approve(engine, card["approval_id"], card["digest"], ownership_check=ownership(engine)).status == "committed"
     ev = a.turn("c1", "Invoice Hooli for copper wire")
     assert kinds(ev) == ["ask"], ev  # the 5 was the ended request's
 
@@ -159,7 +165,7 @@ def test_a_message_after_an_out_of_band_approval_starts_a_new_request(engine):
     card = a.turn("c1", "Invoice Acme Corporation for 5 copper wire")[-1]
     old = store.open_request("c1")
     assert old is not None and old["pending_card"] == card["approval_id"]
-    assert approvals.approve(engine, card["approval_id"], card["digest"]).status == "committed"
+    assert approvals.approve(engine, card["approval_id"], card["digest"], ownership_check=ownership(engine)).status == "committed"
     ev = a.turn("c1", "Invoice Hooli for 3 copper wire")
     assert kinds(ev) == ["card"], ev
     new = store.open_request("c1")
@@ -200,7 +206,7 @@ def test_a_card_turn_s_business_rows_are_still_counted_exactly(engine):
     drafted = eval_snapshot(engine)
     assert set(touched(before, drafted)) == {"approval", "conversation_fence"}
     assert honesty.business(touched(before, drafted)) == {}  # a card and the fence, no business row
-    assert approvals.approve(engine, card["approval_id"], card["digest"]).status == "committed"
+    assert approvals.approve(engine, card["approval_id"], card["digest"], ownership_check=ownership(engine)).status == "committed"
     approved = touched(drafted, eval_snapshot(engine))
     assert t.invoice.name in honesty.business(approved) and "conversation_fence" not in approved
 
@@ -250,7 +256,7 @@ def test_a_card_made_before_a_crash_is_set_aside_and_every_route_to_it_is_refuse
     with pytest.raises(RuntimeError):
         a.turn("c1", "Invoice Acme Corporation for 5 copper wire")
     monkeypatch.setattr(store, "finalise", real)
-    made = approvals.pending_card(engine, "c1")
+    made = approvals.pending_card(engine, "c1", ownership_check=ownership(engine))
     assert made is not None
     _lapse("c1")
     invoices = count(engine, t.invoice)
@@ -260,7 +266,7 @@ def test_a_card_made_before_a_crash_is_set_aside_and_every_route_to_it_is_refuse
     assert store.outcome_applied(made["id"], "superseded")  # the lost turn's intent closed with the set-aside
     assert store.intent("c1")[1] != "open"  # the stores agree: nothing open, nothing pending the books ended
     assert (store.open_request("c1") or {}).get("pending_card") is None
-    assert approvals.approve(engine, made["id"], made["digest"]).status == "superseded"
+    assert approvals.approve(engine, made["id"], made["digest"], ownership_check=ownership(engine)).status == "superseded"
     api = TestClient(create_app(engine, ScriptedModel([]), embedded_owner=True))  # a restart: a new process's API
     out = api.post(f"/v1/cards/{made['id']}/approve", json={"digest": made["digest"]}).json()["events"]
     assert all(e.get("status") != "committed" for e in out), out
@@ -285,14 +291,14 @@ def test_an_exception_after_the_card_never_leaves_an_open_intent_behind_a_releas
     with pytest.raises(RuntimeError):
         a.turn("c1", "Invoice Acme Corporation for 5 copper wire")
     monkeypatch.setattr(store, "finalise", real)
-    made = approvals.pending_card(engine, "c1")
+    made = approvals.pending_card(engine, "c1", ownership_check=ownership(engine))
     assert made is not None
     held = a.turn("c1", "hello?")
     assert [(e["type"], e.get("code")) for e in held] == [("refused", "busy")], held  # the claim was not released
     _lapse("c1")
     ev = a.turn("c1", "hello?")
     assert ev[0]["code"] == "card_set_aside", ev
-    assert approvals.approve(engine, made["id"], made["digest"]).status == "superseded"
+    assert approvals.approve(engine, made["id"], made["digest"], ownership_check=ownership(engine)).status == "superseded"
     assert store.intent("c1")[1] != "open"
 
 
@@ -311,7 +317,7 @@ def test_a_turn_killed_before_its_card_leaves_nothing_waiting(engine, monkeypatc
     monkeypatch.setattr(approvals, "propose", real)  # only this; undo() would also lift the test's own data root
     _lapse("c1")
     ev = a.turn("c1", "hello?")
-    assert kinds(ev) == ["answer"] and approvals.pending_card(engine, "c1") is None, ev
+    assert kinds(ev) == ["answer"] and approvals.pending_card(engine, "c1", ownership_check=ownership(engine)) is None, ev
 
 
 def test_a_books_restore_behind_the_store_ends_the_request_and_shows_no_card(engine, tmp_path):
@@ -328,7 +334,7 @@ def test_a_books_restore_behind_the_store_ends_the_request_and_shows_no_card(eng
     bk.backup(engine, tmp_path / "before")
     a = assistant(engine, Reply("", [inv("Acme Corporation", 5)]), Reply("", [inv("Hooli", 3)]))
     done = a.turn("c1", "Invoice Acme Corporation for 5 copper wire")[-1]
-    assert approvals.approve(engine, done["approval_id"], done["digest"]).status == "committed"
+    assert approvals.approve(engine, done["approval_id"], done["digest"], ownership_check=ownership(engine)).status == "committed"
     assert kinds(a.turn("c1", "Invoice Hooli for 3 copper wire")) == ["card"]
     name = f"restored_{secrets.token_hex(4)}_test"
     admin = create_engine(make_url(PG_URL).set(database="postgres"), isolation_level="AUTOCOMMIT", poolclass=NullPool)
@@ -393,7 +399,7 @@ def test_retry_after_a_card_stop_sets_it_aside_and_replays_the_new_turn(engine, 
     with pytest.raises(RuntimeError, match="stopped after propose"):
         a.turn("c1", text, client_message_id="retry")
     original = message()
-    previous = approvals.pending_card(engine, "c1")
+    previous = approvals.pending_card(engine, "c1", ownership_check=ownership(engine))
     # A re-run that itself stopped can be re-run again, once the new lease lapses.
     for stop_again in (True, False):
         _lapse("c1")
@@ -406,8 +412,8 @@ def test_retry_after_a_card_stop_sets_it_aside_and_replays_the_new_turn(engine, 
             assert events[0] == {"type": "notice", "code": "card_set_aside", "text": say("turn_unfinished")}
             assert kinds(events) == ["notice", "card"]
         assert message()["id"] == original["id"] and message()["turn_id"] != original["turn_id"]
-        assert approvals.approve(engine, previous["id"], previous["digest"]).status == "superseded"
-        previous = approvals.pending_card(engine, "c1")
+        assert approvals.approve(engine, previous["id"], previous["digest"], ownership_check=ownership(engine)).status == "superseded"
+        previous = approvals.pending_card(engine, "c1", ownership_check=ownership(engine))
     before = sqlite_snapshot()
     assert a.turn("c1", text, client_message_id="retry") == events
     assert sqlite_snapshot() == before
@@ -432,7 +438,7 @@ def test_retry_moves_its_message_when_approval_ended_the_old_request(engine, mon
     with pytest.raises(RuntimeError):
         a.turn("c1", text, client_message_id="retry")
     monkeypatch.setattr(store, "finalise", finalise)
-    card = approvals.pending_card(engine, "c1")
+    card = approvals.pending_card(engine, "c1", ownership_check=ownership(engine))
     old = store.open_request("c1")
     # Record the proposed card as pending, as if a later store checkpoint survived.
     store.set_pending(old["id"], card=card["id"])
@@ -444,7 +450,7 @@ def test_retry_moves_its_message_when_approval_ended_the_old_request(engine, mon
         # Approval adds a note on this base; completed recovery may already have ended the request.
         assert store.end_request(old["id"], "committed")
     else:
-        assert approvals.approve(engine, card["id"], card["digest"]).status == "committed"
+        assert approvals.approve(engine, card["id"], card["digest"], ownership_check=ownership(engine)).status == "committed"
     _lapse("c1")
     events = a.turn("c1", text, client_message_id="retry")
     assert events[-1]["type"] == "card"

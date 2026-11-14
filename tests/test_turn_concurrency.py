@@ -94,7 +94,7 @@ def test_a_turn_paused_past_its_lease_stops_when_it_wakes_and_makes_no_card(engi
     before = cards(engine)
     model.go.set()
     th.join(60)
-    assert [(e["type"], e.get("code")) for e in out["events"]] == [("refused", "busy")], out
+    assert [(e["type"], e.get("code")) for e in out["events"]] == [("refused", "turn_lapsed")], out
     assert cards(engine) == before  # the stalled turn made nothing
 
 
@@ -125,7 +125,7 @@ def test_a_takeover_in_the_same_request_sets_the_stalled_worker_s_card_aside(eng
     monkeypatch.setattr(store, "LEASE", timedelta(seconds=300))
     ev = Assistant(engine, ScriptedModel([Reply("", [inv("Acme Corporation", 4)])])).turn("c1", "no, make it 4")
     assert ev[0]["type"] == "notice" and ev[0]["code"] == "card_set_aside", ev  # the reply says why
-    assert approvals.approve(engine, card["approval_id"], card["digest"]).status == "superseded"
+    assert approvals.approve(engine, card["approval_id"], card["digest"], ownership_check=_ownership(engine)).status == "superseded"
     model.go.set()
     th.join(60)
     with engine.connect() as conn:
@@ -235,6 +235,15 @@ def test_a_turn_whose_lease_lapsed_before_the_set_aside_leaves_the_card_as_it_wa
     a = Assistant(engine, model)
     [card] = a.turn("c1", "invoice Acme Corporation for 5 copper wire")
     ev = a.turn("c1", "cancel that")  # an unchanged re-proposal would set the card aside
-    assert [e.get("code") for e in ev] == ["busy"], ev
+    assert [e.get("code") for e in ev] == ["turn_lapsed"], ev
     assert _status(engine, card["approval_id"]) == "pending"  # the books and the store still agree
     assert store.open_request("c1")["pending_card"] == card["approval_id"]
+
+
+def _ownership(engine):
+    from erpclaw_assistant import store
+    from erpclaw_core import principals
+
+    with engine.connect() as conn:
+        owner = principals.owner(conn)["id"]
+    return lambda cid: store.conversation_owner(cid) == owner

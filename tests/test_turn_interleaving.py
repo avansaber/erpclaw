@@ -85,7 +85,7 @@ def run(engine, monkeypatch, order, kill):
     sched = Scheduler(order, kill)
     local = threading.local()
     log = []  # (turn, step, what it returned), in the order the steps ran
-    real = {"claim": store.claim, "activate": approvals.activate, "renew": store.renew,
+    real = {"claim": store.claim, "activate": approvals._activate, "renew": store.renew,
             "propose": approvals.propose, "finalise": store.finalise}
 
     def hooked(name, fn):
@@ -110,7 +110,7 @@ def run(engine, monkeypatch, order, kill):
     monkeypatch.setattr(store, "claim", hooked("claim", real["claim"]))
     monkeypatch.setattr(store, "renew", hooked("renew", real["renew"]))
     monkeypatch.setattr(store, "finalise", hooked("finalise", real["finalise"]))
-    monkeypatch.setattr(approvals, "activate", hooked("activate", real["activate"]))
+    monkeypatch.setattr(approvals, "_activate", hooked("activate", real["activate"]))
     monkeypatch.setattr(approvals, "propose", hooked("propose", real["propose"]))
     out = {}
 

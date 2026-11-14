@@ -226,14 +226,17 @@ def test_the_api_refuses_to_send_a_refusal_of_something_not_offered_without_its_
 def test_the_approval_routes_check_their_events_too(engine, monkeypatch):
     import erpclaw_api.app as api
 
-    ended = approvals.Outcome("superseded", "Not yet.", "x", data={"code": "planned"})  # no id
+    c, cid = client(engine, [])
+    card = approvals.propose(engine, REGISTRY.contracts["create_invoice"],
+                             {"customer": "Acme Corporation", "items": [{"item": "copper wire", "quantity": 2}]},
+                             cid, ownership_check=lambda target: target == cid)
+    ended = approvals.Outcome("superseded", "Not yet.", card.approval_id, data={"code": "planned"})  # no id
     monkeypatch.setattr(api.approvals, "decline", lambda *a, **k: ended)
     monkeypatch.setattr(api.approvals, "approve", lambda *a, **k: ended)
-    c, _ = client(engine, [])
     with pytest.raises(ValueError, match="catalogue id"):
-        c.post("/v1/cards/x/decline")
+        c.post(f"/v1/cards/{card.approval_id}/decline")
     with pytest.raises(ValueError, match="catalogue id"):
-        c.post("/v1/cards/x/approve", json={"digest": "0" * 64})
+        c.post(f"/v1/cards/{card.approval_id}/approve", json={"digest": "0" * 64})
 
 
 # --- a planned reply never denies something switched on ---------------------------------------------------------

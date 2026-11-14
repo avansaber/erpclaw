@@ -360,7 +360,7 @@ requires-dist = [{ name = "erpclaw-core", editable = "packages/erpclaw-core" }]
 
 [[package]]
 name = "erpclaw-stock"
-version = "0.1.1"
+version = "0.1.3"
 source = { editable = "plugins/erpclaw-stock" }
 dependencies = [
     { name = "erpclaw-core" },

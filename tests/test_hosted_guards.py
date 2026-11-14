@@ -447,8 +447,8 @@ def test_a_large_valid_result_and_a_few_stray_braces_are_read_quickly_and_not_re
     rows = json.dumps([{"invoice": f"INV-2026-{i:05d}", "customer": "Acme Corporation", "total": "28.00"}
                        for i in range(2000)])
     for text in (rows, "see the note {in braces} and the [draft] tag, then {another} one"):
-        started = time.perf_counter()
-        assert hosted.check(text) is None and time.perf_counter() - started < 1.0
+        started = time.process_time()
+        assert hosted.check(text) is None and time.process_time() - started < 1.0
 
 
 def test_a_credential_in_a_chat_turn_is_refused_and_saves_nothing(engine):

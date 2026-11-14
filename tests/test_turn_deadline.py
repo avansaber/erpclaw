@@ -10,7 +10,7 @@ from sqlalchemy import select, update
 from erpclaw_assistant import graph, store
 from erpclaw_assistant.model import OpenAICompatModel, Reply, ScriptedModel, call, turn_budget
 from erpclaw_assistant.muse import LocalModel, MuseModel
-from erpclaw_core import approvals, models as m
+from erpclaw_core import approvals, models as m, principals as pr
 from erpclaw_core.common import Refusal, company_ctx
 from erpclaw_core.masters import create_party
 from erpclaw_core.plugins import REGISTRY
@@ -197,7 +197,7 @@ def test_short_calls_exhaust_one_deadline_despite_renewals(engine, monkeypatch, 
     initial = clock[0]
     fake = TimedServer(clock, route, 170)
     c, cid = client(engine, timed_model(fake))
-    activate = approvals.activate
+    activate = approvals._activate
     activations = []
 
     def behind(engine, cid, company_id, generation, token):
@@ -207,7 +207,7 @@ def test_short_calls_exhaust_one_deadline_despite_renewals(engine, monkeypatch, 
             clock[0] += timedelta(seconds=20)
         return activate(engine, cid, company_id, generation, token)
 
-    monkeypatch.setattr(approvals, "activate", behind)
+    monkeypatch.setattr(approvals, "_activate", behind)
     renewals = []
     renew = store.renew
 
@@ -341,6 +341,9 @@ def test_timeout_reconciles_only_a_live_card_of_its_request(engine, monkeypatch,
     """Mutations: compare only the stored card id; adopt any live card regardless of its request token."""
     monkeypatch.setattr(store, "TURN_TIMEOUT", timedelta(seconds=5))
     changed = {}
+    with engine.connect() as conn:
+        owner = pr.owner(conn)["id"]
+    ownership = lambda conversation: store.conversation_owner(conversation) == owner
 
     def fence():
         with engine.connect() as conn:
@@ -357,28 +360,29 @@ def test_timeout_reconciles_only_a_live_card_of_its_request(engine, monkeypatch,
                     with engine.begin() as conn:
                         conn.execute(update(m.item).where(m.item.c.name == "Copper Wire").values(
                             standard_rate="29.00"))
-                    fresh = approvals.approve(engine, card["approval_id"], card["digest"])
+                    fresh = approvals.approve(engine, card["approval_id"], card["digest"], ownership_check=ownership)
                     assert fresh.status == "superseded" and fresh.card
                     assert fresh.approval_id != card["approval_id"]
                     changed["card"] = {"approval_id": fresh.approval_id, "digest": fresh.digest}
                 elif during_call == "gone":
-                    assert approvals.decline(engine, card["approval_id"]).status == "declined"
-                    assert approvals.pending_card(engine, cid) is None
+                    assert approvals.decline(engine, card["approval_id"], ownership_check=ownership).status == "declined"
+                    assert approvals.pending_card(engine, cid, ownership_check=ownership) is None
                 else:
                     live = fence()
                     token = "another request token"
                     assert token != req["token"]
-                    assert approvals.activate(engine, cid, live["company_id"], live["generation"] + 1,
+                    assert approvals._activate(engine, cid, live["company_id"], live["generation"] + 1,
                                               token).status == "active"
                     with engine.connect() as conn:
                         original = conn.execute(select(m.approval).where(
                             m.approval.c.id == card["approval_id"])).mappings().one()
                     fresh = approvals.propose(engine, REGISTRY.contracts[original["contract"]],
-                                              json.loads(original["args_json"]), cid, request_card_token=token)
+                                              json.loads(original["args_json"]), cid, request_card_token=token,
+                                              ownership_check=ownership)
                     changed["card"] = {"approval_id": fresh.approval_id, "digest": fresh.digest}
                 changed["fence"] = fence()
                 if during_call != "gone":
-                    live = approvals.pending_card(engine, cid)
+                    live = approvals.pending_card(engine, cid, ownership_check=ownership)
                     assert live["id"] == changed["card"]["approval_id"]
                     assert live["request_card_token"] == changed["fence"]["live_token"]
                     assert (live["request_card_token"] == req["token"]) == (during_call == "replacement")
@@ -570,7 +574,7 @@ def test_expired_activation_does_not_supersede_a_pending_card(engine, monkeypatc
     [card] = post(c, cid, SAID)
     rid = store.open_request(cid)["id"]
     activations = []
-    activate = approvals.activate
+    activate = approvals._activate
 
     def behind(engine, conversation_id, company_id, generation, token):
         activations.append(generation)
@@ -578,7 +582,7 @@ def test_expired_activation_does_not_supersede_a_pending_card(engine, monkeypatc
             activate(engine, conversation_id, company_id, generation + 10, token)
         return activate(engine, conversation_id, company_id, generation, token)
 
-    monkeypatch.setattr(approvals, "activate", behind)
+    monkeypatch.setattr(approvals, "_activate", behind)
     if retry:
         catch_up = store.catch_up
 

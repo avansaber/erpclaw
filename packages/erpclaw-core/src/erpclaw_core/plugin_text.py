@@ -14,6 +14,7 @@ TEXT = {"en": {
     "file_not_found": "No such stored file.",
     "file_altered": "The stored file has been altered or lost.",
     "model_input_invalid": "The assistant asked for something it can't do, so nothing was saved.",
+    "not_a_write": "That isn't a change I can draft, so nothing was saved.",
     "plugin_boundary_failed": "Something went wrong inside your books' software, so nothing was changed.",
     "plugin_boundary_currency_unknown": ("These books do not have the following currencies, so nothing was "
                                          "changed: {currencies}."),

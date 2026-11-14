@@ -224,9 +224,9 @@ def prepare_commit(world, monkeypatch):
     world.conn.read_set = o.opening_read_set(world.ctx, inputs())
     world.conn.events.clear()
     def number(ctx, series, date):
-        assert series == "SO" and date == START
+        assert series == "OS" and date == START
         world.conn.events.append("number")
-        return "SO-2026-00003"
+        return "OS-2026-00003"
     monkeypatch.setattr(o, "next_number", number)
     def entry(ctx, mv, when, kind, vid):
         world.conn.events.append("stock_entry")
@@ -246,7 +246,7 @@ def test_commit_uses_real_authority_and_freshness_before_number_and_effects(worl
     assert world.conn.events == ["preflight", "preflight", "number", "insert:stock_voucher", "insert:stock_voucher_line", "stock_entry", "post"]
     header, line = [data for _, data in world.conn.inserts]
     assert header["kind"] == "opening" and header["posting_date"] == START
-    assert header["number"] == "SO-2026-00003"
+    assert header["number"] == "OS-2026-00003"
     assert line["voucher_id"] == header["id"] and line["company_id"] == "co"
     assert (line["qty_moved"], line["rate"], line["value"]) == (D(5), D("2.50"), D("12.50"))
     assert line["counted_qty"] is None and line["books_qty"] is None
@@ -306,7 +306,7 @@ def test_books_start_period_refusal_is_actionable(monkeypatch, code, expected):
 def test_replay_is_scoped_to_contract_company_and_exact_key():
     statements = []
     payload = {"text": "Recorded 12.50 USD.", "data": {"voucher_type": "stock_opening"}, "figures": ["12.50"],
-               "amounts": [dict(what="value", of="SO-2026-00003", value="12.50", currency="USD")]}
+               "amounts": [dict(what="value", of="OS-2026-00003", value="12.50", currency="USD")]}
     def execute(stmt):
         statements.append(stmt)
         return ReadResult(scalar=json.dumps(payload))
@@ -364,7 +364,7 @@ def test_contract_is_registered_but_planned_and_versions_are_consistent(as_relea
     assert o.CONTRACT.planned == "Core" and o.CONTRACT.moves_money is True
     assert o.CONTRACT.effect == "write" and o.CONTRACT.plugin == "stock"
     assert MANIFEST.contracts[o.NAME] == "write" and "stock_opening" in MANIFEST.voucher_types
-    assert MANIFEST.version == "0.1.1" and MANIFEST.after_core_revision == "0015"
+    assert MANIFEST.version == "0.1.3" and MANIFEST.after_core_revision == "0015"
     with pytest.raises(Refusal) as exc: approvals._write_contract(o.CONTRACT)
     assert exc.value.code == "planned" and exc.value.capability == "planned.op.record_opening_stock"
 

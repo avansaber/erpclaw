@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from bookdiff import snapshot
 from erpclaw_api.app import create_app
-from erpclaw_assistant.model import Reply, ScriptedModel, call
+from erpclaw_assistant.model import Reply, ScriptedModel, ToolCall, call
 from erpclaw_assistant.resolve_text import table
 from erpclaw_core import catalogue, models
 from erpclaw_core.common import Ctx, company_ctx, new_id
@@ -23,7 +23,7 @@ def chat(engine, said, contract_name, **args):
     assert any(e.target == contract_name and e.state == "installed" for e in choices)
     model = ScriptedModel([Reply("", [call("find_capability", request=said)]),
                            Reply("", [call("choose_capability", pick=f"op.{contract_name}")]),
-                           Reply("", [call(contract_name, **args)])])
+                           Reply("", [ToolCall(f"call_{contract_name}", contract_name, args)])])
     client = TestClient(create_app(engine, model, embedded_owner=True))
     conversation = client.post("/v1/conversations").json()["id"]
     events = client.post(f"/v1/conversations/{conversation}/messages", json={"text": said}).json()["events"]
@@ -147,3 +147,59 @@ def test_name_filter_uses_existing_resolution(engine, as_released, what, contrac
     assert f"Total {what}s: 0." in unknown["text"]
     assert all(record_id not in reply["text"] for record_id in ids for reply in (event, partial, unknown))
     assert snapshot(engine) == before
+
+
+@pytest.mark.parametrize("what,contract,plain,polite", [
+    ("customer", "list_customers", "show customer Acme Corporation", "please show customer Acme Corporation"),
+    ("item", "list_items", "list item copper wire", "Please list item copper wire"),
+    ("supplier", "list_suppliers", "show me the supplier Birchwood Workshop",
+     "kindly show me the supplier Birchwood Workshop"),
+    ("customer", "list_customers", "show customer Acme Corporation", "could you please show customer Acme Corporation"),
+    ("item", "list_items", "show the item copper wire", "can you show the item copper wire"),
+    ("customer", "list_customers", "show customer Acme Corporation", "would you please show customer Acme Corporation"),
+])
+def test_polite_prefix_preserves_named_list_chat(engine, as_released, what, contract, plain, polite):
+    """Removing polite-prefix handling loses the top-ranked named list request."""
+    name = {"customer": "Acme Corporation", "item": "copper wire", "supplier": "Birchwood Workshop"}[what]
+    if what == "supplier":
+        with engine.begin() as conn:
+            create_party(company_ctx(conn), what, name)
+    with engine.connect() as conn:
+        assert catalogue.find_capability(conn, polite)[0].target == contract
+    baseline = chat(engine, plain, contract, name_filter=name)
+    result = chat(engine, polite, contract, name_filter=name)
+    assert [e["type"] for e in result] == ["answer"]
+    assert name.lower() in result[0]["text"].lower()
+    assert result[0]["text"] == baseline[0]["text"]
+
+
+def test_polite_suffix_and_name_are_preserved(engine, as_released):
+    """Removing polite-prefix handling must not alter suffixes or words in names."""
+    with engine.begin() as conn:
+        create_party(company_ctx(conn), "customer", "Please Corp")
+    for said, name in [("show customer Acme Corporation please", "Acme Corporation"),
+                       ("show customer Please Corp", "Please Corp")]:
+        event = chat(engine, said, "list_customers", name_filter=name)[0]
+        assert event["type"] == "answer" and name in event["text"]
+
+
+@pytest.mark.parametrize("plain,contract,args", [
+    ("invoice Acme Corporation for 5 copper wire", "create_invoice",
+     {"customer": "Acme Corporation", "items": [{"item": "copper wire", "quantity": 5}]}),
+    ("add a customer Lakeside Cafe", "add_customer", {"name": "Lakeside Cafe"}),
+])
+def test_polite_prefix_does_not_turn_writes_into_lists(engine, as_released, plain, contract, args):
+    """Removing polite-prefix handling must not change these non-list requests."""
+    baseline = chat(engine, plain, contract, **args)
+    result = chat(engine, "please " + plain, contract, **args)
+    assert [e["type"] for e in result] == [e["type"] for e in baseline] == ["card"]
+    assert result[0]["card"]["lines"] == baseline[0]["card"]["lines"]
+
+
+def test_polite_prefix_without_singular_master_adds_no_list_candidate(engine, as_released):
+    """Removing polite-prefix handling must not add a list to a generic request."""
+    with engine.connect() as conn:
+        plain = {e.id for e in catalogue.find_capability(conn, "show me something")}
+        polite = {e.id for e in catalogue.find_capability(conn, "please show me something")}
+    lists = {"op.list_customers", "op.list_suppliers", "op.list_items"}
+    assert polite & lists == plain & lists

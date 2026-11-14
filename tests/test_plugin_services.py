@@ -586,7 +586,7 @@ def test_a_question_raised_by_a_write_service_inside_the_effect_is_stored_replay
     stored = json.loads(o["result_json"])
     assert {k: stored[k] for k in ("code", "options", "data")} == INTERNAL  # the stored outcome keeps the refs
     # replayed: by read_back (inside the engine, refs kept) and by a repeated approval (the event, none)
-    back = approvals.read_back(books, o["key"])
+    back = approvals.read_back(books, o["key"], ownership_check=lambda conversation: conversation == cid)
     assert back.status == "refused" and back.data == INTERNAL
     [again] = c.post(f"/v1/cards/{card['approval_id']}/approve", json={"digest": card["digest"]}).json()["events"]
     assert _pick(again) == QUESTION_EVENT and _no_ref(again)

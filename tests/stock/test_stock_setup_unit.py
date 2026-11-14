@@ -154,7 +154,20 @@ def test_original_fixture_coverage_and_success_shapes_are_exact():
     assert len(cases) == 22
     assert {case["service"] for case in cases} == SERVICES
     definitions = {s.name: s for s in stock.SERVICES}
-    assert len(definitions) == 13
+    assert len(definitions) == 15
+    assert set(definitions) == {
+        "stock_on_hand", "choose_warehouse", "preview_issue", "issue", "preview_return", "return_in",
+        "preview_reverse", "reverse_movements", "list_warehouses", "preview_create_warehouse",
+        "create_warehouse", "preview_make_stock_item", "make_stock_item", "plan_position_stock",
+        "write_position_stock",
+    }
+    for name, output in {
+        "plan_position_stock": {"currency": "USD", "lines": [{"account": "inv", "debit": "2.00"}],
+                                "read_set": [["item", "i"]], "details": [{"item": "Wire", "warehouse": "Main",
+                                "quantity": "1", "rate": "2.00", "value": "2.00"}]},
+        "write_position_stock": {"voucher_id": "v"},
+    }.items():
+        assert definitions[name].output_model.model_validate(output).model_dump() == output
     for case in cases:
         definition = definitions[case["service"]]
         definition.input_model.model_validate(case["input"])

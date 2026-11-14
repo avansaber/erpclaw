@@ -68,7 +68,7 @@ def approval_ask(engine):
     extra = approvals.propose(engine, REGISTRY.contracts["create_invoice"],
                               {"customer": "Initech", "items": [{"item": "copper wire", "quantity": 5}]})
     assert approvals.approve(engine, extra.approval_id, extra.digest).status == "committed"
-    assert approvals.approve(engine, card["approval_id"], card["digest"]).status == "superseded"
+    assert approvals.approve(engine, card["approval_id"], card["digest"], ownership_check=_ownership(engine)).status == "superseded"
     return a, last_ask(a.turn("c1", "hmm"))
 
 
@@ -155,3 +155,12 @@ def test_the_model_never_sees_the_control_choices(engine):
     a.turn("c1", "hmm")
     later = " ".join(str(m.get("content")) for m in sent[-1])
     assert all(c["code"] not in later for c in controls(ask)), later
+
+
+def _ownership(engine):
+    from erpclaw_assistant import store
+    from erpclaw_core import principals
+
+    with engine.connect() as conn:
+        owner = principals.owner(conn)["id"]
+    return lambda cid: store.conversation_owner(cid) == owner

@@ -121,11 +121,29 @@ def test_the_trusted_path_cannot_be_reached_through_a_service():
         "stock.preview_return", "stock.return_in", "stock.preview_reverse", "stock.reverse_movements",
         "stock.list_warehouses", "stock.preview_create_warehouse", "stock.create_warehouse",
         "stock.preview_make_stock_item", "stock.make_stock_item",
+        "stock.plan_position_stock", "stock.write_position_stock",
     }
     for name, sv in services.items():
         fields = set(sv.input_model.model_fields)
         assert not fields & {"trusted", "authority", "commit"}, name
         assert sv.input_model.model_config.get("extra") == "forbid", name
+
+
+
+def test_opening_write_service_authorizes_non_core_caller(stocked, monkeypatch):
+    from erpclaw_core import approval_scope
+
+    plugin = REGISTRY.plugins[CONSUMER]
+    monkeypatch.setattr(plugin, "manifest", plugin.manifest.model_copy(
+        update={"uses": [*plugin.manifest.uses, "stock.write_position_stock"]}))
+    # Exercise the service's own backstop after the boundary sees a purported commit.
+    monkeypatch.setattr(approval_scope, "committing", lambda ctx: "missing-approval")
+    with stocked["engine"].begin() as conn:
+        ctx = company_ctx(conn, company_id=stocked["company"])
+        with pytest.raises(Refusal) as caught:
+            call_service(ctx, CONSUMER, "stock.write_position_stock",
+                         {"lines": [], "voucher_id": "v", "number": "n"})
+        assert caught.value.code == "not_approved"
 
 
 def test_an_input_naming_an_authority_is_refused_before_the_service_runs(stocked):

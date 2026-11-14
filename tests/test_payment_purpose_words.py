@@ -6,6 +6,7 @@ from sqlalchemy import select
 
 from bookdiff import snapshot as all_books
 from erpclaw_assistant.model import Reply, call
+from ownership_helpers import owner_check
 from erpclaw_core import approvals, ledger, models as m
 from erpclaw_core.common import company_ctx, new_id
 from erpclaw_sales import service as sales, tables as t
@@ -37,15 +38,15 @@ def test_replacement_card_and_replay_recover_purpose(engine):
     [event] = say(c, cid, 'Hooli paid 100 for sales')
     assert ['Purpose (not saved)', 'for sales'] in event['card']['lines']
     post_payment(engine, '20', number=inv['number'])
-    fresh = approvals.approve(engine, event['approval_id'], event['digest'])
+    fresh = approvals.approve(engine, event['approval_id'], event['digest'], ownership_check=owner_check(engine))
     assert fresh.status == 'superseded' and fresh.card is not None
     assert ['Purpose (not saved)', 'for sales'] in fresh.card['lines']
-    replay = approvals.approve(engine, event['approval_id'], event['digest'])
+    replay = approvals.approve(engine, event['approval_id'], event['digest'], ownership_check=owner_check(engine))
     assert replay.card == fresh.card
     with engine.connect() as conn:
         stored = conn.execute(select(m.approval.c.card_json).where(m.approval.c.id == fresh.approval_id)).scalar_one()
         assert 'for sales' not in stored
-    result = approvals.approve(engine, fresh.approval_id, fresh.digest)
+    result = approvals.approve(engine, fresh.approval_id, fresh.digest, ownership_check=owner_check(engine))
     assert result.status == 'committed'
     with engine.connect() as conn:
         payment = conn.execute(select(t.payment).where(t.payment.c.operation_key == fresh.operation_key)).mappings().one()
@@ -97,9 +98,9 @@ def test_purpose_with_two_banks_asks_then_displays(purpose_books, purpose):
         ctx = company_ctx(conn)
         customer = dict(conn.execute(select(m.party).where(m.party.c.name == 'Hooli')).mappings().one())
         sales.record_payment(ctx, sales.plan_payment(ctx, customer, Decimal('20'), ctx.today, account='Bank'))
-    fresh = approvals.approve(purpose_books, event['approval_id'], event['digest'])
+    fresh = approvals.approve(purpose_books, event['approval_id'], event['digest'], ownership_check=owner_check(purpose_books))
     assert fresh.status == 'superseded' and ['Purpose (not saved)', purpose] in fresh.card['lines']
-    assert approvals.approve(purpose_books, event['approval_id'], event['digest']).card == fresh.card
+    assert approvals.approve(purpose_books, event['approval_id'], event['digest'], ownership_check=owner_check(purpose_books)).card == fresh.card
 
 
 def test_purpose_ignores_model_account(purpose_books):

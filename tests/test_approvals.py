@@ -18,6 +18,7 @@ from sqlalchemy.exc import DBAPIError
 
 from bookdiff import assert_changes, snapshot
 from erpclaw_api.app import create_app
+from erpclaw_assistant import store
 from erpclaw_assistant.model import Reply, ScriptedModel, call
 from erpclaw_core import administration as admin
 from erpclaw_core import approvals, models as m
@@ -37,7 +38,18 @@ def invoices(engine):
 
 
 def propose(engine, args=ARGS, conversation=None, principal=None, contract="create_invoice"):
-    return approvals.propose(engine, REGISTRY.contracts[contract], args, conversation, principal=principal)
+    with engine.connect() as conn:
+        owner = principal or pr.owner(conn)
+    if conversation is not None:
+        store.create_conversation(conversation, owner["id"])
+    return approvals.propose(engine, REGISTRY.contracts[contract], args, conversation, principal=principal,
+                             ownership_check=lambda cid: store.conversation_owner(cid) == owner["id"])
+
+
+def ownership(engine):
+    with engine.connect() as conn:
+        owner = pr.owner(conn)["id"]
+    return lambda cid: store.conversation_owner(cid) == owner
 
 
 def company(engine):
@@ -95,14 +107,14 @@ def test_a_correction_supersedes_the_pending_card_and_one_card_is_pending_per_op
     assert card_status(engine, first.approval_id) == "superseded"
     assert card_status(engine, second.approval_id) == "pending"
     n = invoices(engine)
-    assert approvals.approve(engine, first.approval_id, first.digest).status == "superseded"
+    assert approvals.approve(engine, first.approval_id, first.digest, ownership_check=ownership(engine)).status == "superseded"
     assert invoices(engine) == n
     with engine.connect() as conn:  # the index refuses a second pending card for that conversation and operation
         row = dict(conn.execute(select(m.approval).where(m.approval.c.id == second.approval_id)).mappings().one())
     with pytest.raises(DBAPIError):
         with engine.begin() as conn:
             conn.execute(m.approval.insert().values({**row, "id": new_id(), "operation_key": new_id()}))
-    assert approvals.approve(engine, second.approval_id, second.digest).status == "committed"
+    assert approvals.approve(engine, second.approval_id, second.digest, ownership_check=ownership(engine)).status == "committed"
 
 
 # --- stale cards ----------------------------------------------------------------------------------------------
@@ -255,8 +267,8 @@ def test_the_api_refuses_an_unknown_disabled_or_missing_token(engine, api, auth)
     assert health.status_code == 200 and health.json() == {"ok": True}
 
 
-def test_through_the_api_a_principal_drafts_and_another_approves(engine, api):
-    _, dt = person(engine, "dana", ["view", "draft"])
+def test_through_the_api_only_the_conversation_owner_can_approve(engine, api):
+    _, dt = person(engine, "dana", ["view", "draft", "approve", "post"])
     _, at = person(engine, "ann", ["view", "approve", "post"])
     c = api([Reply("", [call("create_invoice", **ARGS)])])
     d = {"Authorization": f"Bearer {dt}"}
@@ -264,10 +276,14 @@ def test_through_the_api_a_principal_drafts_and_another_approves(engine, api):
     [ev] = c.post(f"/v1/conversations/{cid}/messages", json={"text": "invoice Acme Corporation for 5 copper wire"},
                   headers=d).json()["events"]
     assert ev["type"] == "card" and len(ev["digest"]) == 64
-    r = c.post(f"/v1/cards/{ev['approval_id']}/approve", json={"digest": ev["digest"]}, headers=d)
-    assert r.status_code == 403  # the drafter holds no approve
+    before = snapshot(engine)
     r = c.post(f"/v1/cards/{ev['approval_id']}/approve", json={"digest": ev["digest"]},
                headers={"Authorization": f"Bearer {at}"})
+    assert r.status_code == 404
+    assert r.content == b'{"detail":"That conversation was not found.","code":"no_conversation"}'
+    assert snapshot(engine) == before
+    assert card_status(engine, ev["approval_id"]) == "pending"
+    r = c.post(f"/v1/cards/{ev['approval_id']}/approve", json={"digest": ev["digest"]}, headers=d)
     assert r.status_code == 200 and r.json()["events"][0]["status"] == "committed"
 
 

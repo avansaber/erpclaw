@@ -265,7 +265,7 @@ def chosen_item_span(text: str, items: list[dict], session: Session, path: str, 
 
 
 def account(ctx: Ctx, text: str, calls: list[tuple[object, dict]], results: list, lead: int | None,
-            session: Session, scopes: list[str]) -> None:
+            session: Session, scopes: list[str], *, superseded_rates=frozenset()) -> None:
     """Coverage by occurrence accounting: each recognised occurrence is claimed by one part of the reply that
     actually appears in it, exactly; anything left asks. `results` are the writes' resolutions, `lead` the write the
     reply drafts (only its not_done rows are emitted)."""
@@ -310,6 +310,12 @@ def account(ctx: Ctx, text: str, calls: list[tuple[object, dict]], results: list
             if o.kind == "document" and o.start and ws[o.start - 1] == "pay" and _decimal(o.said) == _decimal(amount):
                 o.kind, o.value = "figure", _decimal(amount)
     claimed: set[int] = set()
+    for index, start, end, value in superseded_rates:
+        if index < len(occs):
+            occurrence = occs[index]
+            if (occurrence.kind, occurrence.start, occurrence.end, _rate_figure(occurrence.said)) == (
+                    "rate", start, end, value):
+                claimed.add(index)
 
     if not lined:
         # A completed name resolution survives a pure confirmation, including when the next call has no

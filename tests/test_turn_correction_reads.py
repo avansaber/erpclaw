@@ -5,10 +5,13 @@ from pathlib import Path
 import pytest
 
 from conftest import PG_URL
+from ownership_helpers import owner_check
+from erpclaw_assistant import store
 from erpclaw_assistant.graph import Assistant
 from erpclaw_assistant.model import Reply, ScriptedModel, call
 from erpclaw_cli.evals.run import EvalBooks
 from erpclaw_cli.evals.seeds import services_co
+from erpclaw_core import principals
 
 
 @pytest.fixture(scope="module")
@@ -174,11 +177,11 @@ def test_named_read_keeps_pending_card_and_books(trial, message, as_list):
     reply = Reply("", [call("list_customers")]) if as_list else Reply("Here are the details.")
     a = Assistant(trial, ScriptedModel([Reply("", [invoice]), reply]))
     a.turn("read_preserves", "Invoice Acme Corporation for one website audit.")
-    before = approvals.pending_card(trial, "read_preserves")
+    before = approvals.pending_card(trial, "read_preserves", ownership_check=owner_check(trial))
     with trial.connect() as conn:
         count = conn.execute(select(func.count()).select_from(m.invoice)).scalar_one()
     events = a.turn("read_preserves", message)
-    after = approvals.pending_card(trial, "read_preserves")
+    after = approvals.pending_card(trial, "read_preserves", ownership_check=owner_check(trial))
     assert events[-1]["type"] == "answer", events
     assert after is not None and (after["id"], after["args_json"]) == (before["id"], before["args_json"])
     assert not any(e.get("code") == "card_set_aside" or e["type"] == "card" for e in events), events
@@ -204,9 +207,9 @@ def test_named_read_ignores_model_write(trial):
     other = call("create_invoice", customer="Wayne", items=[{"item": "Website audit", "quantity": 1}])
     a = Assistant(trial, ScriptedModel([Reply("", [invoice]), Reply("", [other])]))
     a.turn("read_write", "Invoice Acme Corporation for one website audit.")
-    before = approvals.pending_card(trial, "read_write")
+    before = approvals.pending_card(trial, "read_write", ownership_check=owner_check(trial))
     events = a.turn("read_write", "show me Acme Corporation's details")
-    after = approvals.pending_card(trial, "read_write")
+    after = approvals.pending_card(trial, "read_write", ownership_check=owner_check(trial))
     assert events[-1]["type"] == "answer", events
     assert after is not None and (after["id"], after["args_json"]) == (before["id"], before["args_json"])
     assert not any(e["type"] == "card" or e.get("code") == "card_set_aside" for e in events)
@@ -229,8 +232,8 @@ def test_unrelated_named_read_sets_card_aside(trial):
     events = a.turn("other_read", "show me Wayne's details")
     assert events[0]["code"] == "card_set_aside" and "Ask again to get it back." in events[0]["text"]
     assert events[-1]["type"] == "answer"
-    assert approvals.pending_card(trial, "other_read") is None
-    assert approvals.approve(trial, first["approval_id"], first["digest"]).status == "superseded"
+    assert approvals.pending_card(trial, "other_read", ownership_check=owner_check(trial)) is None
+    assert approvals.approve(trial, first["approval_id"], first["digest"], ownership_check=owner_check(trial)).status == "superseded"
 
 
 def test_line_item_read_keeps_card(engine):
@@ -240,11 +243,11 @@ def test_line_item_read_keeps_card(engine):
     invoice = call("create_invoice", customer="Acme Corporation", items=[{"item": "copper wire", "quantity": 5}])
     a = Assistant(engine, ScriptedModel([Reply("", [invoice]), Reply("Here are the details.")]))
     a.turn("item_read", "Invoice Acme Corporation for 5 copper wire")
-    before = approvals.pending_card(engine, "item_read")
+    before = approvals.pending_card(engine, "item_read", ownership_check=owner_check(engine))
     with engine.connect() as conn:
         count = conn.execute(select(func.count()).select_from(sales.invoice)).scalar_one()
     events = a.turn("item_read", "what's copper wire's price?")
-    after = approvals.pending_card(engine, "item_read")
+    after = approvals.pending_card(engine, "item_read", ownership_check=owner_check(engine))
     assert after is not None and (after["id"], after["args_json"]) == (before["id"], before["args_json"])
     assert events[-1]["type"] == "answer" and not any(e.get("code") == "card_set_aside" for e in events)
     with engine.connect() as conn:
@@ -256,9 +259,9 @@ def test_short_party_name_read_keeps_matching_card(trial):
     invoice = call("create_invoice", customer="Wayne Enterprises", items=[{"item": "Website audit", "quantity": 1}])
     a = Assistant(trial, ScriptedModel([Reply("", [invoice]), Reply("", [call("list_customers")])]))
     a.turn("short_party", "Invoice Wayne Enterprises for one website audit.")
-    before = approvals.pending_card(trial, "short_party")
+    before = approvals.pending_card(trial, "short_party", ownership_check=owner_check(trial))
     events = a.turn("short_party", "show me Wayne's details")
-    after = approvals.pending_card(trial, "short_party")
+    after = approvals.pending_card(trial, "short_party", ownership_check=owner_check(trial))
     assert after is not None and (after["id"], after["args_json"]) == (before["id"], before["args_json"])
     assert events[-1]["type"] == "answer" and not any(e.get("code") == "card_set_aside" for e in events)
 
@@ -275,7 +278,7 @@ def test_read_question_or_refusal_preserves_only_related_card(trial, monkeypatch
     invoice = call("create_invoice", customer="Acme Corporation", items=[{"item": "Website audit", "quantity": 1}])
     a = Assistant(trial, ScriptedModel([Reply("", [invoice]), Reply("", [call("list_customers")])]))
     a.turn("read_outcome", "Invoice Acme Corporation for one website audit.")
-    before = approvals.pending_card(trial, "read_outcome")
+    before = approvals.pending_card(trial, "read_outcome", ownership_check=owner_check(trial))
     with trial.connect() as conn:
         count = conn.execute(select(func.count()).select_from(sales.invoice)).scalar_one()
 
@@ -286,7 +289,7 @@ def test_read_question_or_refusal_preserves_only_related_card(trial, monkeypatch
     monkeypatch.setitem(REGISTRY.contracts, "list_customers", replace(contract, run=read_outcome))
     name = "Acme Corporation" if related else "Wayne"
     events = a.turn("read_outcome", f"show me {name}'s details")
-    after = approvals.pending_card(trial, "read_outcome")
+    after = approvals.pending_card(trial, "read_outcome", ownership_check=owner_check(trial))
     assert events[-1]["type"] == kind and events[-1]["text"] == "Read tool outcome", events
     if related:
         assert after is not None and (after["id"], after["args_json"]) == (before["id"], before["args_json"])

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from erpclaw_core.common import Refusal
 from erpclaw_core.masters import _norm
@@ -144,6 +145,22 @@ def keeps_card(text: str) -> bool:
 
 
 
+def _written_form(text: str) -> str:
+    return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
+
+
+def _needs_written_form(text: str) -> bool:
+    return any((c.isalnum() and not c.isascii()) or unicodedata.category(c)[0] in "MS"
+               for c in text)
+
+
+def _name_matches(left: str, right: str) -> bool:
+    if _needs_written_form(left) or _needs_written_form(right):
+        return bool(_written_form(left)) and _written_form(left) == _written_form(right)
+    normalized = _norm(left)
+    return bool(normalized) and normalized == _norm(right)
+
+
 def match_answer(pending: dict | None, text: str, choice: str | None = None,
                  card_pending: bool = False) -> tuple[str, str] | None:
     """The owner's message as an answer to the pending question, before the model runs: ("choice", code) to bind, or
@@ -163,6 +180,8 @@ def match_answer(pending: dict | None, text: str, choice: str | None = None,
             return ("control", "cancel") if choice == f"{pending['id']}-cancel" else None
         if said in table()["answers"]["cancel"]:
             return ("control", "cancel")
+        if not _norm(text):
+            return None
         exact = [c for c in choices if c["label"].strip().casefold() == text.strip().casefold()]
         return ("choice", exact[0]["code"]) if len(exact) == 1 else None
     if choice is not None:
@@ -174,20 +193,29 @@ def match_answer(pending: dict | None, text: str, choice: str | None = None,
         return ("control", "cancel")
     if said in t["someone_else"]:
         return ("control", "someone_else")
+    if not _norm(text):
+        return None
     named = [c for c in choices if c.get("ref") is not None]  # a confirm: one candidate, then "someone else"
     if said in t["yes"] and len(named) == 1:
         return ("choice", named[0]["code"])
     exact = [c for c in choices if c["label"].strip().lower() == said]
     if len(exact) == 1:
         return ("choice", exact[0]["code"])
-    normal = [c for c in choices if _norm(c["label"]) and _norm(c["label"]) == _norm(said)]
+    normal = [c for c in choices if _name_matches(c["label"], said)]
     if len(normal) == 1:
         return ("choice", normal[0]["code"])
-    # Warehouse labels include on-hand quantities; their explicit references are still the owner's answer.
-    if pending.get("field", "").rsplit(".", 1)[-1] == "warehouse":
-        refs = [c for c in choices if isinstance(c.get("ref"), str) and _norm(c["ref"]) == _norm(said)]
+    if len(normal) > 1:
+        return None
+    # Warehouse labels can include extra words, and a setup account label
+    # includes its name. The offered name/number also identifies the choice.
+    field = pending.get("field", "")
+    leaf = field.rsplit(":", 1)[-1].rsplit(".", 1)[-1]
+    if leaf == "warehouse" or (field.startswith("add_item#") and leaf == "inventory_account"):
+        refs = [c for c in choices if isinstance(c.get("ref"), str) and _name_matches(c["ref"], text)]
         if len(refs) == 1:
             return ("choice", refs[0]["code"])
+        if len(refs) > 1:
+            return None
     if choices and said in t["positions"]:
         k = t["positions"][said]
         if k == -1:
@@ -197,7 +225,7 @@ def match_answer(pending: dict | None, text: str, choice: str | None = None,
     numbered = re.fullmatch(r"(\d+)\s*[-:.)]\s*(.+)", said)
     if numbered and 1 <= int(numbered[1]) <= len(choices):
         selected = choices[int(numbered[1]) - 1]
-        if _norm(numbered[2]) == _norm(selected["label"]):
+        if _name_matches(numbered[2], selected["label"]):
             return ("choice", selected["code"])
     return None
 

@@ -4,10 +4,10 @@ import json
 import pytest
 
 from bookdiff import snapshot
-from erpclaw_assistant import resolve
+from erpclaw_assistant import resolve, store
 from erpclaw_assistant.graph import Assistant
 from erpclaw_assistant.model import Reply, ScriptedModel, call
-from erpclaw_core import approvals
+from erpclaw_core import approvals, principals as pr
 from erpclaw_core.common import Refusal, company_ctx
 from erpclaw_core.plugins import REGISTRY
 from erpclaw_sales import CancelInvoice, preview_cancel
@@ -58,8 +58,12 @@ def test_second_distinct_write_after_undo_is_rejected(engine, as_released):
 def test_typed_approval_keeps_card_without_writing(engine, request):
     # The all-feature fixture allows a direct service card; chat never offers cancellation.
     a = Assistant(engine, ScriptedModel([Reply("Done.")]))
+    with engine.connect() as conn:
+        owner = pr.owner(conn)["id"]
+    store.create_conversation("pending", owner)
+    ownership = lambda cid: store.conversation_owner(cid) == owner
     card = approvals.propose(engine, REGISTRY.contracts["cancel_invoice"],
-                             {"invoice": "INV-2026-00003"}, conversation_id="pending")
+                             {"invoice": "INV-2026-00003"}, conversation_id="pending", ownership_check=ownership)
     request.getfixturevalue("as_released")
     before = snapshot(engine)
     out = a.graph.invoke({"conversation_id": "pending", "turn": [{"role": "user", "content": "approve"}],
@@ -69,5 +73,5 @@ def test_typed_approval_keeps_card_without_writing(engine, request):
     assert snapshot(engine) == before
     assert out["events"] == [{"type": "answer", "text": "Nothing has been saved yet. Approve the card to save it.",
                               "checked": "engine"}]
-    assert approvals.pending_card(engine, "pending")["id"] == card.approval_id
+    assert approvals.pending_card(engine, "pending", ownership_check=ownership)["id"] == card.approval_id
     assert resolve.keeps_card("approve") and not resolve.keeps_card("approve but change invoice 5")

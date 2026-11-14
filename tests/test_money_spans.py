@@ -382,6 +382,9 @@ def test_pending_confirmation_sets_aside_an_existing_card(money_books):
 def test_an_earlier_card_cannot_be_approved_after_the_confirmation_checkpoint(money_books, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
 
+    with money_books.connect() as conn:
+        owner = pr.owner(conn)["id"]
+    store.create_conversation("money", owner)
     first = card(assistant(money_books, items=[{"item": "Design Work", "quantity": 5}]).turn(
         "money", "Invoice Acme Corporation for 5 Design Work"))
     with money_books.connect() as conn:
@@ -395,7 +398,7 @@ def test_an_earlier_card_cannot_be_approved_after_the_confirmation_checkpoint(mo
             assert store.get_request(request_id)["pending_question"]["span_id"]
             with ThreadPoolExecutor(max_workers=1) as pool:
                 outcomes.append(pool.submit(approvals.approve, money_books, first["approval_id"],
-                                            first["digest"]).result(timeout=10))
+                                            first["digest"], ownership_check=lambda cid: store.conversation_owner(cid) == owner).result(timeout=10))
         return saved
 
     monkeypatch.setattr(store, "save_resolution", approve_after_checkpoint)

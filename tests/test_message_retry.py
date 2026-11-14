@@ -210,7 +210,7 @@ def test_retry_keeps_its_answered_question_between_consecutive_confirmations(eng
     else:
         assert reply["answer"] == 0 and not saved["completed"]
         assert pending == customer_question
-    assert approvals.pending_card(engine, "c") is None
+    assert approvals.pending_card(engine, "c", ownership_check=_ownership(engine)) is None
 
     clock[0] += store.LEASE + timedelta(seconds=1)
     retry = Assistant(engine, ScriptedModel([Reply("", [invoice])]))
@@ -219,7 +219,7 @@ def test_retry_keeps_its_answered_question_between_consecutive_confirmations(eng
     [item] = events
     assert item["code"] == "item_ambiguous" and "Copper Wire" in item["options"]
     assert item["data"]["field"].endswith("item")
-    assert approvals.pending_card(engine, "c") is None
+    assert approvals.pending_card(engine, "c", ownership_check=_ownership(engine)) is None
     assert consumed == [customer_question["id"]] * (1 if checkpointed else 2)
     assert store.message_resolution(reply["id"])["question_id"] == customer_question["id"]
     assert store.message_resolution(reply["id"])["field"] == customer_question["field"]
@@ -412,3 +412,12 @@ def test_api_checks_ownership_before_any_id_lookup_even_with_reused_id(engine, p
     assert unknown.headers == foreign.headers
     assert not any("request_message" in sql.lower() for sql in statements)
     assert sqlite_snapshot() == before_store and books_snapshot(engine) == before_books
+
+
+def _ownership(engine):
+    from erpclaw_assistant import store
+    from erpclaw_core import principals
+
+    with engine.connect() as conn:
+        owner = principals.owner(conn)["id"]
+    return lambda cid: store.conversation_owner(cid) == owner

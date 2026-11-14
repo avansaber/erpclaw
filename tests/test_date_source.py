@@ -267,7 +267,7 @@ def test_a_draft_s_cancellation_whose_draft_was_submitted_meanwhile_never_commit
     assert approvals.approve(engine, submit.approval_id, submit.digest).status == "committed"
     with engine.connect() as conn:
         before = conn.execute(sel(func.count()).select_from(m.ledger_entry)).scalar_one()
-    out = approvals.approve(engine, cancel["approval_id"], cancel["digest"])
+    out = approvals.approve(engine, cancel["approval_id"], cancel["digest"], ownership_check=_ownership(engine))
     assert out.status != "committed" and out.card is None, out  # ended, and no fresh card at all
     assert out.data["code"] == "document_changed" and approvals.DOCUMENT_CHANGED in out.text, out
     with engine.connect() as conn:
@@ -285,7 +285,7 @@ def test_a_card_whose_operation_now_takes_no_date_is_refused(engine, monkeypatch
     monkeypatch.setattr(CancelInvoice, "takes_no_date", lambda self, ctx: True)
     with engine.connect() as conn:
         before = conn.execute(select(func.count()).select_from(m.ledger_entry)).scalar_one()
-    out = approvals.approve(engine, cancel["approval_id"], cancel["digest"])
+    out = approvals.approve(engine, cancel["approval_id"], cancel["digest"], ownership_check=_ownership(engine))
     assert out.status != "committed" and out.card is None, out
     with engine.connect() as conn:
         assert conn.execute(select(func.count()).select_from(m.ledger_entry)).scalar_one() == before
@@ -293,7 +293,7 @@ def test_a_card_whose_operation_now_takes_no_date_is_refused(engine, monkeypatch
 
 def test_a_posted_invoice_s_cancellation_with_its_books_unchanged_commits(engine):
     cancel = card_of(engine, "cancel INV-2026-00003 yesterday", call("cancel_invoice", invoice="INV-2026-00003"))
-    out = approvals.approve(engine, cancel["approval_id"], cancel["digest"])
+    out = approvals.approve(engine, cancel["approval_id"], cancel["digest"], ownership_check=_ownership(engine))
     assert out.status == "committed", out
 
 
@@ -312,7 +312,7 @@ def test_a_fresh_card_on_the_stale_path_never_inherits_an_unchecked_date_source(
         ctx = company_ctx(conn)
         cust = dict(conn.execute(select(m.party).where(m.party.c.name == "Pied Piper")).mappings().one())
         s.record_payment(ctx, s.plan_payment(ctx, cust, Decimal("100"), ctx.today, oldest_first=True))
-    out = approvals.approve(engine, card["approval_id"], card["digest"])
+    out = approvals.approve(engine, card["approval_id"], card["digest"], ownership_check=_ownership(engine))
     assert out.status == "superseded" and out.card, out  # a fresh card
     assert out.card["date_source"] == {"phrase": "yesterday", "date": "2026-10-25"}, out.card
     assert out.card["lines"][-1] == ["Date source", "From your words: 'yesterday' (25 Oct 2026)"]
@@ -327,9 +327,18 @@ def test_a_default_date_shown_before_midnight_never_commits_as_the_next_day(engi
     with engine.connect() as conn:
         before = conn.execute(select(func.count()).select_from(m.ledger_entry)).scalar_one()
     monkeypatch.setenv("ERPCLAW_TODAY", "2026-10-27")  # midnight passes between showing and approving
-    out = approvals.approve(engine, card["approval_id"], card["digest"])
+    out = approvals.approve(engine, card["approval_id"], card["digest"], ownership_check=_ownership(engine))
     assert out.status != "committed", out
     with engine.connect() as conn:
         assert conn.execute(select(func.count()).select_from(m.ledger_entry)).scalar_one() == before
     assert out.status == "superseded" and out.card is not None, out  # a fresh card, never the old one committed
     assert ["Date", "Received 27 Oct 2026"] in out.card["lines"] and out.card["date_source"] == {"default": True}
+
+
+def _ownership(engine):
+    from erpclaw_assistant import store
+    from erpclaw_core import principals
+
+    with engine.connect() as conn:
+        owner = principals.owner(conn)["id"]
+    return lambda cid: store.conversation_owner(cid) == owner

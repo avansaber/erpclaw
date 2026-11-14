@@ -168,12 +168,26 @@ def pending(world, client, *, cid=None, contract="create_invoice", args=None):
         principal = pr.by_id(conn, session["principal_id"])
     before = books(world.owner)
     proposed = approvals.propose(world.runtime, REGISTRY.contracts[contract], args or INVOICE,
-                                 cid, principal=principal, company_id=world.companies[0])
+                                 cid, principal=principal, company_id=world.companies[0],
+                                 ownership_check=lambda c: store.conversation_owner(c) == principal["id"])
     card, = approvals.card_events(proposed)
     business_diff(before, books(world.owner), {"approval": {"added": [
         {"id": card["approval_id"], "contract": contract, "status": "pending", "digest": card["digest"],
          "principal_id": principal["id"], "conversation_id": cid}]}})
     return cid, card
+
+
+def pending_owned_by(world, owner_client, drafter):
+    cid = conversation(owner_client)
+    with world.owner.connect() as conn:
+        session = next(r for r in books(world.owner)["principal_session"].values()
+                       if r["secret_sha256"] == pr.session_digest(owner_client.secret))
+        owner = session["principal_id"]
+    proposed = approvals.propose(world.runtime, REGISTRY.contracts["create_invoice"], INVOICE, cid,
+                                 principal=drafter, company_id=world.companies[0],
+                                 ownership_check=lambda c: store.conversation_owner(c) == owner)
+    card, = approvals.card_events(proposed)
+    return card
 
 
 def approve(client, card, body=None):
@@ -409,8 +423,10 @@ def test_approver_without_post_cannot_approve(signed):
     with world.owner.begin() as conn:
         admin.add_principal(conn, "approver", ["view", "approve"], [world.companies[0]])
     client = world.client(server, "approver")
-    _, card = pending(world, alice)
+    _, foreign = pending(world, alice)
+    card = pending_owned_by(world, client, world.principals["alice"])
     before = books(world.owner)
+    error(approve(client, foreign), 404, "no_conversation")
     error(approve(client, card), 403, "forbidden")
     business_diff(before, books(world.owner))
 
@@ -421,8 +437,10 @@ def test_poster_without_approve_cannot_approve(signed):
     with world.owner.begin() as conn:
         admin.add_principal(conn, "poster", ["view", "post"], [world.companies[0]])
     client = world.client(server, "poster")
-    _, card = pending(world, alice)
+    _, foreign = pending(world, alice)
+    card = pending_owned_by(world, client, world.principals["alice"])
     before = books(world.owner)
+    error(approve(client, foreign), 404, "no_conversation")
     error(approve(client, card), 403, "forbidden")
     business_diff(before, books(world.owner))
 
@@ -431,8 +449,10 @@ def test_other_company_grants_cannot_approve(signed):
     """Grants apply only to their company; checked with a valid foreign-company session and empty diff; scratch mutation caught."""
     world, server, alice = signed
     bob = world.client(server, "bob")
-    _, card = pending(world, alice)
+    _, foreign = pending(world, alice)
+    card = pending_owned_by(world, bob, world.principals["alice"])
     before = books(world.owner)
+    error(approve(bob, foreign), 404, "no_conversation")
     error(approve(bob, card), 403, "forbidden")
     business_diff(before, books(world.owner))
 
@@ -443,10 +463,15 @@ def test_revoked_drafter_card_is_invalidated(signed):
     with world.owner.begin() as conn:
         admin.add_principal(conn, "drafter", ["view", "draft"], [world.companies[0]])
     drafter = world.client(server, "drafter")
-    _, card = pending(world, drafter)
+    _, foreign = pending(world, drafter)
+    with world.owner.connect() as conn:
+        author = pr.by_id(conn, next(r["principal_id"] for r in books(world.owner)["principal_session"].values()
+                                     if r["secret_sha256"] == pr.session_digest(drafter.secret)))
+    card = pending_owned_by(world, client, author)
     with world.owner.begin() as conn:
         admin.revoke(conn, "drafter", ["view"], world.companies[0])
     before = books(world.owner)
+    error(approve(client, foreign), 404, "no_conversation")
     result(approve(client, card), "invalidated")
     after = books(world.owner)
     business_diff(before, after, {"approval": {"changed": [transition(after, card["approval_id"], "invalidated")]}})
@@ -626,7 +651,6 @@ def test_competing_balance_cards_commit_once_and_offer_fresh_card(signed, monkey
     assert decision["fresh_approval_id"] == fresh["approval_id"]
 
 
-@pytest.mark.skip(reason="Conversation ownership and the rule forbidding another principal's card are missing")
 def test_other_principals_conversation_card_is_forbidden(signed):
     """Conversation authority is required; checked by equally privileged principals and empty diff; deferred, mutation not run."""
     world, server, alice = signed
@@ -635,7 +659,13 @@ def test_other_principals_conversation_card_is_forbidden(signed):
     peer = world.client(server, "peer")
     _, card = pending(world, alice)
     before = books(world.owner)
-    error(approve(peer, card), 403, "forbidden")
+    key = before["approval"][(card["approval_id"],)]["operation_key"]
+    responses = [approve(peer, card),
+                 peer.request("POST", f"/v1/cards/{card['approval_id']}/decline", json={}),
+                 peer.request("GET", f"/v1/operations/{key}")]
+    for response in responses:
+        error(response, 404, "no_conversation")
+    assert len({(response.status, response.body) for response in responses}) == 1
     business_diff(before, books(world.owner))
 
 
@@ -851,11 +881,11 @@ def test_valid_session_reaches_each_existing_protected_route(signed):
     error(me, 409, "company_ambiguous")
     assert conversation(client) != cid
     unknown = client.request("GET", "/v1/operations/unknown")
-    assert unknown.status == 200 and unknown.json()["status"] == "unknown"
-    # Main currently creates unknown conversations when messaged; ownership checks are deferred below.
+    error(unknown, 404, "no_conversation")
+    # Ownership is checked before company selection for messages.
     world.model.replies.append(Reply("Hello."))
     message = client.request("POST", "/v1/conversations/unknown/messages", json={"text": "hello"})
-    assert events(message)[0]["code"] == "company_ambiguous"
+    error(message, 404, "no_conversation")
     business_diff(before, books(world.owner))
     error(approve(client, card, {"digest": "0" * 64}), 409, "digest")
     business_diff(before, books(world.owner))
@@ -864,7 +894,6 @@ def test_valid_session_reaches_each_existing_protected_route(signed):
     business_diff(before, after, {"approval": {"changed": [transition(after, card["approval_id"], "declined")]}})
 
 
-@pytest.mark.skip(reason="Conversation ownership and concealed foreign/unknown conversation responses are missing")
 def test_valid_foreign_session_gets_identical_unknown_conversation_body(message_signed):
     """Ownership conceals foreign conversations; checked by byte-identical unknown/foreign 404 bodies."""
     world, server, alice = message_signed

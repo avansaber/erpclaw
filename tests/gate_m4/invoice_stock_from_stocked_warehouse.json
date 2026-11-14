@@ -1,8 +1,8 @@
 {
   "case": "invoice_stock_from_stocked_warehouse",
   "window": [
-    "2026-11-12T22:30:55.186664+00:00",
-    "2026-11-12T22:30:58.060916+00:00"
+    "2026-11-13T08:54:41.205370+00:00",
+    "2026-11-13T08:54:44.202405+00:00"
   ],
   "steps": [
     {
@@ -105,7 +105,7 @@
             "name": "email_folder",
             "version": "0.0.1",
             "kind": "connector",
-            "installed_at": "2026-11-12 22:30:55.842823+00:00",
+            "installed_at": "2026-11-13 08:54:41.900946+00:00",
             "manifest_digest": "<hex64:1>",
             "artifact_digest": "<hex64:2>",
             "after_core_revision": "0001",
@@ -115,7 +115,7 @@
             "name": "sales",
             "version": "0.0.4",
             "kind": "business-module",
-            "installed_at": "2026-11-12 22:30:56.045083+00:00",
+            "installed_at": "2026-11-13 08:54:42.122463+00:00",
             "manifest_digest": "<hex64:3>",
             "artifact_digest": "<hex64:4>",
             "after_core_revision": "0013",
@@ -123,9 +123,9 @@
           },
           {
             "name": "stock",
-            "version": "0.1.1",
+            "version": "0.1.3",
             "kind": "business-module",
-            "installed_at": "2026-11-12 22:30:56.142383+00:00",
+            "installed_at": "2026-11-13 08:54:42.225423+00:00",
             "manifest_digest": "<hex64:5>",
             "artifact_digest": "<hex64:6>",
             "after_core_revision": "0015",
@@ -140,7 +140,7 @@
             "disabled": "False",
             "grants_version": "1",
             "token_sha256": null,
-            "created_at": "2026-11-12 22:30:55.799487+00:00"
+            "created_at": "2026-11-13 08:54:41.850081+00:00"
           }
         ],
         "company": [
@@ -149,7 +149,7 @@
             "name": "Stark Manufacturing Inc.",
             "functional_currency": "USD",
             "fiscal_year_start_month": "1",
-            "created_at": "2026-11-12 22:30:55.760484+00:00",
+            "created_at": "2026-11-13 08:54:41.806363+00:00",
             "date_order": null,
             "status": "ready"
           }
@@ -463,9 +463,9 @@
             "digest": "<hex64:11>",
             "status": "consumed",
             "operation_key": "<uuid:32>",
-            "created_at": "2026-11-12 22:30:56.230981+00:00",
-            "expires_at": "2026-11-12 22:40:56.230900+00:00",
-            "decided_at": "2026-11-12 22:30:56.241631+00:00",
+            "created_at": "2026-11-13 08:54:42.314990+00:00",
+            "expires_at": "2026-11-13 09:04:42.314905+00:00",
+            "decided_at": "2026-11-13 08:54:42.324806+00:00",
             "approved_by": "<uuid:2>",
             "approver_grants_version": "1",
             "decision_json": null,
@@ -476,7 +476,7 @@
           {
             "id": "<uuid:33>",
             "company_id": "<uuid:3>",
-            "at": "2026-11-12 22:30:56.270025+00:00",
+            "at": "2026-11-13 08:54:42.353976+00:00",
             "actor": "owner",
             "action": "save_draft_invoice",
             "document_type": "sales_invoice",
@@ -487,7 +487,7 @@
           {
             "id": "<uuid:35>",
             "company_id": "<uuid:3>",
-            "at": "2026-11-12 22:30:56.271615+00:00",
+            "at": "2026-11-13 08:54:42.355087+00:00",
             "actor": "owner",
             "action": "commit:create_invoice",
             "document_type": null,
@@ -502,7 +502,7 @@
             "company_id": "<uuid:3>",
             "generation": "1",
             "live_token": "<hex32:2>",
-            "updated_at": "2026-11-12 22:30:57.471766+00:00"
+            "updated_at": "2026-11-13 08:54:43.657679+00:00"
           }
         ],
         "dimension_set": [],
@@ -666,7 +666,7 @@
             "memo": null,
             "reverses_posting_id": null,
             "operation_key": null,
-            "created_at": "2026-11-12 22:30:56.202047+00:00",
+            "created_at": "2026-11-13 08:54:42.284842+00:00",
             "created_by": "owner",
             "prev_hash": "<chain-origin>",
             "hash": "<hex64:12>",
@@ -1108,7 +1108,7 @@
             "card_digest": "<hex64:11>",
             "status": "committed",
             "result_json": "{\"amounts\":[{\"currency\":\"USD\",\"of\":\"INV-2026-00001\",\"value\":\"56.00\",\"what\":\"total\"}],\"data\":{\"number\":\"INV-2026-00001\",\"total\":\"56.00\"},\"figures\":[\"56.00 USD\"],\"text\":\"Saved draft invoice INV-2026-00001 for Initech: 56.00 USD, due 25 Nov 2026.\"}",
-            "committed_at": "2026-11-12 22:30:56.272574+00:00"
+            "committed_at": "2026-11-13 08:54:42.355815+00:00"
           }
         ],
         "outbox_attachment": [],
@@ -1128,7 +1128,7 @@
             "operation_key": "<uuid:32>",
             "submit_operation_key": null,
             "cancel_operation_key": null,
-            "created_at": "2026-11-12 22:30:56.265317+00:00"
+            "created_at": "2026-11-13 08:54:42.349801+00:00"
           }
         ],
         "sales_order": [],
@@ -1142,7 +1142,7 @@
             "account_id": "<uuid:26>",
             "is_default": "True",
             "position": "1",
-            "created_at": "2026-11-12 22:30:56.163276+00:00"
+            "created_at": "2026-11-13 08:54:42.247055+00:00"
           },
           {
             "id": "<uuid:89>",
@@ -1151,7 +1151,7 @@
             "account_id": "<uuid:26>",
             "is_default": "False",
             "position": "2",
-            "created_at": "2026-11-12 22:30:56.166125+00:00"
+            "created_at": "2026-11-13 08:54:42.249868+00:00"
           },
           {
             "id": "<uuid:90>",
@@ -1160,7 +1160,7 @@
             "account_id": "<uuid:27>",
             "is_default": "False",
             "position": "3",
-            "created_at": "2026-11-12 22:30:56.168138+00:00"
+            "created_at": "2026-11-13 08:54:42.251605+00:00"
           }
         ],
         "supplier_payment": [],
@@ -1204,7 +1204,7 @@
             "item_id": "<uuid:30>",
             "method": "moving_average",
             "default_warehouse_id": "<uuid:88>",
-            "created_at": "2026-11-12 22:30:56.173574+00:00"
+            "created_at": "2026-11-13 08:54:42.256974+00:00"
           }
         ],
         "stock_ledger_entry": [
@@ -1226,7 +1226,7 @@
             "line_no": "1",
             "against_entry_id": null,
             "reverses_entry_id": null,
-            "created_at": "2026-11-12 22:30:56.188380+00:00"
+            "created_at": "2026-11-13 08:54:42.271700+00:00"
           }
         ],
         "stock_voucher_line": [],
@@ -1432,7 +1432,7 @@
             "name": "email_folder",
             "version": "0.0.1",
             "kind": "connector",
-            "installed_at": "2026-11-12 22:30:55.842823+00:00",
+            "installed_at": "2026-11-13 08:54:41.900946+00:00",
             "manifest_digest": "<hex64:1>",
             "artifact_digest": "<hex64:2>",
             "after_core_revision": "0001",
@@ -1442,7 +1442,7 @@
             "name": "sales",
             "version": "0.0.4",
             "kind": "business-module",
-            "installed_at": "2026-11-12 22:30:56.045083+00:00",
+            "installed_at": "2026-11-13 08:54:42.122463+00:00",
             "manifest_digest": "<hex64:3>",
             "artifact_digest": "<hex64:4>",
             "after_core_revision": "0013",
@@ -1450,9 +1450,9 @@
           },
           {
             "name": "stock",
-            "version": "0.1.1",
+            "version": "0.1.3",
             "kind": "business-module",
-            "installed_at": "2026-11-12 22:30:56.142383+00:00",
+            "installed_at": "2026-11-13 08:54:42.225423+00:00",
             "manifest_digest": "<hex64:5>",
             "artifact_digest": "<hex64:6>",
             "after_core_revision": "0015",
@@ -1467,7 +1467,7 @@
             "disabled": "False",
             "grants_version": "1",
             "token_sha256": null,
-            "created_at": "2026-11-12 22:30:55.799487+00:00"
+            "created_at": "2026-11-13 08:54:41.850081+00:00"
           }
         ],
         "company": [
@@ -1476,7 +1476,7 @@
             "name": "Stark Manufacturing Inc.",
             "functional_currency": "USD",
             "fiscal_year_start_month": "1",
-            "created_at": "2026-11-12 22:30:55.760484+00:00",
+            "created_at": "2026-11-13 08:54:41.806363+00:00",
             "date_order": null,
             "status": "ready"
           }
@@ -1790,9 +1790,9 @@
             "digest": "<hex64:11>",
             "status": "consumed",
             "operation_key": "<uuid:32>",
-            "created_at": "2026-11-12 22:30:56.230981+00:00",
-            "expires_at": "2026-11-12 22:40:56.230900+00:00",
-            "decided_at": "2026-11-12 22:30:56.241631+00:00",
+            "created_at": "2026-11-13 08:54:42.314990+00:00",
+            "expires_at": "2026-11-13 09:04:42.314905+00:00",
+            "decided_at": "2026-11-13 08:54:42.324806+00:00",
             "approved_by": "<uuid:2>",
             "approver_grants_version": "1",
             "decision_json": null,
@@ -1814,8 +1814,8 @@
             "digest": "<hex64:13>",
             "status": "pending",
             "operation_key": "<uuid:97>",
-            "created_at": "2026-11-12 22:30:57.798544+00:00",
-            "expires_at": "2026-11-12 22:40:57.798397+00:00",
+            "created_at": "2026-11-13 08:54:43.969528+00:00",
+            "expires_at": "2026-11-13 09:04:43.969424+00:00",
             "decided_at": null,
             "approved_by": null,
             "approver_grants_version": null,
@@ -1827,7 +1827,7 @@
           {
             "id": "<uuid:33>",
             "company_id": "<uuid:3>",
-            "at": "2026-11-12 22:30:56.270025+00:00",
+            "at": "2026-11-13 08:54:42.353976+00:00",
             "actor": "owner",
             "action": "save_draft_invoice",
             "document_type": "sales_invoice",
@@ -1838,7 +1838,7 @@
           {
             "id": "<uuid:35>",
             "company_id": "<uuid:3>",
-            "at": "2026-11-12 22:30:56.271615+00:00",
+            "at": "2026-11-13 08:54:42.355087+00:00",
             "actor": "owner",
             "action": "commit:create_invoice",
             "document_type": null,
@@ -1853,7 +1853,7 @@
             "company_id": "<uuid:3>",
             "generation": "2",
             "live_token": "<hex32:2>",
-            "updated_at": "2026-11-12 22:30:57.564096+00:00"
+            "updated_at": "2026-11-13 08:54:43.752593+00:00"
           }
         ],
         "dimension_set": [],
@@ -2017,7 +2017,7 @@
             "memo": null,
             "reverses_posting_id": null,
             "operation_key": null,
-            "created_at": "2026-11-12 22:30:56.202047+00:00",
+            "created_at": "2026-11-13 08:54:42.284842+00:00",
             "created_by": "owner",
             "prev_hash": "<chain-origin>",
             "hash": "<hex64:12>",
@@ -2459,7 +2459,7 @@
             "card_digest": "<hex64:11>",
             "status": "committed",
             "result_json": "{\"amounts\":[{\"currency\":\"USD\",\"of\":\"INV-2026-00001\",\"value\":\"56.00\",\"what\":\"total\"}],\"data\":{\"number\":\"INV-2026-00001\",\"total\":\"56.00\"},\"figures\":[\"56.00 USD\"],\"text\":\"Saved draft invoice INV-2026-00001 for Initech: 56.00 USD, due 25 Nov 2026.\"}",
-            "committed_at": "2026-11-12 22:30:56.272574+00:00"
+            "committed_at": "2026-11-13 08:54:42.355815+00:00"
           }
         ],
         "outbox_attachment": [],
@@ -2479,7 +2479,7 @@
             "operation_key": "<uuid:32>",
             "submit_operation_key": null,
             "cancel_operation_key": null,
-            "created_at": "2026-11-12 22:30:56.265317+00:00"
+            "created_at": "2026-11-13 08:54:42.349801+00:00"
           }
         ],
         "sales_order": [],
@@ -2493,7 +2493,7 @@
             "account_id": "<uuid:26>",
             "is_default": "True",
             "position": "1",
-            "created_at": "2026-11-12 22:30:56.163276+00:00"
+            "created_at": "2026-11-13 08:54:42.247055+00:00"
           },
           {
             "id": "<uuid:89>",
@@ -2502,7 +2502,7 @@
             "account_id": "<uuid:26>",
             "is_default": "False",
             "position": "2",
-            "created_at": "2026-11-12 22:30:56.166125+00:00"
+            "created_at": "2026-11-13 08:54:42.249868+00:00"
           },
           {
             "id": "<uuid:90>",
@@ -2511,7 +2511,7 @@
             "account_id": "<uuid:27>",
             "is_default": "False",
             "position": "3",
-            "created_at": "2026-11-12 22:30:56.168138+00:00"
+            "created_at": "2026-11-13 08:54:42.251605+00:00"
           }
         ],
         "supplier_payment": [],
@@ -2555,7 +2555,7 @@
             "item_id": "<uuid:30>",
             "method": "moving_average",
             "default_warehouse_id": "<uuid:88>",
-            "created_at": "2026-11-12 22:30:56.173574+00:00"
+            "created_at": "2026-11-13 08:54:42.256974+00:00"
           }
         ],
         "stock_ledger_entry": [
@@ -2577,7 +2577,7 @@
             "line_no": "1",
             "against_entry_id": null,
             "reverses_entry_id": null,
-            "created_at": "2026-11-12 22:30:56.188380+00:00"
+            "created_at": "2026-11-13 08:54:42.271700+00:00"
           }
         ],
         "stock_voucher_line": [],
@@ -2663,7 +2663,7 @@
             "name": "email_folder",
             "version": "0.0.1",
             "kind": "connector",
-            "installed_at": "2026-11-12 22:30:55.842823+00:00",
+            "installed_at": "2026-11-13 08:54:41.900946+00:00",
             "manifest_digest": "<hex64:1>",
             "artifact_digest": "<hex64:2>",
             "after_core_revision": "0001",
@@ -2673,7 +2673,7 @@
             "name": "sales",
             "version": "0.0.4",
             "kind": "business-module",
-            "installed_at": "2026-11-12 22:30:56.045083+00:00",
+            "installed_at": "2026-11-13 08:54:42.122463+00:00",
             "manifest_digest": "<hex64:3>",
             "artifact_digest": "<hex64:4>",
             "after_core_revision": "0013",
@@ -2681,9 +2681,9 @@
           },
           {
             "name": "stock",
-            "version": "0.1.1",
+            "version": "0.1.3",
             "kind": "business-module",
-            "installed_at": "2026-11-12 22:30:56.142383+00:00",
+            "installed_at": "2026-11-13 08:54:42.225423+00:00",
             "manifest_digest": "<hex64:5>",
             "artifact_digest": "<hex64:6>",
             "after_core_revision": "0015",
@@ -2698,7 +2698,7 @@
             "disabled": "False",
             "grants_version": "1",
             "token_sha256": null,
-            "created_at": "2026-11-12 22:30:55.799487+00:00"
+            "created_at": "2026-11-13 08:54:41.850081+00:00"
           }
         ],
         "company": [
@@ -2707,7 +2707,7 @@
             "name": "Stark Manufacturing Inc.",
             "functional_currency": "USD",
             "fiscal_year_start_month": "1",
-            "created_at": "2026-11-12 22:30:55.760484+00:00",
+            "created_at": "2026-11-13 08:54:41.806363+00:00",
             "date_order": null,
             "status": "ready"
           }
@@ -3021,9 +3021,9 @@
             "digest": "<hex64:11>",
             "status": "consumed",
             "operation_key": "<uuid:32>",
-            "created_at": "2026-11-12 22:30:56.230981+00:00",
-            "expires_at": "2026-11-12 22:40:56.230900+00:00",
-            "decided_at": "2026-11-12 22:30:56.241631+00:00",
+            "created_at": "2026-11-13 08:54:42.314990+00:00",
+            "expires_at": "2026-11-13 09:04:42.314905+00:00",
+            "decided_at": "2026-11-13 08:54:42.324806+00:00",
             "approved_by": "<uuid:2>",
             "approver_grants_version": "1",
             "decision_json": null,
@@ -3045,9 +3045,9 @@
             "digest": "<hex64:13>",
             "status": "consumed",
             "operation_key": "<uuid:97>",
-            "created_at": "2026-11-12 22:30:57.798544+00:00",
-            "expires_at": "2026-11-12 22:40:57.798397+00:00",
-            "decided_at": "2026-11-12 22:30:57.861852+00:00",
+            "created_at": "2026-11-13 08:54:43.969528+00:00",
+            "expires_at": "2026-11-13 09:04:43.969424+00:00",
+            "decided_at": "2026-11-13 08:54:44.017890+00:00",
             "approved_by": "<uuid:2>",
             "approver_grants_version": "1",
             "decision_json": null,
@@ -3058,7 +3058,7 @@
           {
             "id": "<uuid:33>",
             "company_id": "<uuid:3>",
-            "at": "2026-11-12 22:30:56.270025+00:00",
+            "at": "2026-11-13 08:54:42.353976+00:00",
             "actor": "owner",
             "action": "save_draft_invoice",
             "document_type": "sales_invoice",
@@ -3069,7 +3069,7 @@
           {
             "id": "<uuid:35>",
             "company_id": "<uuid:3>",
-            "at": "2026-11-12 22:30:56.271615+00:00",
+            "at": "2026-11-13 08:54:42.355087+00:00",
             "actor": "owner",
             "action": "commit:create_invoice",
             "document_type": null,
@@ -3080,7 +3080,7 @@
           {
             "id": "<uuid:98>",
             "company_id": "<uuid:3>",
-            "at": "2026-11-12 22:30:57.994196+00:00",
+            "at": "2026-11-13 08:54:44.137236+00:00",
             "actor": "owner",
             "action": "submit_invoice",
             "document_type": "sales_invoice",
@@ -3091,7 +3091,7 @@
           {
             "id": "<uuid:100>",
             "company_id": "<uuid:3>",
-            "at": "2026-11-12 22:30:57.999119+00:00",
+            "at": "2026-11-13 08:54:44.140568+00:00",
             "actor": "owner",
             "action": "commit:create_invoice",
             "document_type": null,
@@ -3106,7 +3106,7 @@
             "company_id": "<uuid:3>",
             "generation": "2",
             "live_token": "<hex32:2>",
-            "updated_at": "2026-11-12 22:30:57.564096+00:00"
+            "updated_at": "2026-11-13 08:54:43.752593+00:00"
           }
         ],
         "dimension_set": [],
@@ -3270,7 +3270,7 @@
             "memo": null,
             "reverses_posting_id": null,
             "operation_key": null,
-            "created_at": "2026-11-12 22:30:56.202047+00:00",
+            "created_at": "2026-11-13 08:54:42.284842+00:00",
             "created_by": "owner",
             "prev_hash": "<chain-origin>",
             "hash": "<hex64:12>",
@@ -3287,7 +3287,7 @@
             "memo": null,
             "reverses_posting_id": null,
             "operation_key": null,
-            "created_at": "2026-11-12 22:30:57.981650+00:00",
+            "created_at": "2026-11-13 08:54:44.127884+00:00",
             "created_by": "owner",
             "prev_hash": "<hex64:12>",
             "hash": "<hex64:16>",
@@ -3797,7 +3797,7 @@
             "card_digest": "<hex64:11>",
             "status": "committed",
             "result_json": "{\"amounts\":[{\"currency\":\"USD\",\"of\":\"INV-2026-00001\",\"value\":\"56.00\",\"what\":\"total\"}],\"data\":{\"number\":\"INV-2026-00001\",\"total\":\"56.00\"},\"figures\":[\"56.00 USD\"],\"text\":\"Saved draft invoice INV-2026-00001 for Initech: 56.00 USD, due 25 Nov 2026.\"}",
-            "committed_at": "2026-11-12 22:30:56.272574+00:00"
+            "committed_at": "2026-11-13 08:54:42.355815+00:00"
           },
           {
             "key": "<uuid:97>",
@@ -3806,7 +3806,7 @@
             "card_digest": "<hex64:13>",
             "status": "committed",
             "result_json": "{\"amounts\":[{\"currency\":\"USD\",\"of\":\"INV-2026-00002\",\"value\":\"140.00\",\"what\":\"total\"}],\"data\":{\"number\":\"INV-2026-00002\",\"total\":\"140.00\"},\"figures\":[\"140.00 USD\"],\"text\":\"Saved and submitted invoice INV-2026-00002 for Acme Corporation: 140.00 USD, due 25 Nov 2026.\"}",
-            "committed_at": "2026-11-12 22:30:57.999950+00:00"
+            "committed_at": "2026-11-13 08:54:44.141225+00:00"
           }
         ],
         "outbox_attachment": [],
@@ -3826,7 +3826,7 @@
             "operation_key": "<uuid:32>",
             "submit_operation_key": null,
             "cancel_operation_key": null,
-            "created_at": "2026-11-12 22:30:56.265317+00:00"
+            "created_at": "2026-11-13 08:54:42.349801+00:00"
           },
           {
             "id": "<uuid:99>",
@@ -3842,7 +3842,7 @@
             "operation_key": "<uuid:97>",
             "submit_operation_key": null,
             "cancel_operation_key": null,
-            "created_at": "2026-11-12 22:30:57.932552+00:00"
+            "created_at": "2026-11-13 08:54:44.084723+00:00"
           }
         ],
         "sales_order": [],
@@ -3856,7 +3856,7 @@
             "account_id": "<uuid:26>",
             "is_default": "True",
             "position": "1",
-            "created_at": "2026-11-12 22:30:56.163276+00:00"
+            "created_at": "2026-11-13 08:54:42.247055+00:00"
           },
           {
             "id": "<uuid:89>",
@@ -3865,7 +3865,7 @@
             "account_id": "<uuid:26>",
             "is_default": "False",
             "position": "2",
-            "created_at": "2026-11-12 22:30:56.166125+00:00"
+            "created_at": "2026-11-13 08:54:42.249868+00:00"
           },
           {
             "id": "<uuid:90>",
@@ -3874,7 +3874,7 @@
             "account_id": "<uuid:27>",
             "is_default": "False",
             "position": "3",
-            "created_at": "2026-11-12 22:30:56.168138+00:00"
+            "created_at": "2026-11-13 08:54:42.251605+00:00"
           }
         ],
         "supplier_payment": [],
@@ -3931,7 +3931,7 @@
             "item_id": "<uuid:30>",
             "method": "moving_average",
             "default_warehouse_id": "<uuid:88>",
-            "created_at": "2026-11-12 22:30:56.173574+00:00"
+            "created_at": "2026-11-13 08:54:42.256974+00:00"
           }
         ],
         "stock_ledger_entry": [
@@ -3953,7 +3953,7 @@
             "line_no": "1",
             "against_entry_id": null,
             "reverses_entry_id": null,
-            "created_at": "2026-11-12 22:30:56.188380+00:00"
+            "created_at": "2026-11-13 08:54:42.271700+00:00"
           },
           {
             "id": "<uuid:107>",
@@ -3973,7 +3973,7 @@
             "line_no": "1",
             "against_entry_id": null,
             "reverses_entry_id": null,
-            "created_at": "2026-11-12 22:30:57.961139+00:00"
+            "created_at": "2026-11-13 08:54:44.112210+00:00"
           }
         ],
         "stock_voucher_line": [],
@@ -4571,7 +4571,7 @@
         "name": "email_folder",
         "version": "0.0.1",
         "kind": "connector",
-        "installed_at": "2026-11-12 22:30:55.842823+00:00",
+        "installed_at": "2026-11-13 08:54:41.900946+00:00",
         "manifest_digest": "<hex64:1>",
         "artifact_digest": "<hex64:2>",
         "after_core_revision": "0001",
@@ -4581,7 +4581,7 @@
         "name": "sales",
         "version": "0.0.4",
         "kind": "business-module",
-        "installed_at": "2026-11-12 22:30:56.045083+00:00",
+        "installed_at": "2026-11-13 08:54:42.122463+00:00",
         "manifest_digest": "<hex64:3>",
         "artifact_digest": "<hex64:4>",
         "after_core_revision": "0013",
@@ -4589,9 +4589,9 @@
       },
       {
         "name": "stock",
-        "version": "0.1.1",
+        "version": "0.1.3",
         "kind": "business-module",
-        "installed_at": "2026-11-12 22:30:56.142383+00:00",
+        "installed_at": "2026-11-13 08:54:42.225423+00:00",
         "manifest_digest": "<hex64:5>",
         "artifact_digest": "<hex64:6>",
         "after_core_revision": "0015",
@@ -4606,7 +4606,7 @@
         "disabled": "False",
         "grants_version": "1",
         "token_sha256": null,
-        "created_at": "2026-11-12 22:30:55.799487+00:00"
+        "created_at": "2026-11-13 08:54:41.850081+00:00"
       }
     ],
     "company": [
@@ -4615,7 +4615,7 @@
         "name": "Stark Manufacturing Inc.",
         "functional_currency": "USD",
         "fiscal_year_start_month": "1",
-        "created_at": "2026-11-12 22:30:55.760484+00:00",
+        "created_at": "2026-11-13 08:54:41.806363+00:00",
         "date_order": null,
         "status": "ready"
       }
@@ -4929,9 +4929,9 @@
         "digest": "<hex64:11>",
         "status": "consumed",
         "operation_key": "<uuid:32>",
-        "created_at": "2026-11-12 22:30:56.230981+00:00",
-        "expires_at": "2026-11-12 22:40:56.230900+00:00",
-        "decided_at": "2026-11-12 22:30:56.241631+00:00",
+        "created_at": "2026-11-13 08:54:42.314990+00:00",
+        "expires_at": "2026-11-13 09:04:42.314905+00:00",
+        "decided_at": "2026-11-13 08:54:42.324806+00:00",
         "approved_by": "<uuid:2>",
         "approver_grants_version": "1",
         "decision_json": null,
@@ -4942,7 +4942,7 @@
       {
         "id": "<uuid:33>",
         "company_id": "<uuid:3>",
-        "at": "2026-11-12 22:30:56.270025+00:00",
+        "at": "2026-11-13 08:54:42.353976+00:00",
         "actor": "owner",
         "action": "save_draft_invoice",
         "document_type": "sales_invoice",
@@ -4953,7 +4953,7 @@
       {
         "id": "<uuid:35>",
         "company_id": "<uuid:3>",
-        "at": "2026-11-12 22:30:56.271615+00:00",
+        "at": "2026-11-13 08:54:42.355087+00:00",
         "actor": "owner",
         "action": "commit:create_invoice",
         "document_type": null,
@@ -5124,7 +5124,7 @@
         "memo": null,
         "reverses_posting_id": null,
         "operation_key": null,
-        "created_at": "2026-11-12 22:30:56.202047+00:00",
+        "created_at": "2026-11-13 08:54:42.284842+00:00",
         "created_by": "owner",
         "prev_hash": "<chain-origin>",
         "hash": "<hex64:12>",
@@ -5566,7 +5566,7 @@
         "card_digest": "<hex64:11>",
         "status": "committed",
         "result_json": "{\"amounts\":[{\"currency\":\"USD\",\"of\":\"INV-2026-00001\",\"value\":\"56.00\",\"what\":\"total\"}],\"data\":{\"number\":\"INV-2026-00001\",\"total\":\"56.00\"},\"figures\":[\"56.00 USD\"],\"text\":\"Saved draft invoice INV-2026-00001 for Initech: 56.00 USD, due 25 Nov 2026.\"}",
-        "committed_at": "2026-11-12 22:30:56.272574+00:00"
+        "committed_at": "2026-11-13 08:54:42.355815+00:00"
       }
     ],
     "outbox_attachment": [],
@@ -5586,7 +5586,7 @@
         "operation_key": "<uuid:32>",
         "submit_operation_key": null,
         "cancel_operation_key": null,
-        "created_at": "2026-11-12 22:30:56.265317+00:00"
+        "created_at": "2026-11-13 08:54:42.349801+00:00"
       }
     ],
     "sales_order": [],
@@ -5600,7 +5600,7 @@
         "account_id": "<uuid:26>",
         "is_default": "True",
         "position": "1",
-        "created_at": "2026-11-12 22:30:56.163276+00:00"
+        "created_at": "2026-11-13 08:54:42.247055+00:00"
       },
       {
         "id": "<uuid:89>",
@@ -5609,7 +5609,7 @@
         "account_id": "<uuid:26>",
         "is_default": "False",
         "position": "2",
-        "created_at": "2026-11-12 22:30:56.166125+00:00"
+        "created_at": "2026-11-13 08:54:42.249868+00:00"
       },
       {
         "id": "<uuid:90>",
@@ -5618,7 +5618,7 @@
         "account_id": "<uuid:27>",
         "is_default": "False",
         "position": "3",
-        "created_at": "2026-11-12 22:30:56.168138+00:00"
+        "created_at": "2026-11-13 08:54:42.251605+00:00"
       }
     ],
     "supplier_payment": [],
@@ -5662,7 +5662,7 @@
         "item_id": "<uuid:30>",
         "method": "moving_average",
         "default_warehouse_id": "<uuid:88>",
-        "created_at": "2026-11-12 22:30:56.173574+00:00"
+        "created_at": "2026-11-13 08:54:42.256974+00:00"
       }
     ],
     "stock_ledger_entry": [
@@ -5684,7 +5684,7 @@
         "line_no": "1",
         "against_entry_id": null,
         "reverses_entry_id": null,
-        "created_at": "2026-11-12 22:30:56.188380+00:00"
+        "created_at": "2026-11-13 08:54:42.271700+00:00"
       }
     ],
     "stock_voucher_line": [],
@@ -5698,7 +5698,7 @@
     "sales_invoice_delivery": [],
     "stock_layer_take": []
   },
-  "trial_started": "2026-11-12T22:30:57.332299+00:00",
+  "trial_started": "2026-11-13T08:54:43.528369+00:00",
   "after": {
     "books_identity": [
       {
@@ -5751,7 +5751,7 @@
         "name": "email_folder",
         "version": "0.0.1",
         "kind": "connector",
-        "installed_at": "2026-11-12 22:30:55.842823+00:00",
+        "installed_at": "2026-11-13 08:54:41.900946+00:00",
         "manifest_digest": "<hex64:1>",
         "artifact_digest": "<hex64:2>",
         "after_core_revision": "0001",
@@ -5761,7 +5761,7 @@
         "name": "sales",
         "version": "0.0.4",
         "kind": "business-module",
-        "installed_at": "2026-11-12 22:30:56.045083+00:00",
+        "installed_at": "2026-11-13 08:54:42.122463+00:00",
         "manifest_digest": "<hex64:3>",
         "artifact_digest": "<hex64:4>",
         "after_core_revision": "0013",
@@ -5769,9 +5769,9 @@
       },
       {
         "name": "stock",
-        "version": "0.1.1",
+        "version": "0.1.3",
         "kind": "business-module",
-        "installed_at": "2026-11-12 22:30:56.142383+00:00",
+        "installed_at": "2026-11-13 08:54:42.225423+00:00",
         "manifest_digest": "<hex64:5>",
         "artifact_digest": "<hex64:6>",
         "after_core_revision": "0015",
@@ -5786,7 +5786,7 @@
         "disabled": "False",
         "grants_version": "1",
         "token_sha256": null,
-        "created_at": "2026-11-12 22:30:55.799487+00:00"
+        "created_at": "2026-11-13 08:54:41.850081+00:00"
       }
     ],
     "company": [
@@ -5795,7 +5795,7 @@
         "name": "Stark Manufacturing Inc.",
         "functional_currency": "USD",
         "fiscal_year_start_month": "1",
-        "created_at": "2026-11-12 22:30:55.760484+00:00",
+        "created_at": "2026-11-13 08:54:41.806363+00:00",
         "date_order": null,
         "status": "ready"
       }
@@ -6109,9 +6109,9 @@
         "digest": "<hex64:11>",
         "status": "consumed",
         "operation_key": "<uuid:32>",
-        "created_at": "2026-11-12 22:30:56.230981+00:00",
-        "expires_at": "2026-11-12 22:40:56.230900+00:00",
-        "decided_at": "2026-11-12 22:30:56.241631+00:00",
+        "created_at": "2026-11-13 08:54:42.314990+00:00",
+        "expires_at": "2026-11-13 09:04:42.314905+00:00",
+        "decided_at": "2026-11-13 08:54:42.324806+00:00",
         "approved_by": "<uuid:2>",
         "approver_grants_version": "1",
         "decision_json": null,
@@ -6133,9 +6133,9 @@
         "digest": "<hex64:13>",
         "status": "consumed",
         "operation_key": "<uuid:97>",
-        "created_at": "2026-11-12 22:30:57.798544+00:00",
-        "expires_at": "2026-11-12 22:40:57.798397+00:00",
-        "decided_at": "2026-11-12 22:30:57.861852+00:00",
+        "created_at": "2026-11-13 08:54:43.969528+00:00",
+        "expires_at": "2026-11-13 09:04:43.969424+00:00",
+        "decided_at": "2026-11-13 08:54:44.017890+00:00",
         "approved_by": "<uuid:2>",
         "approver_grants_version": "1",
         "decision_json": null,
@@ -6146,7 +6146,7 @@
       {
         "id": "<uuid:33>",
         "company_id": "<uuid:3>",
-        "at": "2026-11-12 22:30:56.270025+00:00",
+        "at": "2026-11-13 08:54:42.353976+00:00",
         "actor": "owner",
         "action": "save_draft_invoice",
         "document_type": "sales_invoice",
@@ -6157,7 +6157,7 @@
       {
         "id": "<uuid:35>",
         "company_id": "<uuid:3>",
-        "at": "2026-11-12 22:30:56.271615+00:00",
+        "at": "2026-11-13 08:54:42.355087+00:00",
         "actor": "owner",
         "action": "commit:create_invoice",
         "document_type": null,
@@ -6168,7 +6168,7 @@
       {
         "id": "<uuid:98>",
         "company_id": "<uuid:3>",
-        "at": "2026-11-12 22:30:57.994196+00:00",
+        "at": "2026-11-13 08:54:44.137236+00:00",
         "actor": "owner",
         "action": "submit_invoice",
         "document_type": "sales_invoice",
@@ -6179,7 +6179,7 @@
       {
         "id": "<uuid:100>",
         "company_id": "<uuid:3>",
-        "at": "2026-11-12 22:30:57.999119+00:00",
+        "at": "2026-11-13 08:54:44.140568+00:00",
         "actor": "owner",
         "action": "commit:create_invoice",
         "document_type": null,
@@ -6194,7 +6194,7 @@
         "company_id": "<uuid:3>",
         "generation": "2",
         "live_token": "<hex32:2>",
-        "updated_at": "2026-11-12 22:30:57.564096+00:00"
+        "updated_at": "2026-11-13 08:54:43.752593+00:00"
       }
     ],
     "dimension_set": [],
@@ -6358,7 +6358,7 @@
         "memo": null,
         "reverses_posting_id": null,
         "operation_key": null,
-        "created_at": "2026-11-12 22:30:56.202047+00:00",
+        "created_at": "2026-11-13 08:54:42.284842+00:00",
         "created_by": "owner",
         "prev_hash": "<chain-origin>",
         "hash": "<hex64:12>",
@@ -6375,7 +6375,7 @@
         "memo": null,
         "reverses_posting_id": null,
         "operation_key": null,
-        "created_at": "2026-11-12 22:30:57.981650+00:00",
+        "created_at": "2026-11-13 08:54:44.127884+00:00",
         "created_by": "owner",
         "prev_hash": "<hex64:12>",
         "hash": "<hex64:16>",
@@ -6885,7 +6885,7 @@
         "card_digest": "<hex64:11>",
         "status": "committed",
         "result_json": "{\"amounts\":[{\"currency\":\"USD\",\"of\":\"INV-2026-00001\",\"value\":\"56.00\",\"what\":\"total\"}],\"data\":{\"number\":\"INV-2026-00001\",\"total\":\"56.00\"},\"figures\":[\"56.00 USD\"],\"text\":\"Saved draft invoice INV-2026-00001 for Initech: 56.00 USD, due 25 Nov 2026.\"}",
-        "committed_at": "2026-11-12 22:30:56.272574+00:00"
+        "committed_at": "2026-11-13 08:54:42.355815+00:00"
       },
       {
         "key": "<uuid:97>",
@@ -6894,7 +6894,7 @@
         "card_digest": "<hex64:13>",
         "status": "committed",
         "result_json": "{\"amounts\":[{\"currency\":\"USD\",\"of\":\"INV-2026-00002\",\"value\":\"140.00\",\"what\":\"total\"}],\"data\":{\"number\":\"INV-2026-00002\",\"total\":\"140.00\"},\"figures\":[\"140.00 USD\"],\"text\":\"Saved and submitted invoice INV-2026-00002 for Acme Corporation: 140.00 USD, due 25 Nov 2026.\"}",
-        "committed_at": "2026-11-12 22:30:57.999950+00:00"
+        "committed_at": "2026-11-13 08:54:44.141225+00:00"
       }
     ],
     "outbox_attachment": [],
@@ -6914,7 +6914,7 @@
         "operation_key": "<uuid:32>",
         "submit_operation_key": null,
         "cancel_operation_key": null,
-        "created_at": "2026-11-12 22:30:56.265317+00:00"
+        "created_at": "2026-11-13 08:54:42.349801+00:00"
       },
       {
         "id": "<uuid:99>",
@@ -6930,7 +6930,7 @@
         "operation_key": "<uuid:97>",
         "submit_operation_key": null,
         "cancel_operation_key": null,
-        "created_at": "2026-11-12 22:30:57.932552+00:00"
+        "created_at": "2026-11-13 08:54:44.084723+00:00"
       }
     ],
     "sales_order": [],
@@ -6944,7 +6944,7 @@
         "account_id": "<uuid:26>",
         "is_default": "True",
         "position": "1",
-        "created_at": "2026-11-12 22:30:56.163276+00:00"
+        "created_at": "2026-11-13 08:54:42.247055+00:00"
       },
       {
         "id": "<uuid:89>",
@@ -6953,7 +6953,7 @@
         "account_id": "<uuid:26>",
         "is_default": "False",
         "position": "2",
-        "created_at": "2026-11-12 22:30:56.166125+00:00"
+        "created_at": "2026-11-13 08:54:42.249868+00:00"
       },
       {
         "id": "<uuid:90>",
@@ -6962,7 +6962,7 @@
         "account_id": "<uuid:27>",
         "is_default": "False",
         "position": "3",
-        "created_at": "2026-11-12 22:30:56.168138+00:00"
+        "created_at": "2026-11-13 08:54:42.251605+00:00"
       }
     ],
     "supplier_payment": [],
@@ -7019,7 +7019,7 @@
         "item_id": "<uuid:30>",
         "method": "moving_average",
         "default_warehouse_id": "<uuid:88>",
-        "created_at": "2026-11-12 22:30:56.173574+00:00"
+        "created_at": "2026-11-13 08:54:42.256974+00:00"
       }
     ],
     "stock_ledger_entry": [
@@ -7041,7 +7041,7 @@
         "line_no": "1",
         "against_entry_id": null,
         "reverses_entry_id": null,
-        "created_at": "2026-11-12 22:30:56.188380+00:00"
+        "created_at": "2026-11-13 08:54:42.271700+00:00"
       },
       {
         "id": "<uuid:107>",
@@ -7061,7 +7061,7 @@
         "line_no": "1",
         "against_entry_id": null,
         "reverses_entry_id": null,
-        "created_at": "2026-11-12 22:30:57.961139+00:00"
+        "created_at": "2026-11-13 08:54:44.112210+00:00"
       }
     ],
     "stock_voucher_line": [],

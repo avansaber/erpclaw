@@ -192,6 +192,8 @@ from .resolve_policy import (
 from .resolve_args import (
     SINGLE_FIELDS,
     request_words,
+    owner_price_correction,
+    catalogue_marked_price,
     _payer,
     payment_binding,
     _outgoing_account,
@@ -207,12 +209,12 @@ from .resolve_args import (
 )
 
 
-def account(ctx, text, calls, results, lead, session, scopes):
+def account(ctx, text, calls, results, lead, session, scopes, superseded_rates=frozenset()):
     """Enable currency-marked rate occurrences only while accounting for invoice lines."""
     from .resolve_text import _invoice_rate_context
     invoice_only = bool(calls) and all(c.name in {"create_invoice", "submit_invoice"} for c, _ in calls)
     token = _invoice_rate_context.set(invoice_only)
     try:
-        return _account(ctx, text, calls, results, lead, session, scopes)
+        return _account(ctx, text, calls, results, lead, session, scopes, superseded_rates=superseded_rates)
     finally:
         _invoice_rate_context.reset(token)

@@ -34,7 +34,7 @@ PINNED = {"profile": PROFILE, "provider": "openrouter", "model": "qwen/qwen3.5-9
           "pins": {"order": ["primeintellect"], "allow_fallbacks": False, "data_collection": "deny", "zdr": True,
                    "quantizations": ["bf16"], "require_parameters": True}}
 MODEL_FAILURES = {"model_unavailable", "model_refused", "model_rate_limited", "credential_refused",
-                  "hosted_books_refused", "model_input_invalid", "answer_interrupted", "busy",
+                  "hosted_books_refused", "model_input_invalid", "answer_interrupted", "busy", "turn_lapsed",
                   "reconciliation_incomplete"}
 
 

@@ -15,7 +15,7 @@ def test_wrapping_contact_quotes_do_not_reach_card_or_saved_party(engine, quote)
     [card] = assistant.turn('quoted', text)
     assert card['type'] == 'card', card
     assert ['Email', email] in card['card']['lines']
-    assert approvals.approve(engine, card['approval_id'], card['digest']).status == 'committed'
+    assert approvals.approve(engine, card['approval_id'], card['digest'], ownership_check=_ownership(engine)).status == 'committed'
     with engine.connect() as conn:
         saved = conn.execute(select(m.party.c.email).where(m.party.c.name == 'Lakeside Cafe')).scalar_one()
     assert saved == email
@@ -27,3 +27,12 @@ def test_wrapping_city_quotes_do_not_reach_customer_card(engine):
     [card] = assistant.turn('city', 'Add a customer called Lakeside Cafe with city "New York"')
     assert card['type'] == 'card', card
     assert ['City', 'New York'] in card['card']['lines']
+
+
+def _ownership(engine):
+    from erpclaw_assistant import store
+    from erpclaw_core import principals
+
+    with engine.connect() as conn:
+        owner = principals.owner(conn)["id"]
+    return lambda cid: store.conversation_owner(cid) == owner

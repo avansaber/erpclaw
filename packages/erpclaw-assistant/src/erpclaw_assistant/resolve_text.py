@@ -32,6 +32,11 @@ TABLES = {
         "negation": frozenset({"not"}),
         # Correction cues take precedence over read wording on a pending card.
         "correction_cue": r"\b(?:no|not|meant|instead)\b",
+        "marked_price_prefix": r"\s*(?:actually|make\s+it|no\s*,)\s*",
+        "marked_rate_tail": r"(?:\s+each|\s+piece)",
+        "marked_rate_tail_needs_per": "piece",
+        "marked_rate_per_ending": "per",
+        "marked_rate_tail_needs_currency": "each",
         # A self-contained read remains a read when a card is pending.
         "read_request": (r"\b(?:check|show|list|display)\b.*"
                          r"\b(?:customers?|suppliers?|items?|products?|services?|invoices?|payments?|"
@@ -48,6 +53,8 @@ TABLES = {
         # an owner's typed answer to the engine's pending question, matched before the model runs; the control
         # actions are matched by these words, or by their codes
         "answers": {
+            "continue_invoice": frozenset({"yes", "y", "yeah", "yep", "yes please", "continue", "continue please", "go ahead", "go on"}),
+            "decline_invoice": frozenset({"no", "no thanks", "no thank you", "cancel", "stop", "never mind", "nevermind"}),
             "yes": frozenset({"yes", "y", "yeah", "yep", "correct", "right"}),
             "someone_else": frozenset({"someone else", "none of these", "neither"}),
             "cancel": frozenset({"cancel", "never mind", "nevermind", "stop"}),
@@ -263,6 +270,12 @@ TABLES = {
         "memo_qualifier_cues": ((r"memo\b\s*[:#]?\s*po\b", "po"),),
         "po_memo_prefixes": ("po ", "po:", "po#"),
         "text": {
+            "add_offer_one": "I can't find a {kind} called '{name}'. Which {kind} is it for, or shall I add it first? After approving each card, say continue to proceed with the invoice.",
+            "add_offer_many": "{names} aren't in your books yet. Add them first? After approving each card, say continue to proceed with the invoice.",
+            "add_offer_it": "Add it",
+            "add_offer_them": "Add them",
+            "add_offer_no": "No thanks",
+            "add_continue": "Ready to continue the invoice.",
             "planned_singular": "{name} is not in ERPClaw yet.",
             "planned_plural": "{name} are not in ERPClaw yet.",
             "none_installed_not_done": "I didn't do anything with that.",
@@ -371,6 +384,8 @@ TABLES = {
             "cancelled": "Cancelled; nothing was saved.",
             # a message while a turn holds the conversation: working (it renewed lately) or stopped partway
             "busy": "I'm still working on your last message.",
+            "turn_lapsed": "That took too long, so I stopped before finishing your last message. "
+                           "Please check what is already there, and send it again if it is still missing.",
             "busy_stopped": "Your last message stopped partway, and nothing was saved from it. Please send it again in "
                             "a few minutes.",
             # a takeover set aside a card of a turn that lost its claim: true whether that turn died or stalled

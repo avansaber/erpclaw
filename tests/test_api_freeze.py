@@ -15,7 +15,7 @@ from erpclaw_api.app import Approval, Message, create_app
 from erpclaw_assistant import store
 from erpclaw_assistant.model import Reply, ScriptedModel, call
 from erpclaw_core import administration as admin
-from erpclaw_core import approvals, models as m, outbox, setup
+from erpclaw_core import approvals, models as m, outbox, setup, principals as pr
 from erpclaw_core.common import Refusal, check_events, company_ctx, new_id
 from erpclaw_core.plugins import REGISTRY, disable_plugin, install_plugin
 from erpclaw_sales import tables as t
@@ -59,8 +59,22 @@ def _person(engine, name, can):
         return {"Authorization": f"Bearer {token}"}
 
 
+def _ownership(engine):
+    with engine.connect() as conn:
+        owner = pr.owner(conn)["id"]
+    return lambda cid: store.conversation_owner(cid) == owner
+
+
+def _conversation(engine):
+    cid = new_id()
+    with engine.connect() as conn:
+        owner = pr.owner(conn)["id"]
+    store.create_conversation(cid, owner)
+    return cid
+
+
 def _card(engine, conversation=None):
-    return approvals.propose(engine, REGISTRY.contracts["create_invoice"], ARGS, conversation)
+    return approvals.propose(engine, REGISTRY.contracts["create_invoice"], ARGS, conversation, ownership_check=_ownership(engine))
 
 
 def _status(engine, aid):
@@ -129,10 +143,13 @@ def test_an_operation_read_without_view_is_403_forbidden(engine):
 
 
 @pytest.mark.parametrize("action", ["approve", "decline"])
-def test_a_card_the_books_do_not_have_is_404_no_card(engine, action):
+def test_a_card_the_books_do_not_have_is_404_no_conversation(engine, action):
     c = _app(engine)
     kw = {"json": {"digest": DIGEST}} if action == "approve" else {}
-    refused(c.post(f"/v1/cards/{new_id()}/{action}", **kw), 404, "no_card")
+    response = c.post(f"/v1/cards/{new_id()}/{action}", **kw)
+    refused(response, 404, "no_conversation")
+    unknown = c.post(f"/v1/conversations/{new_id()}/messages", json={"text": "hello"})
+    assert response.status_code == unknown.status_code and response.content == unknown.content
 
 
 def test_an_approval_whose_digest_differs_is_409_with_the_refusals_code(engine):
@@ -228,7 +245,7 @@ def test_initial_setup_responses_carry_the_committed_currency(engine, monkeypatc
     setup.create_own_books(engine)
     card = approvals.propose(engine, REGISTRY.contracts["set_up_company"], {
         "name": "Lakeside Bakery", "currency": "USD", "fiscal_year_start_month": 1, "date_order": "DMY"},
-        new_id())
+        _conversation(engine), ownership_check=_ownership(engine))
     assert approvals.books_currency(engine, approval_id=card.approval_id) is None
     c = _app(engine, raise_server_exceptions=False)
     notes = []
@@ -249,7 +266,7 @@ def test_initial_setup_responses_carry_the_committed_currency(engine, monkeypatc
     with caplog.at_level(logging.WARNING, logger=api.__name__):
         r = c.post(f"/v1/cards/{card.approval_id}/approve", json={"digest": card.digest})
     assert r.status_code == 200, r.text
-    outcome = approvals.read_back(engine, card.operation_key)
+    outcome = approvals.read_back(engine, card.operation_key, ownership_check=_ownership(engine))
     assert outcome.status == "committed" and _status(engine, card.approval_id) == "consumed"
     assert approvals.books_currency(engine, approval_id=card.approval_id) == "USD"
     expected = [_result_event(outcome)]
@@ -314,7 +331,8 @@ def test_a_currency_read_failure_after_commit_uses_available_currency(engine, mo
 
 
 def test_a_refused_outcome_with_a_history_failure_uses_the_neutral_sentence(engine, monkeypatch, caplog):
-    card = approvals.propose(engine, REGISTRY.contracts["create_invoice"], ARGS, new_id())
+    card = approvals.propose(engine, REGISTRY.contracts["create_invoice"], ARGS, _conversation(engine),
+                             ownership_check=_ownership(engine))
     c = _app(engine, raise_server_exceptions=False)
     n = _invoices(engine)
     reads, deliveries = [], []
@@ -337,7 +355,7 @@ def test_a_refused_outcome_with_a_history_failure_uses_the_neutral_sentence(engi
     with caplog.at_level(logging.WARNING, logger=api.__name__):
         r = c.post(f"/v1/cards/{card.approval_id}/approve", json={"digest": card.digest})
     assert r.status_code == 200, r.text
-    outcome = approvals.read_back(engine, card.operation_key)
+    outcome = approvals.read_back(engine, card.operation_key, ownership_check=_ownership(engine))
     assert outcome.status == "refused" and _invoices(engine) == n
     events = r.json()["events"]
     assert events == [{**_result_event(outcome), "code": "rule_at_commit"},
@@ -403,7 +421,7 @@ def test_a_history_failure_keeps_the_saved_card_action_and_all_its_events(engine
     c.post(f"/v1/conversations/{cid}/messages", json={"text": SAID})
     req = store.open_request(cid)
     before_history = store.events(req["id"])
-    card = approvals.propose(engine, REGISTRY.contracts["create_invoice"], {**ARGS, "email": True}, cid)
+    card = approvals.propose(engine, REGISTRY.contracts["create_invoice"], {**ARGS, "email": True}, cid, ownership_check=_ownership(engine))
     n = _invoices(engine)
     delivered = []
 
@@ -415,16 +433,25 @@ def test_a_history_failure_keeps_the_saved_card_action_and_all_its_events(engine
     def fail_history(*args, **kwargs):
         raise RuntimeError(MARK)
 
+    real_conversation_of = approvals.conversation_of
+    lookups = []
+
+    def fail_history_lookup(*args, **kwargs):
+        lookups.append(args)
+        if len(lookups) == 1:
+            return real_conversation_of(*args, **kwargs)
+        raise RuntimeError(MARK)
+
     monkeypatch.setattr(api, "deliver_pending", delivery)
     if step == "note":
         monkeypatch.setattr(c.app.state.assistant, "note", fail_history)
     else:
-        monkeypatch.setattr(approvals, "conversation_of", fail_history)
+        monkeypatch.setattr(approvals, "conversation_of", fail_history_lookup)
     with caplog.at_level(logging.WARNING, logger=api.__name__):
         r = c.post(f"/v1/cards/{card.approval_id}/{action}",
                    **({"json": {"digest": card.digest}} if action == "approve" else {}))
     assert r.status_code == 200, r.text
-    saved = (approvals.read_back(engine, card.operation_key) if action == "approve" else
+    saved = (approvals.read_back(engine, card.operation_key, ownership_check=_ownership(engine)) if action == "approve" else
              approvals.Outcome("declined", "Not saved. Nothing changed in your books.", card.approval_id))
     expected = [_result_event(saved)]
     expected.extend({"type": "email", "status": d["status"], "text": f"Email to {d['recipient']}: {d['text']}"}
@@ -573,7 +600,6 @@ def test_health_answers_any_caller_and_names_no_model(engine):
 
 
 @pytest.mark.parametrize("action", ["approve", "decline"])
-@pytest.mark.xfail(strict=True, reason="needs conversation ownership")
 def test_a_card_in_another_principals_conversation_is_forbidden(engine, action):
     c = _app(engine, [Reply("", [INVOICE])], embedded=False)
     dana = _person(engine, "dana", ["view", "draft", "approve", "post"])
@@ -582,7 +608,10 @@ def test_a_card_in_another_principals_conversation_is_forbidden(engine, action):
     [card] = c.post(f"/v1/conversations/{cid}/messages", json={"text": SAID}, headers=dana).json()["events"]
     before = snapshot(engine)
     kw = {"json": {"digest": card["digest"]}} if action == "approve" else {}
-    refused(c.post(f"/v1/cards/{card['approval_id']}/{action}", headers=ann, **kw), 403, "forbidden")
+    response = c.post(f"/v1/cards/{card['approval_id']}/{action}", headers=ann, **kw)
+    refused(response, 404, "no_conversation")
+    unknown = c.post(f"/v1/cards/{new_id()}/{action}", headers=ann, **kw)
+    assert response.status_code == unknown.status_code and response.content == unknown.content
     assert snapshot(engine) == before
 
 
@@ -643,7 +672,8 @@ def test_card_action_conflicts_keep_the_refusals_code(engine, monkeypatch, actio
     def refuse(*args, **kwargs):
         raise Refusal("That request has ended; ask again.", code)
 
+    card = _card(engine, _conversation(engine))
     monkeypatch.setattr(approvals, action, refuse)
     kw = {"json": {"digest": DIGEST}} if action == "approve" else {}
-    got = refused(_app(engine).post(f"/v1/cards/{new_id()}/{action}", **kw), 409, code)
+    got = refused(_app(engine).post(f"/v1/cards/{card.approval_id}/{action}", **kw), 409, code)
     assert got["detail"] == "That request has ended; ask again."

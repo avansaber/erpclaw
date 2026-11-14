@@ -29,7 +29,8 @@ def test_unregistered_contract_is_refused_before_a_card(engine):
     with pytest.raises(Refusal) as exc:
         approvals.propose(engine, contract, {})
     assert exc.value.code == 'not_a_write'
-    assert str(exc.value) == 'unregistered_payment is not a write with a declared read set.'
+    assert str(exc.value) == approvals.say('not_a_write')
+    assert 'unregistered_payment' not in str(exc.value)
     assert all_books(engine) == before
 
 

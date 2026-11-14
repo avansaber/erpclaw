@@ -37,7 +37,15 @@ class SupplierLine(Input):
     due_date: date | None = None
 
 
+class StockLine(Input):
+    item: str = Field(min_length=1, max_length=200)
+    warehouse: str = Field(min_length=1, max_length=140)
+    quantity: str
+    rate: str
+
+
 class RecordOpeningPosition(Input):
+    stock_lines: list[StockLine] = Field(default_factory=list, max_length=20)
     bank_lines: list[BankLine] = Field(default_factory=list, max_length=5)
     supplier_lines: list[SupplierLine] = Field(default_factory=list, max_length=20)
 
@@ -72,16 +80,22 @@ class OpeningPlan:
     suppliers: list[dict]
     owed: Decimal
     equity: Decimal
+    stock: dict | None
 
 
 def _plan(ctx: Ctx, inp: RecordOpeningPosition) -> OpeningPlan:
-    if not inp.bank_lines and not inp.supplier_lines:
+    if not inp.bank_lines and not inp.supplier_lines and not inp.stock_lines:
         raise Refusal("Tell me at least one starting figure for a bank, cash account or supplier.", "empty_opening")
     year = ctx.conn.execute(select(m.fiscal_year).where(m.fiscal_year.c.company_id == ctx.company_id)
         .order_by(m.fiscal_year.c.start_date, m.fiscal_year.c.id).limit(1)).mappings().first()
     if year is None:
         raise Refusal("These books have no first fiscal year; set up the books first.", "no_fiscal_year")
     when = year["start_date"]
+    stock = None
+    if inp.stock_lines:
+        from .plugins import call_service
+        stock = call_service(ctx, "core", "stock.plan_position_stock",
+                             {"lines": [row.model_dump() for row in inp.stock_lines]})
     period = ledger.open_period(ctx, when)
     accounts, lines, seen = [], [], set()
     for line in inp.bank_lines:
@@ -100,6 +114,12 @@ def _plan(ctx: Ctx, inp: RecordOpeningPosition) -> OpeningPlan:
     for account in accounts:
         if account["account_type"] != "bank":
             raise Refusal(f"{account['name']} is not a bank or cash account.", "account_not_bank")
+    if stock:
+        for row in stock["lines"]:
+            account = ctx.conn.execute(select(m.account).where(m.account.c.company_id == ctx.company_id,
+                m.account.c.id == row["account"])).mappings().one()
+            accounts.append(dict(account))
+            lines.append(ledger.Line(account["id"], debit=Decimal(row["debit"])))
     total = sum((line.debit for line in lines), Decimal(0))
     suppliers = []
     for row in inp.supplier_lines:
@@ -125,6 +145,8 @@ def _plan(ctx: Ctx, inp: RecordOpeningPosition) -> OpeningPlan:
             ("account", equity["id"])}
     rows.update(("account", account["id"]) for account in accounts)
     rows.update(("party", supplier["id"]) for supplier in suppliers)
+    if stock:
+        rows.update(tuple(row) for row in stock["read_set"])
     # External accounting mappings affect the ledger's destination and must be bound too.
     from .integration import system_of_record
 
@@ -133,7 +155,7 @@ def _plan(ctx: Ctx, inp: RecordOpeningPosition) -> OpeningPlan:
         rows.update(("account_map", key) for key in ctx.conn.execute(select(m.account_map.c.id).where(
             m.account_map.c.company_id == ctx.company_id, m.account_map.c.external_system == external,
             m.account_map.c.account_id.in_([a["id"] for a in accounts]))).scalars())
-    return OpeningPlan(when, accounts, lines, total, sorted(rows), suppliers, owed, starting_equity)
+    return OpeningPlan(when, accounts, lines, total, sorted(rows), suppliers, owed, starting_equity, stock)
 
 
 def preview_opening(ctx: Ctx, inp: RecordOpeningPosition) -> Preview:
@@ -147,6 +169,11 @@ def preview_opening(ctx: Ctx, inp: RecordOpeningPosition) -> Preview:
     sh.line("Date", f"{plan.date.day} {plan.date:%b %Y} (when these books start)")
     for account, line in zip(plan.accounts[:len(inp.bank_lines)], plan.lines[:len(inp.bank_lines)]):
         sh.line(account["name"], f"{sh.amount(line.debit)} {ctx.currency}")
+    if plan.stock:
+        for row in plan.stock["details"]:
+            sh.line(row["item"], f"{row['quantity']} in {row['warehouse']} at "
+                    f"{sh.unit_price(Decimal(row['rate']))} {ctx.currency}: "
+                    f"{sh.amount(Decimal(row['value']))} {ctx.currency}")
     for supplier, row in zip(plan.suppliers, inp.supplier_lines):
         value = payables._amount(ctx, row.amount, "A supplier starting figure")
         detail = f"{sh.amount(value)} {ctx.currency}"
@@ -202,10 +229,15 @@ def commit_opening(ctx: Ctx, inp: RecordOpeningPosition, key: str) -> Result:
     if not number:
         raise Refusal("An opening position needs its approved batch number.", "not_approved")
     posting = ledger.post(ctx, plan.date, ledger.OPENING, voucher_id, plan.lines, memo=number, operation_key=key)
+    if plan.stock:
+        from .plugins import call_service
+        call_service(ctx, "core", "stock.write_position_stock", {
+            "lines": [row.model_dump() for row in inp.stock_lines],
+            "voucher_id": voucher_id, "number": number})
     token = _opening_item_commit.set(ctx)
     try:
         for sequence, (supplier, row) in enumerate(zip(plan.suppliers, inp.supplier_lines), 1):
-            control_no = len(inp.bank_lines) + sequence
+            control_no = len(inp.bank_lines) + len(inp.stock_lines) + sequence
             line = payables.open_item(ctx, supplier_id=supplier["id"], source_type=ledger.OPENING,
                 source_id=new_id(), source_number=number, posting_date=plan.date, amount=row.amount,
                 posting_id=posting.posting_id, control_line_no=control_no, source_voucher_id=voucher_id,

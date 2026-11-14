@@ -226,8 +226,8 @@ def test_round3_pending_card_survives_and_can_be_approved(engine, as_released, m
         assert events[-1]["type"] == "answer" and events[-1]["checked"] == "engine"
     assert store.open_request("pending-card") == pending
     assert_changes(before, snapshot(engine), {})
-    assert approvals.pending_card(engine, "pending-card")["id"] == card["approval_id"]
-    assert approvals.approve(engine, card["approval_id"], card["digest"]).status == "committed"
+    assert approvals.pending_card(engine, "pending-card", ownership_check=_ownership(engine))["id"] == card["approval_id"]
+    assert approvals.approve(engine, card["approval_id"], card["digest"], ownership_check=_ownership(engine)).status == "committed"
 
 
 @pytest.mark.parametrize("pending_kind", ["card", "question"])
@@ -265,7 +265,7 @@ def test_mixed_with_open_request_uses_normal_turn(engine, as_released, monkeypat
         assert events == [question]
     else:
         round3_combined(engine, events, MIXED)
-        assert approvals.pending_card(engine, cid)["id"] == card["approval_id"]
+        assert approvals.pending_card(engine, cid, ownership_check=_ownership(engine))["id"] == card["approval_id"]
     assert_changes(before, snapshot(engine), {})
 
 
@@ -301,9 +301,9 @@ def test_interrupted_mixed_retry_then_thanks_preserves_pending_card(engine, as_r
         requests = conn.execute("SELECT id FROM request WHERE conversation_id = ? AND state = 'open'",
                                 (cid,)).fetchall()
     assert [row["id"] for row in requests] == [pending["id"]]
-    assert approvals.pending_card(engine, cid)["id"] == card["approval_id"]
+    assert approvals.pending_card(engine, cid, ownership_check=_ownership(engine))["id"] == card["approval_id"]
     assert_changes(before, snapshot(engine), {})
-    assert approvals.approve(engine, card["approval_id"], card["digest"]).status == "committed"
+    assert approvals.approve(engine, card["approval_id"], card["digest"], ownership_check=_ownership(engine)).status == "committed"
 
 
 @pytest.mark.parametrize("kind", ["customer", "setup"])
@@ -359,3 +359,12 @@ def test_round3_live_claim_still_refuses_the_message(engine, mixed):
     assert events[-1]["code"] == "busy" and store.demand() == []
     assert assistant.model.seen == []
     store.release(claim)
+
+
+def _ownership(engine):
+    from erpclaw_assistant import store
+    from erpclaw_core import principals
+
+    with engine.connect() as conn:
+        owner = principals.owner(conn)["id"]
+    return lambda cid: store.conversation_owner(cid) == owner

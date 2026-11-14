@@ -375,7 +375,7 @@ def test_header_frozen_ddl_company_constraints_and_metadata():
     uniques={tuple(c.name for c in u.columns) for u in t.goods_received.constraints if u.__class__.__name__=="UniqueConstraint"}
     assert uniques=={("company_id","id"),("company_id","voucher_id"),("company_id","number")}
     assert "stock_goods_received" in MANIFEST.owned_tables and g.VOUCHER in MANIFEST.voucher_types
-    assert MANIFEST.version=="0.1.1"
+    assert MANIFEST.version=="0.1.3"
 
 
 def test_migration_uses_only_recorded_ddl_and_schema_qualified_append_guards(monkeypatch):

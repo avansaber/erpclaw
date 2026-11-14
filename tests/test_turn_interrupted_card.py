@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 from erpclaw_assistant import store
 from erpclaw_assistant.graph import Assistant
 from erpclaw_assistant.model import Reply, ScriptedModel, call
+from ownership_helpers import owner_check
 from erpclaw_core import approvals
 from erpclaw_sales import tables
 from test_turn_correction_gate import books, trial  # shared isolated service-company fixture
@@ -39,9 +40,9 @@ def test_incomplete_reply_keeps_h014_card(trial, reply):
                        "currency": "USD"}]
     assert invoice_count(trial) == before
     assert store.open_request("h014")["pending_card"] == card["approval_id"]
-    assert approvals.pending_card(trial, "h014")["id"] == card["approval_id"]
-    first = approvals.approve(trial, card["approval_id"], card["digest"])
+    assert approvals.pending_card(trial, "h014", ownership_check=owner_check(trial))["id"] == card["approval_id"]
+    first = approvals.approve(trial, card["approval_id"], card["digest"], ownership_check=owner_check(trial))
     assert first.status == "committed" and invoice_count(trial) == before + 1
-    again = approvals.approve(trial, card["approval_id"], card["digest"])
+    again = approvals.approve(trial, card["approval_id"], card["digest"], ownership_check=owner_check(trial))
     assert again.status == "committed" and again.operation_key == first.operation_key
     assert invoice_count(trial) == before + 1

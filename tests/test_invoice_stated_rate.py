@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 
 from erpclaw_assistant.graph import Assistant
 from erpclaw_assistant.model import Reply, ScriptedModel, call
+from ownership_helpers import owner_check
 from erpclaw_core import approvals
 from erpclaw_core.common import company_ctx
 from erpclaw_core.masters import create_item
@@ -38,7 +39,7 @@ def test_stated_rate_card_and_commit_match_books(engine):
     assert any(k == "List price" and "28.00" in v and "10.00" in v for k, v in c["card"]["lines"])
     with engine.connect() as conn:
         assert conn.execute(select(func.count()).select_from(tables.invoice)).scalar_one() == before
-    result = approvals.approve(engine, c["approval_id"], c["digest"])
+    result = approvals.approve(engine, c["approval_id"], c["digest"], ownership_check=owner_check(engine))
     assert result.status == "committed"
     with engine.connect() as conn:
         row = conn.execute(select(tables.invoice.c.total, tables.invoice_line.c.quantity,
@@ -78,7 +79,7 @@ def test_memo_decoy_requires_choice_and_stores_selected_rate(engine):
     label = next(c["label"] for c in events[-1]["choices"] if c["label"].lower().startswith("leave out"))
     c = card(a.turn("memo", label))
     assert any("@ 30.00 = 150.00" in v for k, v in c["card"]["lines"] if k == "Item")
-    result = approvals.approve(engine, c["approval_id"], c["digest"])
+    result = approvals.approve(engine, c["approval_id"], c["digest"], ownership_check=owner_check(engine))
     assert result.status == "committed"
     with engine.connect() as conn:
         row = conn.execute(select(tables.invoice_line.c.rate, tables.invoice_line.c.amount)
@@ -133,7 +134,7 @@ def test_four_decimal_rate_is_shown_and_committed_exactly(engine):
     events = make(engine).turn("precision", "invoice Hooli for 5 copper wire at 30.1234 each")
     c = card(events)
     assert any("@ 30.1234 = 150.62" in v for k, v in c["card"]["lines"] if k == "Item")
-    result = approvals.approve(engine, c["approval_id"], c["digest"])
+    result = approvals.approve(engine, c["approval_id"], c["digest"], ownership_check=owner_check(engine))
     assert result.status == "committed"
     with engine.connect() as conn:
         row = conn.execute(select(tables.invoice_line.c.rate, tables.invoice_line.c.amount)
@@ -154,7 +155,7 @@ def test_stated_rate_books_diff(engine):
     events = make(engine).turn("diff", "invoice Hooli for 5 copper wire at 30 each")
     c = card(events)
     assert "@ 30.00 = 150.00" in str(c["card"]["lines"])
-    result = approvals.approve(engine, c["approval_id"], c["digest"])
+    result = approvals.approve(engine, c["approval_id"], c["digest"], ownership_check=owner_check(engine))
     assert result.status == "committed"
     diff = changes(before, snapshot(engine))
     assert set(diff) == {"approval", "audit_log", "ledger_entry", "number_series", "operation_outcome",
@@ -272,7 +273,7 @@ def test_stale_card_cannot_commit_after_list_price_falls(engine):
     with engine.begin() as conn:
         conn.execute(m.item.update().where(m.item.c.name == "Boundary Service").values(standard_rate=Decimal("99")))
     before = snapshot(engine)
-    result = approvals.approve(engine, c["approval_id"], c["digest"])
+    result = approvals.approve(engine, c["approval_id"], c["digest"], ownership_check=owner_check(engine))
     assert result.status != "committed"
     diff = changes(before, snapshot(engine))
     assert not set(diff) & {"sales_invoice", "sales_invoice_line", "posting", "ledger_entry"}
@@ -321,7 +322,7 @@ def test_old_sales_contract_card_is_superseded_without_business_writes(engine):
         conn.execute(m.approval.update().where(m.approval.c.id == row["id"]).values(
             contract_version="0.0.2", args_json=approvals.canonical(args), digest=old_digest))
     before = snapshot(engine)
-    result = approvals.approve(engine, c["approval_id"], old_digest)
+    result = approvals.approve(engine, c["approval_id"], old_digest, ownership_check=owner_check(engine))
     assert result.status == "superseded" and result.text == approvals.FRESH, result
     assert not set(changes(before, snapshot(engine))) & {"sales_invoice", "sales_invoice_line", "posting", "ledger_entry"}
 

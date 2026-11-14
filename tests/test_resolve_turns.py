@@ -263,7 +263,7 @@ def test_two_customers_named_with_and_draft_one_card_and_say_the_other_whatever_
         assert ev[1]["part"] == "one_at_a_time" and ev[1]["capability"] == "planned.several_changes"
         assert ev[1]["text"] == ("One change at a time: I've drafted the invoice for Acme Corporation. Ask again for "
                                  "the invoice for Hooli once you've approved or declined it.")
-        assert approvals.approve(engine, ev[0]["approval_id"], ev[0]["digest"]).status == "committed"
+        assert approvals.approve(engine, ev[0]["approval_id"], ev[0]["digest"], ownership_check=_ownership(engine)).status == "committed"
 
 
 def test_fewer_calls_than_customers_named_asks(engine):
@@ -382,7 +382,7 @@ def test_a_payment_asked_beside_a_new_invoice_is_carded_against_the_books_as_the
     assert any(k == "Amount received" for k, _ in pay["card"]["lines"]), pay["card"]["lines"]
     shown = [v for k, v in pay["card"]["lines"] if k == "Applied to"]
     credit = [v for k, v in pay["card"]["lines"] if k == "Credit left"]
-    out = approvals.approve(engine, pay["approval_id"], pay["digest"])
+    out = approvals.approve(engine, pay["approval_id"], pay["digest"], ownership_check=_ownership(engine))
     assert out.status == "committed", out.text
     with engine.connect() as conn:
         row = conn.execute(select(t.payment).where(t.payment.c.operation_key == out.operation_key)).mappings().one()
@@ -471,7 +471,7 @@ def test_every_card_a_reply_returns_can_be_approved(engine):
              [_invoice("Hooli", ("copper wire", 5)), call("record_payment", customer="Hooli", amount=500)])):
         ev = turns(engine, Reply("", calls)).turn(f"c{len(said)}", said)
         cards = [e for e in ev if e["type"] == "card"]
-        assert cards and all(approvals.approve(engine, c["approval_id"], c["digest"]).status == "committed"
+        assert cards and all(approvals.approve(engine, c["approval_id"], c["digest"], ownership_check=_ownership(engine)).status == "committed"
                              for c in cards), ev
 
 
@@ -881,3 +881,12 @@ def test_submit_this_invoice_without_a_number_is_the_same_write(engine):
     said = "invoice Hooli for 5 copper wire and submit this invoice"
     ev = turns(engine, Reply("", [_invoice("Hooli", ("copper wire", 5))])).turn("c1", said)
     assert "changes_ambiguous" not in [e.get("code") for e in ev], ev
+
+
+def _ownership(engine):
+    from erpclaw_assistant import store
+    from erpclaw_core import principals
+
+    with engine.connect() as conn:
+        owner = principals.owner(conn)["id"]
+    return lambda cid: store.conversation_owner(cid) == owner

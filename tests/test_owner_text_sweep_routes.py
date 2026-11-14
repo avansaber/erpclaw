@@ -23,6 +23,8 @@ ARGS = {"customer": "Acme Corporation", "items": [{"item": "copper wire", "quant
 ROUTES = {
     ("GET", "/v1/health"): (False, False, False),
     ("GET", "/v1/me"): (True, False, True),
+    ("GET", "/v1/cards/{aid}"): (True, False, True),
+    ("GET", "/v1/conversations/{cid}/stream"): (True, False, True),
     ("POST", "/v1/session"): (False, True, True),
     ("DELETE", "/v1/session"): (False, False, True),
     ("POST", "/v1/conversations"): (True, True, True),
@@ -151,7 +153,7 @@ def test_unknown_identifiers_read_plainly(window, target):
             "decline": "/v1/cards/absent/decline", "operation": "/v1/operations/absent"}[target]
     response = client.get(path) if target == "operation" else client.post(
         path, json={"text": "hello"} if target == "message" else {"digest": card.digest} if target == "approve" else {})
-    checked(response, 200 if target == "operation" else 404)
+    checked(response, 404)
 
 
 @pytest.mark.parametrize("route", [r for r in ROUTES if r[0] == "POST" and ("messages" in r[1] or "cards" in r[1])]

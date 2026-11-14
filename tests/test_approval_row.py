@@ -12,6 +12,7 @@ from sqlalchemy import func, select, text, update
 
 from bookdiff import assert_changes, snapshot
 from erpclaw_api.app import create_app
+from erpclaw_assistant import store
 from erpclaw_assistant.model import Reply, ScriptedModel, call
 from erpclaw_core import administration as admin
 from erpclaw_core import approvals, ledger, models as m
@@ -30,9 +31,19 @@ def company(engine) -> str:
         return company_ctx(conn).company_id
 
 
+def ownership(engine):
+    with engine.connect() as conn:
+        owner = pr.owner(conn)["id"]
+    return lambda cid: store.conversation_owner(cid) == owner
+
+
 def propose(engine, conv=None, token=None, args=INVOICE, contract="create_invoice", replaces=None, **kw):
+    if conv is not None:
+        with engine.connect() as conn:
+            owner = pr.owner(conn)["id"]
+        store.create_conversation(conv, owner)
     return approvals.propose(engine, REGISTRY.contracts[contract], args, conv, request_card_token=token,
-                             replaces=replaces, **kw)
+                             replaces=replaces,ownership_check=ownership(engine),  **kw)
 
 
 def card(engine, aid) -> dict:
@@ -64,9 +75,9 @@ def decision(engine, aid) -> dict:
 
 def test_a_higher_generation_activates_and_sets_aside_cards_of_other_tokens(engine):
     cid = company(engine)
-    assert approvals.activate(engine, "c1", cid, 1, "T1").status == "active"
+    assert approvals._activate(engine, "c1", cid, 1, "T1").status == "active"
     old = propose(engine, "c1", "T1")
-    act = approvals.activate(engine, "c1", cid, 2, "T2")
+    act = approvals._activate(engine, "c1", cid, 2, "T2")
     assert (act.status, act.generation, act.set_aside) == ("active", 2, [old.approval_id])
     assert status(engine, old.approval_id) == "superseded"
     assert decision(engine, old.approval_id) == {"status": "superseded", "text": approvals.ENDED}
@@ -75,26 +86,26 @@ def test_a_higher_generation_activates_and_sets_aside_cards_of_other_tokens(engi
 
 def test_a_continuing_request_keeps_its_token_so_its_card_stays(engine):
     cid = company(engine)
-    approvals.activate(engine, "c1", cid, 1, "T1")
+    approvals._activate(engine, "c1", cid, 1, "T1")
     mine = propose(engine, "c1", "T1")
-    assert approvals.activate(engine, "c1", cid, 2, "T1").set_aside == []
+    assert approvals._activate(engine, "c1", cid, 2, "T1").set_aside == []
     assert status(engine, mine.approval_id) == "pending"
 
 
 @pytest.mark.parametrize("generation", [2, 1])
 def test_an_equal_or_lower_generation_changes_nothing_and_returns_the_fences(engine, generation):
     cid = company(engine)
-    approvals.activate(engine, "c1", cid, 2, "T2")
+    approvals._activate(engine, "c1", cid, 2, "T2")
     live = propose(engine, "c1", "T2")
     before = snapshot(engine)
-    act = approvals.activate(engine, "c1", cid, generation, "T9")
+    act = approvals._activate(engine, "c1", cid, generation, "T9")
     assert (act.status, act.generation, act.set_aside) == ("stale", 2, [])
     assert snapshot(engine) == before and status(engine, live.approval_id) == "pending"
 
 
 def test_a_failed_activation_on_a_new_conversation_writes_nothing(engine):
     before = snapshot(engine)
-    assert approvals.activate(engine, "c-new", company(engine), 0, "T0").status == "stale"
+    assert approvals._activate(engine, "c-new", company(engine), 0, "T0").status == "stale"
     assert snapshot(engine) == before  # not even the fence row
 
 
@@ -102,18 +113,18 @@ def test_a_store_behind_the_books_retries_at_the_fences_generation_plus_one(engi
     """A restored or rebuilt store's counter is behind: activation is stale with the fence's generation, retires
     nothing, and a retry above it succeeds."""
     cid = company(engine)
-    approvals.activate(engine, "c1", cid, 7, "T7")
+    approvals._activate(engine, "c1", cid, 7, "T7")
     live = propose(engine, "c1", "T7")
-    stale = approvals.activate(engine, "c1", cid, 3, "T3")
+    stale = approvals._activate(engine, "c1", cid, 3, "T3")
     assert (stale.status, stale.generation) == ("stale", 7) and status(engine, live.approval_id) == "pending"
-    retry = approvals.activate(engine, "c1", cid, stale.generation + 1, "T8")
+    retry = approvals._activate(engine, "c1", cid, stale.generation + 1, "T8")
     assert (retry.status, retry.set_aside) == ("active", [live.approval_id])
 
 
 def test_propose_with_a_token_that_is_not_live_is_refused_before_any_card(engine):
     cid = company(engine)
-    approvals.activate(engine, "c1", cid, 1, "T1")
-    approvals.activate(engine, "c1", cid, 2, "T2")
+    approvals._activate(engine, "c1", cid, 1, "T1")
+    approvals._activate(engine, "c1", cid, 2, "T2")
     before = snapshot(engine)
     for token in ("T1", "never"):
         with pytest.raises(Refusal) as r:
@@ -126,27 +137,27 @@ def test_propose_with_a_token_that_is_not_live_is_refused_before_any_card(engine
 
 def test_approving_a_card_whose_request_ended_supersedes_it_and_commits_nothing(engine):
     cid = company(engine)
-    approvals.activate(engine, "c1", cid, 1, "T1")
+    approvals._activate(engine, "c1", cid, 1, "T1")
     c = propose(engine, "c1", "T1")
-    assert approvals.end_request(engine, "c1", 1, "T1")
+    assert approvals._end_request(engine, "c1", 1, "T1")
     n = count(engine, t.invoice)
-    out = approvals.approve(engine, c.approval_id, c.digest)
+    out = approvals.approve(engine, c.approval_id, c.digest, ownership_check=ownership(engine))
     assert (out.status, out.text) == ("superseded", approvals.ENDED)
     assert status(engine, c.approval_id) == "superseded" and count(engine, t.invoice) == n
     assert count(engine, m.operation_outcome) == 0
-    again = approvals.approve(engine, c.approval_id, c.digest)  # the stored decision
+    again = approvals.approve(engine, c.approval_id, c.digest, ownership_check=ownership(engine))  # the stored decision
     assert (again.status, again.text) == ("superseded", approvals.ENDED)
 
 
 def test_end_request_needs_the_fences_own_generation_and_token(engine):
     cid = company(engine)
-    approvals.activate(engine, "c1", cid, 3, "T3")
+    approvals._activate(engine, "c1", cid, 3, "T3")
     before = snapshot(engine)
-    assert not approvals.end_request(engine, "c1", 2, "T3")
-    assert not approvals.end_request(engine, "c1", 3, "T2")
-    assert not approvals.end_request(engine, "c-none", 3, "T3")
+    assert not approvals._end_request(engine, "c1", 2, "T3")
+    assert not approvals._end_request(engine, "c1", 3, "T2")
+    assert not approvals._end_request(engine, "c-none", 3, "T3")
     assert snapshot(engine) == before
-    assert approvals.end_request(engine, "c1", 3, "T3")
+    assert approvals._end_request(engine, "c1", 3, "T3")
     assert fence(engine, "c1")["live_token"] is None and fence(engine, "c1")["generation"] == 3
 
 
@@ -154,9 +165,9 @@ def test_a_fence_belongs_to_one_company(engine):
     from erpclaw_core.setup import create_company
 
     other = create_company(engine, "Other Co")
-    approvals.activate(engine, "c1", _ours(engine), 1, "T1")
+    approvals._activate(engine, "c1", _ours(engine), 1, "T1")
     with pytest.raises(Refusal) as r:
-        approvals.activate(engine, "c1", other, 2, "T2")
+        approvals._activate(engine, "c1", other, 2, "T2")
     assert r.value.code == "fence_company" and fence(engine, "c1")["live_token"] == "T1"
 
 
@@ -170,16 +181,16 @@ def test_every_route_that_returns_a_card_returns_only_a_live_or_tokenless_one(en
     A card stranded on a token that is no longer live (the fence moved by a direct write here) is shown by
     none of them."""
     cid = company(engine)
-    approvals.activate(engine, "c1", cid, 1, "T1")
+    approvals._activate(engine, "c1", cid, 1, "T1")
     c = propose(engine, "c1", "T1")
-    assert approvals.pending_card(engine, "c1")["id"] == c.approval_id
+    assert approvals.pending_card(engine, "c1", ownership_check=ownership(engine))["id"] == c.approval_id
     with engine.begin() as conn:
         conn.execute(update(m.conversation_fence).where(m.conversation_fence.c.conversation_id == "c1")
                      .values(live_token="T-other"))
-    assert approvals.pending_card(engine, "c1") is None
-    assert approvals.approve(engine, c.approval_id, c.digest).card is None
+    assert approvals.pending_card(engine, "c1", ownership_check=ownership(engine)) is None
+    assert approvals.approve(engine, c.approval_id, c.digest, ownership_check=ownership(engine)).card is None
     plain = propose(engine, "c2")  # a token-less card in a conversation is not fenced
-    assert approvals.pending_card(engine, "c2")["id"] == plain.approval_id
+    assert approvals.pending_card(engine, "c2", ownership_check=ownership(engine))["id"] == plain.approval_id
 
 
 # --- the two-worker interleaving --------------------------------------------------------------------------------
@@ -254,7 +265,7 @@ def test_two_workers_in_every_ordering_with_a_crash_at_every_step(engine):
                         how = decides[0] if w == "w1" else decides[1]
                         want = model.step(w, gen, token, what, how)
                         if what == "activate":
-                            got = approvals.activate(engine, conv, cid, gen, token).status
+                            got = approvals._activate(engine, conv, cid, gen, token).status
                         elif what == "propose":
                             try:
                                 made[w] = propose(engine, conv, token, args={**INVOICE, "submit": False})
@@ -265,12 +276,12 @@ def test_two_workers_in_every_ordering_with_a_crash_at_every_step(engine):
                             if w not in made or status(engine, made[w].approval_id) != "pending":
                                 got = "none"
                             elif how == "decline":
-                                got = approvals.decline(engine, made[w].approval_id).status
+                                got = approvals.decline(engine, made[w].approval_id, ownership_check=ownership(engine)).status
                             else:
-                                o = approvals.approve(engine, made[w].approval_id, made[w].digest)
+                                o = approvals.approve(engine, made[w].approval_id, made[w].digest, ownership_check=ownership(engine))
                                 got = {"committed": "consumed"}.get(o.status, o.status)
                         else:
-                            approvals.end_request(engine, conv, gen, token)
+                            approvals._end_request(engine, conv, gen, token)
                             got = "ended"
                         assert got == want, (seq, w, what, got, want)
                     for w, c in made.items():  # the books match the model card by card
@@ -304,13 +315,13 @@ class HoldFirstLock:
 
 def test_activate_then_approve_serialize_on_the_fence_and_never_deadlock(engine, monkeypatch):
     cid = company(engine)
-    approvals.activate(engine, "c1", cid, 1, "T1")
+    approvals._activate(engine, "c1", cid, 1, "T1")
     c = propose(engine, "c1", "T1")
     held, box = HoldFirstLock(monkeypatch), {}
     try:
-        t1 = run(lambda: approvals.activate(engine, "c1", cid, 2, "T2"), box, "activate")
+        t1 = run(lambda: approvals._activate(engine, "c1", cid, 2, "T2"), box, "activate")
         assert held.locked.wait(10)
-        t2 = run(lambda: approvals.approve(engine, c.approval_id, c.digest), box, "approve")
+        t2 = run(lambda: approvals.approve(engine, c.approval_id, c.digest, ownership_check=ownership(engine)), box, "approve")
         assert a_session_waits(engine), "approve did not wait for the fence"
     finally:
         held.go.set()
@@ -325,13 +336,13 @@ def test_approve_then_activate_serialize_on_the_fence_and_never_deadlock(engine,
     from test_approvals_concurrency import Held
 
     cid = company(engine)
-    approvals.activate(engine, "c1", cid, 1, "T1")
+    approvals._activate(engine, "c1", cid, 1, "T1")
     c = propose(engine, "c1", "T1")
     held, box = Held(monkeypatch), {}
     try:
-        t1 = run(lambda: approvals.approve(engine, c.approval_id, c.digest), box, "approve")
+        t1 = run(lambda: approvals.approve(engine, c.approval_id, c.digest, ownership_check=ownership(engine)), box, "approve")
         assert held.locked.wait(10)
-        t2 = run(lambda: approvals.activate(engine, "c1", cid, 2, "T2"), box, "activate")
+        t2 = run(lambda: approvals._activate(engine, "c1", cid, 2, "T2"), box, "activate")
         assert a_session_waits(engine), "activate did not wait for the fence"
     finally:
         held.go.set()
@@ -352,7 +363,7 @@ def test_a_second_request_sets_aside_the_first_card_whatever_its_operation(engin
     assert events[0]["code"] == "card_set_aside" and pay.card["title"] in events[0]["text"]
     assert events[1]["replaces"] == pay.approval_id
     before = snapshot(engine)
-    out = approvals.approve(engine, pay.approval_id, pay.digest)
+    out = approvals.approve(engine, pay.approval_id, pay.digest, ownership_check=ownership(engine))
     assert (out.status, out.text) == ("superseded", approvals.GONE["superseded"]) and out.card is None
     assert snapshot(engine) == before  # nothing committed, nothing written
 
@@ -392,7 +403,7 @@ def test_a_turn_shows_the_set_aside_notice_before_its_new_card(engine):
 def _stale(engine, c):
     with engine.begin() as conn:
         conn.execute(update(m.item).where(m.item.c.name == "Copper Wire").values(standard_rate="29.00"))
-    return approvals.approve(engine, c.approval_id, c.digest)
+    return approvals.approve(engine, c.approval_id, c.digest, ownership_check=ownership(engine))
 
 
 def test_a_repeat_after_the_stale_path_returns_the_fresh_card_while_it_is_pending(engine):
@@ -400,7 +411,7 @@ def test_a_repeat_after_the_stale_path_returns_the_fresh_card_while_it_is_pendin
     fresh = _stale(engine, c)
     assert fresh.status == "superseded" and fresh.card and fresh.data["replaces"] == c.approval_id
     before = snapshot(engine)
-    again = approvals.approve(engine, c.approval_id, c.digest)
+    again = approvals.approve(engine, c.approval_id, c.digest, ownership_check=ownership(engine))
     assert (again.status, again.approval_id, again.digest) == ("superseded", fresh.approval_id, fresh.digest)
     assert snapshot(engine) == before
 
@@ -408,10 +419,10 @@ def test_a_repeat_after_the_stale_path_returns_the_fresh_card_while_it_is_pendin
 def test_a_repeat_after_the_fresh_card_committed_returns_its_outcome(engine):
     c = propose(engine, "c1")
     fresh = _stale(engine, c)
-    done = approvals.approve(engine, fresh.approval_id, fresh.digest)
+    done = approvals.approve(engine, fresh.approval_id, fresh.digest, ownership_check=ownership(engine))
     assert done.status == "committed"
     before = snapshot(engine)
-    again = approvals.approve(engine, c.approval_id, c.digest)
+    again = approvals.approve(engine, c.approval_id, c.digest, ownership_check=ownership(engine))
     assert (again.status, again.operation_key, again.text) == ("committed", done.operation_key, done.text)
     assert snapshot(engine) == before
 
@@ -448,34 +459,34 @@ def test_a_repeat_of_a_declined_or_expired_card_returns_its_message(engine, monk
     from erpclaw_core.common import now
 
     d = propose(engine, "c1")
-    approvals.decline(engine, d.approval_id)
-    assert approvals.approve(engine, d.approval_id, d.digest).text == approvals.GONE["declined"]
+    approvals.decline(engine, d.approval_id, ownership_check=ownership(engine))
+    assert approvals.approve(engine, d.approval_id, d.digest, ownership_check=ownership(engine)).text == approvals.GONE["declined"]
     e = propose(engine, "c2")
     monkeypatch.setattr(approvals, "now", lambda: now() + timedelta(minutes=11))
-    assert approvals.approve(engine, e.approval_id, e.digest).status == "expired"
+    assert approvals.approve(engine, e.approval_id, e.digest, ownership_check=ownership(engine)).status == "expired"
     before = snapshot(engine)
-    again = approvals.approve(engine, e.approval_id, e.digest)
+    again = approvals.approve(engine, e.approval_id, e.digest, ownership_check=ownership(engine))
     assert (again.status, again.text) == ("expired", approvals.GONE["expired"]) and snapshot(engine) == before
 
 
 # --- the replacement and the fence ------------------------------------------------------------------------------
 
 def test_the_stale_paths_fresh_card_inherits_its_predecessors_token(engine):
-    approvals.activate(engine, "c1", company(engine), 1, "T1")
+    approvals._activate(engine, "c1", company(engine), 1, "T1")
     c = propose(engine, "c1", "T1")
     fresh = _stale(engine, c)
     assert card(engine, fresh.approval_id)["request_card_token"] == "T1"
-    assert approvals.pending_card(engine, "c1")["id"] == fresh.approval_id
+    assert approvals.pending_card(engine, "c1", ownership_check=ownership(engine))["id"] == fresh.approval_id
 
 
 def test_a_rotation_before_the_fresh_card_makes_no_card_and_ends_the_predecessor(engine, monkeypatch):
     cid = company(engine)
-    approvals.activate(engine, "c1", cid, 1, "T1")
+    approvals._activate(engine, "c1", cid, 1, "T1")
     c = propose(engine, "c1", "T1")
     real = approvals._propose
 
     def rotated(*a, **k):  # a newer worker takes the conversation between the claim and the fresh proposal
-        approvals.activate(engine, "c1", cid, 2, "T2")
+        approvals._activate(engine, "c1", cid, 2, "T2")
         return real(*a, **k)
 
     monkeypatch.setattr(approvals, "_propose", rotated)
@@ -488,9 +499,9 @@ def test_a_rotation_before_the_fresh_card_makes_no_card_and_ends_the_predecessor
 
 def test_propose_replacing_a_card_after_a_rotation_makes_no_card(engine):
     cid = company(engine)
-    approvals.activate(engine, "c1", cid, 1, "T1")
+    approvals._activate(engine, "c1", cid, 1, "T1")
     a = propose(engine, "c1", "T1")
-    approvals.activate(engine, "c1", cid, 2, "T2")
+    approvals._activate(engine, "c1", cid, 2, "T2")
     n = count(engine, m.approval)
     with pytest.raises(Refusal) as r:
         propose(engine, "c1", "T1", replaces=a.approval_id)
@@ -544,9 +555,9 @@ def test_replaces_a_card_still_pending_supersedes_it(engine):
 def test_replaces_a_card_that_already_ended_makes_no_card_and_says_what_happened(engine, ended):
     a = propose(engine, "c1", args=PAYMENT, contract="record_payment")
     if ended == "committed":
-        assert approvals.approve(engine, a.approval_id, a.digest).status == "committed"
+        assert approvals.approve(engine, a.approval_id, a.digest, ownership_check=ownership(engine)).status == "committed"
     else:
-        approvals.decline(engine, a.approval_id)
+        approvals.decline(engine, a.approval_id, ownership_check=ownership(engine))
     n = count(engine, m.approval)
     out = propose(engine, "c1", args={**PAYMENT, "amount": "120"}, contract="record_payment", replaces=a.approval_id)
     assert out.status == "replaced_card_ended" and out.card is None and count(engine, m.approval) == n
@@ -559,19 +570,19 @@ def test_replaces_a_card_that_already_ended_makes_no_card_and_says_what_happened
 def test_a_correction_inherits_its_predecessors_token_and_is_fenced_by_it(engine):
     """A correction that names no token takes the card's own, so it cannot commit
     once that request has ended."""
-    approvals.activate(engine, "c1", company(engine), 1, "T1")
+    approvals._activate(engine, "c1", company(engine), 1, "T1")
     a = propose(engine, "c1", "T1")
     b = propose(engine, "c1", args={**INVOICE, "items": [{"item": "copper wire", "quantity": 6}]},
                 replaces=a.approval_id)
     assert card(engine, b.approval_id)["request_card_token"] == "T1"
-    assert approvals.end_request(engine, "c1", 1, "T1")
+    assert approvals._end_request(engine, "c1", 1, "T1")
     n = count(engine, t.invoice)
-    out = approvals.approve(engine, b.approval_id, b.digest)
+    out = approvals.approve(engine, b.approval_id, b.digest, ownership_check=ownership(engine))
     assert (out.status, out.text) == ("superseded", approvals.ENDED) and count(engine, t.invoice) == n
 
 
 def test_a_correction_with_another_requests_token_changes_nothing(engine):
-    approvals.activate(engine, "c1", company(engine), 1, "T1")
+    approvals._activate(engine, "c1", company(engine), 1, "T1")
     a = propose(engine, "c1", "T1")
     before = snapshot(engine)
     with pytest.raises(Refusal) as r:
@@ -581,8 +592,8 @@ def test_a_correction_with_another_requests_token_changes_nothing(engine):
 
 def test_a_correction_of_a_tokenless_card_takes_the_callers_token(engine):
     a = propose(engine, "c1")
-    approvals.activate(engine, "c1", company(engine), 1, "T1")  # sets the token-less card aside
-    approvals.activate(engine, "c2", company(engine), 1, "T2")
+    approvals._activate(engine, "c1", company(engine), 1, "T1")  # sets the token-less card aside
+    approvals._activate(engine, "c2", company(engine), 1, "T2")
     b = propose(engine, "c2")
     c = propose(engine, "c2", "T2", replaces=b.approval_id)
     assert card(engine, c.approval_id)["request_card_token"] == "T2" and status(engine, a.approval_id) == "superseded"
@@ -593,7 +604,7 @@ def test_correcting_a_payment_that_settled_its_invoice_reports_the_payment(engin
     a payment that already settled its invoice is reported as recorded, never as a refusal of the correction."""
     settle = {"customer": "Pied Piper", "amount": "1120", "invoice": "INV-2026-00006", "method": "check"}
     a = propose(engine, "c1", args=settle, contract="record_payment")
-    assert approvals.approve(engine, a.approval_id, a.digest).status == "committed"
+    assert approvals.approve(engine, a.approval_id, a.digest, ownership_check=ownership(engine)).status == "committed"
     out = propose(engine, "c1", args={**settle, "method": "wire"}, contract="record_payment", replaces=a.approval_id)
     assert out.status == "replaced_card_ended" and "already approved" in out.text and out.card is None
 
@@ -645,7 +656,7 @@ def test_an_approval_that_wins_the_race_with_its_correction_commits_once(engine,
     n = _payments(engine)
     held, box = Held(monkeypatch), {}
     try:
-        t1 = run(lambda: approvals.approve(engine, a.approval_id, a.digest), box, "approve")
+        t1 = run(lambda: approvals.approve(engine, a.approval_id, a.digest, ownership_check=ownership(engine)), box, "approve")
         assert held.locked.wait(10)
         t2 = run(lambda: propose(engine, "c1", args={**PAYMENT, "amount": "120"}, contract="record_payment",
                                  replaces=a.approval_id), box, "propose")
@@ -667,7 +678,7 @@ def test_a_correction_that_wins_the_race_supersedes_the_card_it_replaces(engine,
         t1 = run(lambda: propose(engine, "c1", args={**PAYMENT, "amount": "120"}, contract="record_payment",
                                  replaces=a.approval_id), box, "propose")
         assert held.locked.wait(10)
-        t2 = run(lambda: approvals.approve(engine, a.approval_id, a.digest), box, "approve")
+        t2 = run(lambda: approvals.approve(engine, a.approval_id, a.digest, ownership_check=ownership(engine)), box, "approve")
         assert a_session_waits(engine), "the approval did not wait for the card's row"
     finally:
         held.go.set()
@@ -746,9 +757,11 @@ def test_older_books_keep_each_conversations_newest_pending_card(engine):
     assert rows["a-new"].decision_json is None and rows["a-done"].decision_json is None
     assert [(a.approval_id, a.actor, a.action) for a in audits] == [("a-old", "revision 0007", "card_set_aside")]
     assert "(conversation_id)" in index and "contract" not in index and "conversation_id IS NOT NULL" in index
+    store.create_conversation("conv-2", "p-old")
+    store.create_conversation("conv-3", "p-old")
     # an older card ended before decisions were stored answers a repeat with its status's message, as before
-    assert approvals.approve(engine, "a-done", "a-done".ljust(64, "0")).text == approvals.GONE["superseded"]
-    assert approvals.decline(engine, "a-solo").status == "declined"
+    assert approvals.approve(engine, "a-done", "a-done".ljust(64, "0"), ownership_check=ownership(engine)).text == approvals.GONE["superseded"]
+    assert approvals.decline(engine, "a-solo", ownership_check=ownership(engine)).status == "declined"
 
 
 # --- what a plugin's write may rely on during a commit -------------------------------------------------------------
@@ -780,7 +793,7 @@ def test_a_consumed_card_without_an_outcome_exists_only_inside_its_own_commit__s
 
     monkeypatch.setattr(contract, "commit", observed)
     c = propose(engine)
-    out = approvals.approve(engine, c.approval_id, c.digest)
+    out = approvals.approve(engine, c.approval_id, c.digest, ownership_check=ownership(engine))
     assert out.status == ends, out.text
     assert seen["inside"] == ("consumed", 0)
     assert seen["other"] == "pending"

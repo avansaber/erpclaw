@@ -12,11 +12,17 @@ from sqlalchemy import func, select
 from erpclaw_assistant import store
 from erpclaw_assistant.graph import Assistant
 from erpclaw_assistant.model import Reply, ScriptedModel, call
-from erpclaw_core import approvals
+from erpclaw_core import approvals, principals as pr
 from erpclaw_core import models as m
 from erpclaw_core.common import company_ctx
 from erpclaw_core.masters import create_party
 from erpclaw_sales import tables as t
+
+
+def ownership(engine):
+    with engine.connect() as conn:
+        owner = pr.owner(conn)["id"]
+    return lambda cid: store.conversation_owner(cid) == owner
 
 
 def assistant(engine, *replies):
@@ -56,11 +62,11 @@ def test_a_corrected_card_never_commits_and_the_correction_commits_once(engine):
     second = ev[1]
     assert second["replaces"] == first["approval_id"] and "3" in str(second["card"]["lines"]), second
     invoices = count(engine, t.invoice)
-    old = approvals.approve(engine, first["approval_id"], first["digest"])
+    old = approvals.approve(engine, first["approval_id"], first["digest"], ownership_check=ownership(engine))
     assert old.status == "superseded" and count(engine, t.invoice) == invoices, old
-    new = approvals.approve(engine, second["approval_id"], second["digest"])
+    new = approvals.approve(engine, second["approval_id"], second["digest"], ownership_check=ownership(engine))
     assert new.status == "committed" and count(engine, t.invoice) == invoices + 1, new
-    again = approvals.approve(engine, second["approval_id"], second["digest"])
+    again = approvals.approve(engine, second["approval_id"], second["digest"], ownership_check=ownership(engine))
     assert again.status == "committed" and again.operation_key == new.operation_key  # read back, never twice
     assert count(engine, t.invoice) == invoices + 1
 
@@ -70,8 +76,8 @@ def test_the_corrected_card_approved_first_leaves_the_old_one_unapprovable(engin
     first = card_of(a.turn("c1", "Invoice Acme Corporation for 5 copper wire"))
     second = card_of(a.turn("c1", "actually make it 3"))
     invoices = count(engine, t.invoice)
-    assert approvals.approve(engine, second["approval_id"], second["digest"]).status == "committed"
-    assert approvals.approve(engine, first["approval_id"], first["digest"]).status == "superseded"
+    assert approvals.approve(engine, second["approval_id"], second["digest"], ownership_check=ownership(engine)).status == "committed"
+    assert approvals.approve(engine, first["approval_id"], first["digest"], ownership_check=ownership(engine)).status == "superseded"
     assert count(engine, t.invoice) == invoices + 1
 
 
@@ -82,7 +88,7 @@ def test_a_correction_ending_with_a_question_sets_the_card_aside_and_its_approva
     assert kinds(ev) == ["notice", "ask"] and ev[0]["code"] == "card_set_aside", ev
     assert "Wayne Enterprises" in ev[1]["options"], ev
     invoices = count(engine, t.invoice)
-    out = approvals.approve(engine, first["approval_id"], first["digest"])
+    out = approvals.approve(engine, first["approval_id"], first["digest"], ownership_check=ownership(engine))
     assert out.status == "superseded" and out.text == ev[1]["text"] and out.data.get("code") == ev[1]["code"], out
     assert count(engine, t.invoice) == invoices
 
@@ -94,7 +100,7 @@ def test_a_refusal_after_a_card_sets_it_aside(engine):
     assert ev[0]["type"] == "notice" and ev[0]["code"] == "card_set_aside", ev
     assert "Ask again to get it back." in ev[0]["text"], ev
     invoices = count(engine, t.invoice)
-    assert approvals.approve(engine, first["approval_id"], first["digest"]).status == "superseded"
+    assert approvals.approve(engine, first["approval_id"], first["digest"], ownership_check=ownership(engine)).status == "superseded"
     assert count(engine, t.invoice) == invoices
 
 
@@ -103,7 +109,7 @@ def test_a_read_answer_while_a_card_is_pending_sets_it_aside(engine):
     first = card_of(a.turn("c1", "Invoice Acme Corporation for 5 copper wire"))
     ev = a.turn("c1", "who owes us money?")
     assert kinds(ev) == ["notice", "answer"], ev
-    assert approvals.approve(engine, first["approval_id"], first["digest"]).status == "superseded"
+    assert approvals.approve(engine, first["approval_id"], first["digest"], ownership_check=ownership(engine)).status == "superseded"
 
 
 def test_a_correction_the_model_ignores_is_asked_and_the_old_card_is_set_aside(engine):
@@ -111,7 +117,7 @@ def test_a_correction_the_model_ignores_is_asked_and_the_old_card_is_set_aside(e
     first = card_of(a.turn("c1", "Invoice Acme Corporation for 5 copper wire"))
     ev = a.turn("c1", "make it 7")
     assert kinds(ev) == ["notice", "ask"] and "7" in ev[1]["text"], ev  # the 7 is asked about, never dropped
-    assert approvals.approve(engine, first["approval_id"], first["digest"]).status == "superseded"
+    assert approvals.approve(engine, first["approval_id"], first["digest"], ownership_check=ownership(engine)).status == "superseded"
 
 
 # ---------- the latest mention supplies the field ----------
@@ -191,7 +197,7 @@ def test_cancel_with_a_card_pending_ends_the_request_and_declines_the_card(engin
     ev = a.turn("c1", said)
     assert kinds(ev) == ["answer"] and ev[0]["text"] == "Cancelled; nothing was saved.", ev
     invoices = count(engine, t.invoice)
-    assert approvals.approve(engine, first["approval_id"], first["digest"]).status == "declined"
+    assert approvals.approve(engine, first["approval_id"], first["digest"], ownership_check=ownership(engine)).status == "declined"
     assert count(engine, t.invoice) == invoices
     ev = a.turn("c1", "Invoice Hooli")  # a new request: the ended one's 5 copper wire never reaches it
     assert not any(e["type"] == "card" for e in ev), ev
@@ -245,7 +251,7 @@ def test_a_correction_answered_in_text_is_applied_by_the_engine_and_the_old_card
     assert ev[-1]["type"] in ("ask", "card") and "Wayne Enterprises" in str(ev[-1]), ev
     assert not any(e.get("checked") == "engine" and "Approve the card" in e.get("text", "") for e in ev), ev
     invoices = count(engine, t.invoice)
-    assert approvals.approve(engine, first["approval_id"], first["digest"]).status == "superseded"
+    assert approvals.approve(engine, first["approval_id"], first["digest"], ownership_check=ownership(engine)).status == "superseded"
     assert count(engine, t.invoice) == invoices
 
 
@@ -255,7 +261,7 @@ def test_a_quantity_typed_while_the_model_answers_in_text_is_asked_about_and_the
     first = card_of(a.turn("c1", "Invoice Acme Corporation for 5 copper wire"))
     ev = a.turn("c1", "make it 3")
     assert kinds(ev) == ["notice", "ask"] and "3" in ev[1]["text"], ev
-    assert approvals.approve(engine, first["approval_id"], first["digest"]).status == "superseded"
+    assert approvals.approve(engine, first["approval_id"], first["digest"], ownership_check=ownership(engine)).status == "superseded"
 
 
 def test_a_message_that_changes_nothing_sets_the_card_aside_and_says_so(engine):
@@ -265,7 +271,7 @@ def test_a_message_that_changes_nothing_sets_the_card_aside_and_says_so(engine):
     assert not any(e["type"] == "card" for e in ev), ev
     assert ev[-1]["text"] == ("I didn't change that card, so I've set it aside; nothing was saved. "
                               "Tell me what to change, or ask again to get it back."), ev
-    out = approvals.approve(engine, first["approval_id"], first["digest"])
+    out = approvals.approve(engine, first["approval_id"], first["digest"], ownership_check=ownership(engine))
     assert out.status == "superseded", out
 
 
@@ -277,7 +283,7 @@ def test_an_acknowledgement_or_an_approval_word_keeps_the_card_and_its_notice(en
     first = card_of(a.turn("c1", "Invoice Acme Corporation for 5 copper wire"))
     ev = a.turn("c1", said)
     assert kinds(ev) == ["answer"] and ev[0]["text"] == "Nothing has been saved yet. Approve the card to save it.", ev
-    assert approvals.approve(engine, first["approval_id"], first["digest"]).status == "committed"
+    assert approvals.approve(engine, first["approval_id"], first["digest"], ownership_check=ownership(engine)).status == "committed"
 
 
 @pytest.mark.parametrize("said", ["ok, but make it Wayne", "thanks, wrong customer though", "yes, but make it Wayne",
@@ -292,7 +298,7 @@ def test_a_message_that_only_contains_an_acknowledgement_is_re_proposed(engine, 
     ev = a.turn("c1", said)
     assert not any("Approve the card" in e.get("text", "") for e in ev), ev
     invoices = count(engine, t.invoice)
-    assert approvals.approve(engine, first["approval_id"], first["digest"]).status == "superseded"
+    assert approvals.approve(engine, first["approval_id"], first["digest"], ownership_check=ownership(engine)).status == "superseded"
     assert count(engine, t.invoice) == invoices
 
 
@@ -306,7 +312,7 @@ def test_a_covered_message_after_the_card_was_set_aside_saves_nothing_and_makes_
     invoices = count(engine, t.invoice)
     ev = a.turn("c1", said)
     assert kinds(ev) == ["answer"] and ev[0]["text"] == "Nothing has been saved yet.", ev
-    assert approvals.approve(engine, first["approval_id"], first["digest"]).status == "superseded"
+    assert approvals.approve(engine, first["approval_id"], first["digest"], ownership_check=ownership(engine)).status == "superseded"
     assert count(engine, t.invoice) == invoices
 
 
@@ -323,7 +329,7 @@ class ApprovesFirst:
     def complete(self, messages, tools):
         if self.card is None:
             return self.first.complete(messages, tools)
-        approvals.approve(self.engine, self.card["approval_id"], self.card["digest"])
+        approvals.approve(self.engine, self.card["approval_id"], self.card["digest"], ownership_check=ownership(self.engine))
         self.card, reply = False, self.reply
         return reply
 
@@ -352,7 +358,7 @@ def _approval_time_question(engine):
     extra = approvals.propose(engine, REGISTRY.contracts["create_invoice"],
                               {"customer": "Initech", "items": [{"item": "copper wire", "quantity": 5}]})
     assert approvals.approve(engine, extra.approval_id, extra.digest).status == "committed"
-    out = approvals.approve(engine, card["approval_id"], card["digest"])
+    out = approvals.approve(engine, card["approval_id"], card["digest"], ownership_check=ownership(engine))
     assert out.status == "superseded" and out.data.get("code") == "invoice_ambiguous", out  # a second open invoice
     return a, pay, out
 

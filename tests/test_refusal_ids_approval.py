@@ -6,6 +6,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from erpclaw_api.app import create_app
+from erpclaw_assistant import store
 from erpclaw_assistant.model import Reply, ScriptedModel, call
 from erpclaw_core import approvals
 from erpclaw_core.common import Refusal
@@ -80,7 +81,9 @@ def test_a_refusal_inside_the_commit_keeps_its_id_returned_read_back_and_sent(en
     assert e["code"] == "planned" and e["capability"] == "planned.messaging"
     again = approve(c, ev)  # the same card again: replayed from its stored outcome
     assert again == [e]
-    back = approvals.read_back(engine, e["operation_key"])
+    cid = approvals.conversation_of(engine, ev["approval_id"])
+    owner = store.conversation_owner(cid)
+    back = approvals.read_back(engine, e["operation_key"], ownership_check=lambda target: store.conversation_owner(target) == owner)
     assert back.status == "refused" and back.data["code"] == "planned" and back.data["capability"] == "planned.messaging"
 
 
